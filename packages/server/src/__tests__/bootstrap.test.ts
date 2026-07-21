@@ -30,6 +30,36 @@ function makeTempConfigDir(): string {
   return dir;
 }
 
+function makeWebDist(): string {
+  const dir = makeTempConfigDir();
+  const buildId = "bootstrap-web-build";
+  writeFileSync(
+    join(dir, "browser-security-manifest.json"),
+    JSON.stringify({ schemaVersion: 1, buildId, integrations: [] }),
+  );
+  writeFileSync(join(dir, "version.json"), JSON.stringify({ buildId }));
+  return dir;
+}
+
+function makeBrokenWebDist(kind: "missing-manifest" | "missing-version" | "mismatched-build-id"): string {
+  const dir = makeTempConfigDir();
+  if (kind !== "missing-manifest") {
+    writeFileSync(
+      join(dir, "browser-security-manifest.json"),
+      JSON.stringify({ schemaVersion: 1, buildId: "browser-security-build", integrations: [] }),
+    );
+  }
+  if (kind !== "missing-version") {
+    writeFileSync(
+      join(dir, "version.json"),
+      JSON.stringify({
+        buildId: kind === "mismatched-build-id" ? "different-version-build" : "browser-security-build",
+      }),
+    );
+  }
+  return dir;
+}
+
 const baseServerConfig: ServerConfig = {
   channel: "dev",
   growth: {
@@ -41,6 +71,7 @@ const baseServerConfig: ServerConfig = {
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },
+  security: { csp: { scriptOrigins: [], connectOrigins: [], imageOrigins: [] } },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
@@ -122,6 +153,35 @@ describe("server bootstrap", () => {
     expect(shutdownTelemetryFn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["missing browser-security-manifest.json", "missing-manifest"],
+    ["missing version.json", "missing-version"],
+    ["mismatched Web build IDs", "mismatched-build-id"],
+  ] as const)("rejects %s before telemetry, migrations, build, or listen", async (_label, kind) => {
+    const webDistPath = makeBrokenWebDist(kind);
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const buildAppFn = vi.fn();
+
+    await expect(
+      startServer({
+        initServerConfig: async () => baseServerConfig,
+        webDistPath,
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        buildApp: buildAppFn,
+      }),
+    ).rejects.toThrow(
+      kind === "mismatched-build-id"
+        ? /browser security manifest build id does not match version\.json/u
+        : /(?:browser security|version) manifest.*missing/u,
+    );
+
+    expect(initTelemetryFn).not.toHaveBeenCalled();
+    expect(runMigrationsFn).not.toHaveBeenCalled();
+    expect(buildAppFn).not.toHaveBeenCalled();
+  });
+
   it("starts the server through telemetry, migrations, app build, listen, and ready stages", async () => {
     const initTelemetryFn = vi.fn(async () => undefined);
     const runMigrationsFn = vi.fn(async () => 12);
@@ -131,11 +191,12 @@ describe("server bootstrap", () => {
     const markReadyFn = vi.fn();
     const shutdownTelemetryFn = vi.fn(async () => undefined);
     const processOn = vi.spyOn(process, "on").mockReturnValue(process);
+    const webDistPath = makeWebDist();
 
     await startServer({
       initServerConfig: async () => baseServerConfig,
       randomUUID: () => "12345678-1234-4234-9234-123456789abc",
-      webDistPath: "/srv/web",
+      webDistPath,
       initTelemetry: initTelemetryFn,
       runMigrations: runMigrationsFn,
       buildApp: buildAppFn as never,
@@ -148,7 +209,7 @@ describe("server bootstrap", () => {
     expect(buildAppFn).toHaveBeenCalledWith(
       expect.objectContaining({
         instanceId: "srv_12345678",
-        webDistPath: "/srv/web",
+        webDistPath,
       }),
     );
     expect(listenFn).toHaveBeenCalledWith({ host: "127.0.0.1", port: 0 });

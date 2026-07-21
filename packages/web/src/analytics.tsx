@@ -1,10 +1,14 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router";
+import { BROWSER_INTEGRATION_REGISTRY, isBrowserIntegrationActive } from "./browser-resource-policy.js";
+
+export { PRODUCTION_WEB_HOST as PROD_HOST } from "./browser-resource-policy.js";
 
 /**
- * GA4 analytics for the cloud SPA. The gtag snippet + config live in
- * index.html (property G-BHG918MZ02, cross-domain linker, send_page_view off).
- * This module reports SPA navigations and exposes a typed event helper.
+ * GA4 analytics for the cloud SPA. The external bootstrap + config live in
+ * browser-bootstrap.ts (property G-BHG918MZ02, cross-domain linker,
+ * send_page_view off). This module reports SPA navigations and exposes a typed
+ * event helper.
  *
  * Why manual page_view: gtag fires page_view once on initial load. A
  * react-router app changes the URL without a full load, so without this every
@@ -21,12 +25,10 @@ import { useLocation } from "react-router";
  *     paths, before anything is sent.
  */
 
-export const PROD_HOST = "cloud.first-tree.ai";
-
 /** Only the production cloud host reports to the shared GA property. */
 export function analyticsEnabled(): boolean {
   if (typeof window === "undefined") return false;
-  return window.location.hostname === PROD_HOST;
+  return isBrowserIntegrationActive(BROWSER_INTEGRATION_REGISTRY.googleAnalytics, window.location.hostname);
 }
 
 /**
@@ -53,7 +55,7 @@ type GtagArgs =
 function gtag(...args: GtagArgs): void {
   if (!analyticsEnabled()) return;
   const w = window as unknown as { gtag?: (...a: GtagArgs) => void };
-  // gtag is defined inline in index.html; guard in case the snippet is absent
+  // gtag is defined by the external bootstrap; guard in case it is absent
   // (e.g. an ad-blocker removed it) so analytics never breaks the app.
   w.gtag?.(...args);
 }

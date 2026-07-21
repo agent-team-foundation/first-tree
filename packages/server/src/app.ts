@@ -88,6 +88,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { registerSecurityHeaders } from "./security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -205,6 +206,11 @@ export async function buildApp(config: Config) {
         "container's port to the public internet directly.",
     );
   }
+
+  // Register the browser security contract before observability plugins and
+  // every API/static route so normal, error, preflight, HEAD, and 304 replies
+  // all receive the same application-owned headers.
+  await registerSecurityHeaders(app, config);
 
   // HTTP tracing — `@autotelic/fastify-opentelemetry` opens one span on
   // `onRequest`, ends it on `onResponse`. No per-hook child spans (so we

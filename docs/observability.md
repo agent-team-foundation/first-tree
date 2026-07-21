@@ -76,10 +76,20 @@ Both surfaces tag events with the git SHA used to build the artifact:
 
 ```bash
 VITE_SENTRY_DSN=https://public@example.ingest.sentry.io/1
+VITE_SENTRY_ENABLED=true
 VITE_SENTRY_ENVIRONMENT=production
 VITE_SENTRY_TRACES_SAMPLE_RATE=0.1
 FIRST_TREE_WEB_BUILD_ID=$GITHUB_SHA
 ```
+
+`VITE_SENTRY_ENABLED` is a build-time switch. Omit it to enable Web Sentry when
+a DSN exists, or set it to `false` to disable browser initialization even when
+the build environment still supplies a DSN. The Web build emits a sanitized
+browser security manifest from the same activation decision. An enabled Sentry
+entry contains only the DSN origin—never its public key, project path, query, or
+the raw DSN—and the deployed server must include that exact origin in
+`FIRST_TREE_CSP_CONNECT_ORIGINS`. A missing or different origin fails embedded
+SPA startup instead of shipping a policy that silently blocks telemetry.
 
 The Vite build generates hidden source maps and uploads them through
 `@sentry/vite-plugin` when `SENTRY_AUTH_TOKEN` and `SENTRY_ORG` are present.
@@ -88,10 +98,12 @@ The upload target defaults to `first-tree-web`; override with
 credentials or upload failures emit warnings and do not fail the deployable
 artifact.
 
-The Docker release workflow passes `VITE_SENTRY_DSN` and
-`VITE_SENTRY_ENVIRONMENT` from GitHub repository/environment variables into
-the Web build, which makes Sentry enabled by default for the managed release
-path without committing the public DSN to the repo.
+The Docker release workflow passes `VITE_SENTRY_DSN`,
+`VITE_SENTRY_ENABLED`, and `VITE_SENTRY_ENVIRONMENT` from GitHub
+repository/environment variables into the Web build. This keeps activation,
+the generated candidate manifest, and the runtime CSP preflight aligned without
+committing the public DSN to the repo. Source-map upload credentials remain a
+separate build concern and do not enable the browser SDK.
 
 ### Client configuration
 
@@ -121,12 +133,12 @@ provider prompts, model output, tool output, stdout, and stderr are redacted.
 The Web Console loads Microsoft Clarity for production session insights. The
 project id is `xj2f9syfng`.
 
-Clarity is loaded from `packages/web/index.html` only when
-`window.location.hostname` is `cloud.first-tree.ai`. Local development hosts and
-staging hosts such as `dev.cloud.first-tree.ai` do not fetch the Clarity SDK and
-do not write into the production project. This mirrors the GA4 host gate in the
-same SPA shell and avoids requiring a Vite env var, Docker build argument, or
-secret for this fixed production tag.
+Clarity is loaded by the Web analytics bootstrap only when the browser is on
+the production Cloud hostname. Local development and staging hosts do not fetch
+the Clarity SDK or write into the production project. The same checked-in
+browser resource registry drives this hostname activation and the sanitized
+candidate security manifest; deployment documentation must not maintain a
+second vendor-origin list.
 
 The Web Console treats Clarity as layout/session telemetry, not content
 telemetry. The React root (`#root`) carries `data-clarity-mask="true"` so chat

@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { PERMISSIONS_POLICY } from "../security-headers.js";
 import * as resourcesMigration from "../services/resources-migration.js";
 
 /**
@@ -26,6 +27,7 @@ const baseConfig: Config = {
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
+  security: { csp: { scriptOrigins: [], connectOrigins: [], imageOrigins: [] } },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
@@ -56,6 +58,30 @@ const baseConfig: Config = {
 
 async function safeClose(app: FastifyInstance | undefined) {
   if (app) await app.close();
+}
+
+type InjectResponse = Awaited<ReturnType<FastifyInstance["inject"]>>;
+
+function expectEmbeddedAppSecurityHeaders(response: InjectResponse): void {
+  expect(response.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
+  expect(response.headers["x-content-type-options"]).toBe("nosniff");
+  expect(response.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+  expect(response.headers["permissions-policy"]).toBe(PERMISSIONS_POLICY);
+  expect(response.headers["x-frame-options"]).toBe("DENY");
+  expect(response.headers["content-security-policy-report-only"]).toBeUndefined();
+
+  const csp = response.headers["content-security-policy"];
+  expect(csp).toBeTypeOf("string");
+  if (typeof csp !== "string") throw new Error("missing Content-Security-Policy");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(csp).toContain("connect-src 'self' wss://first-tree.example");
+  const scriptDirective = csp
+    .split(";")
+    .map((directive) => directive.trim())
+    .find((directive) => directive.startsWith("script-src "));
+  expect(scriptDirective).toBe("script-src 'self'");
+  expect(scriptDirective).not.toContain("'unsafe-inline'");
+  expect(scriptDirective).not.toContain("'unsafe-eval'");
 }
 
 afterEach(() => {
@@ -173,15 +199,65 @@ describe("buildApp — server secret validation", () => {
 describe("buildApp — retired feedback route boundary", () => {
   it("returns a 410 tombstone for /feedback/* instead of the SPA shell", async () => {
     const webRoot = await mkdtemp(join(tmpdir(), "first-tree-web-"));
+    const buildId = "build-app-validation-web";
     await writeFile(join(webRoot, "index.html"), "<!doctype html><html><body>App shell</body></html>", "utf8");
+    await mkdir(join(webRoot, "assets"));
+    await writeFile(join(webRoot, "assets", "app.js"), "export const app = true;", "utf8");
+    await writeFile(
+      join(webRoot, "browser-security-manifest.json"),
+      JSON.stringify({ schemaVersion: 1, buildId, integrations: [] }),
+      "utf8",
+    );
+    await writeFile(join(webRoot, "version.json"), JSON.stringify({ buildId }), "utf8");
 
     let app: FastifyInstance | undefined;
     try {
-      app = await buildApp({ ...baseConfig, webDistPath: webRoot });
+      app = await buildApp({
+        ...baseConfig,
+        server: { ...baseConfig.server, publicUrl: "https://first-tree.example" },
+        webDistPath: webRoot,
+      });
 
       const spa = await app.inject({ method: "GET", url: "/workspace/deep-link" });
       expect(spa.statusCode).toBe(200);
       expect(spa.body).toContain("App shell");
+
+      const apiSuccess = await app.inject({ method: "GET", url: "/api/v1/health" });
+      expect(apiSuccess.statusCode).toBe(200);
+      const apiHead = await app.inject({ method: "HEAD", url: "/api/v1/health" });
+      expect(apiHead.statusCode).toBe(200);
+      expect(apiHead.body).toBe("");
+
+      const spaHead = await app.inject({ method: "HEAD", url: "/workspace/deep-link" });
+      expect(spaHead.statusCode).toBe(200);
+      expect(spaHead.body).toBe("");
+
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: "/api/v1/health",
+        headers: {
+          origin: "https://browser.example",
+          "access-control-request-method": "GET",
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+
+      const redirect = await app.inject({ method: "GET", url: "/api/v1/auth/github/start" });
+      expect(redirect.statusCode).toBe(302);
+      expect(redirect.headers.location).toMatch(/^https:\/\/github\.com\//u);
+
+      const asset = await app.inject({ method: "GET", url: "/assets/app.js" });
+      expect(asset.statusCode).toBe(200);
+      expect(asset.headers.etag).toBeTypeOf("string");
+      const assetHead = await app.inject({ method: "HEAD", url: "/assets/app.js" });
+      expect(assetHead.statusCode).toBe(200);
+      expect(assetHead.body).toBe("");
+      const assetNotModified = await app.inject({
+        method: "GET",
+        url: "/assets/app.js",
+        headers: { "if-none-match": String(asset.headers.etag) },
+      });
+      expect(assetNotModified.statusCode).toBe(304);
 
       const feedback = await app.inject({ method: "POST", url: "/feedback/chat" });
       expect(feedback.statusCode).toBe(410);
@@ -196,6 +272,23 @@ describe("buildApp — retired feedback route boundary", () => {
       const assetMiss = await app.inject({ method: "GET", url: "/assets/missing.js" });
       expect(assetMiss.statusCode).toBe(404);
       expect(assetMiss.json()).toEqual({ error: "Not found" });
+
+      for (const response of [
+        spa,
+        spaHead,
+        apiSuccess,
+        apiHead,
+        preflight,
+        redirect,
+        asset,
+        assetHead,
+        assetNotModified,
+        feedback,
+        apiMiss,
+        assetMiss,
+      ]) {
+        expectEmbeddedAppSecurityHeaders(response);
+      }
     } finally {
       await safeClose(app);
       await rm(webRoot, { recursive: true, force: true });

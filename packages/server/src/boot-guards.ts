@@ -1,5 +1,7 @@
 import type { Config } from "./config.js";
+import { assertContentSecurityPolicySize } from "./security-headers.js";
 import { assertEncryptionKeyValid } from "./services/crypto.js";
+import { assertWebSecurityContract } from "./web-security.js";
 
 /**
  * Boot-time configuration sanity checks. Called from `buildApp` (and thus
@@ -11,6 +13,8 @@ export function assertBootConfigValid(config: Config): void {
   assertSecretsValid(config);
   assertProductionRequiresPublicUrl(config);
   assertGithubAppConfigComplete(config);
+  assertWebSecurityContract(config);
+  assertContentSecurityPolicySize(config);
 }
 
 function assertSecretsValid(config: Config): void {

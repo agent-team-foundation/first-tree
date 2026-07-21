@@ -1,9 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initConfig } from "../resolver.js";
-import { createServerConfigSchema, getServerConfig, serverConfigSchema } from "../server-config.js";
+import { initConfig, resolveConfigReadonly } from "../resolver.js";
+import {
+  browserSecurityConnectOriginListConfigSchema,
+  browserSecurityOriginListConfigSchema,
+  createServerConfigSchema,
+  getServerConfig,
+  serverConfigSchema,
+} from "../server-config.js";
 import { resetConfig, setConfig } from "../singleton.js";
 
 describe("server config", () => {
@@ -59,6 +65,79 @@ describe("server config", () => {
     expect(fieldSchema.parse("")).toBeUndefined();
     expect(fieldSchema.parse("   ")).toBeUndefined();
     expect(fieldSchema.parse(undefined)).toBeUndefined();
+  });
+
+  it("materializes empty browser CSP origin lists with no env or YAML input", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.security.csp).toEqual({
+      scriptOrigins: [],
+      connectOrigins: [],
+      imageOrigins: [],
+    });
+    expect(resolveConfigReadonly({ schema: serverConfigSchema, role: "server", configDir })).toMatchObject({
+      security: {
+        csp: {
+          scriptOrigins: [],
+          connectOrigins: [],
+          imageOrigins: [],
+        },
+      },
+    });
+  });
+
+  it("canonicalizes, deduplicates, and sorts browser CSP origins from CSV and YAML", async () => {
+    expect(
+      browserSecurityOriginListConfigSchema.parse(" https://z.example:443/,https://a.example,https://z.example "),
+    ).toEqual(["https://a.example", "https://z.example"]);
+    expect(
+      browserSecurityConnectOriginListConfigSchema.parse(
+        "wss://socket.example:443/,https://api.example,wss://socket.example",
+      ),
+    ).toEqual(["https://api.example", "wss://socket.example"]);
+    expect(browserSecurityOriginListConfigSchema.safeParse("wss://socket.example").success).toBe(false);
+
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    writeFileSync(
+      join(configDir, "server.yaml"),
+      "security:\n  csp:\n    imageOrigins:\n      - https://images.example/\n      - https://avatars.example\n",
+    );
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+    expect(config.security.csp.imageOrigins).toEqual(["https://avatars.example", "https://images.example"]);
+  });
+
+  it("rejects non-origin CSP input without reflecting the rejected value", async () => {
+    const configDir = makeTempConfigDir();
+    const rejected = "https://user:super-secret@example.com/path?token=secret";
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_CSP_CONNECT_ORIGINS", rejected);
+
+    let message = "";
+    try {
+      await initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("security.csp.connectOrigins");
+    expect(message).not.toContain(rejected);
+    expect(message).not.toContain("super-secret");
   });
 
   it("loads Google OAuth only when both credentials are configured", async () => {

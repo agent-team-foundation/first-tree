@@ -4,6 +4,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { isNavigableWebHref } from "../../lib/safe-href.js";
 import { cn } from "../../lib/utils.js";
+import { rehypeNonFetchingImages } from "../rehype-non-fetching-images.js";
 
 type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
 
@@ -144,6 +145,10 @@ export type MarkdownProps = {
  */
 export function Markdown({ children, className, components, rehypePlugins }: MarkdownProps) {
   const normalizedChildren = normalizeQuoteContinuations(children);
+  // Keep the image guard last. Message-specific plugins (mentions today,
+  // future caller transforms later) may rewrite the hast tree, but no caller
+  // can leave behind a fetching Markdown <img> after this final pass.
+  const finalRehypePlugins = [...(rehypePlugins ?? []), rehypeNonFetchingImages];
 
   return (
     <div
@@ -168,7 +173,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={rehypePlugins}
+        rehypePlugins={finalRehypePlugins}
         urlTransform={previewSafeUrlTransform}
         components={{
           a: ({ node, href, children, ...props }) => {

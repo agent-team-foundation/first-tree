@@ -105,6 +105,9 @@ describe("attachments route — upload + capability download", () => {
       },
     });
     expect(reply.statusCode).toBe(304);
+    expect(reply.headers["x-content-type-options"]).toBe("nosniff");
+    expect(reply.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(reply.headers["x-frame-options"]).toBe("DENY");
   });
 
   it("rejects upload with wrong Content-Type", async () => {
