@@ -1,4 +1,5 @@
 import type { AuthProvider, AuthProviderConnection } from "@first-tree/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { Github, Link2, Unlink } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -10,6 +11,7 @@ import { Avatar } from "../../components/avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../../components/ui/settings-field.js";
+import { invalidateDisplayNameQueries } from "../../lib/identity-cache.js";
 
 const ERROR_COPY: Record<string, string> = {
   "identity-conflict": "That account is already connected to another First Tree user.",
@@ -26,6 +28,7 @@ type Feedback = {
 
 export function SettingsAccountPage() {
   const { user, refreshMe } = useAuth();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const [displayName, setDisplayName] = useState(user?.displayName ?? "");
   const [providers, setProviders] = useState<AuthProviderConnection[]>([]);
@@ -89,7 +92,7 @@ export function SettingsAccountPage() {
     try {
       await updateMyProfile({ displayName: normalizedDisplayName });
       setDisplayName(normalizedDisplayName);
-      await refreshMe();
+      await Promise.all([refreshMe(), invalidateDisplayNameQueries(queryClient)]);
       setProfileSaved(true);
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : "Could not update profile." });

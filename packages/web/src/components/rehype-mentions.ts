@@ -55,7 +55,6 @@ function makeMentionElement(identity: RenderedMentionIdentity, isSelf: boolean):
   const displayName = identity.displayName.trim() || identity.name;
   const displayLabel = `@${displayName}`;
   const identityLabel = displayName === identity.name ? displayLabel : `${displayLabel} (@${identity.name})`;
-  const visibleLabel = identity.disambiguate ? identityLabel : displayLabel;
 
   return {
     type: "element",
@@ -73,7 +72,24 @@ function makeMentionElement(identity: RenderedMentionIdentity, isSelf: boolean):
       title: identityLabel,
       ariaLabel: identityLabel,
     },
-    children: [{ type: "text", value: visibleLabel }],
+    children: [
+      {
+        type: "element",
+        tagName: "span",
+        properties: { className: ["mention-chip-display"] },
+        children: [{ type: "text", value: displayLabel }],
+      },
+      ...(identity.disambiguate
+        ? [
+            {
+              type: "element" as const,
+              tagName: "span",
+              properties: { className: ["mention-chip-handle"] },
+              children: [{ type: "text" as const, value: `(@${identity.name})` }],
+            },
+          ]
+        : []),
+    ],
   };
 }
 
@@ -177,16 +193,15 @@ export function rehypeMentions(
  * should proceed unchanged.
  */
 type SelectedMention = {
-  start: number;
-  end: number;
   name: string;
   visibleText: string;
+  chip: HTMLElement;
 };
 
 function selectedMentions(root: HTMLElement, selection: Selection | null): SelectedMention[] | null {
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
   const range = selection.getRangeAt(0);
-  if (!root.contains(range.commonAncestorContainer)) return null;
+  if (!range.intersectsNode(root)) return null;
 
   const mentions: SelectedMention[] = [];
   const chips = root.querySelectorAll<HTMLElement>(".mention-chip[data-mention-name]");
@@ -219,27 +234,100 @@ function selectedMentions(root: HTMLElement, selection: Selection | null): Selec
       continue;
     }
 
-    // Measure the chip's exact position within the selected text instead of
-    // replacing by label value. Two people may share a displayName, and the
-    // same visible string may also appear as ordinary text before the chip.
-    const prefixRange = range.cloneRange();
-    prefixRange.setEnd(chipRange.startContainer, chipRange.startOffset);
-    const start = prefixRange.toString().length;
-    mentions.push({ start, end: start + visibleText.length, name, visibleText });
+    mentions.push({ name, visibleText, chip });
   }
 
   return mentions.length > 0 ? mentions : null;
 }
 
-export function copyTextWithMentionHandles(root: HTMLElement, selection: Selection | null): string | null {
+type CanonicalSelectionFragment = {
+  fragment: DocumentFragment;
+  mentions: SelectedMention[];
+  pending: SelectedMention[];
+};
+
+/**
+ * Clone the selected DOM once, then replace every complete mention chip in
+ * document order. Plain and rich clipboard payloads are both derived from this
+ * same clone, so rendered line breaks never become offsets into a different
+ * string representation.
+ */
+function selectionFragmentWithMentionHandles(
+  root: HTMLElement,
+  selection: Selection | null,
+): CanonicalSelectionFragment | null {
   const mentions = selectedMentions(root, selection);
   if (!mentions || !selection) return null;
-  mentions.sort((left, right) => right.start - left.start);
 
-  return mentions.reduce(
-    (text, mention) => `${text.slice(0, mention.start)}@${mention.name}${text.slice(mention.end)}`,
-    selection.toString(),
-  );
+  const markerAttribute = "data-mention-copy-index";
+  const previousMarkers = mentions.map(({ chip }) => chip.getAttribute(markerAttribute));
+  for (const [index, mention] of mentions.entries()) {
+    mention.chip.setAttribute(markerAttribute, String(index));
+  }
+
+  let fragment: DocumentFragment;
+  try {
+    fragment = selection.getRangeAt(0).cloneContents();
+  } finally {
+    for (const [index, mention] of mentions.entries()) {
+      const previous = previousMarkers[index];
+      if (previous === null || previous === undefined) mention.chip.removeAttribute(markerAttribute);
+      else mention.chip.setAttribute(markerAttribute, previous);
+    }
+  }
+
+  const pending = [...mentions];
+  for (const chip of fragment.querySelectorAll<HTMLElement>(`[${markerAttribute}]`)) {
+    const index = Number(chip.getAttribute(markerAttribute));
+    const mention = mentions[index];
+    if (!mention) continue;
+    chip.replaceWith(root.ownerDocument.createTextNode(`@${mention.name}`));
+    const pendingIndex = pending.indexOf(mention);
+    if (pendingIndex >= 0) pending.splice(pendingIndex, 1);
+  }
+
+  return { fragment, mentions, pending };
+}
+
+/** Read a detached selection fragment through the browser's rendered-text
+ * algorithm. The temporary node stays off-screen (rather than display:none)
+ * because `innerText` deliberately ignores layout for non-rendered content. */
+function renderedTextFromFragment(root: HTMLElement, fragment: DocumentFragment): string {
+  const container = root.ownerDocument.createElement("div");
+  container.style.position = "fixed";
+  container.style.left = "-200vw";
+  container.style.top = "0";
+  container.style.width = "100vw";
+  container.style.whiteSpace = "pre-wrap";
+  container.append(fragment);
+
+  const body = root.ownerDocument.body;
+  if (!body) return container.textContent ?? "";
+  body.append(container);
+  try {
+    return container.innerText;
+  } finally {
+    container.remove();
+  }
+}
+
+export function copyTextWithMentionHandles(root: HTMLElement, selection: Selection | null): string | null {
+  const rewritten = selectionFragmentWithMentionHandles(root, selection);
+  if (!rewritten || !selection) return null;
+
+  // A range whose common ancestor is the chip's text node clones only that
+  // text, not its wrapping span/data attributes. This is the sole useful
+  // pending shape: the user selected exactly one complete chip.
+  if (
+    rewritten.pending.length === 1 &&
+    rewritten.mentions.length === 1 &&
+    selection.toString() === rewritten.pending[0]?.visibleText
+  ) {
+    return `@${rewritten.pending[0].name}`;
+  }
+  if (rewritten.pending.length > 0) return null;
+
+  return renderedTextFromFragment(root, rewritten.fragment);
 }
 
 /**
@@ -248,28 +336,42 @@ export function copyTextWithMentionHandles(root: HTMLElement, selection: Selecti
  * payload so pasting into Docs/Notion retains links and emphasis.
  */
 export function copyHtmlWithMentionHandles(root: HTMLElement, selection: Selection | null): string | null {
-  const mentions = selectedMentions(root, selection);
-  if (!mentions || !selection) return null;
-
-  const fragment = selection.getRangeAt(0).cloneContents();
-  const pending = [...mentions].sort((left, right) => left.start - right.start);
-
-  for (const chip of fragment.querySelectorAll<HTMLElement>(".mention-chip[data-mention-name]")) {
-    const mention = pending[0];
-    if (!mention || chip.dataset.mentionName !== mention.name || chip.textContent !== mention.visibleText) continue;
-    chip.replaceWith(root.ownerDocument.createTextNode(`@${mention.name}`));
-    pending.shift();
-  }
-
+  const rewritten = selectionFragmentWithMentionHandles(root, selection);
+  if (!rewritten || !selection) return null;
   const container = root.ownerDocument.createElement("div");
   // When the selection starts and ends directly inside a chip's text node,
   // cloneContents() has no ancestor span to rewrite. Fall back to escaped
   // canonical plain text for that boundary-only case instead of leaking the
   // presentation label back into a rich paste.
-  if (pending.length > 0) {
+  if (rewritten.pending.length > 0) {
     container.textContent = copyTextWithMentionHandles(root, selection) ?? selection.toString();
     return container.innerHTML;
   }
-  container.append(fragment);
+  container.append(rewritten.fragment);
   return container.innerHTML;
+}
+
+/**
+ * Observe copy at the document boundary, where the Clipboard API dispatches
+ * non-editable timeline copies (the focused node may be body, the composer, or
+ * another control). The selection itself is the scope boundary: helpers return
+ * null unless a complete mention inside this timeline is selected.
+ */
+export function installTimelineMentionCopy(ownerDocument: Document, timeline: () => HTMLElement | null): () => void {
+  const handleCopy = (event: ClipboardEvent) => {
+    if (event.defaultPrevented || !event.clipboardData) return;
+    const root = timeline();
+    if (!root) return;
+    const selection = ownerDocument.getSelection();
+    const copiedText = copyTextWithMentionHandles(root, selection);
+    if (copiedText === null) return;
+    const copiedHtml = copyHtmlWithMentionHandles(root, selection);
+
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", copiedText);
+    if (copiedHtml !== null) event.clipboardData.setData("text/html", copiedHtml);
+  };
+
+  ownerDocument.addEventListener("copy", handleCopy);
+  return () => ownerDocument.removeEventListener("copy", handleCopy);
 }

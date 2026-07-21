@@ -2174,14 +2174,14 @@ tr[data-interactive]:hover {
  * plugin). The composer mirror overlay uses `.mention-text` instead
  * (see below) because any horizontal padding / background offset on
  * the mirror chip pushes the visual glyphs out of sync with the
- * textarea's caret position underneath. `white-space: nowrap` keeps
- * `@<displayName>` from wrapping. Inline-block + ellipsis keeps a very long
- * display name inside the message column on narrow screens. */
+ * textarea's caret position underneath. The display-name segment stays on one
+ * line and owns ellipsis so a duplicate-name chip can keep its canonical
+ * handle visible on narrow/touch screens. Exceptionally long valid handles
+ * may wrap within their own segment rather than overflowing the viewport. */
 .mention-chip {
-  display: inline-block;
+  display: inline-flex;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  align-items: baseline;
   vertical-align: bottom;
   background: var(--brand);
   color: var(--fg-on-vivid);
@@ -2189,6 +2189,21 @@ tr[data-interactive]:hover {
   border-radius: var(--radius-full);
   font-weight: 500;
   white-space: nowrap;
+}
+
+.mention-chip-display {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mention-chip-handle {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: calc(100% - var(--sp-1));
+  margin-left: var(--sp-1);
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* Mention chip — self variant. Highest-priority highlight: when a

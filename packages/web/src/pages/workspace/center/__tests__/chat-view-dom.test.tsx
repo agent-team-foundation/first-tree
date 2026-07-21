@@ -618,6 +618,17 @@ async function setValue(element: HTMLInputElement | HTMLTextAreaElement, value: 
   await flush();
 }
 
+function dispatchCopy(target: Element): { event: Event; payloads: Map<string, string> } {
+  const payloads = new Map<string, string>();
+  const event = new Event("copy", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    configurable: true,
+    value: { setData: (type: string, value: string) => payloads.set(type, value) },
+  });
+  target.dispatchEvent(event);
+  return { event, payloads };
+}
+
 async function changeFiles(element: HTMLInputElement, files: File[]): Promise<void> {
   Object.defineProperty(element, "files", { configurable: true, value: files });
   await act(async () => {
@@ -1647,6 +1658,186 @@ describe("ChatView", () => {
     await waitForText(container, "@李坤阳（新）");
     expect(chip?.textContent).toBe("@李坤阳（新）");
 
+    await act(async () => root.unmount());
+  });
+
+  it("does not reassign a historical mention when its canonical handle is reused", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const currentOwner = participant({
+      agentId: "agent-new-owner",
+      name: "reused-handle",
+      displayName: "New Owner",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        currentOwner,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "historical-handle-owner",
+        senderId: "agent-1",
+        content: "旧消息 @reused-handle",
+        metadata: {
+          mentions: ["agent-deleted-owner"],
+          // System routing can point at the new owner for reasons unrelated to
+          // this token. Only the explicit token-to-ID mapping may relabel it.
+          addressedAgentIds: [currentOwner.agentId],
+        },
+        source: "api",
+      }),
+      message({
+        id: "current-handle-owner",
+        senderId: "agent-1",
+        content: "新消息 @reused-handle",
+        metadata: { mentions: [currentOwner.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@New Owner");
+    const historical = container.querySelector<HTMLElement>('[data-message-id="historical-handle-owner"]');
+    const current = container.querySelector<HTMLElement>('[data-message-id="current-handle-owner"]');
+    expect(historical?.textContent).toContain("@reused-handle");
+    expect(historical?.querySelector(".mention-chip")).toBeNull();
+    expect(current?.textContent).toContain("@New Owner");
+    expect(current?.querySelector('.mention-chip[data-mention-agent-id="agent-new-owner"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("copies canonical handles when copy targets the composer or body, including cross-message rich text", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const numericHuman = participant({
+      agentId: "human-agent-alice",
+      type: "human",
+      name: "1736192959",
+      displayName: "李坤阳",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        numericHuman,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "copy-display-name-1",
+        senderId: "human-agent-self",
+        content: "**请** 先看  \n下一行 @1736192959\n\n第二段 [查看详情](https://example.com)",
+        metadata: { mentions: [numericHuman.agentId] },
+        createdAt: "2026-05-28T11:55:00.000Z",
+      }),
+      message({
+        id: "copy-display-name-2",
+        senderId: "agent-1",
+        content: "然后通知 @nova",
+        metadata: { mentions: ["agent-1"] },
+        source: "api",
+        createdAt: "2026-05-28T11:56:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@李坤阳");
+    const firstBody = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-1"] div.text-body');
+    const firstParagraph = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-1"] p');
+    const secondParagraph = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-2"] p');
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea");
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const numericChip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="1736192959"]');
+    if (!firstBody || !firstParagraph || !secondParagraph || !composer || !timeline || !numericChip) {
+      throw new Error("Expected copy fixtures and composer");
+    }
+
+    const selection = window.getSelection();
+    const singleRange = document.createRange();
+    singleRange.selectNodeContents(firstBody);
+    // Real non-editable copy keeps the previously focused composer as the
+    // event target while the mouse selection lives in the timeline.
+    composer.focus();
+    selection?.removeAllRanges();
+    selection?.addRange(singleRange);
+    expect(selection?.toString()).toContain("@李坤阳");
+    expect(timeline.contains(singleRange.commonAncestorContainer)).toBe(true);
+    expect(singleRange.intersectsNode(numericChip)).toBe(true);
+
+    const singleCopy = dispatchCopy(composer);
+    expect(singleCopy.event.defaultPrevented).toBe(true);
+    expect(singleCopy.payloads.get("text/plain")).toContain("请 先看");
+    expect(singleCopy.payloads.get("text/plain")).toContain("下一行 @1736192959");
+    expect(singleCopy.payloads.get("text/plain")).toContain("第二段 查看详情");
+    expect(singleCopy.payloads.get("text/html")).toContain("<strong>请</strong>");
+    expect(singleCopy.payloads.get("text/html")).toContain("@1736192959");
+    expect(singleCopy.payloads.get("text/html")).toContain("https://example.com");
+    expect(singleCopy.payloads.get("text/html")).not.toContain("李坤阳");
+
+    const crossRange = document.createRange();
+    crossRange.setStart(firstBody, 0);
+    crossRange.setEnd(secondParagraph, secondParagraph.childNodes.length);
+    selection?.removeAllRanges();
+    selection?.addRange(crossRange);
+
+    const crossCopy = dispatchCopy(document.body);
+    expect(crossCopy.event.defaultPrevented).toBe(true);
+    expect(crossCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(crossCopy.payloads.get("text/plain")).toContain("@nova");
+    expect(crossCopy.payloads.get("text/plain")).not.toContain("@李坤阳");
+    expect(crossCopy.payloads.get("text/html")).toContain("<strong>请</strong>");
+    expect(crossCopy.payloads.get("text/html")).toContain("@1736192959");
+    expect(crossCopy.payloads.get("text/html")).toContain("@nova");
+    expect(crossCopy.payloads.get("text/html")).not.toContain("mention-chip");
+
+    const outsideAfter = document.createElement("p");
+    outsideAfter.textContent = "outside after";
+    document.body.append(outsideAfter);
+    const outsideAfterText = outsideAfter.firstChild;
+    if (!outsideAfterText) throw new Error("Expected outside-after text");
+    const insideToOutside = document.createRange();
+    insideToOutside.setStart(firstParagraph, 0);
+    insideToOutside.setEnd(outsideAfterText, outsideAfterText.textContent?.length ?? 0);
+    selection?.removeAllRanges();
+    selection?.addRange(insideToOutside);
+
+    const insideToOutsideCopy = dispatchCopy(document.body);
+    expect(insideToOutsideCopy.event.defaultPrevented).toBe(true);
+    expect(insideToOutsideCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(insideToOutsideCopy.payloads.get("text/plain")).toContain("outside after");
+    expect(insideToOutsideCopy.payloads.get("text/html")).not.toContain("李坤阳");
+
+    const outsideBefore = document.createElement("p");
+    outsideBefore.textContent = "outside before";
+    document.body.insertBefore(outsideBefore, document.body.firstChild);
+    const outsideBeforeText = outsideBefore.firstChild;
+    if (!outsideBeforeText) throw new Error("Expected outside-before text");
+    const outsideToInside = document.createRange();
+    outsideToInside.setStart(outsideBeforeText, 0);
+    outsideToInside.setEnd(secondParagraph, secondParagraph.childNodes.length);
+    selection?.removeAllRanges();
+    selection?.addRange(outsideToInside);
+
+    const outsideToInsideCopy = dispatchCopy(composer);
+    expect(outsideToInsideCopy.event.defaultPrevented).toBe(true);
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("outside before");
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("@nova");
+    expect(outsideToInsideCopy.payloads.get("text/html")).not.toContain("mention-chip");
+
+    selection?.removeAllRanges();
+    outsideBefore.remove();
+    outsideAfter.remove();
     await act(async () => root.unmount());
   });
 

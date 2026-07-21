@@ -31,6 +31,7 @@ import {
 import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
 import { Tab, TabBadge, TabBar } from "./../components/ui/tab-bar.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
+import { invalidateDisplayNameQueries } from "./../lib/identity-cache.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { isBindableClient } from "./agent-detail/action-state.js";
@@ -130,7 +131,11 @@ function AgentDetailPageView() {
 
   const identityUpdateMutation = useMutation({
     mutationFn: (patch: Parameters<typeof updateAgent>[1]) => updateAgent(uuid, patch),
-    onSuccess: () => {
+    onSuccess: async (_agent, patch) => {
+      if (patch.displayName !== undefined) {
+        await invalidateDisplayNameQueries(queryClient);
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },

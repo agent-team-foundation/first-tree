@@ -28,6 +28,13 @@ function text(value: string): TestNode {
   return { type: "text", value };
 }
 
+function visibleChipText(node: TestNode | undefined): string {
+  return (node?.children ?? [])
+    .flatMap((child) => child.children ?? [child])
+    .map((child) => child.value ?? "")
+    .join("");
+}
+
 function inlineCode(value: string): TestNode {
   return { type: "element", tagName: "code", properties: {}, children: [text(value)] };
 }
@@ -70,7 +77,8 @@ describe("rehypeMentions", () => {
     expect(chip?.properties?.["data-mention-display-name"]).toBe("Alice Chen");
     expect(chip?.properties?.title).toBe("@Alice Chen (@alice)");
     expect(chip?.properties?.ariaLabel).toBe("@Alice Chen (@alice)");
-    expect(chip?.children).toEqual([text("@Alice Chen")]);
+    expect(visibleChipText(chip)).toBe("@Alice Chen");
+    expect(chip?.children?.[0]?.properties?.className).toEqual(["mention-chip-display"]);
     expect(para?.children?.[2]).toEqual(text("!"));
   });
 
@@ -85,7 +93,7 @@ describe("rehypeMentions", () => {
     transform(tree as unknown as Parameters<typeof transform>[0]);
 
     const chip = tree.children?.[0]?.children?.[1];
-    expect(chip?.children).toEqual([text("@李坤阳")]);
+    expect(visibleChipText(chip)).toBe("@李坤阳");
     expect(chip?.properties?.title).toBe("@李坤阳 (@1736192959)");
   });
 
@@ -100,7 +108,7 @@ describe("rehypeMentions", () => {
     transform(tree as unknown as Parameters<typeof transform>[0]);
 
     const chip = tree.children?.[0]?.children?.[1];
-    expect(chip?.children).toEqual([text("@fallback")]);
+    expect(visibleChipText(chip)).toBe("@fallback");
     expect(chip?.properties?.title).toBe("@fallback");
   });
 
@@ -115,9 +123,13 @@ describe("rehypeMentions", () => {
     transform(tree as unknown as Parameters<typeof transform>[0]);
 
     const children = tree.children?.[0]?.children;
-    expect(children?.[1]?.children).toEqual([text("@Sam (@alice)")]);
-    expect(children?.[3]?.children).toEqual([text("@Sam (@bob)")]);
-    expect(children?.[5]?.children).toEqual([text("@Carol")]);
+    expect(visibleChipText(children?.[1])).toBe("@Sam(@alice)");
+    expect(children?.[1]?.children?.[0]?.properties?.className).toEqual(["mention-chip-display"]);
+    expect(children?.[1]?.children?.[1]?.properties?.className).toEqual(["mention-chip-handle"]);
+    expect(visibleChipText(children?.[3])).toBe("@Sam(@bob)");
+    expect(children?.[3]?.children?.[1]?.properties?.className).toEqual(["mention-chip-handle"]);
+    expect(visibleChipText(children?.[5])).toBe("@Carol");
+    expect(children?.[5]?.children).toHaveLength(1);
   });
 
   it("adds the `is-self` class when the mention resolves to the viewer", () => {
@@ -190,6 +202,31 @@ describe("copyTextWithMentionHandles", () => {
     expect(copyHtmlWithMentionHandles(root, selection)).toBe(
       '<strong>请</strong> @1736192959 <a href="https://example.com">查看详情</a>',
     );
+
+    selection?.removeAllRanges();
+    root.remove();
+  });
+
+  it("derives multiline plain and rich copy from the same cloned DOM", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<p>line one<br>line two <span class="mention-chip" data-mention-name="alice"><span class="mention-chip-display">@Alice Chen</span></span></p>' +
+      '<p>next paragraph <span class="mention-chip" data-mention-name="me"><span class="mention-chip-display">@Me</span></span></p>';
+    document.body.append(root);
+
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const plain = copyTextWithMentionHandles(root, selection);
+    const rich = copyHtmlWithMentionHandles(root, selection);
+    expect(plain).toContain("line one");
+    expect(plain).toContain("line two @alice");
+    expect(plain).toContain("next paragraph @me");
+    expect(plain).not.toContain("Alice Chen");
+    expect(rich).toBe("<p>line one<br>line two @alice</p><p>next paragraph @me</p>");
 
     selection?.removeAllRanges();
     root.remove();

@@ -38,7 +38,6 @@ import {
 import {
   type CSSProperties,
   memo,
-  type ClipboardEvent as ReactClipboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
@@ -106,6 +105,7 @@ import {
 import {
   findBlockingRequest,
   findThreadableRequestId,
+  readMentions,
   readRequestPayload,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
@@ -119,8 +119,7 @@ import {
 import { MentionHighlightOverlay } from "../../../components/mention-highlight-overlay.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import {
-  copyHtmlWithMentionHandles,
-  copyTextWithMentionHandles,
+  installTimelineMentionCopy,
   type RenderedMentionParticipant,
   rehypeMentions,
 } from "../../../components/rehype-mentions.js";
@@ -607,6 +606,18 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
+  // Resolve a visible label only when this token's persisted mention ID still
+  // identifies the current owner of the canonical handle. System-level
+  // addressedAgentIds can include recipients unrelated to a particular token
+  // and therefore are not identity evidence. Handles can be released and
+  // reused after an agent is deleted; resolving history from the chat's
+  // current name map alone would then visibly reassign the old mention to a
+  // different person. Legacy rows without structured mentions degrade safely
+  // to their original `@handle` text.
+  const historicalMentionParticipants = useMemo(() => {
+    const targetIds = new Set(readMentions(msg.metadata));
+    return mentionParticipants.filter((participant) => targetIds.has(participant.agentId));
+  }, [mentionParticipants, msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
@@ -634,8 +645,8 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // original rendering. `selfAgentId` flips chips that target the viewer
   // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
   const messageRehypePlugins = useMemo(
-    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
-    [mentionParticipants, myAgentId],
+    () => [rehypeMentions(historicalMentionParticipants, { selfAgentId: myAgentId })],
+    [historicalMentionParticipants, myAgentId],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -731,20 +742,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
   );
 
-  const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
-    const selection = window.getSelection();
-    const copiedText = copyTextWithMentionHandles(event.currentTarget, selection);
-    if (copiedText === null) return;
-    event.preventDefault();
-    event.clipboardData.setData("text/plain", copiedText);
-    const copiedHtml = copyHtmlWithMentionHandles(event.currentTarget, selection);
-    if (copiedHtml !== null) event.clipboardData.setData("text/html", copiedHtml);
-  }, []);
-
   return (
     <div
       className="text-body"
-      onCopy={handleCopy}
       style={{
         color: "var(--fg)",
         marginTop: 2,
@@ -1753,6 +1753,15 @@ export function ChatView({
   // ResizeObserver-stabilised scrolling) and useReadTracker (as the
   // IntersectionObserver root).
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Non-editable selections dispatch `copy` at the focused node (often body or
+  // the composer), not at the message element that contains the selection.
+  // Listen on the owning document so ordinary and cross-message timeline copy
+  // always reaches the canonical-handle rewrite, then scope strictly back to
+  // this chat's scroll container through the selection Range.
+  useEffect(() => {
+    const ownerDocument = scrollContainerRef.current?.ownerDocument ?? document;
+    return installTimelineMentionCopy(ownerDocument, () => scrollContainerRef.current);
+  }, []);
   // Positioning context for the chat-summary floating card: the expanded
   // summary is portaled into the timeline's `relative` wrapper and laid out
   // `absolute; top:0` over the message area, so it never occupies stream space
