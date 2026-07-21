@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTEXT_REVIEW_BODY_MAX_BYTES,
+  contextReviewErrorCodeSchema,
   contextReviewerRunMessageMetadataSchema,
   contextReviewSubmitRequestSchema,
 } from "../schemas/context-review.js";
@@ -90,6 +91,10 @@ describe("Context Review schemas", () => {
         contextReviewRunId: "run-1",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts the server's superseded-run error code", () => {
+    expect(contextReviewErrorCodeSchema.parse("CONTEXT_REVIEW_RUN_SUPERSEDED")).toBe("CONTEXT_REVIEW_RUN_SUPERSEDED");
   });
 
   it("normalizes exact heads and enforces review event and body limits", () => {
