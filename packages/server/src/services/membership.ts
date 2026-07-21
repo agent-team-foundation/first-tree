@@ -240,7 +240,21 @@ export async function reactivateMembership(
     .limit(1);
   if (!identity) throw new NotFoundError(`Membership "${existing.id}" not found`);
 
-  const mutateRows = async () => reactivateMembershipRows(db, existing, options);
+  const mutateRows = async () => {
+    // The caller may have classified this membership before waiting on the
+    // user identity lock. Re-read and lock the lifecycle row now so a
+    // concurrently completed rejoin/restore is observed instead of being
+    // overwritten from that stale snapshot.
+    const [current] = await db.select().from(members).where(eq(members.id, existing.id)).for("update").limit(1);
+    if (!current) throw new NotFoundError(`Membership "${existing.id}" not found`);
+    if (current.status === MEMBER_STATUSES.ACTIVE) {
+      throw new ConflictError(`User "${options.username}" is already a member of this organization`);
+    }
+    if (current.status !== MEMBER_STATUSES.LEFT && current.status !== MEMBER_STATUSES.REMOVED) {
+      throw new ConflictError(`User "${options.username}" has an unsupported membership status`);
+    }
+    await reactivateMembershipRows(db, current, options);
+  };
   if (options.displayName !== undefined) {
     await syncUserDisplayName(db, identity.userId, options.displayName, mutateRows);
   } else {
@@ -457,19 +471,23 @@ export type MembershipMirrorRepairResult = {
  * mirror; inactive memberships keep the mirror named but suspended.
  */
 export async function repairMembershipHumanMirrors(db: Database): Promise<MembershipMirrorRepairResult> {
-  return db.transaction(async (tx) => {
-    const rows = await tx
-      .select({
-        memberId: members.id,
-        userId: members.userId,
-        agentId: members.agentId,
-      })
-      .from(members)
-      .orderBy(asc(members.userId), asc(members.id));
+  const rows = await db
+    .select({
+      memberId: members.id,
+      userId: members.userId,
+      agentId: members.agentId,
+    })
+    .from(members)
+    .orderBy(asc(members.userId), asc(members.id));
 
-    let activeMirrorsRepaired = 0;
-    let inactiveMirrorsRepaired = 0;
-    for (const row of rows) {
+  let activeMirrorsRepaired = 0;
+  let inactiveMirrorsRepaired = 0;
+  for (const row of rows) {
+    // Keep repair transactions scoped to one membership. Accumulating member
+    // locks across users can deadlock with leave/removal, which locks an org's
+    // active admins before its target member. Per-row commits release the
+    // target before repair advances to another user's admin row.
+    const repairedStatus = await db.transaction(async (tx) => {
       // Re-read each projection under the same user -> member -> agent order
       // used by live identity writes. Separate READ COMMITTED statements avoid
       // replaying a stale joined snapshot after waiting on a concurrent rename.
@@ -491,7 +509,7 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
         .where(eq(agents.uuid, row.agentId))
         .for("update")
         .limit(1);
-      if (!identity || !member || !mirror) continue;
+      if (!identity || !member || !mirror) return null;
 
       const desiredStatus = member.status === MEMBER_STATUSES.ACTIVE ? AGENT_STATUSES.ACTIVE : AGENT_STATUSES.SUSPENDED;
       const needsRepair =
@@ -499,7 +517,7 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
         mirror.status !== desiredStatus ||
         mirror.name === null ||
         mirror.displayName !== identity.displayName;
-      if (!needsRepair) continue;
+      if (!needsRepair) return null;
 
       const restoredName =
         mirror.name ??
@@ -520,12 +538,14 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
         })
         .where(eq(agents.uuid, row.agentId));
 
-      if (member.status === MEMBER_STATUSES.ACTIVE) activeMirrorsRepaired += 1;
-      else inactiveMirrorsRepaired += 1;
-    }
+      return member.status;
+    });
 
-    return { activeMirrorsRepaired, inactiveMirrorsRepaired };
-  });
+    if (repairedStatus === MEMBER_STATUSES.ACTIVE) activeMirrorsRepaired += 1;
+    else if (repairedStatus !== null) inactiveMirrorsRepaired += 1;
+  }
+
+  return { activeMirrorsRepaired, inactiveMirrorsRepaired };
 }
 
 type CreatePersonalTeamInput = {

@@ -746,6 +746,92 @@ describe("Members API", () => {
       }
     });
 
+    it("rejects a stale admin restore after a concurrent self rejoin wins", async () => {
+      const app = getApp();
+      const databaseUrl = process.env.DATABASE_URL ?? "";
+      if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+      const admin = await createTestAdmin(app, { username: `restore-race-admin-${randomUUID().slice(0, 8)}` });
+      const target = await memberService.createMember(app.db, admin.organizationId, {
+        username: `restore-race-target-${randomUUID().slice(0, 8)}`,
+        displayName: "Self Rejoin Identity",
+        role: "member",
+      });
+      await app.db.update(membersTable).set({ status: "left" }).where(eq(membersTable.id, target.id));
+      await app.db.update(agentsTable).set({ status: "suspended" }).where(eq(agentsTable.uuid, target.agentId));
+
+      const suffix = randomUUID().slice(0, 8);
+      const rejoiningApplicationName = `membership_self_rejoin_${suffix}`;
+      const restoringApplicationName = `membership_admin_restore_${suffix}`;
+      const rejoiningDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, rejoiningApplicationName));
+      const restoringDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, restoringApplicationName));
+      const memberBlocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+      const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+      let memberBlockerCommitted = false;
+      try {
+        await memberBlocker`BEGIN`;
+        await memberBlocker`SELECT id FROM members WHERE id = ${target.id} FOR UPDATE`;
+
+        // The real self-service ensure path takes the user lock first, then
+        // pauses on this member-row blocker before it can publish the rejoin.
+        const rejoining = ensureMembership(rejoiningDb, {
+          userId: target.userId,
+          organizationId: admin.organizationId,
+          role: "member",
+          displayName: "Self Rejoin Identity",
+          username: target.username,
+        });
+        await waitForPostgresLockWait(observer, rejoiningApplicationName);
+
+        const restoring = memberService
+          .createMember(restoringDb, admin.organizationId, {
+            username: target.username,
+            displayName: "Stale Admin Rename",
+            role: "admin",
+          })
+          .then(
+            (value) => ({ status: "fulfilled" as const, value }),
+            (error: unknown) => ({ status: "rejected" as const, error }),
+          );
+        await waitForPostgresLockWait(observer, restoringApplicationName);
+
+        // Releasing the member row lets self-rejoin commit first. The waiting
+        // admin restore must then re-read the active lifecycle state while it
+        // owns the user lock rather than applying its stale pre-lock snapshot.
+        await memberBlocker`COMMIT`;
+        memberBlockerCommitted = true;
+        await expect(rejoining).resolves.toMatchObject({ id: target.id, status: "active" });
+
+        const restoreResult = await restoring;
+        expect(restoreResult.status).toBe("rejected");
+        if (restoreResult.status === "rejected") {
+          expect(restoreResult.error).toBeInstanceOf(Error);
+          expect((restoreResult.error as Error).message).toMatch(/already a member/i);
+        }
+
+        const [user] = await app.db
+          .select({ displayName: usersTable.displayName })
+          .from(usersTable)
+          .where(eq(usersTable.id, target.userId));
+        const [member] = await app.db
+          .select({ role: membersTable.role, status: membersTable.status })
+          .from(membersTable)
+          .where(eq(membersTable.id, target.id));
+        const [mirror] = await app.db
+          .select({ displayName: agentsTable.displayName, status: agentsTable.status })
+          .from(agentsTable)
+          .where(eq(agentsTable.uuid, target.agentId));
+        expect(user?.displayName).toBe("Self Rejoin Identity");
+        expect(member).toMatchObject({ role: "member", status: "active" });
+        expect(mirror).toMatchObject({ displayName: "Self Rejoin Identity", status: "active" });
+      } finally {
+        if (!memberBlockerCommitted) await memberBlocker`ROLLBACK`;
+        await rejoiningDb.end();
+        await restoringDb.end();
+        await memberBlocker.end();
+        await observer.end();
+      }
+    });
+
     it("locks the user before claiming a new membership's unique slot", async () => {
       const app = getApp();
       const databaseUrl = process.env.DATABASE_URL ?? "";
@@ -908,6 +994,80 @@ describe("Members API", () => {
         if (!blockerCommitted) await blocker`ROLLBACK`;
         await repairDb.end();
         await blocker.end();
+        await observer.end();
+      }
+    });
+
+    it("does not deadlock startup repair with concurrent member removal", async () => {
+      const app = getApp();
+      const databaseUrl = process.env.DATABASE_URL ?? "";
+      if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+      const organization = await createOrganization(app.db, {
+        name: `repair-removal-${randomUUID().slice(0, 8)}`,
+        displayName: "Repair Removal",
+      });
+      // Create the ordinary member first so repair reaches and locks it before
+      // the later admin row in its stable user-id order.
+      const target = await memberService.createMember(app.db, organization.id, {
+        username: `repair-removal-target-${randomUUID().slice(0, 8)}`,
+        displayName: "Repair Removal Target",
+        role: "member",
+      });
+      const admin = await memberService.createMember(app.db, organization.id, {
+        username: `repair-removal-admin-${randomUUID().slice(0, 8)}`,
+        displayName: "Repair Removal Admin",
+        role: "admin",
+      });
+      expect(target.userId < admin.userId).toBe(true);
+
+      const suffix = randomUUID().slice(0, 8);
+      const repairApplicationName = `membership_repair_removal_${suffix}`;
+      const removalApplicationName = `membership_remove_repair_${suffix}`;
+      const repairDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, repairApplicationName));
+      const removalDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, removalApplicationName));
+      const mirrorBlocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+      const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+      let mirrorBlockerCommitted = false;
+      try {
+        await mirrorBlocker`BEGIN`;
+        await mirrorBlocker`SELECT uuid FROM agents WHERE uuid = ${target.agentId} FOR UPDATE`;
+
+        const repair = repairMembershipHumanMirrors(repairDb).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        await waitForPostgresLockWait(observer, repairApplicationName);
+
+        // Removal locks the active admin first and then waits for the target
+        // member held by repair. A table-wide repair transaction would next
+        // wait for that admin while retaining the target, forming a cycle.
+        const removal = memberService.deleteMember(removalDb, target.id, organization.id).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        await waitForPostgresLockWait(observer, removalApplicationName);
+
+        await mirrorBlocker`COMMIT`;
+        mirrorBlockerCommitted = true;
+        const [repairResult, removalResult] = await Promise.all([repair, removal]);
+        expect(repairResult.status).toBe("fulfilled");
+        expect(removalResult.status).toBe("fulfilled");
+
+        const [member] = await app.db
+          .select({ status: membersTable.status })
+          .from(membersTable)
+          .where(eq(membersTable.id, target.id));
+        const [mirror] = await app.db
+          .select({ status: agentsTable.status })
+          .from(agentsTable)
+          .where(eq(agentsTable.uuid, target.agentId));
+        expect(member?.status).toBe("removed");
+        expect(mirror?.status).toBe("suspended");
+      } finally {
+        if (!mirrorBlockerCommitted) await mirrorBlocker`ROLLBACK`;
+        await repairDb.end();
+        await removalDb.end();
+        await mirrorBlocker.end();
         await observer.end();
       }
     });
