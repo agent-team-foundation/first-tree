@@ -15,6 +15,7 @@ import {
   updateAgent,
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
+import { updateMember, updateMyProfile } from "./../api/members.js";
 import { listAgentSessions } from "./../api/sessions.js";
 import { useAuth } from "./../auth/auth-context.js";
 import { Avatar } from "./../components/avatar.js";
@@ -61,7 +62,7 @@ function AgentDetailPageView() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const location = useLocation();
-  const { memberId, role } = useAuth();
+  const { memberId, role, refreshMe } = useAuth();
   // On phones the header drops its secondary metadata line (type · visibility,
   // offline-since) — those are all repeated on the Profile tab — so the
   // avatar, name, presence chip, and action buttons keep their natural size
@@ -130,10 +131,33 @@ function AgentDetailPageView() {
   const [dangerError, setDangerError] = useState<string | null>(null);
 
   const identityUpdateMutation = useMutation({
-    mutationFn: (patch: Parameters<typeof updateAgent>[1]) => updateAgent(uuid, patch),
+    mutationFn: async (patch: Parameters<typeof updateAgent>[1]) => {
+      const target = agentQuery.data;
+      if (patch.displayName === undefined || target?.type !== "human") {
+        return updateAgent(uuid, patch);
+      }
+
+      // A human agent is only a membership-scoped mirror of its user. Keep the
+      // authoritative users.display_name and every applicable mirror aligned by
+      // using the member/profile mutations instead of generic PATCH /agents.
+      if (!target.managerId) throw new Error("Human identity is missing its member owner.");
+      const { displayName, ...agentPatch } = patch;
+      const identityResult =
+        target.managerId === memberId
+          ? await updateMyProfile({ displayName })
+          : await updateMember(target.managerId, { displayName });
+      // Profile fields commit independently today, but preserve any future
+      // combined patch instead of silently dropping non-name agent fields.
+      if (Object.keys(agentPatch).length > 0) await updateAgent(uuid, agentPatch);
+      return identityResult;
+    },
     onSuccess: async (_agent, patch) => {
       if (patch.displayName !== undefined) {
-        await invalidateDisplayNameQueries(queryClient);
+        const refreshAuthenticatedUser = agentQuery.data?.type === "human" && agentQuery.data.managerId === memberId;
+        await Promise.all([
+          invalidateDisplayNameQueries(queryClient),
+          ...(refreshAuthenticatedUser ? [refreshMe()] : []),
+        ]);
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["agent", uuid] });

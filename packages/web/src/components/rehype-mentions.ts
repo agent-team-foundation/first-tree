@@ -305,7 +305,11 @@ function renderedTextFromFragment(root: HTMLElement, fragment: DocumentFragment)
   container.style.left = "-200vw";
   container.style.top = "0";
   container.style.width = "100vw";
-  container.style.whiteSpace = "pre-wrap";
+  // Match the live timeline's whitespace collapsing. Forcing pre-wrap here
+  // would preserve otherwise-collapsible spaces/tabs merely because the
+  // selection contains a mention, changing unrelated copied text.
+  const liveWhiteSpace = root.ownerDocument.defaultView?.getComputedStyle(root).whiteSpace;
+  if (liveWhiteSpace) container.style.whiteSpace = liveWhiteSpace;
   container.append(fragment);
 
   const body = root.ownerDocument.body;

@@ -483,6 +483,54 @@ describe("Members API", () => {
       expect(row?.role).toBe("member");
     });
 
+    it("updateMember keeps every human mirror aligned for a multi-org user", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `mirror-admin-${randomUUID().slice(0, 8)}` });
+      const target = await memberService.createMember(app.db, admin.organizationId, {
+        username: `mirror-target-${randomUUID().slice(0, 8)}`,
+        displayName: "Original Name",
+        role: "member",
+      });
+      const sideOrg = await createOrganization(app.db, {
+        name: `mirror-side-${randomUUID().slice(0, 8)}`,
+        displayName: "Mirror Side",
+      });
+      const sideMemberId = randomUUID();
+      let sideAgentId = "";
+      await app.db.transaction(async (tx) => {
+        const sideHuman = await createAgent(tx as unknown as typeof app.db, {
+          name: `mirror-human-${randomUUID().slice(0, 8)}`,
+          type: "human",
+          displayName: "Original Name",
+          managerId: sideMemberId,
+          organizationId: sideOrg.id,
+        });
+        sideAgentId = sideHuman.uuid;
+        await tx.insert(membersTable).values({
+          id: sideMemberId,
+          userId: target.userId,
+          organizationId: sideOrg.id,
+          agentId: sideAgentId,
+          role: "member",
+        });
+      });
+
+      await memberService.updateMember(app.db, target.id, { displayName: "Unified Name" }, admin.organizationId);
+
+      const [user] = await app.db
+        .select({ displayName: usersTable.displayName })
+        .from(usersTable)
+        .where(eq(usersTable.id, target.userId))
+        .limit(1);
+      const mirrors = await app.db
+        .select({ uuid: agentsTable.uuid, displayName: agentsTable.displayName })
+        .from(agentsTable)
+        .where(inArray(agentsTable.uuid, [target.agentId, sideAgentId]));
+      expect(user?.displayName).toBe("Unified Name");
+      expect(mirrors).toHaveLength(2);
+      expect(mirrors.every((mirror) => mirror.displayName === "Unified Name")).toBe(true);
+    });
+
     it("createMember rejects an existing row with an unsupported lifecycle status", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app, { username: `unsupported-admin-${randomUUID().slice(0, 8)}` });

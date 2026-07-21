@@ -36,6 +36,11 @@ const agentMocks = vi.hoisted(() => ({
   updateAgent: vi.fn(),
 }));
 
+const memberMocks = vi.hoisted(() => ({
+  updateMember: vi.fn(),
+  updateMyProfile: vi.fn(),
+}));
+
 const agentResourceMocks = vi.hoisted(() => ({
   getAgentResources: vi.fn(),
   updateAgentResources: vi.fn(),
@@ -51,6 +56,7 @@ const usageMocks = vi.hoisted(() => ({
 }));
 
 const authMock = vi.hoisted(() => ({
+  refreshMe: vi.fn(),
   value: {
     memberId: "member-self",
     role: "admin",
@@ -74,6 +80,11 @@ vi.mock("../../../api/agents.js", async (importOriginal) => ({
   ...agentMocks,
 }));
 
+vi.mock("../../../api/members.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../api/members.js")>()),
+  ...memberMocks,
+}));
+
 vi.mock("../../../api/agent-resources.js", () => agentResourceMocks);
 
 vi.mock("../../../api/sessions.js", async (importOriginal) => ({
@@ -88,7 +99,7 @@ vi.mock("../../../api/usage.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../../auth/auth-context.js", () => ({
-  useAuth: () => authMock.value,
+  useAuth: () => ({ ...authMock.value, refreshMe: authMock.refreshMe }),
 }));
 
 vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
@@ -388,6 +399,20 @@ beforeEach(() => {
   agentMocks.listAllAgents.mockResolvedValue(switcherAgents);
   agentMocks.listAgents.mockResolvedValue(switcherAgents);
   agentMocks.updateAgent.mockResolvedValue(agent());
+  memberMocks.updateMember.mockResolvedValue({
+    id: "member-other",
+    userId: "user-other",
+    organizationId: "org-1",
+    agentId: "agent-1",
+    role: "member",
+    createdAt: NOW,
+    username: "other",
+    displayName: "Other Updated",
+    avatarUrl: null,
+    lastActiveAt: null,
+  });
+  memberMocks.updateMyProfile.mockResolvedValue({ id: "user-self", displayName: "Gandy Updated" });
+  authMock.refreshMe.mockResolvedValue(undefined);
   agentMocks.suspendAgent.mockResolvedValue(agent({ status: "suspended" }));
   agentMocks.switchAgentRuntime.mockResolvedValue(agent({ runtimeProvider: "codex" }));
   agentMocks.recoverAgentRuntimeSwitch.mockResolvedValue(agent());
@@ -1090,6 +1115,72 @@ describe("AgentDetailPage", () => {
     expect(view.container.textContent).not.toContain("Agent lifecycle");
     expect(view.container.textContent).not.toContain("Deletion");
     expect(view.container.querySelector('button[aria-label="Suspend"]')).toBeNull();
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("updates a self human name through the authoritative profile route", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValue(agent({ type: "human", managerId: "member-self", displayName: "Gandy" }));
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    await click(exactButtonByText(view.container, "Edit"));
+    await waitForText(document.body, "Edit profile");
+    const input = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!input) throw new Error("Expected profile display-name input");
+    await setValue(input, "Gandy Updated");
+    await click(exactButtonByText(document.body, "Done"));
+
+    await waitForCondition(() => memberMocks.updateMyProfile.mock.calls.length > 0, "Expected self profile update");
+    expect(memberMocks.updateMyProfile).toHaveBeenCalledWith({ displayName: "Gandy Updated" });
+    expect(agentMocks.updateAgent).not.toHaveBeenCalled();
+    await waitForCondition(() => authMock.refreshMe.mock.calls.length > 0, "Expected authenticated user refresh");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("updates another human name through the authoritative member route", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValue(
+      agent({ type: "human", managerId: "member-other", displayName: "Other Person" }),
+    );
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    await click(exactButtonByText(view.container, "Edit"));
+    await waitForText(document.body, "Edit profile");
+    const input = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!input) throw new Error("Expected profile display-name input");
+    await setValue(input, "Other Updated");
+    await click(exactButtonByText(document.body, "Done"));
+
+    await waitForCondition(() => memberMocks.updateMember.mock.calls.length > 0, "Expected member identity update");
+    expect(memberMocks.updateMember).toHaveBeenCalledWith("member-other", { displayName: "Other Updated" });
+    expect(agentMocks.updateAgent).not.toHaveBeenCalled();
+    expect(authMock.refreshMe).not.toHaveBeenCalled();
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps non-human display-name edits on the agent route", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValue(agent({ displayName: "Vega" }));
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    await click(exactButtonByText(view.container, "Edit"));
+    await waitForText(document.body, "Edit profile");
+    const input = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!input) throw new Error("Expected profile display-name input");
+    await setValue(input, "Vega Updated");
+    await click(exactButtonByText(document.body, "Done"));
+
+    await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected agent identity update");
+    expect(agentMocks.updateAgent).toHaveBeenCalledWith("agent-1", { displayName: "Vega Updated" });
+    expect(memberMocks.updateMember).not.toHaveBeenCalled();
+    expect(memberMocks.updateMyProfile).not.toHaveBeenCalled();
+    expect(authMock.refreshMe).not.toHaveBeenCalled();
 
     await act(async () => view.root.unmount());
   });

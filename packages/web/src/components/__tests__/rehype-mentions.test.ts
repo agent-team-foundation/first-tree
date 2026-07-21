@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   copyHtmlWithMentionHandles,
   copyTextWithMentionHandles,
@@ -242,6 +242,30 @@ describe("copyTextWithMentionHandles", () => {
     expect(plain).toContain("next paragraph @me");
     expect(plain).not.toContain("Alice Chen");
     expect(rich).toBe("<p>line one<br>line two @alice</p><p>next paragraph @me</p>");
+
+    selection?.removeAllRanges();
+    root.remove();
+  });
+
+  it("preserves the live whitespace semantics around rewritten mentions", () => {
+    const root = document.createElement("div");
+    root.style.whiteSpace = "normal";
+    root.innerHTML =
+      'Please   ask\t<span class="mention-chip" data-mention-name="alice"><span class="mention-chip-display">@Alice Chen</span></span>   today';
+    document.body.append(root);
+
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const appendSpy = vi.spyOn(document.body, "append");
+    expect(copyTextWithMentionHandles(root, selection)).toBe(root.innerText.replace("@Alice Chen", "@alice"));
+    const detachedRenderRoot = appendSpy.mock.calls.at(-1)?.[0];
+    expect(detachedRenderRoot).toBeInstanceOf(HTMLElement);
+    expect((detachedRenderRoot as HTMLElement).style.whiteSpace).toBe("normal");
+    appendSpy.mockRestore();
 
     selection?.removeAllRanges();
     root.remove();

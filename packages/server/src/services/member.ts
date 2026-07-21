@@ -228,14 +228,19 @@ export async function updateMember(db: Database, id: string, data: UpdateMember,
     if (data.role !== undefined && data.role !== current.role) {
       await tx.update(members).set({ role: data.role }).where(eq(members.id, id));
     }
-    // Member displayName is stored on the member's human agent — there is no
-    // `members.display_name` column. Write to the agent directly so the two
-    // views (member list + agent detail) don't drift. `users.display_name`
-    // is treated as the authoritative field the `listMembers` join reads
-    // from, so update it too.
+    // displayName is user-global: members have no display_name column and
+    // listMembers reads users.display_name. Keep every membership-scoped
+    // human agent mirror aligned so chat detail never disagrees with the
+    // member/AuthProvider identity after an admin rename in any organization.
     if (data.displayName !== undefined && data.displayName !== current.displayName) {
       await tx.update(users).set({ displayName: data.displayName }).where(eq(users.id, current.userId));
-      await tx.update(agents).set({ displayName: data.displayName }).where(eq(agents.uuid, current.agentId));
+      const memberRows = await tx
+        .select({ agentId: members.agentId })
+        .from(members)
+        .where(eq(members.userId, current.userId));
+      for (const member of memberRows) {
+        await tx.update(agents).set({ displayName: data.displayName }).where(eq(agents.uuid, member.agentId));
+      }
     }
   });
 

@@ -28,8 +28,9 @@ import { useJustSaved } from "./save-semantics.js";
  * One "Edit profile" dialog merging the former Identity and Appearance dialogs.
  * Every field saves on its own commit (immediate-save, like the rest of the
  * agent-detail page) — there is no Save button:
- *   - Identity / visibility / fallback color → a partial PATCH /agents/:uuid per
- *     field (`onSave`): display name on blur / Enter, the rest on change. Saves
+ *   - Identity / visibility / fallback color → a partial mutation per field
+ *     (`onSave`): display name on blur / Enter, the rest on change. Human names
+ *     use their member/profile identity route; agent fields use PATCH /agents/:uuid. Saves
  *     serialize — controls + Done disable while one is in flight — so partial
  *     PATCHes never race and the dialog never closes mid-save; a rejected save
  *     surfaces inline. Done just commits any pending name, then closes.
@@ -210,8 +211,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   // Every field saves on its own commit (text on blur / Enter, selects + colour
   // on change) — consistent with the rest of the agent-detail page, which has no
-  // Save button. Each save is a partial PATCH /agents/:uuid; the avatar image is
-  // handled eagerly below, separately.
+  // Save button. Each save is a partial identity mutation; the parent routes a
+  // human display name through its member/profile authority and agent fields
+  // through PATCH /agents/:uuid. The avatar image is handled eagerly below.
   async function saveField(patch: UpdateAgent): Promise<boolean> {
     // Serialize: ignore a new save while one is in flight, so overlapping partial
     // PATCHes can't race and leave the server with a stale value.
