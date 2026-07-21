@@ -147,7 +147,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let tmuxSessionName: string | null = null;
   let transcriptTailer: TranscriptTailer | null = null;
-  let currentTurnPromise: Promise<void> | null = null;
+  let currentTurnPromise: Promise<unknown> | null = null;
   const lifecycleFence = new TuiLifecycleFence();
   let turnAborted = false;
   // True for the whole span a turn is being prepared/run — start/resume
@@ -309,13 +309,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     tmuxSessionName = sessionName;
     try {
       await waitForReady({ name: sessionName, timeoutMs: READY_TIMEOUT_MS });
+      transcriptTailer = await TranscriptTailer.create(transcriptPathFor(cwd, sessionId), {
+        startAt: resumeSessionId === null ? "start" : "end",
+      });
     } catch (err) {
       await killSession(sessionName).catch(() => {});
       tmuxSessionName = null;
+      transcriptTailer = null;
       throw err;
     }
-
-    transcriptTailer = new TranscriptTailer(transcriptPathFor(cwd, sessionId));
     return sessionId;
   }
 
@@ -377,11 +379,25 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     turnProcessor = null;
   }
 
-  async function drainAndConsume(sessionCtx: SessionContext, state: TurnState): Promise<void> {
-    if (!transcriptTailer) return;
-    for (const entry of transcriptTailer.drainEntries()) {
-      consumeEntry(entry, sessionCtx, state);
+  async function drainAndConsume(sessionCtx: SessionContext, state: TurnState, deadline: number): Promise<boolean> {
+    if (!transcriptTailer) return true;
+    const watermark = await transcriptTailer.captureWatermark();
+    while (!turnAborted && !lifecycleFence.stopRequested && Date.now() < deadline) {
+      const drained = await transcriptTailer.drainEntries(watermark);
+      for (const entry of drained.entries) {
+        consumeEntry(entry, sessionCtx, state);
+      }
+      if (drained.skippedOversizedLines > 0) {
+        sessionCtx.log(`tui transcript skipped ${drained.skippedOversizedLines} oversized JSONL record(s)`);
+      }
+      if (!drained.hasMore) return true;
+      if (drained.bytesRead === 0) return false;
+
+      // Keep a large but finite watermark cooperative with pane polling,
+      // suspend, and the turn deadline.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
+    return false;
   }
 
   async function runTurn(
@@ -389,11 +405,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
-    token.processingStarted(messages);
     turnAborted = false;
 
     const state: TurnState = { finalTexts: [] };
@@ -402,20 +417,50 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     let everSawWorking = false;
     let brokeOnIdle = false;
 
+    // Everything present before paste belongs to an earlier turn. Move the
+    // baseline with metadata only: resume must never read/parse its history.
+    // This await introduces a lifecycle interleaving point, so re-check the
+    // stop fence before handing the message to the provider.
     try {
-      // Pre-flush whatever's already in the transcript (the prior turn's
-      // tail end) so it doesn't pollute this turn's text accumulation.
-      transcriptTailer.drainEntries();
+      await transcriptTailer.discardToEnd();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      sessionCtx.log(`tui transcript preflush failed: ${message}`);
+      try {
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `Transcript preflush failed: ${message}` },
+        });
+      } catch (emitError) {
+        sessionCtx.log(
+          `tui transcript preflush error event failed: ${emitError instanceof Error ? emitError.message : String(emitError)}`,
+        );
+      }
+      token.retry(messages, "tui_transcript_preflush_failed");
+      return false;
+    }
+    if (turnAborted || lifecycleFence.stopRequested) {
+      token.retry(messages, "tui_turn_stopped_before_paste");
+      return false;
+    }
+    token.processingStarted(messages);
 
+    try {
       await pasteText(tmuxSessionName, text);
       sessionCtx.recordProviderActivity();
 
       const startTs = Date.now();
-      while (Date.now() - startTs < TURN_TIMEOUT_MS) {
+      const turnDeadline = startTs + TURN_TIMEOUT_MS;
+      while (Date.now() < turnDeadline) {
         if (turnAborted) break;
         sessionCtx.recordProviderActivity();
 
-        await drainAndConsume(sessionCtx, state);
+        const caughtUp = await drainAndConsume(sessionCtx, state, turnDeadline);
+        if (turnAborted || lifecycleFence.stopRequested) break;
+        // An idle pane is not a clean completion while a fixed transcript
+        // watermark still has unread bytes at the absolute turn deadline.
+        // Settling here would ACK partial output and lose the remainder.
+        if (!caughtUp && Date.now() >= turnDeadline) break;
 
         const pane = await capturePane(tmuxSessionName);
         const working = pane.includes(WORKING_MARKER);
@@ -431,10 +476,13 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           // assistant_text block to the transcript after the working
           // marker disappears.
           const graceUntil = Date.now() + TURN_GRACE_MS;
+          let graceCaughtUp = true;
           while (Date.now() < graceUntil) {
-            await drainAndConsume(sessionCtx, state);
+            graceCaughtUp = await drainAndConsume(sessionCtx, state, Math.min(graceUntil, turnDeadline));
+            if (turnAborted || lifecycleFence.stopRequested) break;
             await sleep(150);
           }
+          if (!graceCaughtUp && Date.now() >= turnDeadline) break;
           brokeOnIdle = true;
           break;
         }
@@ -443,7 +491,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       }
 
       // One last pass in case the timeout-or-break left entries behind.
-      await drainAndConsume(sessionCtx, state);
+      await drainAndConsume(sessionCtx, state, turnDeadline);
 
       // Loop hit the TURN_TIMEOUT ceiling (not a clean idle break, not an
       // explicit abort): claude may still be working. Interrupt it so its
@@ -517,6 +565,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       token.retry(messages, disposition.action.reason);
     }
     resetProcessor();
+    return true;
   }
 
   /**
@@ -698,13 +747,17 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             deliveryToken.retry(message, "tui_start_stopped_before_turn");
             return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
           }
-          currentTurnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
+          const turnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
+          currentTurnPromise = turnPromise;
+          let enteredProvider: boolean;
           try {
-            await currentTurnPromise;
+            enteredProvider = await turnPromise;
           } finally {
             currentTurnPromise = null;
           }
-          return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "processing" } } : sessionId;
+          return hasExplicitDeliveryToken
+            ? { sessionId, route: { kind: "owned", mode: enteredProvider ? "processing" : "queued" } }
+            : sessionId;
         } finally {
           turnRunning = false;
           // Drain any messages injected during bootstrap / the first turn.
@@ -763,11 +816,18 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
                 ? { sessionId: restartedId, route: { kind: "owned", mode: "queued" } }
                 : restartedId;
             }
-            currentTurnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
+            const turnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
+            currentTurnPromise = turnPromise;
+            let enteredProvider: boolean;
             try {
-              await currentTurnPromise;
+              enteredProvider = await turnPromise;
             } finally {
               currentTurnPromise = null;
+            }
+            if (!enteredProvider) {
+              return hasExplicitDeliveryToken
+                ? { sessionId: restartedId, route: { kind: "owned", mode: "queued" } }
+                : restartedId;
             }
           }
           return hasExplicitDeliveryToken
