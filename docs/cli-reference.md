@@ -256,6 +256,25 @@ first-tree agent prune [--yes] [--dry-run]  # remove every local alias the serve
 
 `prune` is the counterpart to `daemon doctor`'s "stale aliases" warning.
 
+Local cleanup accepts the path-safe persisted-name compatibility shape: 1–100
+lowercase ASCII letters, digits, hyphens, or underscores. This keeps older
+aliases manageable, including names that start with `-` / `_` or are now
+reserved for new agents. `agent remove` rejects other inputs as
+`INVALID_AGENT_NAME` before local state is inspected or changed; `prune`
+also refuses to delete a discovered alias outside this shape.
+
+For a grandfathered name that begins with `-`, terminate command options
+before the name, for example `first-tree agent remove -- -legacy`.
+
+Before changing files for an alias, `remove` and `prune` preflight its
+config, workspace, and session targets against their expected managed First
+Tree state regions. A preflight failure leaves all three unchanged. Each
+target is checked again immediately before deletion; if concurrent filesystem
+changes invalidate a later check, cleanup stops, but an earlier completed
+deletion is not rolled back. Node's path APIs cannot make the final check and
+deletion one atomic filesystem operation, so same-path inode replacement
+remains an operating-system race boundary.
+
 ### agent status / agent reset
 
 ```

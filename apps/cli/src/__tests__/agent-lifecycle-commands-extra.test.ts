@@ -138,6 +138,7 @@ beforeEach(() => {
   coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([]);
   coreMocks.readActiveClientIdFromIndex.mockReturnValue(null);
   coreMocks.readActiveRootClientId.mockReturnValue(null);
+  coreMocks.removeLocalAgent.mockReturnValue(true);
   coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: true });
   cliFetchMock.mockReset();
   promptMocks.confirm.mockResolvedValue(true);
