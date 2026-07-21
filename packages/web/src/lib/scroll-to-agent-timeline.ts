@@ -11,14 +11,24 @@ type TimelineJumpOptions = {
 /**
  * Best-effort jump to an agent's place in the chat timeline, by the per-agent
  * anchor a status maps to: working → its WorkingTurn (`data-working-agent`),
- * failed → its ErrorRow (`data-error-agent`). No-op for states with no
- * timeline target (ready / paused / offline) or when the anchor isn't
- * currently mounted (e.g. a working card whose turn already ended). Shared by
- * the compose rail and the sidebar AgentRow so "click a status → see its
- * context" works the same way in both.
+ * failed → its fatal ErrorRow (`data-error-agent`), and provider reason → its
+ * waiting/retrying/warning ErrorRow (`data-status-reason-agent`). No-op when
+ * the anchor is not currently mounted. Shared by the compose Inspector and
+ * any future status surface that needs the same evidence jump.
  */
-export function scrollToAgentTimeline(agentId: string, main: AgentMainStatus, options: TimelineJumpOptions = {}): void {
-  const attr = main === "failed" ? "data-error-agent" : main === "working" ? "data-working-agent" : null;
+export function scrollToAgentTimeline(
+  agentId: string,
+  main: AgentMainStatus | "reason",
+  options: TimelineJumpOptions = {},
+): void {
+  const attr =
+    main === "failed"
+      ? "data-error-agent"
+      : main === "working"
+        ? "data-working-agent"
+        : main === "reason"
+          ? "data-status-reason-agent"
+          : null;
   if (!attr) return;
   const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
   const target = els[els.length - 1];

@@ -1,7 +1,7 @@
-import type { AgentMainStatus } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { scrollToAgentTimeline } from "../../lib/scroll-to-agent-timeline.js";
+import type { TimelineAnchorKind } from "../../lib/use-mounted-anchors.js";
 import { cn } from "../../lib/utils.js";
 
 /**
@@ -20,7 +20,7 @@ import { cn } from "../../lib/utils.js";
  */
 export function TimelineJumpButton({
   agentId,
-  main,
+  target,
   anchored,
   ariaLabel,
   onNavigate,
@@ -30,7 +30,7 @@ export function TimelineJumpButton({
   children,
 }: {
   agentId: string;
-  main: AgentMainStatus;
+  target: TimelineAnchorKind;
   /** Whether this agent's timeline anchor is currently mounted. */
   anchored: boolean;
   ariaLabel: string;
@@ -43,9 +43,8 @@ export function TimelineJumpButton({
   children: ReactNode;
 }) {
   if (!anchored) {
-    // Anchor not mounted (e.g. a non-primary agent's events, or an old message
-    // outside the 50-message window) → show the status, but don't pretend it's
-    // a working jump.
+    // Anchor not mounted (for example, evidence outside a bounded timeline
+    // window) → show the status, but don't pretend it is a working jump.
     return (
       <div className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: "var(--sp-1)", ...style }}>
         {children}
@@ -57,7 +56,7 @@ export function TimelineJumpButton({
       type="button"
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         onNavigate?.();
-        scrollToAgentTimeline(agentId, main, { focus: event.detail === 0 });
+        scrollToAgentTimeline(agentId, target, { focus: event.detail === 0 });
       }}
       aria-label={ariaLabel}
       className={cn("group inline-flex min-w-0 items-center", className, interactiveClassName)}

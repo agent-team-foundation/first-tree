@@ -70,16 +70,21 @@ describe("scrollToAgentTimeline", () => {
     vi.unstubAllGlobals();
   });
 
-  it("handles errors, inert states, and missing anchors", () => {
+  it("handles errors, provider reasons, inert states, and missing anchors", () => {
     const error = document.createElement("div");
     error.setAttribute("data-error-agent", "agent-1");
-    document.body.append(error);
+    const reason = document.createElement("div");
+    reason.setAttribute("data-status-reason-agent", "agent-1");
+    document.body.append(error, reason);
     error.scrollIntoView = vi.fn();
+    reason.scrollIntoView = vi.fn();
 
     scrollToAgentTimeline("agent-1", "failed");
+    scrollToAgentTimeline("agent-1", "reason");
     scrollToAgentTimeline("agent-1", "ready");
     scrollToAgentTimeline("missing", "working");
 
     expect(error.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(reason.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 });

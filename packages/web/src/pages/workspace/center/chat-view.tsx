@@ -460,6 +460,10 @@ function ErrorRow({
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
       data-error-agent={fatal ? event.agentId : undefined}
+      // Every provider reason, including waiting/retrying/warning rows, is
+      // evidence for the Inspector's reason summary without becoming a
+      // failure-status anchor.
+      data-status-reason-agent={retryReason ? event.agentId : undefined}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: `var(--hairline-bold) solid ${color}`,

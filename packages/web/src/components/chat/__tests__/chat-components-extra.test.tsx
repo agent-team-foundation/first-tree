@@ -8,7 +8,7 @@ import {
   type LiveActivity,
 } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, createRef, type ReactElement } from "react";
+import { act, createRef, type ReactElement, useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
@@ -152,7 +152,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-ready", "Ready Agent")]} />));
 
     await waitForSettled(h, () => expect(agentStatusApiMocks.fetchChatAgentStatuses).toHaveBeenCalledWith("chat-1"));
-    expect(h.container.textContent).toBe("");
+    expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
+    expect(h.container.querySelector('[role="status"]')?.textContent).toContain("0 actionable agents");
   });
 
   it("does not infer working from a residual mounted timeline turn", async () => {
@@ -168,7 +169,33 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
 
     await waitForSettled(h, () => expect(agentStatusApiMocks.fetchChatAgentStatuses).toHaveBeenCalledWith("chat-1"));
-    expect(h.container.textContent).toBe("");
+    expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
+  });
+
+  it("keeps one live region mounted across quiet and active transitions", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+
+    h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />, queryClient));
+    const liveStatus = h.container.querySelector<HTMLElement>('[role="status"]');
+    expect(liveStatus?.textContent).toContain("0 actionable agents");
+
+    await act(async () => {
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") })],
+      );
+    });
+    await h.flush();
+    await waitForSettled(h, () => expect(liveStatus?.textContent).toContain("1 actionable agent"));
+    expect(h.container.querySelector('[role="status"]')).toBe(liveStatus);
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+    });
+    await h.flush();
+    await waitForSettled(h, () => expect(liveStatus?.textContent).toContain("0 actionable agents"));
+    expect(h.container.querySelector('[role="status"]')).toBe(liveStatus);
   });
 
   it("keeps the collapsed snapshot concise and opens one live activity inspector", async () => {
@@ -212,7 +239,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     // `turnTextFull` is timeline evidence, not duplicated into the live snapshot.
     expect(h.container.textContent).not.toContain("Cover the status rail.");
 
-    await keyDown(h, document, "Escape");
+    const focusedControl = document.activeElement;
+    if (!(focusedControl instanceof HTMLElement)) throw new Error("Expected a focused Inspector control");
+    await keyDown(h, focusedControl, "Escape");
     await waitForSettled(h, () => expect(h.container.querySelector('section[aria-label="Agent activity"]')).toBeNull());
   });
 
@@ -372,9 +401,47 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
     );
 
-    await keyDown(h, document, "Escape");
+    const focusedControl = document.activeElement;
+    if (!(focusedControl instanceof HTMLElement)) throw new Error("Expected a focused Inspector control");
+    await keyDown(h, focusedControl, "Escape");
     expect(h.container.querySelector("[data-live-activity-inspector]")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("leaves Escape to a later focused keyboard layer outside the inspector", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-nova", {
+        working: true,
+        engagement: "active",
+        activity: activity("agent-nova", { turnText: "Check layered keyboard handling" }),
+      }),
+    ]);
+    const externalEscape = vi.fn();
+
+    h.render(
+      withProviders(
+        <>
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+          <input
+            aria-label="Mention autocomplete"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") externalEscape();
+            }}
+          />
+        </>,
+      ),
+    );
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    const laterLayer = h.container.querySelector<HTMLInputElement>('input[aria-label="Mention autocomplete"]');
+    if (!laterLayer) throw new Error("Expected later keyboard layer");
+    laterLayer.focus();
+
+    await keyDown(h, laterLayer, "Escape");
+
+    expect(externalEscape).toHaveBeenCalledTimes(1);
+    expect(h.container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    expect(document.activeElement).toBe(laterLayer);
   });
 
   it("jumps a ready terminal error to its mounted error evidence", async () => {
@@ -408,6 +475,73 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(row).not.toBeNull();
     await click(h, row);
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-terminal", "failed", { focus: true });
+  });
+
+  it("jumps waiting, retrying, and terminal-warning summaries to provider evidence", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-waiting", {
+        statusReason: {
+          kind: "waiting",
+          severity: "warning",
+          provider: "codex",
+          scope: "session_resume",
+          category: "provider_capacity",
+          reasonCode: "provider_rate_limited",
+          label: "Waiting for provider capacity",
+        },
+      }),
+      status("agent-retrying", {
+        statusReason: {
+          kind: "retrying",
+          severity: "info",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          label: "Retrying provider",
+        },
+      }),
+      status("agent-warning", {
+        statusReason: {
+          kind: "terminal",
+          severity: "warning",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "unknown",
+          reasonCode: "provider_warning",
+          label: "Provider stopped with warning",
+        },
+      }),
+    ]);
+
+    h.render(
+      withProviders(
+        <>
+          <div data-status-reason-agent="agent-waiting" />
+          <div data-status-reason-agent="agent-retrying" />
+          <div data-status-reason-agent="agent-warning" />
+          <ComposeStatusBar
+            chatId="chat-1"
+            agents={[
+              agent("agent-waiting", "Waiting Agent"),
+              agent("agent-retrying", "Retrying Agent"),
+              agent("agent-warning", "Warning Agent"),
+            ]}
+          />
+        </>,
+      ),
+    );
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (3)"));
+
+    for (const [agentId, name] of [
+      ["agent-waiting", "Waiting Agent"],
+      ["agent-retrying", "Retrying Agent"],
+      ["agent-warning", "Warning Agent"],
+    ]) {
+      await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+      await click(h, h.container.querySelector(`button[aria-label*="${name}"][aria-label*="timeline"]`));
+      expect(timelineMocks.scrollToAgentTimeline).toHaveBeenLastCalledWith(agentId, "reason", { focus: true });
+    }
   });
 
   it("keeps focus inside a live-updating inspector, then returns it to the composer fallback", async () => {
@@ -464,6 +598,39 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await h.flush();
     await waitForSettled(h, () => expect(document.activeElement).toBe(fallbackRef.current));
     expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
+  });
+
+  it("moves focus to Close when a focused row loses only its timeline anchor", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") }),
+    ]);
+    let hideAnchor: (() => void) | undefined;
+
+    function AnchorHarness() {
+      const [showAnchor, setShowAnchor] = useState(true);
+      hideAnchor = () => setShowAnchor(false);
+      return (
+        <>
+          {showAnchor ? <div data-working-agent="agent-nova" /> : null}
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+        </>
+      );
+    }
+
+    h.render(withProviders(<AnchorHarness />));
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    const row = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
+    row?.focus();
+    expect(document.activeElement).toBe(row);
+
+    await act(async () => hideAnchor?.());
+    await h.flush();
+
+    await waitForSettled(h, () =>
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
+    );
+    expect(h.container.querySelector('button[aria-label*="Nova"]')).toBeNull();
   });
 });
 

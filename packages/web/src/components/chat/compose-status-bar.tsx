@@ -10,7 +10,7 @@ import { type Ref, type RefObject, useCallback, useEffect, useId, useMemo, useRe
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
-import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
+import { isJumpable, type TimelineAnchorKind, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 
@@ -161,8 +161,9 @@ export function ComposeStatusBar({
     if (!inspectorOpen || !focusWithinRef.current) return;
     const active = document.activeElement;
     const activeAgentId = active?.closest<HTMLElement>("[data-live-activity-agent]")?.dataset.liveActivityAgent;
+    const focusedStatus = attention.find((status) => status.agentId === activeAgentId);
     const focusedRowSurvives =
-      activeAgentId !== undefined && attention.some((status) => status.agentId === activeAgentId);
+      focusedStatus !== undefined && isJumpable(mounted, timelineTarget(focusedStatus), focusedStatus.agentId);
     if (
       active &&
       (triggerRef.current?.contains(active) ||
@@ -174,7 +175,7 @@ export function ComposeStatusBar({
       inspectorRef.current?.querySelector<HTMLElement>(".compose-status-inspector-close")?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [attention, fallbackFocusRef, inspectorOpen]);
+  }, [attention, fallbackFocusRef, inspectorOpen, mounted]);
 
   useEffect(() => {
     if (!inspectorOpen) return;
@@ -188,6 +189,13 @@ export function ComposeStatusBar({
     if (!inspectorOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        (!inspectorRef.current?.contains(target) && !triggerRef.current?.contains(target))
+      ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -206,81 +214,83 @@ export function ComposeStatusBar({
     };
   }, [closeInspector, closeInspectorAndRestoreFocus, inspectorOpen]);
 
-  if (attention.length === 0) return null;
   const leadRow = (lead && attention.find((status) => status.agentId === lead.agentId)) ?? attention[0];
-  if (!leadRow) return null;
 
   return (
-    <div
-      className="fade-in"
-      data-compose-status-bar
-      onFocusCapture={() => {
-        focusWithinRef.current = true;
-      }}
-      onBlurCapture={(event) => {
-        const next = event.relatedTarget;
-        // Removing the last actionable row temporarily moves browser focus to
-        // body before the fallback-focus effect runs. Preserve the marker for
-        // that removal transition; explicit outside pointer dismissal resets
-        // it through closeInspector.
-        if (next instanceof Node && next !== document.body && !event.currentTarget.contains(next)) {
-          focusWithinRef.current = false;
-        }
-      }}
-      style={{
-        position: "relative",
-        marginBottom: "var(--sp-1)",
-        paddingBottom: "var(--sp-1)",
-        borderBottom: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div className="flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
-        <LeadSnapshot status={leadRow} name={nameOf(leadRow.agentId)} />
-        <button
-          ref={triggerRef}
-          type="button"
-          aria-controls={inspectorId}
-          aria-expanded={inspectorOpen}
-          aria-haspopup="dialog"
-          aria-label={`${inspectorOpen ? "Close" : "Open"} agent activity, ${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}`}
-          onClick={() => setInspectorOpen((open) => !open)}
-          className="compose-status-activity-trigger text-label inline-flex shrink-0 items-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          style={{
-            gap: "var(--sp-1)",
-            border: 0,
-            background: inspectorOpen ? "var(--bg-hover)" : "transparent",
-            padding: "0 var(--sp-1_5)",
-            cursor: "pointer",
-            color: "var(--fg-3)",
-          }}
-        >
-          <span>Activity ({attention.length})</span>
-          <ChevronDown
-            aria-hidden="true"
-            className="h-3.5 w-3.5 transition-transform"
-            style={{ transform: inspectorOpen ? "rotate(180deg)" : "none" }}
-          />
-        </button>
-      </div>
-
+    <>
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}
       </span>
 
-      {/* Keep the panel after its disclosure trigger in DOM order. Its visual
-          position is still above the composer, while forward Tab now enters
-          Close → activity rows instead of skipping the panel entirely. */}
-      {inspectorOpen ? (
-        <LiveActivityInspector
-          id={inspectorId}
-          ref={inspectorRef}
-          attention={attention}
-          nameOf={nameOf}
-          mounted={mounted}
-          onClose={closeInspectorAndRestoreFocus}
-        />
+      {leadRow ? (
+        <div
+          className="fade-in"
+          data-compose-status-bar
+          onFocusCapture={() => {
+            focusWithinRef.current = true;
+          }}
+          onBlurCapture={(event) => {
+            const next = event.relatedTarget;
+            // Removing the last actionable row temporarily moves browser focus to
+            // body before the fallback-focus effect runs. Preserve the marker for
+            // that removal transition; explicit outside pointer dismissal resets
+            // it through closeInspector.
+            if (next instanceof Node && next !== document.body && !event.currentTarget.contains(next)) {
+              focusWithinRef.current = false;
+            }
+          }}
+          style={{
+            position: "relative",
+            marginBottom: "var(--sp-1)",
+            paddingBottom: "var(--sp-1)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
+            <LeadSnapshot status={leadRow} name={nameOf(leadRow.agentId)} />
+            <button
+              ref={triggerRef}
+              type="button"
+              aria-controls={inspectorId}
+              aria-expanded={inspectorOpen}
+              aria-haspopup="dialog"
+              aria-label={`${inspectorOpen ? "Close" : "Open"} agent activity, ${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}`}
+              onClick={() => setInspectorOpen((open) => !open)}
+              className="compose-status-activity-trigger text-label inline-flex shrink-0 items-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              style={{
+                gap: "var(--sp-1)",
+                border: 0,
+                background: inspectorOpen ? "var(--bg-hover)" : "transparent",
+                padding: "0 var(--sp-1_5)",
+                cursor: "pointer",
+                color: "var(--fg-3)",
+              }}
+            >
+              <span>Activity ({attention.length})</span>
+              <ChevronDown
+                aria-hidden="true"
+                className="h-3.5 w-3.5 transition-transform"
+                style={{ transform: inspectorOpen ? "rotate(180deg)" : "none" }}
+              />
+            </button>
+          </div>
+
+          {/* Keep the panel after its disclosure trigger in DOM order. Its visual
+              position is still above the composer, while forward Tab now enters
+              Close → activity rows instead of skipping the panel entirely. */}
+          {inspectorOpen ? (
+            <LiveActivityInspector
+              id={inspectorId}
+              ref={inspectorRef}
+              attention={attention}
+              nameOf={nameOf}
+              mounted={mounted}
+              onClose={closeInspectorAndRestoreFocus}
+            />
+          ) : null}
+        </div>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -417,8 +427,8 @@ function InspectorItem({
 }) {
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
-  const jumpMain = isFatalStatusReason(status) ? "failed" : status.main;
-  const anchored = isJumpable(mounted, jumpMain, status.agentId);
+  const jumpTarget = timelineTarget(status);
+  const anchored = isJumpable(mounted, jumpTarget, status.agentId);
   const accessibleSummary = [
     name,
     stateLabel(status),
@@ -431,7 +441,7 @@ function InspectorItem({
   return (
     <TimelineJumpButton
       agentId={status.agentId}
-      main={jumpMain}
+      target={jumpTarget}
       anchored={anchored}
       ariaLabel={accessibleSummary}
       onNavigate={onNavigate}
@@ -468,6 +478,12 @@ function InspectorItem({
       </div>
     </TimelineJumpButton>
   );
+}
+
+function timelineTarget(status: AgentChatStatus): TimelineAnchorKind {
+  if (status.main === "failed" || isFatalStatusReason(status)) return "failed";
+  if (visibleStatusReason(status)) return "reason";
+  return "working";
 }
 
 function stateLabel(status: AgentChatStatus): string {
