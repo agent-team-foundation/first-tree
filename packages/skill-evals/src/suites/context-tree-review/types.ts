@@ -9,8 +9,6 @@ export type ReviewScenario =
   | "draft"
   | "passing"
   | "semantic-failure"
-  | "stale-head"
-  | "submission-race"
   | "validator-failure";
 
 export type ContextTreeReviewEvalCase = {
@@ -102,7 +100,6 @@ export type EvalMetrics = {
   semanticReadAfterVerify: boolean;
   semanticReadAfterFailedVerify: boolean;
   semanticReadBeforeVerify: boolean;
-  submissionRaceContained: boolean;
   targetMatches: boolean;
   verifyExitCodes: readonly number[];
   verifyFirst: boolean;

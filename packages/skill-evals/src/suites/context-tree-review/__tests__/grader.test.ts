@@ -366,25 +366,6 @@ describe("context-tree-review grader", () => {
     expect(passes(detachedEvents)).toBe(false);
   });
 
-  it("accepts a submission race only when the review remains bound to the inspected head", () => {
-    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "submission-race");
-    if (!evalCase) throw new Error("Missing submission-race case.");
-    const events = passingEvents();
-    Object.assign(events.at(-1) as object, { currentHeadOid: "new-head" });
-    const metrics = deriveMetrics(events, evalCase, { ...expectation, submissionHeadOid: "new-head" }, integrity, 0);
-    expect(casePassed(evalCase, metrics)).toBe(true);
-
-    Object.assign(events.at(-1) as object, { commitOid: "new-head" });
-    const wrongCommitMetrics = deriveMetrics(
-      events,
-      evalCase,
-      { ...expectation, submissionHeadOid: "new-head" },
-      integrity,
-      0,
-    );
-    expect(casePassed(evalCase, wrongCommitMetrics)).toBe(false);
-  });
-
   it("allows cleanup of a temporary review body outside the tree", () => {
     const events = passingEvents();
     events.push({

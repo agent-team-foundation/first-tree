@@ -281,7 +281,6 @@ describe("formatInboundContent", () => {
         contextReviewRunId: "run-1",
         contextReviewRepository: "acme/context-tree",
         contextReviewPrNumber: 42,
-        contextReviewHeadSha: "a".repeat(40),
         contextReviewOrganizationId: "org-1",
         contextReviewReviewerAgentUuid: "reviewer-1",
         contextReviewReviewerManagerHumanAgentId: "human-1",
@@ -291,39 +290,6 @@ describe("formatInboundContent", () => {
 
     expect(await formatInboundContent(msg, cache)).toBe(
       "[From: GitHub · type=system]\n\nReview this exact Context Tree head.",
-    );
-  });
-
-  it("preserves GitHub attribution for retired managed-review history", async () => {
-    const cache = createParticipantCache(
-      mkSdk(async () => participants),
-      "chat-1",
-      () => {},
-    );
-    const msg: SessionMessage = {
-      id: "m1",
-      chatId: "chat-1",
-      senderId: "agent-a",
-      source: "github",
-      format: "markdown",
-      content: "Historical managed review task.",
-      metadata: {
-        source: "github",
-        systemSender: "github",
-        contextReviewManagedEventV1: {
-          schemaVersion: 1,
-          eventType: "pull_request",
-          action: "opened",
-          triggerEvent: "pull_request.opened",
-          repository: "acme/context-tree",
-          pullRequest: 42,
-          senderLogin: "writer",
-        },
-      },
-    };
-
-    expect(await formatInboundContent(msg, cache)).toBe(
-      "[From: GitHub · type=system]\n\nHistorical managed review task.",
     );
   });
 

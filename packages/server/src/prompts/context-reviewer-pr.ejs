@@ -21,6 +21,6 @@ Comment URL: <%= commentUrl %>
 <% } -%>
 First Tree organization: <%= organizationId %>
 Context review run: <%= contextReviewRunId %>
-Exact review head: <%= contextReviewHeadSha %>
+Review the pull request's latest live GitHub state.
 
-Use this server-authored run id only through `first-tree tree review` as defined by the loaded skill. GitHub App credentials remain in Cloud. Any safe repair commit/push and the final exact-head squash merge use the host's local git/gh identity; a repair push ends this run without a verdict and waits for the synchronize-created successor run.
+Use this server-authored run id only through `first-tree tree review` as defined by the loaded skill. GitHub App credentials remain in Cloud. Safe repair commit/push and squash merge use the host's local git/gh identity. After a repair push, fetch and fully review the latest PR state; a synchronize webhook may also create another harmless run.

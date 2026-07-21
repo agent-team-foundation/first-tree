@@ -491,16 +491,16 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
 if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
-  const commitOid = optionValue(argv, "--head");
+  const commitOid = fixture.submissionHeadOid;
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
-  const exactOptions = argv.length === 10;
+  const exactOptions = argv.length === 8 && !argv.includes("--head") && !argv.includes("--agent");
   const action = event === "APPROVE" ? "approve" : event === "COMMENT" ? "comment" : event === "REQUEST_CHANGES" ? "request-changes" : null;
   let body = "";
   try {
     body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
   } catch {}
-  const valid = exactOptions && runId === fixture.runId && commitOid === fixture.reviewHeadOid && action && body.length > 0;
+  const valid = exactOptions && runId === fixture.runId && action && body.length > 0;
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }

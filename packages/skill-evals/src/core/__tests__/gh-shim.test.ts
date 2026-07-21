@@ -29,7 +29,7 @@ function createShim(
 }
 
 describe("gh eval shim", () => {
-  it("allows only a locally authenticated exact-head squash merge after App approval", () => {
+  it("allows only a locally authenticated squash merge after App approval", () => {
     const head = "a".repeat(40);
     const shim = createShim("context-review-local-merge", {
       prNumber: 42,
@@ -46,11 +46,11 @@ describe("gh eval shim", () => {
         FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
         FIRST_TREE_EVAL_PHASE: "model",
       };
-      const accepted = spawnSync(
-        shim.ghPath,
-        ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--match-head-commit", head],
-        { cwd: shim.workspacePath, encoding: "utf8", env },
-      );
+      const accepted = spawnSync(shim.ghPath, ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash"], {
+        cwd: shim.workspacePath,
+        encoding: "utf8",
+        env,
+      });
       expect(accepted.status).toBe(0);
       expect(readEvents(shim.eventsPath)).toEqual(
         expect.arrayContaining([expect.objectContaining({ commitOid: head, prNumber: 42, type: "github_pr_merged" })]),
@@ -58,7 +58,7 @@ describe("gh eval shim", () => {
 
       const bypass = spawnSync(
         shim.ghPath,
-        ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--match-head-commit", head, "--admin"],
+        ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--admin"],
         { cwd: shim.workspacePath, encoding: "utf8", env },
       );
       expect(bypass.status).toBe(2);

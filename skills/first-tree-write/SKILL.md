@@ -123,45 +123,22 @@ resolves the Server current Reviewer when the pull request event arrives.
    tree PRs/MRs must be created as draft and left draft for independent review.
 8. **Let the App reviewer own GitHub review dispatch.** For a ready GitHub PR
    against the bound Context Tree repository, the GitHub App webhook creates or
-   reuses the PR-scoped Reviewer Chat and trusted exact-head run. The writer
+   reuses the PR-scoped Reviewer Chat and trusted review run. The writer
    must not create a review Chat, construct a task packet, add a protocol marker,
    publish a verdict, retry review delivery, or merge the PR.
 
 ## GitHub Context Review handoff
 
-When Context Reviewer is enabled, make the PR body sufficient for a reviewer to
-derive live repair authority without a second task payload. Include the source
-artifact, durable decision summary and rationale, verification result, and an
-exact normalized repository-relative repair scope. Include this block exactly
-once, with the heading, fixed consent sentence and scope heading each appearing
-exactly once:
-
-```markdown
-## Context Tree Review
-
-The PR author authorizes the configured Context Tree Reviewer to repair only the exact files below.
-
-### Repair scope
-
-- `domain/decision.md`
-```
-
-Replace the example with every verified changed tree file, sorted by UTF-8 byte
-order and deduplicated. Use only exact repository-relative file paths wrapped
-in one Markdown code span. Do not use globs, directories, absolute paths,
-`.`/`..`, `.github`, CODEOWNERS, extra prose/list entries or a second Context
-Tree Review/Repair scope block. The fixed sentence authorizes only objective,
-decision-preserving repairs; it does not relax protected content rules. Every pushed successor
-head must be reviewed from the beginning.
-
-Normally the scope equals the verified changed tree files. Do not add a legacy
-dispatch marker; it has no behavior. Expanding the declared scope after review
-starts requires explicit human authorization and a fresh review of the
-resulting head.
+When Context Reviewer is enabled, keep the PR body useful to a human reviewer:
+summarize the source artifact, durable decision and rationale, changed nodes and
+verification result. Do not add a repair-consent block, exact-file permission
+list, legacy dispatch marker or task payload. The configured review agent may
+repair the PR directly under the Context Tree review policy and will inspect the
+latest live PR state.
 
 Push without force. If push or PR creation has an unknown result, inspect the
-remote branch and open PRs before retrying. Once the PR exists, preserve its URL,
-branch and exact head if later review dispatch is delayed or unavailable. Do not
+remote branch and open PRs before retrying. Once the PR exists, preserve its URL
+and branch if later review dispatch is delayed or unavailable. Do not
 use removed member-dispatch or task-packet surfaces, and do not wake the Reviewer
 directly. Supported GitHub App webhooks are the sole dispatch owner.
 

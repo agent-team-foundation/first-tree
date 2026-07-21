@@ -12,7 +12,7 @@ import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import {
   contextReviewerPrTestInternals,
-  handleContextReviewerPrEvent as handleContextReviewerPrEventImpl,
+  handleContextReviewerPrEvent,
   handleContextReviewerPullRequest,
   normalizeGithubRepo,
   renderContextReviewerPrPrompt,
@@ -29,50 +29,6 @@ const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
-
-function createContextReviewerGithubFetch(liveHeadSha = HEAD_SHA) {
-  return async function contextReviewerGithubFetch(
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> {
-    const url = String(input);
-    if (url.includes("/access_tokens") && init?.method === "POST") {
-      return new Response(
-        JSON.stringify({
-          token: "installation-token",
-          expires_at: "2030-01-01T00:00:00.000Z",
-          permissions: { metadata: "read", pull_requests: "write" },
-          repository_selection: "selected",
-        }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      );
-    }
-    if (url.endsWith("/repos/owner/context-tree/pulls/123")) {
-      return new Response(
-        JSON.stringify({
-          number: 123,
-          state: "open",
-          draft: false,
-          merged: false,
-          head: { sha: liveHeadSha },
-          html_url: "https://github.com/owner/context-tree/pull/123",
-          body: null,
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }
-    return new Response("not found", { status: 404 });
-  };
-}
-
-const contextReviewerGithubFetch = createContextReviewerGithubFetch();
-
-function handleContextReviewerPrEvent(app: App, input: Parameters<typeof handleContextReviewerPrEventImpl>[1]) {
-  return handleContextReviewerPrEventImpl(app, {
-    ...input,
-    fetcher: input.fetcher ?? contextReviewerGithubFetch,
-  });
-}
 
 function pullRequestPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -212,7 +168,6 @@ describe("Context Reviewer PR prompt", () => {
       commentAuthorLogin: null,
       organizationId: "org-1",
       contextReviewRunId: "01900000-0000-7000-8000-000000000001",
-      contextReviewHeadSha: HEAD_SHA,
       reviewerManagerGithubLogin: "reviewer-manager",
     });
 
@@ -225,7 +180,7 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Event sender: writer");
     expect(prompt).toContain("Reviewer manager GitHub login: reviewer-manager");
     expect(prompt).toContain("Context review run: 01900000-0000-7000-8000-000000000001");
-    expect(prompt).toContain(`Exact review head: ${HEAD_SHA}`);
+    expect(prompt).toContain("Review the pull request's latest live GitHub state.");
     expect(prompt).not.toContain("Known self-approval blocker");
     expect(prompt).toContain("Draft status from webhook: ready for review");
     expect(prompt).not.toContain("Review goals:");
@@ -251,7 +206,6 @@ describe("Context Reviewer PR prompt", () => {
       commentAuthorLogin: null,
       organizationId: "org-1",
       contextReviewRunId: "01900000-0000-7000-8000-000000000002",
-      contextReviewHeadSha: HEAD_SHA,
       reviewerManagerGithubLogin: null,
     });
 
@@ -278,7 +232,6 @@ describe("Context Reviewer PR prompt", () => {
       commentAuthorLogin: null,
       organizationId: "org-1",
       contextReviewRunId: "01900000-0000-7000-8000-000000000003",
-      contextReviewHeadSha: HEAD_SHA,
       reviewerManagerGithubLogin: null,
     });
 
@@ -303,7 +256,6 @@ describe("Context Reviewer PR prompt", () => {
       commentAuthorLogin: "commenter",
       organizationId: "org-1",
       contextReviewRunId: "01900000-0000-7000-8000-000000000004",
-      contextReviewHeadSha: HEAD_SHA,
       reviewerManagerGithubLogin: null,
     });
 
@@ -328,7 +280,6 @@ describe("Context Reviewer PR prompt", () => {
       commentAuthorLogin: null,
       organizationId: "org-1",
       contextReviewRunId: "01900000-0000-7000-8000-000000000005",
-      contextReviewHeadSha: HEAD_SHA,
       reviewerManagerGithubLogin: "Writer",
     });
 
@@ -408,8 +359,7 @@ describe("handleContextReviewerPrEvent", () => {
     const reviewer = await createReviewer(app, admin);
     await enableReviewer(app, admin, reviewer.uuid);
     const payload = pullRequestPayload();
-    (payload.pull_request as Record<string, unknown>).body =
-      "<!-- first-tree-context-review:managed-v1 -->\n\nRepair scope: system/";
+    (payload.pull_request as Record<string, unknown>).body = "<!-- first-tree-context-review:managed-v1 -->";
 
     await expect(
       handleContextReviewerPrEvent(app, {
@@ -421,7 +371,7 @@ describe("handleContextReviewerPrEvent", () => {
     await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(1);
   });
 
-  it("routes PR body edits but ignores other pull request metadata edits", async () => {
+  it("ignores pull request metadata edits", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -433,7 +383,7 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload({ action: "edited", changes: { body: { from: "old body" } } }),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toMatchObject({ handled: true, reused: false });
+    ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
     await expect(
       handleContextReviewerPrEvent(app, {
         eventType: "pull_request",
@@ -441,7 +391,7 @@ describe("handleContextReviewerPrEvent", () => {
         organizationId: admin.organizationId,
       }),
     ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
-    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(1);
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
   it("skips when the feature is disabled, context repo is missing, reviewer is missing, or action is unsupported", async () => {
@@ -655,37 +605,6 @@ describe("handleContextReviewerPrEvent", () => {
     expect(chatRows).toHaveLength(1);
   });
 
-  it("binds the first run to the authoritative live head instead of a stale webhook head", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const result = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        action: "ready_for_review",
-        pull_request: {
-          ...pullRequestPayload().pull_request,
-          head: { ref: "context-update", sha: "a".repeat(40) },
-        },
-      }),
-      organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch("b".repeat(40)),
-    });
-
-    expect(result).toMatchObject({ handled: true, reused: false });
-    if (!result.handled) throw new Error("expected stale first event handled");
-    const [run] = await app.db
-      .select({ metadata: messages.metadata })
-      .from(messages)
-      .where(eq(messages.id, result.messageId));
-    expect(run?.metadata).toMatchObject({
-      triggerEvent: "pull_request.ready_for_review",
-      contextReviewHeadSha: "b".repeat(40),
-    });
-  });
-
   it("atomically reserves one reviewer chat for concurrent first deliveries", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
@@ -704,13 +623,11 @@ describe("handleContextReviewerPrEvent", () => {
         eventType: "pull_request",
         payload: opened,
         organizationId: admin.organizationId,
-        fetcher: createContextReviewerGithubFetch("b".repeat(40)),
       }),
       handleContextReviewerPrEvent(app, {
         eventType: "pull_request",
         payload: synchronized,
         organizationId: admin.organizationId,
-        fetcher: createContextReviewerGithubFetch("b".repeat(40)),
       }),
     ]);
 
@@ -725,10 +642,9 @@ describe("handleContextReviewerPrEvent", () => {
       .orderBy(desc(messages.createdAt), desc(messages.id));
     expect(runMessages.length).toBeGreaterThanOrEqual(1);
     expect(runMessages.length).toBeLessThanOrEqual(2);
-    expect(runMessages[0]?.metadata).toMatchObject({
-      triggerEvent: "pull_request.synchronize",
-      contextReviewHeadSha: "b".repeat(40),
-    });
+    expect(runMessages.map((row) => row.metadata.triggerEvent)).toEqual(
+      expect.arrayContaining(["pull_request.opened", "pull_request.synchronize"]),
+    );
   });
 
   it("does not suppress a delayed opened task after the configured reviewer changes", async () => {
@@ -744,7 +660,6 @@ describe("handleContextReviewerPrEvent", () => {
         pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
       }),
       organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch("b".repeat(40)),
     });
     if (!synchronized.handled) throw new Error("expected synchronize event handled");
 
@@ -762,7 +677,6 @@ describe("handleContextReviewerPrEvent", () => {
         pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
       }),
       organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch("b".repeat(40)),
     });
 
     expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
@@ -777,7 +691,6 @@ describe("handleContextReviewerPrEvent", () => {
       id: opened.messageId,
       metadata: {
         triggerEvent: "pull_request.opened",
-        contextReviewHeadSha: "b".repeat(40),
         contextReviewReviewerAgentUuid: currentReviewer.uuid,
         contextReviewReviewerManagerHumanAgentId: admin.humanAgentUuid,
       },
@@ -797,7 +710,6 @@ describe("handleContextReviewerPrEvent", () => {
         pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
       }),
       organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch("b".repeat(40)),
     });
     if (!synchronized.handled) throw new Error("expected synchronize event handled");
 
@@ -813,7 +725,6 @@ describe("handleContextReviewerPrEvent", () => {
         pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
       }),
       organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch("b".repeat(40)),
     });
 
     expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
@@ -828,87 +739,10 @@ describe("handleContextReviewerPrEvent", () => {
       id: opened.messageId,
       metadata: {
         triggerEvent: "pull_request.opened",
-        contextReviewHeadSha: "b".repeat(40),
         contextReviewReviewerAgentUuid: reviewer.uuid,
         contextReviewReviewerManagerHumanAgentId: currentManager.agentId,
       },
     });
-  });
-
-  it("binds delayed accepted events to the authoritative live successor head", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const successorHead = "b".repeat(40);
-    const staleHead = "a".repeat(40);
-    const synchronized = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        action: "synchronize",
-        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: successorHead } },
-      }),
-      organizationId: admin.organizationId,
-      fetcher: createContextReviewerGithubFetch(successorHead),
-    });
-    if (!synchronized.handled) throw new Error("expected synchronize event handled");
-
-    const stalePullRequest = {
-      ...pullRequestPayload().pull_request,
-      head: { ref: "context-update", sha: staleHead },
-    };
-    const delayedEvents = [
-      {
-        eventType: "pull_request",
-        triggerEvent: "pull_request.edited",
-        payload: pullRequestPayload({
-          action: "edited",
-          changes: { body: { from: "old scope" } },
-          pull_request: stalePullRequest,
-        }),
-      },
-      {
-        eventType: "pull_request",
-        triggerEvent: "pull_request.ready_for_review",
-        payload: pullRequestPayload({ action: "ready_for_review", pull_request: stalePullRequest }),
-      },
-      {
-        eventType: "pull_request",
-        triggerEvent: "pull_request.reopened",
-        payload: pullRequestPayload({ action: "reopened", pull_request: stalePullRequest }),
-      },
-      {
-        eventType: "pull_request_review_comment",
-        triggerEvent: "pull_request_review_comment.created",
-        payload: reviewCommentPayload({ pull_request: stalePullRequest }),
-      },
-    ];
-
-    for (const delayedEvent of delayedEvents) {
-      const result = await handleContextReviewerPrEvent(app, {
-        eventType: delayedEvent.eventType,
-        payload: delayedEvent.payload,
-        organizationId: admin.organizationId,
-        fetcher: createContextReviewerGithubFetch(successorHead),
-      });
-      expect(result).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
-      if (!result.handled) throw new Error(`expected ${delayedEvent.triggerEvent} handled`);
-
-      const [currentRun] = await app.db
-        .select({ id: messages.id, metadata: messages.metadata })
-        .from(messages)
-        .where(eq(messages.chatId, synchronized.chatId))
-        .orderBy(desc(messages.createdAt), desc(messages.id))
-        .limit(1);
-      expect(currentRun).toMatchObject({
-        id: result.messageId,
-        metadata: {
-          triggerEvent: delayedEvent.triggerEvent,
-          contextReviewHeadSha: successorHead,
-        },
-      });
-    }
   });
 
   it("reuses the reviewer chat for pull_request.synchronize and notifies the reviewer", async () => {
@@ -1016,7 +850,6 @@ describe("handleContextReviewerPrEvent", () => {
       eventType: "issue_comment",
       payload: issueCommentPayload(),
       organizationId: admin.organizationId,
-      fetcher: contextReviewerGithubFetch,
     });
 
     expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
@@ -1027,7 +860,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).toContain("Comment author: commenter");
     expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-1");
     expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.content).toContain(`Exact review head: ${HEAD_SHA}`);
+    expect(followUp?.content).toContain("Review the pull request's latest live GitHub state.");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -1035,7 +868,6 @@ describe("handleContextReviewerPrEvent", () => {
       triggerEvent: "issue_comment.created",
       entityKey: "owner/context-tree#123",
       contextTreeReviewer: true,
-      contextReviewHeadSha: HEAD_SHA,
       commentAuthorLogin: "commenter",
       commentUrl: "https://github.com/owner/context-tree/pull/123#issuecomment-1",
       mentions: [reviewer.uuid],
@@ -1120,7 +952,6 @@ describe("handleContextReviewerPrEvent", () => {
         sender: { login: "MANAGER-LOGIN", type: "User" },
       }),
       organizationId: admin.organizationId,
-      fetcher: contextReviewerGithubFetch,
     });
 
     expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
@@ -1175,7 +1006,6 @@ describe("handleContextReviewerPrEvent", () => {
         sender: { login: "TEST-APP-SLUG[bot]", type: "Bot" },
       }),
       organizationId: admin.organizationId,
-      fetcher: contextReviewerGithubFetch,
     });
 
     expect(second).toMatchObject({ handled: true, reused: true, suppressed: true, chatId: first.chatId });
@@ -1218,7 +1048,6 @@ describe("handleContextReviewerPrEvent", () => {
         sender: { login: "unrelated-human", type: "User" },
       }),
       organizationId: admin.organizationId,
-      fetcher: contextReviewerGithubFetch,
     });
 
     expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });

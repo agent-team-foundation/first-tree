@@ -125,7 +125,7 @@ describe("CLI command registration", () => {
     // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
     // browser added back for agents and scripted consumers, and `init` was
     // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path;
-    // `review` is the narrow App-backed exact-head verdict publisher.
+    // `review` is the narrow App-backed verdict publisher.
     expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
       "init",
       "read",

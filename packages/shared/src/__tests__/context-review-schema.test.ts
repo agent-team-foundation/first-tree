@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTEXT_REVIEW_BODY_MAX_BYTES,
-  contextReviewErrorCodeSchema,
   contextReviewerRunMessageMetadataSchema,
   contextReviewSubmitRequestSchema,
 } from "../schemas/context-review.js";
@@ -15,7 +14,6 @@ describe("Context Review schemas", () => {
         contextReviewRunId: "run-1",
         contextReviewRepository: "acme/context-tree",
         contextReviewPrNumber: 42,
-        contextReviewHeadSha: "a".repeat(40),
         contextReviewOrganizationId: "org-1",
         contextReviewReviewerAgentUuid: "reviewer-1",
         contextReviewReviewerManagerHumanAgentId: "human-1",
@@ -73,7 +71,6 @@ describe("Context Review schemas", () => {
         contextReviewRunId: "run-1",
         contextReviewRepository: "acme/context-tree",
         contextReviewPrNumber: 42,
-        contextReviewHeadSha: "a".repeat(40),
         contextReviewOrganizationId: "org-1",
         contextReviewReviewerAgentUuid: "reviewer-1",
         contextReviewReviewerManagerHumanAgentId: "human-1",
@@ -93,28 +90,26 @@ describe("Context Review schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts the server's superseded-run error code", () => {
-    expect(contextReviewErrorCodeSchema.parse("CONTEXT_REVIEW_RUN_SUPERSEDED")).toBe("CONTEXT_REVIEW_RUN_SUPERSEDED");
-  });
-
-  it("normalizes exact heads and enforces review event and body limits", () => {
-    expect(
-      contextReviewSubmitRequestSchema.parse({
-        reviewedHead: "A".repeat(40),
-        event: "APPROVE",
-        body: "Ready to merge.",
-      }).reviewedHead,
-    ).toBe("a".repeat(40));
+  it("enforces review event and body limits without accepting a caller-provided head", () => {
+    expect(contextReviewSubmitRequestSchema.parse({ event: "APPROVE", body: "Ready to merge." })).toEqual({
+      event: "APPROVE",
+      body: "Ready to merge.",
+    });
     expect(
       contextReviewSubmitRequestSchema.safeParse({
         reviewedHead: "a".repeat(40),
+        event: "APPROVE",
+        body: "Ready.",
+      }).success,
+    ).toBe(false);
+    expect(
+      contextReviewSubmitRequestSchema.safeParse({
         event: "MERGE",
         body: "Ready.",
       }).success,
     ).toBe(false);
     expect(
       contextReviewSubmitRequestSchema.safeParse({
-        reviewedHead: "a".repeat(40),
         event: "COMMENT",
         body: "x".repeat(CONTEXT_REVIEW_BODY_MAX_BYTES + 1),
       }).success,

@@ -10,14 +10,10 @@ describe("first-tree-write App review handoff floor", () => {
   it("ends writer ownership at a source-complete GitHub PR", () => {
     expect(skill).toContain("Let the App reviewer own GitHub review dispatch");
     expect(skill).toContain("GitHub App webhook creates or\n   reuses the PR-scoped Reviewer Chat");
-    expect(skill).toContain("exact normalized repository-relative repair scope");
-    expect(skill).toContain(
-      "The PR author authorizes the configured Context Tree Reviewer to repair only the exact files below.",
-    );
-    expect(skill).toContain("sorted by UTF-8 byte\norder and deduplicated");
-    expect(skill).toContain("Do not use globs, directories, absolute paths");
-    expect(skill).toContain("Every pushed successor\nhead must be reviewed from the beginning");
-    expect(skill).toContain("Do not add a legacy\ndispatch marker; it has no behavior");
+    expect(skill).toContain("The configured review agent may\nrepair the PR directly");
+    expect(skill).toContain("Do not add a repair-consent block, exact-file permission\nlist");
+    expect(skill).toContain("Do not add a repair-consent block");
+    expect(skill).toContain("legacy dispatch marker or task payload");
     expect(skill).toContain("Supported GitHub App webhooks are the sole dispatch owner");
   });
 

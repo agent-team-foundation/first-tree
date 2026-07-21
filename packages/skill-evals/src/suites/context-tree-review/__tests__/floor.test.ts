@@ -14,7 +14,7 @@ import { skillHasPolicyDuplication } from "../fixture.js";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..");
 
 describe("context-tree-review floor", () => {
-  it("covers the deterministic verdict and race outcomes", () => {
+  it("covers the deterministic review outcomes", () => {
     expect(CONTEXT_TREE_REVIEW_GATE_CASES.map((item) => item.fixture.scenario)).toEqual([
       "validator-failure",
       "semantic-failure",
@@ -22,24 +22,15 @@ describe("context-tree-review floor", () => {
       "draft",
       "archive-only",
       "authority",
-      "stale-head",
-      "submission-race",
     ]);
     expect(CONTEXT_TREE_REVIEW_SUITE.coverage.tiers.map((item) => item.tier)).toEqual(["floor", "gate"]);
     expect(CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS).toEqual([
       "validator-failure",
       "semantic-failure",
-      "safe-repair",
-      "protected-repair-refusal",
-      "successor-head-review",
+      "passing",
       "draft",
-      "stale-run",
-      "head-race",
-      "fork",
-      "approve-and-local-merge",
-      "approved-not-merged",
-      "request-changes",
-      "comment",
+      "archive-only",
+      "authority",
     ]);
   });
 
@@ -58,8 +49,8 @@ describe("context-tree-review floor", () => {
     expect(skillHasPolicyDuplication(repoRoot)).toBe(false);
     expect(skill).toContain("first-tree tree review");
     expect(skill).toContain('--run "$CONTEXT_REVIEW_RUN_ID"');
-    expect(skill).toContain("GitHub App webhook is the only review-dispatch authority");
-    expect(skill).toContain("Historical\n`first-tree-context-review:managed-v1` text has no behavior");
+    expect(skill).toContain("GitHub App webhook owns review dispatch");
+    expect(skill).toContain("Historical managed marker text\nhas no behavior");
     expect(skill).not.toContain("first-tree github context-review");
     expect(skill).not.toContain("reviewPacketV1");
     expect(skill).not.toContain("contextReviewManagedEventV1");
@@ -68,25 +59,19 @@ describe("context-tree-review floor", () => {
     expect(cloud).not.toContain("gh pr review");
   });
 
-  it("pins repair, successor review, App verdict, and local exact-head merge", () => {
+  it("pins local repair, App verdict, and repository-gated local merge", () => {
     const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
 
     expect(skill).toContain("first-tree org context-tree review-config --json");
-    expect(skill).toContain("There is no packet");
-    expect(skill).toContain("scripts/parse-repair-scope.mjs");
-    expect(skill).toContain("fixed consent sentence and Repair scope heading exactly\nonce and in order");
-    expect(skill).toContain("missing, duplicate, invalid or ambiguous\nblock disables automatic repair only");
+    expect(skill).toContain("No PR-body consent block or task packet is required");
     expect(skill).toContain("same-repository, non-fork PR");
-    expect(skill).toContain("intersection of the parsed scope, that changed\nset and the protection rules");
-    expect(skill).toContain("reread PR body, open/draft/base/head-repository/source-ref/head state");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
-    expect(skill).toContain("current run ends immediately without\ncalling `tree review`");
-    expect(skill).toContain("successor exact-head run");
-    expect(skill).toContain('--match-head-commit "$REVIEWED_HEAD"');
+    expect(skill).toContain('gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash');
+    expect(skill).not.toContain("--match-head-commit");
+    expect(skill).not.toContain("parse-repair-scope");
     expect(skill).toContain("Never use `--admin`");
-    expect(skill).toContain("approved_not_merged");
-    expect(skill).toContain("commit-bound review is the only GitHub verdict");
-    expect(skill).toContain("do not\ncopy the GitHub verdict into a second canonical comment/status/receipt");
+    expect(skill).toContain("App-authored PR review is the only GitHub verdict");
+    expect(skill).toContain("do not copy the\nGitHub verdict into a second canonical comment/status/receipt");
   });
 });

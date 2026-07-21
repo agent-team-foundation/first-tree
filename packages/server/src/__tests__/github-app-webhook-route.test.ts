@@ -1767,7 +1767,6 @@ describe("POST /webhooks/github-app", () => {
       entityType: "pull_request",
       entityKey: "owner/context-tree#42",
       contextTreeReviewer: true,
-      contextReviewHeadSha: liveHead,
       commentAuthorLogin: "context-commenter",
       commentUrl: "https://github.com/owner/context-tree/pull/42#issuecomment-2",
       mentions: [reviewer],

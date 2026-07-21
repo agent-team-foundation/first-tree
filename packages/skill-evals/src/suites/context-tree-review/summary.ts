@@ -45,7 +45,6 @@ export function buildGrading(
         !metrics.semanticReadAfterFailedVerify &&
         (!evalCase.expected.verifyMustPass ||
           evalCase.fixture.scenario === "archive-only" ||
-          evalCase.fixture.scenario === "stale-head" ||
           metrics.semanticReadAfterVerify) &&
         metrics.finalViewFresh &&
         metrics.reviewAfterFinalView,

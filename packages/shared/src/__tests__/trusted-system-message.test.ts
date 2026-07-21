@@ -113,7 +113,6 @@ describe("trusted system message attribution", () => {
           contextReviewRunId: "run-1",
           contextReviewRepository: "acme/context-tree",
           contextReviewPrNumber: 42,
-          contextReviewHeadSha: "a".repeat(40),
           contextReviewOrganizationId: "org-1",
           contextReviewReviewerAgentUuid: "reviewer-1",
           contextReviewReviewerManagerHumanAgentId: "human-1",
@@ -121,31 +120,6 @@ describe("trusted system message attribution", () => {
         },
       }),
     ).toBe(true);
-  });
-
-  it("preserves read-only GitHub attribution for retired managed-review history", () => {
-    const historical = {
-      source: "github",
-      format: "markdown",
-      content: "Historical managed Context Review task",
-      metadata: {
-        source: "github",
-        systemSender: "github",
-        contextReviewManagedEventV1: {
-          schemaVersion: 1,
-          eventType: "pull_request",
-          action: "opened",
-          triggerEvent: "pull_request.opened",
-          repository: "acme/context-tree",
-          pullRequest: 42,
-          senderLogin: "writer",
-          headSha: "a".repeat(40),
-        },
-      },
-    };
-
-    expect(isTrustedGithubDispatcherMessage(historical)).toBe(true);
-    expect(resolveTrustedSystemSender(historical)).toBe("github");
   });
 
   it("rejects spoofed metadata without trusted provenance and card shape", () => {

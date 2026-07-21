@@ -19,7 +19,7 @@ describe("Context Reviewer PR internals", () => {
         action: "edited",
         changes: { body: { from: "old" } },
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isContextReviewerCandidateEvent("pull_request", "edited", {
         action: "edited",
@@ -60,7 +60,6 @@ describe("Context Reviewer PR internals", () => {
         commentAuthorLogin: null,
         organizationId: "org_1",
         contextReviewRunId: "01900000-0000-7000-8000-000000000001",
-        contextReviewHeadSha: "a".repeat(40),
         reviewerManagerGithubLogin: null,
       }),
     ).rejects.toThrow("Context Reviewer PR prompt template is missing");

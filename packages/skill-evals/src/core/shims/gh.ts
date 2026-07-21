@@ -327,12 +327,12 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
     argv[2] === String(fixture.prNumber) &&
     argAfter(argv, "--repo") === fixture.repo &&
     argv.includes("--squash") &&
-    argAfter(argv, "--match-head-commit") === fixture.reviewHeadOid &&
     !argv.includes("--admin") &&
     !argv.includes("--auto") &&
     !argv.includes("--merge") &&
     !argv.includes("--rebase") &&
-    state.approvedHead === fixture.reviewHeadOid;
+    state.approvedHead === fixture.reviewHeadOid &&
+    !argv.includes("--match-head-commit");
   if (!exact) {
     finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
       reviewFixture: true,

@@ -60,24 +60,14 @@ async function run(args: string[]): Promise<void> {
 }
 
 function validArgs(): string[] {
-  return [
-    "--run",
-    "01900000-0000-7000-8000-000000000042",
-    "--head",
-    "a".repeat(40),
-    "--event",
-    "APPROVE",
-    "--body-file",
-    bodyFile,
-  ];
+  return ["--run", "01900000-0000-7000-8000-000000000042", "--event", "APPROVE", "--body-file", bodyFile];
 }
 
 describe("tree review", () => {
   it("submits only the server-derived chat and narrow review payload", async () => {
-    await run([...validArgs(), "--agent", "reviewer"]);
-    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("reviewer");
+    await run(validArgs());
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith();
     expect(sdk.submitContextReview).toHaveBeenCalledWith("chat-42", "01900000-0000-7000-8000-000000000042", {
-      reviewedHead: "a".repeat(40),
       event: "APPROVE",
       body: "## Context approved\n",
     });
@@ -104,11 +94,8 @@ describe("tree review", () => {
     expect(localAgentMocks.createSdk).not.toHaveBeenCalled();
   });
 
-  it("rejects invalid event, abbreviated head, and empty body", async () => {
+  it("rejects an invalid event and empty body", async () => {
     await expect(run(validArgs().map((value) => (value === "APPROVE" ? "MERGE" : value)))).rejects.toThrow(
-      "INVALID_CONTEXT_REVIEW",
-    );
-    await expect(run(validArgs().map((value) => (value === "a".repeat(40) ? "abc123" : value)))).rejects.toThrow(
       "INVALID_CONTEXT_REVIEW",
     );
     await writeFile(bodyFile, "", "utf8");
@@ -149,13 +136,7 @@ describe("tree review", () => {
     const tree = root.commands.find((command) => command.name() === "tree");
     const review = tree?.commands.find((command) => command.name() === "review");
     expect(review?.commands).toHaveLength(0);
-    expect(review?.options.map((option) => option.long).sort()).toEqual([
-      "--agent",
-      "--body-file",
-      "--event",
-      "--head",
-      "--run",
-    ]);
+    expect(review?.options.map((option) => option.long).sort()).toEqual(["--body-file", "--event", "--run"]);
   });
 
   it("does not expose the removed GitHub review command", async () => {

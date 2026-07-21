@@ -965,8 +965,8 @@ first-tree tree
 ├── read --team ID --snapshot DIR            # activate one exact task read snapshot
 ├── write --team ID --snapshot DIR \
 │        --github-login LOGIN                 # preflight clean source-backed authoring
-├── review --run ID --head SHA --event EVENT \
-│        --body-file PATH                      # publish one exact-head App review
+├── review --run ID --event EVENT \
+│        --body-file PATH                      # publish one App review for the live PR head
 ├── seed --team ID                            # preflight clean Team Seed authority/binding
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
@@ -1055,27 +1055,22 @@ from it, because the App webhook resolves the Server current Reviewer again.
 Authoring happens in a separate task worktree/branch created from
 `baseCommit`; the exact read snapshot remains immutable. After a ready PR
 exists, GitHub App webhooks create or reuse its stable PR-scoped Reviewer Chat
-and trusted exact-head run. Writers do not create or wake a review Chat.
-
-Repair consent is expressed only by one human-readable PR-body block with the
-exact `## Context Tree Review` heading, fixed authorization sentence, and
-`### Repair scope` list. The list contains sorted, deduplicated Markdown
-code-span exact repository-relative files; glob, directory, absolute,
-traversal, protected, duplicate, or ambiguous entries disable automatic repair
-without disabling read-only review. The Reviewer re-reads the live body,
-base-to-head changed paths, and head before every edit, commit, push, review
-publication, and merge. Body-only `pull_request.edited` events retrigger review;
-other PR metadata edits and edited issue comments do not.
+and trusted review run. Writers do not create or wake a review Chat. The run
+authorizes review of the PR rather than freezing one webhook commit. The
+Reviewer reads the latest live GitHub state and may directly repair a
+same-repository branch with its local identity under the Context Tree policy;
+the PR body needs no consent block or machine-parsed repair scope.
 
 `first-tree tree review` is available only inside the active Context Reviewer
-runtime session. It accepts a Server-authored run id, the exact inspected
-40-character head OID, one of `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`, and a
-UTF-8 body file (`-` reads stdin). The Server re-resolves the live installation,
-bound repository, pull request, run, and current head before the GitHub App
-creates the commit-bound review; stale or unauthorized submissions fail closed.
-The command never merges. After a successful `APPROVE`, the Reviewer uses its
-local GitHub identity to run `gh pr merge --squash --match-head-commit <sha>`;
-it never uses `--admin`.
+runtime session. It accepts a Server-authored run id, one of `APPROVE`,
+`REQUEST_CHANGES`, or `COMMENT`, and a UTF-8 body file (`-` reads stdin). It
+does not accept a head or alternate agent. The Server re-resolves the live
+installation, bound repository, pull request, run, configured Reviewer and
+current PR head before the GitHub App creates the review. Unauthorized
+submissions fail closed. The command never merges. After a successful
+`APPROVE`, the Reviewer uses its local GitHub identity to run
+`gh pr merge <number> --repo <owner/repo> --squash`; it never uses `--admin`
+or `--auto`. The repository's stale-review dismissal protects a newer commit.
 
 Existing Context Tree repositories should require pull requests, at least one
 current approval, and stale-review dismissal after every push. An administrator

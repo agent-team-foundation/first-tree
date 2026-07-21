@@ -140,7 +140,6 @@ const trustedContextReviewMsg = {
     contextReviewRunId: "run-42",
     contextReviewRepository: "owner/repo",
     contextReviewPrNumber: 42,
-    contextReviewHeadSha: "a".repeat(40),
     contextReviewOrganizationId: "org-1",
     contextReviewReviewerAgentUuid: "reviewer-1",
     contextReviewReviewerManagerHumanAgentId: "human-1",

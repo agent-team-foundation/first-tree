@@ -6,9 +6,7 @@ import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 
 type TreeReviewOptions = {
-  agent?: string;
   run?: string;
-  head?: string;
   event?: string;
   bodyFile?: string;
 };
@@ -16,10 +14,8 @@ type TreeReviewOptions = {
 function configureTreeReviewCommand(command: Command): void {
   command
     .requiredOption("--run <runId>", "Server-authored Context Reviewer run id")
-    .requiredOption("--head <oid>", "Exact inspected 40-character PR head OID")
     .requiredOption("--event <event>", "APPROVE, REQUEST_CHANGES, or COMMENT")
-    .requiredOption("--body-file <path>", "Review body file (`-` reads stdin)")
-    .option("--agent <name>", "Local agent name");
+    .requiredOption("--body-file <path>", "Review body file (`-` reads stdin)");
 }
 
 export async function runTreeReviewCommand(context: CommandContext): Promise<void> {
@@ -44,7 +40,6 @@ export async function runTreeReviewCommand(context: CommandContext): Promise<voi
 
     const body = await readReviewBody(options.bodyFile ?? "");
     const parsed = contextReviewSubmitRequestSchema.safeParse({
-      reviewedHead: options.head,
       event: options.event,
       body,
     });
@@ -52,7 +47,7 @@ export async function runTreeReviewCommand(context: CommandContext): Promise<voi
       fail("INVALID_CONTEXT_REVIEW", parsed.error.issues.map((issue) => issue.message).join("; "), 2);
     }
 
-    const result = await createSdk(options.agent).submitContextReview(chatId, options.run ?? "", parsed.data);
+    const result = await createSdk().submitContextReview(chatId, options.run ?? "", parsed.data);
     success(result);
   } catch (error) {
     handleSdkError(error);

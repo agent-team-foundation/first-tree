@@ -36,7 +36,7 @@ const DEFAULT_SKILL_NAMES = [
 
 function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
   const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review may repair only when the installed skill live-scope gates permit it.\n`;
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill.\n`;
 }
 
 function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"]): { path: string; content: string } {
@@ -49,7 +49,7 @@ function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"])
   if (scenario === "validator-failure") {
     return {
       path: "system/review-contract.md",
-      content: `---\ntitle: "Review Contract"\nowners: []\n---\n\n# Review Contract\n\n## Decision\n\nReview outcomes are head-bound.\n`,
+      content: `---\ntitle: "Review Contract"\nowners: []\n---\n\n# Review Contract\n\n## Decision\n\nThe GitHub App publishes Context Tree review outcomes.\n`,
     };
   }
   if (scenario === "semantic-failure") {
@@ -71,7 +71,7 @@ function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"])
     path: "system/review-contract.md",
     content: node(
       "Review Contract",
-      "## Decision\n\nContext Tree pull request reviews are bound to the current head and produce one explicit verdict.\n\n## Rationale\n\nA single head-bound verdict prevents stale approvals and gives owners one auditable semantic outcome.\n\n## Constraints\n\nReviewers do not edit or merge the proposed tree change.",
+      "## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.\n\n## Constraints\n\nRepositories dismiss stale approvals after a push.",
     ),
   };
 }
@@ -157,8 +157,8 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     title: "Update review contract",
     url: "https://github.com/owner/context-tree/pull/42",
   };
-  const secondView = evalCase.fixture.scenario === "stale-head" ? { ...view, headRefOid: baseOid } : view;
-  const submissionHeadOid = evalCase.fixture.scenario === "submission-race" ? baseOid : secondView.headRefOid;
+  const secondView = view;
+  const submissionHeadOid = secondView.headRefOid;
   const reviewerLogin = "read-only-reviewer";
   const runId = "01900000-0000-7000-8000-000000000042";
   const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");

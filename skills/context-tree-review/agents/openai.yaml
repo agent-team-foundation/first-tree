@@ -1,4 +1,4 @@
 interface:
   display_name: "Context Tree Review"
   short_description: "Review a Context Tree PR against generated policy"
-  default_prompt: "Use $context-tree-review to inspect this trusted GitHub App Context Reviewer run, repair only within live declared scope, publish one exact-head App review, and squash-merge through local gh only after approval."
+  default_prompt: "Use $context-tree-review to inspect the latest live state for this trusted GitHub App Context Reviewer run, make any appropriate repair with the local identity, publish the verdict through the App, and squash-merge through local gh only after approval."

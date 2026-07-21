@@ -11,13 +11,11 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
-import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
-import { createAppJwt, getPullRequestForReview, mintInstallationToken } from "./github-app.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
@@ -53,7 +51,6 @@ export type ContextReviewerPrTemplateInput = {
   commentAuthorLogin: string | null;
   organizationId: string;
   contextReviewRunId: string;
-  contextReviewHeadSha: string;
   reviewerManagerGithubLogin: string | null;
 };
 
@@ -72,24 +69,21 @@ export type ContextReviewerPrSkipReason =
 
 type ContextReviewerPrPayloadInput = Omit<
   ContextReviewerPrTemplateInput,
-  "contextReviewRunId" | "contextReviewHeadSha" | "reviewerManagerGithubLogin"
+  "contextReviewRunId" | "reviewerManagerGithubLogin"
 >;
 
 type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
   action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "created" | "edited";
   entityKey: string;
-  headSha: string | null;
   senderType: string | null;
   commentAuthorType: string | null;
 };
 
-type ResolvedPullRequestPayloadInfo = Omit<PullRequestPayloadInfo, "headSha"> & { headSha: string };
-
 type ContextReviewerPrTrigger =
   | {
       eventType: "pull_request";
-      action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited";
+      action: "opened" | "synchronize" | "ready_for_review" | "reopened";
       triggerEvent: string;
     }
   | { eventType: "issue_comment"; action: "created"; triggerEvent: string }
@@ -205,8 +199,6 @@ export async function handleContextReviewerPrEvent(
     eventType: string;
     payload: unknown;
     organizationId: string;
-    installationId?: number;
-    fetcher?: typeof fetch;
   },
 ): Promise<ContextReviewerPrResult> {
   const action = isRecord(input.payload) ? readString(input.payload.action) : null;
@@ -228,8 +220,6 @@ async function handleContextReviewerPrEventWithInfo(
     eventType: string;
     payload: unknown;
     organizationId: string;
-    installationId?: number;
-    fetcher?: typeof fetch;
   },
   info: PullRequestPayloadInfo,
 ): Promise<ContextReviewerPrResult> {
@@ -273,17 +263,12 @@ async function handleContextReviewerPrEventWithInfo(
     organizationId: input.organizationId,
     entityKey: info.entityKey,
   });
-  const resolvedHeadSha = await resolveLivePullRequestHead(app, info, input);
-  const resolvedInfo: ResolvedPullRequestPayloadInfo = {
-    ...info,
-    headSha: resolvedHeadSha,
-  };
 
   const metadata = chatMetadataSchema.parse({
     source: "github",
     entityType: "pull_request",
-    entityKey: resolvedInfo.entityKey,
-    entityUrl: resolvedInfo.htmlUrl,
+    entityKey: info.entityKey,
+    entityUrl: info.htmlUrl,
     contextTreeReviewer: true,
     reviewerAgentUuid: reviewer.uuid,
   });
@@ -297,7 +282,7 @@ async function handleContextReviewerPrEventWithInfo(
     );
     const suppressedEchoMessageId = await findSuppressibleReviewerEchoMessageId(app.db, {
       chatId: existingChatId,
-      info: resolvedInfo,
+      info,
       reviewer,
       appSlug: app.config.oauth?.githubApp?.slug ?? null,
     });
@@ -319,23 +304,8 @@ async function handleContextReviewerPrEventWithInfo(
         suppressed: true,
       };
     }
-    const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
-      chatId: existingChatId,
-      info: resolvedInfo,
-      reviewer,
-    });
-    if (supersedingSynchronizeMessageId) {
-      return {
-        handled: true,
-        chatId: existingChatId,
-        messageId: supersedingSynchronizeMessageId,
-        reused: true,
-        suppressed: true,
-      };
-    }
-
     const contextReviewRunId = uuidv7();
-    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(resolvedInfo, reviewer, contextReviewRunId));
+    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
     const { message, recipients } = await sendMessage(
       app.db,
       existingChatId,
@@ -344,7 +314,7 @@ async function handleContextReviewerPrEventWithInfo(
         source: "github",
         format: "markdown",
         content: prompt,
-        metadata: contextReviewerMessageMetadata(resolvedInfo, reviewer, contextReviewRunId),
+        metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
       },
       { normalizeMentionsInContent: false, allowContextReviewRun: true },
     );
@@ -352,10 +322,10 @@ async function handleContextReviewerPrEventWithInfo(
     log.info(
       {
         organizationId: input.organizationId,
-        entityKey: resolvedInfo.entityKey,
+        entityKey: info.entityKey,
         chatId: existingChatId,
-        triggerEvent: resolvedInfo.triggerEvent,
-        isDraft: resolvedInfo.isDraft,
+        triggerEvent: info.triggerEvent,
+        isDraft: info.isDraft,
       },
       "context reviewer task sent to existing chat",
     );
@@ -363,20 +333,20 @@ async function handleContextReviewerPrEventWithInfo(
   }
 
   const contextReviewRunId = uuidv7();
-  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(resolvedInfo, reviewer, contextReviewRunId));
+  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
   const created = await createChat(app.db, {
     mode: "task",
     initiatorAgentId: reviewer.managerHumanAgentId,
     organizationId: input.organizationId,
     initialRecipientAgentIds: [reviewer.uuid],
     contextParticipantAgentIds: [],
-    topic: `Context Review PR #${resolvedInfo.prNumber}: ${resolvedInfo.title}`,
-    onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, resolvedInfo.entityKey),
+    topic: `Context Review PR #${info.prNumber}: ${info.title}`,
+    onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
     initialMessage: {
       source: "github",
       format: "markdown",
       content: prompt,
-      metadata: contextReviewerMessageMetadata(resolvedInfo, reviewer, contextReviewRunId),
+      metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
     },
     allowContextReviewRun: true,
     source: "manual",
@@ -389,20 +359,6 @@ async function handleContextReviewerPrEventWithInfo(
       [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
       { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
     );
-    const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
-      chatId: created.chat.id,
-      info: resolvedInfo,
-      reviewer,
-    });
-    if (supersedingSynchronizeMessageId) {
-      return {
-        handled: true,
-        chatId: created.chat.id,
-        messageId: supersedingSynchronizeMessageId,
-        reused: true,
-        suppressed: true,
-      };
-    }
     const { message, recipients } = await sendMessage(
       app.db,
       created.chat.id,
@@ -411,7 +367,7 @@ async function handleContextReviewerPrEventWithInfo(
         source: "github",
         format: "markdown",
         content: prompt,
-        metadata: contextReviewerMessageMetadata(resolvedInfo, reviewer, contextReviewRunId),
+        metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
       },
       { normalizeMentionsInContent: false, allowContextReviewRun: true },
     );
@@ -422,10 +378,10 @@ async function handleContextReviewerPrEventWithInfo(
   log.info(
     {
       organizationId: input.organizationId,
-      entityKey: resolvedInfo.entityKey,
+      entityKey: info.entityKey,
       chatId: created.chat.id,
-      triggerEvent: resolvedInfo.triggerEvent,
-      isDraft: resolvedInfo.isDraft,
+      triggerEvent: info.triggerEvent,
+      isDraft: info.isDraft,
     },
     "context reviewer task chat created",
   );
@@ -455,19 +411,13 @@ function isSupportedContextReviewerPrEvent(eventType: string, action: string | n
 function resolveContextReviewerPrTrigger(
   eventType: string,
   action: string | null,
-  payload?: unknown,
+  _payload?: unknown,
 ): ContextReviewerPrTrigger | null {
   if (
     eventType === "pull_request" &&
     (action === "opened" || action === "reopened" || action === "synchronize" || action === "ready_for_review")
   ) {
     return { eventType, action, triggerEvent: `${eventType}.${action}` };
-  }
-  if (eventType === "pull_request" && action === "edited" && isRecord(payload)) {
-    const changes = isRecord(payload.changes) ? payload.changes : null;
-    if (changes && Object.hasOwn(changes, "body")) {
-      return { eventType, action, triggerEvent: `${eventType}.${action}` };
-    }
   }
   if (eventType === "issue_comment" && action === "created") {
     return { eventType, action, triggerEvent: `${eventType}.${action}` };
@@ -521,7 +471,6 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
-      headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
       commentUrl: null,
       commentAuthorLogin: null,
@@ -547,7 +496,6 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(issue) ?? senderLogin,
       baseRef: null,
       headRef: null,
-      headSha: null,
       isDraft: null,
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
@@ -572,7 +520,6 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
-      headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
@@ -589,10 +536,6 @@ function readDraftStatus(pr: Record<string, unknown> | null): boolean | null {
   return pr.draft;
 }
 
-function normalizeCommitOid(value: string | null): string | null {
-  return value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
-}
-
 function readUserLogin(record: Record<string, unknown> | null): string | null {
   const user = isRecord(record?.user) ? record.user : null;
   return readString(user?.login);
@@ -604,20 +547,19 @@ function readCommentAuthor(comment: Record<string, unknown> | null): { login: st
 }
 
 function buildTemplateInput(
-  info: ResolvedPullRequestPayloadInfo,
+  info: PullRequestPayloadInfo,
   reviewer: ReviewerAgent,
   contextReviewRunId: string,
 ): ContextReviewerPrTemplateInput {
   return {
     ...info,
     contextReviewRunId,
-    contextReviewHeadSha: info.headSha,
     reviewerManagerGithubLogin: reviewer.managerGithubLogin,
   };
 }
 
 function contextReviewerMessageMetadata(
-  info: ResolvedPullRequestPayloadInfo,
+  info: PullRequestPayloadInfo,
   reviewer: ReviewerAgent,
   contextReviewRunId: string,
 ): Record<string, unknown> {
@@ -632,7 +574,6 @@ function contextReviewerMessageMetadata(
     contextReviewRunId,
     contextReviewRepository: normalizeGithubRepo(info.repoFullName),
     contextReviewPrNumber: info.prNumber,
-    contextReviewHeadSha: info.headSha,
     contextReviewOrganizationId: info.organizationId,
     contextReviewReviewerAgentUuid: reviewer.uuid,
     contextReviewReviewerManagerHumanAgentId: reviewer.managerHumanAgentId,
@@ -653,55 +594,6 @@ function contextReviewerMessageMetadata(
     metadata.pullRequestDraft = info.isDraft;
   }
   return metadata;
-}
-
-async function resolveLivePullRequestHead(
-  app: FastifyInstance,
-  info: PullRequestPayloadInfo,
-  input: { organizationId: string; installationId?: number; fetcher?: typeof fetch },
-): Promise<string> {
-  const [installation] = await app.db
-    .select({
-      installationId: githubAppInstallations.installationId,
-      permissions: githubAppInstallations.permissions,
-      suspendedAt: githubAppInstallations.suspendedAt,
-    })
-    .from(githubAppInstallations)
-    .where(eq(githubAppInstallations.hubOrganizationId, input.organizationId))
-    .limit(1);
-  if (
-    !installation ||
-    installation.suspendedAt ||
-    installation.permissions.pull_requests !== "write" ||
-    (input.installationId !== undefined && installation.installationId !== input.installationId)
-  ) {
-    throw new Error(
-      "Context Reviewer cannot resolve the pull request head without its active Pull requests: write installation.",
-    );
-  }
-  const credentials = app.config.oauth?.githubApp;
-  if (!credentials) throw new Error("GitHub App credentials are unavailable for Context Reviewer head resolution.");
-  const repository = normalizeGithubRepo(info.repoFullName);
-  const [owner, repo] = repository?.split("/") ?? [];
-  if (!owner || !repo) throw new Error("Context Reviewer repository is invalid.");
-
-  const appJwt = await createAppJwt(credentials);
-  const minted = await mintInstallationToken(appJwt, installation.installationId, {
-    fetcher: input.fetcher,
-    repositories: [repo],
-    permissions: { metadata: "read", pull_requests: "read" },
-  });
-  if (minted.permissions.pull_requests !== "read" && minted.permissions.pull_requests !== "write") {
-    throw new Error("The live GitHub App token cannot read pull requests.");
-  }
-  const pullRequest = await getPullRequestForReview(minted.token, owner, repo, info.prNumber, {
-    fetcher: input.fetcher,
-  });
-  const headSha = normalizeCommitOid(pullRequest.headSha);
-  if (!headSha || pullRequest.number !== info.prNumber) {
-    throw new Error("GitHub returned invalid pull request head authority.");
-  }
-  return headSha;
 }
 
 async function loadValidReviewerAgent(
@@ -749,30 +641,6 @@ async function findExistingReviewerChat(
     )
     .limit(1);
   return row?.id ?? null;
-}
-
-async function findSupersedingSynchronizeMessageId(
-  db: Database,
-  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent },
-): Promise<string | null> {
-  if (input.info.triggerEvent !== "pull_request.opened") return null;
-  const [row] = await db
-    .select({ id: messages.id, headSha: sql<string | null>`${messages.metadata}->>'contextReviewHeadSha'` })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.chatId, input.chatId),
-        eq(messages.source, "github"),
-        sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
-        sql`${messages.metadata}->>'triggerEvent' = 'pull_request.synchronize'`,
-        sql`${messages.metadata}->>'contextReviewReviewerAgentUuid' = ${input.reviewer.uuid}`,
-        sql`${messages.metadata}->>'contextReviewReviewerManagerHumanAgentId' = ${input.reviewer.managerHumanAgentId}`,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messages.id))
-    .limit(1);
-  if (!row) return null;
-  return input.info.headSha && row.headSha === input.info.headSha ? null : row.id;
 }
 
 async function findSuppressibleReviewerEchoMessageId(
