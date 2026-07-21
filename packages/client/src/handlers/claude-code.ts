@@ -672,8 +672,8 @@ export function createToolCallProcessor(
             // Chunk so the FULL assistant text is preserved across one or more
             // events — the durable troubleshooting record now that the
             // per-turn final-text chat mirror is retired.
-            for (const chunk of chunkAssistantText(text)) {
-              emit({ kind: "assistant_text", payload: { text: chunk } });
+            for (const [chunkIndex, chunk] of chunkAssistantText(text).entries()) {
+              emit({ kind: "assistant_text", payload: { text: chunk, continuation: chunkIndex > 0 } });
             }
           } else if (isThinkingBlock(block)) {
             emit({ kind: "thinking", payload: {} });

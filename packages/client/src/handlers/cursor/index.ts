@@ -869,8 +869,8 @@ export const createCursorHandler: HandlerFactory = (config) => {
       // result text — so per-chat trigger ownership is released (historic
       // prototype bug #8).
       if (finalText.trim()) {
-        for (const chunk of chunkAssistantText(finalText)) {
-          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        for (const [chunkIndex, chunk] of chunkAssistantText(finalText).entries()) {
+          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk, continuation: chunkIndex > 0 } });
         }
       }
       try {

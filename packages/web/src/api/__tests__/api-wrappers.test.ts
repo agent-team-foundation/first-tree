@@ -257,6 +257,7 @@ describe("api wrapper paths", () => {
     expect(sessions.sessionQueryKey("agent-1", "chat-1")).toEqual(["session", "agent-1", "chat-1"]);
     expect(sessions.agentSessionsQueryKey("agent-1")).toEqual(["agent-sessions", "agent-1"]);
     expect(sessions.chatSessionEventsQueryKey("chat-1")).toEqual(["chat-session-events", "chat-1"]);
+    expect(sessions.chatCurrentTurnNarrationsQueryKey("chat-1")).toEqual(["chat-current-turn-narrations", "chat-1"]);
     expect(sessions.asToolCallPayload({ toolUseId: "tool-1", name: "Bash", args: {}, status: "ok" })).toEqual({
       toolUseId: "tool-1",
       name: "Bash",
@@ -278,12 +279,14 @@ describe("api wrapper paths", () => {
     await sessions.getSession("agent/id", "chat/id");
     await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
     await sessions.listChatSessionEvents("chat/id", { limit: 200, direction: "desc" });
+    await sessions.listChatCurrentTurnNarrations("chat/id");
     await sessions.suspendSession("agent/id", "chat/id");
     await sessions.resumeSession("agent/id", "chat/id");
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat%2Fid/session-events?limit=200&direction=desc");
+    expect(apiMock.get).toHaveBeenCalledWith("/chats/chat%2Fid/current-turn-narrations");
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova&addressableOnly=true",

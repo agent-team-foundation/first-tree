@@ -60,7 +60,11 @@ import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
 import { extractSummary } from "../services/session.js";
-import { listChatSpeakerEvents, summarizeChatTokenUsage } from "../services/session-event.js";
+import {
+  listChatCurrentTurnNarrations,
+  listChatSpeakerEvents,
+  summarizeChatTokenUsage,
+} from "../services/session-event.js";
 import { sendFollowResult } from "./github-entity-reply.js";
 
 /**
@@ -250,6 +254,17 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       limit: Number.isFinite(limit) ? limit : undefined,
       direction,
     });
+  });
+
+  /**
+   * Lossless assistant narration for every speaker's currently open turn.
+   * Kept separate from `/agent-status` so its 30s compact-state refresh never
+   * retransmits long model output; the connected composer fetches this only
+   * while its inline detail is expanded.
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/current-turn-narrations", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return listChatCurrentTurnNarrations(app.db, chat.id);
   });
 
   /**

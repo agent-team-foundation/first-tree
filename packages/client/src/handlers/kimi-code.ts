@@ -487,8 +487,10 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       const endedSuccessfully = observation?.ended?.reason === "completed";
       if (endedSuccessfully) {
         const assistantText = observation?.assistantText ?? "";
-        for (const chunk of chunkAssistantText(assistantText)) {
-          if (chunk.trim()) sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        for (const [chunkIndex, chunk] of chunkAssistantText(assistantText).entries()) {
+          if (chunk.trim()) {
+            sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk, continuation: chunkIndex > 0 } });
+          }
         }
         await emitUsage(sessionCtx, activeSession, usageBaseline);
         try {

@@ -108,6 +108,21 @@ const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_
 // working). Prefix-invalidate so every open chat's panel refreshes; throttled
 // like the rest.
 const chatAgentStatusInvalidator = createThrottledInvalidator(["chat-agent-status"], INVALIDATE_THROTTLE_MS);
+const currentTurnNarrationInvalidators = new Map<string, ThrottledInvalidator>();
+
+function invalidateCurrentTurnNarration(qc: QC, chatId: string): void {
+  let invalidator = currentTurnNarrationInvalidators.get(chatId);
+  if (!invalidator) {
+    invalidator = createThrottledInvalidator(["chat-current-turn-narrations", chatId], INVALIDATE_THROTTLE_MS);
+    currentTurnNarrationInvalidators.set(chatId, invalidator);
+  }
+  invalidator.invalidate(qc);
+}
+
+function disposeCurrentTurnNarrationInvalidators(): void {
+  for (const invalidator of currentTurnNarrationInvalidators.values()) invalidator.dispose();
+  currentTurnNarrationInvalidators.clear();
+}
 // Replaces the per-component `refetchInterval` previously wired into
 // SessionContext, ChatView's right-sidebar session card, the per-agent
 // roster panel, and AgentRow. The frame carries `agentId` + `chatId`
@@ -246,6 +261,12 @@ function broadcast(msg: WsMessage) {
       }
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-session-events", chatId] });
+        // Full narration is fetched only while expanded. Restrict refreshes to
+        // text/boundary events and fold chunk bursts so a long answer does not
+        // repeatedly download its full prefix for tool or token events.
+        if (msg.kind === "assistant_text" || msg.kind === "turn_end") {
+          invalidateCurrentTurnNarration(latestQc, chatId);
+        }
       }
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
@@ -350,6 +371,7 @@ function connect() {
       latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
       latestQc.invalidateQueries({ queryKey: ["session-events"] });
       latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-current-turn-narrations"] });
       latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
       // `["chat-messages"]` used to recover from a WS gap via the 5s
       // refetchInterval in ChatView; now that the poll is gone, reconnect
@@ -430,6 +452,7 @@ function teardown() {
   activityInvalidator.dispose();
   sessionsInvalidator.dispose();
   chatAgentStatusInvalidator.dispose();
+  disposeCurrentTurnNarrationInvalidators();
   disposeSessionPairThrottle();
   if (ws) {
     ws.close(1000, "unmount");

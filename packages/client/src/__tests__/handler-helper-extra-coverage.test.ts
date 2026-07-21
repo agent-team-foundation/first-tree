@@ -256,7 +256,10 @@ describe("additional Claude helper branches", () => {
       kind: "tool_call",
       payload: { toolUseId: "tool-read", name: "Read", status: "pending" },
     });
-    expect(events[1]).toEqual({ kind: "assistant_text", payload: { text: "Assistant output" } });
+    expect(events[1]).toEqual({
+      kind: "assistant_text",
+      payload: { text: "Assistant output", continuation: false },
+    });
     expect(events[2]).toEqual({ kind: "thinking", payload: {} });
     expect(events[3]).toMatchObject({
       kind: "tool_call",

@@ -1701,7 +1701,7 @@ export function ChatView({
     if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // A nested top layer (for example the Activity Inspector) owns the first
+      // A nested top layer (for example expanded current output) owns the first
       // Escape and marks it handled. Keep the details rail open until the next
       // Escape instead of dismissing two layers in one keypress.
       if (event.defaultPrevented) return;
@@ -3504,6 +3504,11 @@ export function ChatView({
       // send. The agent's harness routes the slash on receipt.
     },
   });
+  const composerPickerOpen = composerPickerVisible({
+    isTrial,
+    mentionOpen: mention.trigger != null,
+    slashOpen: slash.trigger != null,
+  });
 
   // Wrapped via a variable (not nested inline) so introducing the provider
   // doesn't re-indent the entire chat body — keeps the diff about the fix.
@@ -4001,25 +4006,39 @@ export function ChatView({
                 paddingBottom: "calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
               }}
             >
-              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-                {/* Live activity is view-only awareness, so watchers keep the
-                    same stable “what are agents doing?” entry as participants.
-                    Reply controls below remain gated by `readOnly`. */}
-                <ComposeStatusBar
-                  chatId={chatId}
-                  agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                  fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
-                />
+              <div
+                className="composer-stack"
+                style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}
+              >
+                {chatTokenUsage && chatProcessedTokens > 0 ? (
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                    title={formatTokenUsageTitle(chatTokenUsage)}
+                  >
+                    {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
+                  </div>
+                ) : null}
+                {/* The mention/slash picker temporarily owns the connected top
+                    edge, so hide live status while that input-specific surface
+                    is docked. It remounts collapsed when the picker closes. */}
+                {!composerPickerOpen ? (
+                  <ComposeStatusBar
+                    chatId={chatId}
+                    agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                    fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
+                  />
+                ) : null}
                 {readOnly ? (
                   <div
                     ref={readOnlyComposerRef}
                     tabIndex={-1}
-                    className="flex items-center"
+                    className="composer-card flex items-center"
+                    data-composer-editor
                     style={{
                       gap: "var(--sp-3)",
                       padding: "var(--sp-2) var(--sp-3)",
                       border: "var(--hairline) solid var(--border)",
-                      borderRadius: 6,
                       // Raised surface (`--bg-raised`) so the slot reads as a
                       // distinct input card lifted above the timeline (`--bg`),
                       // sharing the header chrome's surface. Mirrors the editable
@@ -4053,21 +4072,13 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatProcessedTokens > 0 ? (
-                      <div
-                        className="mono text-caption"
-                        style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={formatTokenUsageTitle(chatTokenUsage)}
-                      >
-                        {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
-                      </div>
-                    ) : null}
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
                       className="composer-card composer-input"
+                      data-composer-editor
                       // Phone-only: flatten the card's top corners while a picker
                       // panel (mention or slash) is docked flush above it so the two
                       // read as one welded surface (see
@@ -4075,15 +4086,7 @@ export function ChatView({
                       // composerPickerVisible on `!isTrial`: trial keeps the slash
                       // hook live but renders no panel, so a trial `/` must not weld
                       // an empty input.
-                      data-picker-open={
-                        composerPickerVisible({
-                          isTrial,
-                          mentionOpen: mention.trigger != null,
-                          slashOpen: slash.trigger != null,
-                        })
-                          ? "true"
-                          : undefined
-                      }
+                      data-picker-open={composerPickerOpen ? "true" : undefined}
                       style={{
                         position: "relative",
                         border: "var(--hairline) solid var(--border)",

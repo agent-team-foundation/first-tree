@@ -1,4 +1,4 @@
-import type { SessionState } from "@first-tree/shared";
+import type { CurrentTurnNarrations, SessionState } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type SessionListItem = {
@@ -121,6 +121,7 @@ export type ChatSessionEventsResponse = {
 };
 
 export const chatSessionEventsQueryKey = (chatId: string) => ["chat-session-events", chatId] as const;
+export const chatCurrentTurnNarrationsQueryKey = (chatId: string) => ["chat-current-turn-narrations", chatId] as const;
 
 export function listSessions(params?: {
   limit?: number;
@@ -176,6 +177,10 @@ export function listChatSessionEvents(
   return api.get<ChatSessionEventsResponse>(
     `/chats/${encodeURIComponent(chatId)}/session-events${query ? `?${query}` : ""}`,
   );
+}
+
+export function listChatCurrentTurnNarrations(chatId: string): Promise<CurrentTurnNarrations> {
+  return api.get<CurrentTurnNarrations>(`/chats/${encodeURIComponent(chatId)}/current-turn-narrations`);
 }
 
 export type SessionMutationResponse = {

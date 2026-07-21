@@ -4,9 +4,30 @@ import {
   parseProviderRetryEventMessage,
   statusReasonFromProviderRetryEvent,
 } from "../schemas/provider-retry.js";
-import { sessionEventSchema } from "../schemas/session-event.js";
+import { currentTurnNarrationSchema, sessionEventSchema } from "../schemas/session-event.js";
 
 describe("sessionEventSchema", () => {
+  describe("currentTurnNarrationSchema", () => {
+    it("accepts complete uncapped current-turn text", () => {
+      const text = "x".repeat(20_000);
+      expect(currentTurnNarrationSchema.parse({ agentId: "agent-1", afterSeq: 4, latestSeq: 9, text })).toEqual({
+        agentId: "agent-1",
+        afterSeq: 4,
+        latestSeq: 9,
+        text,
+      });
+    });
+
+    it("rejects an empty narration or invalid sequence boundary", () => {
+      expect(
+        currentTurnNarrationSchema.safeParse({ agentId: "agent-1", afterSeq: 0, latestSeq: 1, text: "" }).success,
+      ).toBe(false);
+      expect(
+        currentTurnNarrationSchema.safeParse({ agentId: "agent-1", afterSeq: -1, latestSeq: 0, text: "x" }).success,
+      ).toBe(false);
+    });
+  });
+
   describe("tool_call", () => {
     it("parses with the minimum required fields", () => {
       const r = sessionEventSchema.safeParse({
@@ -158,12 +179,17 @@ describe("sessionEventSchema", () => {
   });
 
   describe("assistant_text", () => {
-    it("parses a minimal assistant_text event", () => {
-      const r = sessionEventSchema.safeParse({
+    it("parses legacy and chunk-boundary-aware assistant_text events", () => {
+      const legacy = sessionEventSchema.safeParse({
         kind: "assistant_text",
         payload: { text: "I'll check the file." },
       });
-      expect(r.success).toBe(true);
+      const current = sessionEventSchema.safeParse({
+        kind: "assistant_text",
+        payload: { text: "continued", continuation: true },
+      });
+      expect(legacy.success).toBe(true);
+      expect(current.success).toBe(true);
     });
 
     it("rejects text longer than 8000 chars", () => {

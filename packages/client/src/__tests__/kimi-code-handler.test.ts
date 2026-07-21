@@ -183,7 +183,10 @@ describe("Kimi Code handler", () => {
     expect(captures.create?.roleAdditional).toContain("First Tree");
     expect(fakeSession.prompts).toEqual(["[From: human-1]\n\ndo work"]);
     expect(events.some((item) => item.kind === "thinking")).toBe(true);
-    expect(events).toContainEqual({ kind: "assistant_text", payload: { text: "hello from Kimi" } });
+    expect(events).toContainEqual({
+      kind: "assistant_text",
+      payload: { text: "hello from Kimi", continuation: false },
+    });
     expect(events).toContainEqual({
       kind: "token_usage",
       payload: {

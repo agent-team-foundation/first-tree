@@ -160,7 +160,13 @@ describe("useAdminWs", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["sessions"] });
 
     await act(async () => {
-      socket.emit({ type: "session:event", agentId: "agent-1", chatId: "chat-1", status: makeStatus() });
+      socket.emit({
+        type: "session:event",
+        agentId: "agent-1",
+        chatId: "chat-1",
+        kind: "assistant_text",
+        status: makeStatus(),
+      });
       socket.emit({ type: "chat:message", chatId: "chat-1" });
       socket.emit({ type: "pulse:tick" });
       socket.emit("not json");
@@ -168,8 +174,22 @@ describe("useAdminWs", () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-events", "agent-1", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-session-events", "chat-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-current-turn-narrations", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-messages", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-detail", "chat-1"] });
+
+    const narrationInvalidations = () =>
+      invalidateSpy.mock.calls.filter(
+        ([options]) =>
+          JSON.stringify(options) === JSON.stringify({ queryKey: ["chat-current-turn-narrations", "chat-1"] }),
+      ).length;
+    const beforeNonTextEvent = narrationInvalidations();
+    await act(async () => {
+      socket.emit({ type: "session:event", agentId: "agent-1", chatId: "chat-1", kind: "tool_call" });
+      socket.emit({ type: "session:event", agentId: "agent-1", chatId: "chat-1", kind: "thinking" });
+      socket.emit({ type: "session:event", agentId: "agent-1", chatId: "chat-1", kind: "token_usage" });
+    });
+    expect(narrationInvalidations()).toBe(beforeNonTextEvent);
   });
 
   it("refreshes access tokens on auth close and reconnects immediately", async () => {

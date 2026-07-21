@@ -276,7 +276,12 @@ describe("createToolCallProcessor", () => {
       .map(([ev]) => ev)
       .filter((ev): ev is Extract<SessionEvent, { kind: "assistant_text" }> => ev?.kind === "assistant_text")
       .map((ev) => ev.payload.text);
+    const boundaries = emit.mock.calls
+      .map(([ev]) => ev)
+      .filter((ev): ev is Extract<SessionEvent, { kind: "assistant_text" }> => ev?.kind === "assistant_text")
+      .map((ev) => ev.payload.continuation);
     expect(texts).toHaveLength(2);
+    expect(boundaries).toEqual([false, true]);
     for (const t of texts) expect(t.length).toBeLessThanOrEqual(8000);
     expect(texts.join("")).toBe(full);
   });

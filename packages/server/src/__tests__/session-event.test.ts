@@ -295,6 +295,141 @@ describe("sessionEventService", () => {
     expect(remaining2).toHaveLength(1);
   });
 
+  it("reconstructs split assistant blocks exactly and preserves independent block boundaries", () => {
+    const firstChunk = "x".repeat(8000);
+    expect(
+      sessionEventService.combineAssistantTextChunks([
+        { seq: 7, text: "After the tool.", continuation: false },
+        { seq: 3, text: firstChunk, continuation: false },
+        { seq: 4, text: "y".repeat(8000), continuation: true },
+        { seq: 5, text: "Tail", continuation: true },
+        { seq: 6, text: "Next block", continuation: false },
+      ]),
+    ).toEqual({
+      latestSeq: 7,
+      text: `${firstChunk}${"y".repeat(8000)}Tail\n\nNext block\n\nAfter the tool.`,
+    });
+    expect(
+      sessionEventService.combineAssistantTextChunks([
+        { seq: 1, text: "Hello", continuation: false },
+        { seq: 2, text: "world", continuation: false },
+        { seq: 3, text: "Already one newline\n", continuation: false },
+        { seq: 4, text: "next", continuation: false },
+        { seq: 5, text: "left\n", continuation: false },
+        { seq: 6, text: "\nright", continuation: false },
+      ]),
+    ).toEqual({
+      latestSeq: 6,
+      text: "Hello\n\nworld\n\nAlready one newline\n\nnext\n\nleft\n\nright",
+    });
+    // Historical clients emitted no continuation flag. A full 8k predecessor
+    // is the only recoverable signal that the adjacent row is its tail.
+    expect(
+      sessionEventService.combineAssistantTextChunks([
+        { seq: 1, text: firstChunk },
+        { seq: 2, text: "legacy tail" },
+      ]),
+    ).toEqual({ latestSeq: 2, text: `${firstChunk}legacy tail` });
+    const whitespaceChunk = " ".repeat(8000);
+    expect(
+      sessionEventService.combineAssistantTextChunks([
+        { seq: 1, text: firstChunk, continuation: false },
+        { seq: 2, text: whitespaceChunk, continuation: true },
+        { seq: 3, text: "tail", continuation: true },
+      ]),
+    ).toEqual({ latestSeq: 3, text: `${firstChunk}${whitespaceChunk}tail` });
+    expect(
+      sessionEventService.combineAssistantTextChunks([
+        { seq: 2, text: "  " },
+        { seq: 1, text: "" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns every speaker's complete current-turn narration on demand and enforces chat access", async () => {
+    const app = getApp();
+    const first = await createTestAgent(app, { name: `narration-one-${crypto.randomUUID().slice(0, 6)}` });
+    const second = await createTestAgent(app, { name: `narration-two-${crypto.randomUUID().slice(0, 6)}` });
+    const forged = await createTestAgent(app, { name: `narration-forged-${crypto.randomUUID().slice(0, 6)}` });
+    const viewer = await createTestAdmin(app);
+    const c = chatId();
+
+    await app.db.insert(chats).values({ id: c, organizationId: first.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId: c, agentId: first.agent.uuid, accessMode: "speaker" },
+      { chatId: c, agentId: second.agent.uuid, accessMode: "speaker" },
+      { chatId: c, agentId: viewer.humanAgentUuid, accessMode: "watcher" },
+    ]);
+
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "Previous turn" },
+    });
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "turn_end",
+      payload: { status: "success" },
+    });
+    const firstChunk = "a".repeat(8000);
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: firstChunk },
+    });
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "tail" },
+    });
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "tool_call",
+      payload: { toolUseId: "tool-1", name: "Read", args: {}, status: "ok" },
+    });
+    await sessionEventService.appendEvent(app.db, first.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "After tool" },
+    });
+    await sessionEventService.appendEvent(app.db, second.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "Second speaker" },
+    });
+    await sessionEventService.appendEvent(app.db, forged.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "Not a chat speaker" },
+    });
+
+    const narrations = await sessionEventService.listChatCurrentTurnNarrations(app.db, c);
+    expect(narrations).toEqual(
+      [
+        {
+          agentId: first.agent.uuid,
+          afterSeq: 2,
+          latestSeq: 6,
+          text: `${firstChunk}tail\n\nAfter tool`,
+        },
+        {
+          agentId: second.agent.uuid,
+          afterSeq: 0,
+          latestSeq: 1,
+          text: "Second speaker",
+        },
+      ].sort((a, b) => a.agentId.localeCompare(b.agentId)),
+    );
+
+    const watcherResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${c}/current-turn-narrations`,
+      headers: { authorization: `Bearer ${viewer.accessToken}` },
+    });
+    expect(watcherResponse.statusCode).toBe(200);
+    expect(watcherResponse.json()).toEqual(narrations);
+
+    const outsider = await createTestAdmin(app);
+    const outsiderResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${c}/current-turn-narrations`,
+      headers: { authorization: `Bearer ${outsider.accessToken}` },
+    });
+    expect(outsiderResponse.statusCode).toBe(404);
+  });
+
   it("chat-scoped batches expose private speaker evidence to speakers and watchers only", async () => {
     const app = getApp();
     const privateOne = await createTestAgent(app, { name: `private-one-${crypto.randomUUID().slice(0, 6)}` });

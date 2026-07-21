@@ -644,8 +644,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // Chunk so the FULL assistant text is preserved across one or more
         // events — the durable troubleshooting record now that the per-turn
         // final-text chat mirror is retired.
-        for (const chunk of chunkAssistantText(item.text)) {
-          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        for (const [chunkIndex, chunk] of chunkAssistantText(item.text).entries()) {
+          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk, continuation: chunkIndex > 0 } });
         }
         return item.text;
       }

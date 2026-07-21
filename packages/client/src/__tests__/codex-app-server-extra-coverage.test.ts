@@ -797,7 +797,7 @@ describe("codex app-server handler extra branches", () => {
     expect(events.some((event) => event.kind === "thinking")).toBe(true);
     expect(events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "assistant_text", payload: { text: "done" } }),
+        expect.objectContaining({ kind: "assistant_text", payload: { text: "done", continuation: false } }),
         expect.objectContaining({
           kind: "tool_call",
           payload: expect.objectContaining({ name: "web_search", args: { query: "first tree" }, status: "ok" }),
@@ -885,7 +885,10 @@ describe("codex app-server handler extra branches", () => {
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "assistant_text", payload: { text: "buffered answer" } }),
+        expect.objectContaining({
+          kind: "assistant_text",
+          payload: { text: "buffered answer", continuation: false },
+        }),
         expect.objectContaining({
           kind: "tool_call",
           payload: expect.objectContaining({ toolUseId: "cmd-failed", name: "command", status: "error" }),

@@ -347,7 +347,7 @@ describe("codex handler startup inject queue", () => {
     );
     expect(events).toEqual(
       expect.arrayContaining([
-        { kind: "assistant_text", payload: { text: "visible answer" } },
+        { kind: "assistant_text", payload: { text: "visible answer", continuation: false } },
         { kind: "thinking", payload: {} },
         expect.objectContaining({
           kind: "error",

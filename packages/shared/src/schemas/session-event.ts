@@ -59,8 +59,35 @@ export type ErrorEventPayload = z.infer<typeof errorEventPayload>;
  */
 export const assistantTextEventPayload = z.object({
   text: z.string().max(8000),
+  /**
+   * True when this event continues the immediately preceding text event from
+   * the same model block. New clients always send the flag (false on the
+   * first chunk); it stays optional so older clients and persisted rows remain
+   * valid during rolling upgrades.
+   */
+  continuation: z.boolean().optional(),
 });
 export type AssistantTextEventPayload = z.infer<typeof assistantTextEventPayload>;
+
+/**
+ * Complete assistant narration for one agent's currently open turn in a chat.
+ *
+ * This is fetched on demand by the expanded composer status surface rather
+ * than riding the frequently refreshed compact status projection. `text`
+ * reconstructs every assistant_text chunk after `afterSeq` in event order;
+ * it is intentionally not capped because the source event stream is already
+ * the lossless troubleshooting record.
+ */
+export const currentTurnNarrationSchema = z.object({
+  agentId: z.string(),
+  afterSeq: z.number().int().nonnegative(),
+  latestSeq: z.number().int().positive(),
+  text: z.string().min(1),
+});
+export type CurrentTurnNarration = z.infer<typeof currentTurnNarrationSchema>;
+
+export const currentTurnNarrationsSchema = z.array(currentTurnNarrationSchema);
+export type CurrentTurnNarrations = z.infer<typeof currentTurnNarrationsSchema>;
 
 /**
  * Marker emitted when the model produces a `thinking` content block.

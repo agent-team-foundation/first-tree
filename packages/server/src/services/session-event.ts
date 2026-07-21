@@ -2,6 +2,7 @@ import type {
   ChatTokenUsage,
   ContextTreeUsageEvent,
   ContextTreeUsageSummary,
+  CurrentTurnNarrations,
   SessionEvent,
   SessionEventKind,
 } from "@first-tree/shared";
@@ -268,6 +269,120 @@ export async function listChatSpeakerEvents(
       return { agentId, items, nextCursor: hasMore && last ? last.seq : null };
     }),
   };
+}
+
+const LEGACY_ASSISTANT_TEXT_CHUNK_SIZE = 8000;
+
+function missingBlankLine(current: string, next: string): string {
+  const trailingNewlines = current.match(/\n*$/)?.[0].length ?? 0;
+  const leadingNewlines = next.match(/^\n*/)?.[0].length ?? 0;
+  return "\n".repeat(Math.max(0, 2 - trailingNewlines - leadingNewlines));
+}
+
+/**
+ * Reconstruct nonblank assistant output from per-event chunks.
+ *
+ * New clients explicitly mark continuation chunks, so adjacent independent
+ * model blocks retain a blank-line boundary. Historical rows predate that
+ * flag; only an adjacent row after a full 8k legacy chunk is treated as its
+ * continuation. Every chunk is retained, including whitespace-only chunks
+ * inside otherwise nonblank output.
+ */
+export function combineAssistantTextChunks(
+  rows: Array<{ seq: number; text: string; continuation?: boolean }>,
+): { latestSeq: number; text: string } | null {
+  const ordered = [...rows].sort((a, b) => a.seq - b.seq);
+  let latestSeq = 0;
+  let previous: (typeof ordered)[number] | null = null;
+  let text = "";
+
+  for (const row of ordered) {
+    const isAdjacent = previous !== null && row.seq === previous.seq + 1;
+    const isContinuation =
+      isAdjacent &&
+      (row.continuation === true ||
+        (row.continuation === undefined && previous?.text.length === LEGACY_ASSISTANT_TEXT_CHUNK_SIZE));
+    if (text && !isContinuation) {
+      text += missingBlankLine(text, row.text);
+    }
+    text += row.text;
+    previous = row;
+    latestSeq = row.seq;
+  }
+
+  return text.trim() ? { latestSeq, text } : null;
+}
+
+/**
+ * Complete current-turn assistant narration for every non-human speaker in a
+ * chat. This intentionally has no content cap: the client already chunks each
+ * assistant block into validated 8k events, and this on-demand endpoint
+ * reconstructs all nonblank output only while the composer status is open.
+ */
+export async function listChatCurrentTurnNarrations(db: Database, chatId: string): Promise<CurrentTurnNarrations> {
+  const rows = (await db.execute(sql`
+    WITH speakers AS (
+      SELECT cm.agent_id
+        FROM chat_membership cm
+        INNER JOIN agents a ON a.uuid = cm.agent_id
+        INNER JOIN chats c ON c.id = cm.chat_id
+       WHERE cm.chat_id = ${chatId}
+         AND cm.access_mode = 'speaker'
+         AND a.type = 'agent'
+         AND a.organization_id = c.organization_id
+    )
+    SELECT s.agent_id,
+           COALESCE(boundary.seq, 0)::int AS after_seq,
+           se.seq,
+           se.payload->>'text' AS text,
+           (se.payload->>'continuation')::boolean AS continuation
+      FROM speakers s
+      LEFT JOIN LATERAL (
+        SELECT previous.seq
+          FROM session_events previous
+         WHERE previous.agent_id = s.agent_id
+           AND previous.chat_id = ${chatId}
+           AND previous.kind = 'turn_end'
+         ORDER BY previous.seq DESC
+         LIMIT 1
+      ) boundary ON TRUE
+      INNER JOIN session_events se
+        ON se.agent_id = s.agent_id
+       AND se.chat_id = ${chatId}
+       AND se.kind = 'assistant_text'
+       AND se.seq > COALESCE(boundary.seq, 0)
+     ORDER BY s.agent_id ASC, se.seq ASC
+  `)) as unknown as Array<{
+    agent_id: string;
+    after_seq: number | string;
+    seq: number | string;
+    text: string | null;
+    continuation: boolean | null;
+  }>;
+
+  const byAgent = new Map<
+    string,
+    { afterSeq: number; rows: Array<{ seq: number; text: string; continuation?: boolean }> }
+  >();
+  for (const row of rows) {
+    if (typeof row.text !== "string") continue;
+    const existing = byAgent.get(row.agent_id);
+    const event = {
+      seq: Number(row.seq),
+      text: row.text,
+      ...(row.continuation === null ? {} : { continuation: row.continuation }),
+    };
+    if (existing) existing.rows.push(event);
+    else byAgent.set(row.agent_id, { afterSeq: Number(row.after_seq), rows: [event] });
+  }
+
+  const narrations: CurrentTurnNarrations = [];
+  for (const [agentId, value] of byAgent) {
+    const combined = combineAssistantTextChunks(value.rows);
+    if (!combined) continue;
+    narrations.push({ agentId, afterSeq: value.afterSeq, latestSeq: combined.latestSeq, text: combined.text });
+  }
+  return narrations;
 }
 
 /** Delete all events for a session — called on eviction / termination. */

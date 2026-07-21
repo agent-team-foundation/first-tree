@@ -72,6 +72,7 @@ const readStateMocks = vi.hoisted(() => ({
 }));
 
 const sessionMocks = vi.hoisted(() => ({
+  listChatCurrentTurnNarrations: vi.fn(),
   listChatSessionEvents: vi.fn(),
   listSessionEvents: vi.fn(),
   listSessionOutputs: vi.fn(),
@@ -118,6 +119,7 @@ vi.mock("../../../../api/read-state-store.js", () => readStateMocks);
 
 vi.mock("../../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/sessions.js")>()),
+  listChatCurrentTurnNarrations: sessionMocks.listChatCurrentTurnNarrations,
   listChatSessionEvents: sessionMocks.listChatSessionEvents,
   listSessionEvents: sessionMocks.listSessionEvents,
   listSessionOutputs: sessionMocks.listSessionOutputs,
@@ -767,6 +769,14 @@ beforeEach(() => {
   sessionMocks.listChatSessionEvents.mockResolvedValue(
     chatSessionEvents({ agentId: "agent-1", events: SESSION_EVENTS }),
   );
+  sessionMocks.listChatCurrentTurnNarrations.mockResolvedValue([
+    {
+      agentId: "agent-1",
+      afterSeq: 0,
+      latestSeq: 2,
+      text: "Checking the rollout path.",
+    },
+  ]);
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 
@@ -988,7 +998,7 @@ describe("ChatView", () => {
     await act(async () => readOnly.root.unmount());
   });
 
-  it("loads secondary-agent activity into the timeline so inspector summaries have evidence", async () => {
+  it("loads secondary-agent evidence into the timeline and connected current-output region", async () => {
     const { ChatView } = await import("../chat-view.js");
     const secondaryEvents = {
       items: [
@@ -1041,19 +1051,52 @@ describe("ChatView", () => {
           },
         ],
       );
+      queryClient.setQueryData(
+        ["chat-current-turn-narrations", "chat-1"],
+        [
+          {
+            agentId: "agent-2",
+            afterSeq: 0,
+            latestSeq: 1,
+            text: "Reviewing the mobile interaction.",
+          },
+        ],
+      );
+      queryClient.setQueryData(["chat-token-usage", "chat-1"], {
+        inputTokens: 1200,
+        cachedInputTokens: 200,
+        outputTokens: 600,
+        totalTokens: 2000,
+      });
     });
 
     await waitForCondition(
       () => container.querySelector('[data-working-agent="agent-2"]') !== null,
       "Expected secondary agent timeline evidence",
     );
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
-    expect(container.querySelector('button[aria-label*="Design Critique"][aria-label*="Reviewing"]')).not.toBeNull();
+    const composerStack = container.querySelector(".composer-stack");
+    const stackChildren = composerStack ? [...composerStack.children] : [];
+    const tokenIndex = stackChildren.findIndex((node) => node.textContent?.includes("processed tokens in this chat"));
+    const statusIndex = stackChildren.findIndex((node) => node.hasAttribute("data-compose-status-bar"));
+    const editorIndex = stackChildren.findIndex((node) => node.hasAttribute("data-composer-editor"));
+    expect(tokenIndex).toBeGreaterThanOrEqual(0);
+    expect(statusIndex).toBeGreaterThan(tokenIndex);
+    expect(editorIndex).toBeGreaterThan(statusIndex);
+
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await waitForCondition(
+      () => container.querySelector('section[aria-label="Current agent output"]') !== null,
+      "Expected connected current output to open",
+    );
+    expect(container.querySelector(".compose-status-agent")?.textContent).toContain("Design Critique");
+    expect(container.querySelector(".compose-status-markdown")?.textContent).toContain(
+      "Reviewing the mobile interaction.",
+    );
 
     await act(async () => root.unmount());
   });
 
-  it("uses one Escape to close Activity without also dismissing open chat details", async () => {
+  it("uses one Escape to collapse current output without dismissing open chat details", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
 
@@ -1066,15 +1109,16 @@ describe("ChatView", () => {
       () => container.querySelector('aside[aria-label="Chat details"]') !== null,
       "Expected chat details to be open",
     );
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
-    await waitForCondition(
-      () => container.querySelector("[data-live-activity-inspector]") !== null,
-      "Expected Activity Inspector to open",
+    const outputToggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Expand current agent output"]',
     );
+    await click(outputToggle);
     await waitForCondition(
-      () => document.activeElement?.getAttribute("aria-label") === "Close agent activity",
-      "Expected focus to enter Activity Inspector",
+      () => container.querySelector('section[aria-label="Current agent output"]') !== null,
+      "Expected current output to open",
     );
+    await act(async () => outputToggle?.focus());
+    expect(document.activeElement).toBe(outputToggle);
 
     await act(async () => {
       document.activeElement?.dispatchEvent(
@@ -1083,20 +1127,21 @@ describe("ChatView", () => {
     });
     await flush();
 
-    expect(container.querySelector("[data-live-activity-inspector]")).toBeNull();
+    expect(container.querySelector('section[aria-label="Current agent output"]')).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+    expect(document.activeElement).toBe(outputToggle);
 
     await act(async () => root.unmount());
   });
 
-  it("lets a later mention layer consume Escape before the open Activity Inspector", async () => {
+  it("lets the mention layer own the composer's top edge and then restores compact output", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
 
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForCondition(
-      () => container.querySelector("[data-live-activity-inspector]") !== null,
-      "Expected Activity Inspector to open",
+      () => container.querySelector('section[aria-label="Current agent output"]') !== null,
+      "Expected current output to open",
     );
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
@@ -1106,6 +1151,7 @@ describe("ChatView", () => {
       () => container.querySelector('[role="listbox"][aria-label="Mention suggestions"]') !== null,
       "Expected mention suggestions to open after focus primed @",
     );
+    expect(container.querySelector('section[aria-label="Current agent output"]')).toBeNull();
 
     await act(async () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
@@ -1113,7 +1159,11 @@ describe("ChatView", () => {
     await flush();
 
     expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
-    expect(container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    await waitForCondition(
+      () => container.querySelector('button[aria-label^="Expand current agent output"]') !== null,
+      "Expected compact current output to return after the mention layer closes",
+    );
+    expect(container.querySelector('section[aria-label="Current agent output"]')).toBeNull();
     expect(document.activeElement).toBe(textarea);
 
     await act(async () => root.unmount());
