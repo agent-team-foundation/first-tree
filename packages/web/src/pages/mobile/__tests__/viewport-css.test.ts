@@ -16,4 +16,18 @@ describe("mobile shell viewport CSS", () => {
     expect(standaloneBlock).toContain(".h-dvh-screen");
     expect(standaloneBlock).toContain("height: 100vh");
   });
+
+  it("reserves the mobile timeline-jump footprint beside current output", () => {
+    const narrationClearance = indexCss.lastIndexOf(".compose-status-narration-with-jump > :first-child");
+    const mobileRule = indexCss.lastIndexOf("@media (max-width: 47.999rem)", narrationClearance);
+    const jumpRule = indexCss.indexOf(".compose-status-jump {", narrationClearance);
+    const clearanceBlock = indexCss.slice(narrationClearance, jumpRule);
+    const jumpBlock = indexCss.slice(jumpRule, jumpRule + 140);
+
+    expect(mobileRule).toBeGreaterThan(-1);
+    expect(narrationClearance).toBeGreaterThan(mobileRule);
+    expect(clearanceBlock).toContain("padding-right: var(--sp-11)");
+    expect(jumpBlock).toContain("width: var(--sp-11)");
+    expect(jumpBlock).toContain("height: var(--sp-11)");
+  });
 });

@@ -1081,7 +1081,7 @@ describe("ChatView", () => {
       "Expected secondary agent timeline evidence",
     );
     await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
-    expect(container.querySelector('button[aria-label*="Design Critique"][aria-label*="Reviewing"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="View Design Critique in the timeline"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });

@@ -342,7 +342,11 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     h.render(
       withProviders(
-        <ComposeStatusBar chatId="chat-1" agents={[agent("agent-atlas", "Atlas"), agent("agent-nova", "Nova")]} />,
+        <>
+          <div data-error-agent="agent-atlas" />
+          <div data-working-agent="agent-nova" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-atlas", "Atlas"), agent("agent-nova", "Nova")]} />
+        </>,
       ),
     );
 
@@ -371,14 +375,16 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelectorAll("[data-current-agent-output]")).toHaveLength(1);
     expect(h.container.querySelectorAll("[data-current-output-agent]")).toHaveLength(2);
     expect(h.container.querySelectorAll("[data-current-output-identity]")).toHaveLength(2);
+    expect(h.container.querySelectorAll(".compose-status-narration-with-jump")).toHaveLength(2);
   });
 
   it("keeps a quiet timeline jump inside the expanded output", async () => {
+    const fullNarration = `Run the focused suite\n\n${"Detailed result. ".repeat(110)}`;
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
         engagement: "active",
-        activity: activity("agent-nova", { turnText: "Run the focused suite" }),
+        activity: activity("agent-nova", { turnText: "Run the focused suite", turnTextFull: fullNarration }),
       }),
     ]);
 
@@ -394,15 +400,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () =>
-      expect(
-        h.container.querySelector('.compose-status-jump[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
-      ).not.toBeNull(),
+      expect(h.container.querySelector('.compose-status-jump[aria-label*="Nova"]')).not.toBeNull(),
     );
+    const jump = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Nova"]');
+    if (!jump) throw new Error("Expected timeline jump");
+    expect(jump?.getAttribute("aria-label")).toBe("View Nova in the timeline");
+    expect(jump?.getAttribute("aria-label")).not.toContain(fullNarration);
 
-    await click(
-      h,
-      h.container.querySelector('.compose-status-jump[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
-    );
+    await click(h, jump);
 
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-nova", "working", { focus: true });
     expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
@@ -528,9 +533,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
-    const row = h.container.querySelector(
-      '.compose-status-jump[aria-label*="Terminal Agent"][aria-label*="Provider retry exhausted"]',
-    );
+    const row = h.container.querySelector('.compose-status-jump[aria-label="View Terminal Agent in the timeline"]');
     expect(row).not.toBeNull();
     await click(h, row);
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-terminal", "failed", { focus: true });
@@ -712,6 +715,45 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelector('.compose-status-jump[aria-label*="Atlas"]')).toBe(atlasJump);
     expect(document.activeElement).toBe(atlasJump);
     expect(h.container.querySelector("[data-current-output-identity]")).toBeNull();
+  });
+
+  it("keeps focus on a surviving Markdown link without a timeline anchor during a status update", async () => {
+    const queryClient = createQueryClient();
+    const linkedActivity = activity("agent-nova", {
+      label: "Drafting",
+      turnText: "Review the [implementation notes](https://example.com/notes).",
+    });
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [status("agent-nova", { working: true, engagement: "active", activity: linkedActivity })],
+    );
+
+    h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />, queryClient));
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const link = h.container.querySelector<HTMLAnchorElement>(
+      '.compose-status-narration a[href="https://example.com/notes"]',
+    );
+    if (!link) throw new Error("Expected Markdown link");
+    expect(h.container.querySelector(".compose-status-jump")).toBeNull();
+    link.focus();
+
+    await act(async () => {
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [
+          status("agent-nova", {
+            working: true,
+            engagement: "active",
+            activity: { ...linkedActivity, detail: "Refreshing status" },
+          }),
+        ],
+      );
+    });
+    await h.flush();
+
+    expect(document.activeElement).toBe(link);
   });
 
   it("moves focus to the disclosure when a focused jump loses its timeline anchor", async () => {

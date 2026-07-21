@@ -160,12 +160,12 @@ export function ComposeStatusBar({
     }
     if (!expanded || !focusWithinRef.current) return;
     const active = document.activeElement;
-    const activeAgentId = active?.closest<HTMLElement>("[data-current-output-agent]")?.dataset.currentOutputAgent;
-    const focusedStatus = attention.find((status) => status.agentId === activeAgentId);
-    const focusedRowSurvives =
-      focusedStatus !== undefined && isJumpable(mounted, timelineTarget(focusedStatus), focusedStatus.agentId);
-    if (active && surfaceRef.current?.contains(active) && (activeAgentId === undefined || focusedRowSurvives)) {
-      return;
+    if (active instanceof HTMLElement && active.isConnected && surfaceRef.current?.contains(active)) {
+      const activeJump = active.closest<HTMLElement>(".compose-status-jump");
+      if (!activeJump) return;
+      const activeAgentId = activeJump.closest<HTMLElement>("[data-current-output-agent]")?.dataset.currentOutputAgent;
+      const focusedStatus = attention.find((status) => status.agentId === activeAgentId);
+      if (focusedStatus && isJumpable(mounted, timelineTarget(focusedStatus), focusedStatus.agentId)) return;
     }
     const frame = requestAnimationFrame(() => triggerRef.current?.focus());
     return () => cancelAnimationFrame(frame);
@@ -359,15 +359,6 @@ function CurrentOutputItem({
   const snapshot = agentSnapshot(status);
   const jumpTarget = timelineTarget(status);
   const anchored = isJumpable(mounted, jumpTarget, status.agentId);
-  const accessibleSummary = [
-    name,
-    stateLabel(status),
-    stripInlineMarkdown(snapshot.update),
-    snapshot.meta ? formatActivityMeta(snapshot.meta) : null,
-    "View in the timeline",
-  ]
-    .filter((part): part is string => part !== null)
-    .join(". ");
   return (
     <article
       className="compose-status-output"
@@ -398,7 +389,7 @@ function CurrentOutputItem({
           agentId={status.agentId}
           target={jumpTarget}
           anchored
-          ariaLabel={accessibleSummary}
+          ariaLabel={`View ${name} in the timeline`}
           className="compose-status-jump"
           interactiveClassName="rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
@@ -408,7 +399,7 @@ function CurrentOutputItem({
 
       <Markdown
         key="narration"
-        className={`compose-status-narration text-body${!showIdentity && anchored ? " compose-status-narration-with-jump" : ""}`}
+        className={`compose-status-narration text-body${anchored ? " compose-status-narration-with-jump" : ""}`}
       >
         {snapshot.update}
       </Markdown>
