@@ -66,20 +66,23 @@ function validateCandidateAttempt(value: unknown, serverAuthority: string): Acqu
  * side effect: the caller destroys only its candidate attempt.
  */
 export async function requestCandidateMe(input: CandidateMeRequest): Promise<CandidateMeResult> {
-  if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+  const signal = input.signal;
+  const serverAuthorityValue = input.serverAuthority;
+  const attemptValue = input.attempt;
+  const accessToken = input.candidate.accessToken;
+  const refreshToken = input.candidate.refreshToken;
+  const suppliedFingerprint = input.candidate.credentialFingerprint;
+  if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
 
-  const serverAuthority = canonicalizeServerAuthority(input.serverAuthority);
-  const attempt = validateCandidateAttempt(input.attempt, serverAuthority);
+  const serverAuthority = canonicalizeServerAuthority(serverAuthorityValue);
+  const attempt = validateCandidateAttempt(attemptValue, serverAuthority);
   const structurallyValidated = createCandidateTokenSnapshot({
-    accessToken: input.candidate.accessToken,
-    refreshToken: input.candidate.refreshToken,
+    accessToken,
+    refreshToken,
   });
   const candidate = await fingerprintCandidateTokenSnapshot(structurallyValidated, serverAuthority);
-  if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
-  if (
-    input.candidate.credentialFingerprint !== undefined &&
-    input.candidate.credentialFingerprint !== candidate.credentialFingerprint
-  ) {
+  if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+  if (suppliedFingerprint !== undefined && suppliedFingerprint !== candidate.credentialFingerprint) {
     throw new CandidateApiError(400, "Candidate fingerprint does not match its token bytes");
   }
   if (candidate.accessExpiresAt <= Date.now() || candidate.refreshExpiresAt <= Date.now()) {
@@ -99,20 +102,20 @@ export async function requestCandidateMe(input: CandidateMeRequest): Promise<Can
         Authorization: `Bearer ${candidate.accessToken}`,
         ...expectedAuthorityHeaders(serverAuthority),
       },
-      signal: input.signal,
+      signal,
     });
   } catch {
-    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+    if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(503, "Candidate identity request is unavailable");
   }
 
   if (!response.ok) {
-    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+    if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(response.status, `Candidate identity request failed (${response.status})`);
   }
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
-    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+    if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(502, "Candidate identity response is malformed");
   }
 
@@ -120,11 +123,11 @@ export async function requestCandidateMe(input: CandidateMeRequest): Promise<Can
   try {
     payload = JSON.parse(await readBoundedResponseText(response, MAX_ME_RESPONSE_BYTES));
   } catch {
-    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+    if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(502, "Candidate identity response is malformed");
   }
 
-  if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
+  if (signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
 
   if (!isRecord(payload) || !isRecord(payload.user) || typeof payload.user.id !== "string") {
     throw new CandidateApiError(502, "Candidate identity response is malformed");

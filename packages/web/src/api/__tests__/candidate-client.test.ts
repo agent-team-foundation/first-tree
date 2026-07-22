@@ -71,6 +71,39 @@ describe("candidate client", () => {
     expect(result.accountId).toBe("account-a");
   });
 
+  it("uses one immutable signal snapshot for the whole request", async () => {
+    const originalController = new AbortController();
+    const replacementController = new AbortController();
+    let markStarted = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let resolveRequest = (_response: Response): void => undefined;
+    const fetchMock = vi.fn(
+      (_url: string, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+          markStarted();
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const mutableInput = {
+      candidate: candidate(),
+      attempt: attempt(),
+      serverAuthority: "https://s1.example/api/v1",
+      signal: originalController.signal,
+    };
+
+    const request = requestCandidateMe(mutableInput);
+    await started;
+    mutableInput.signal = replacementController.signal;
+    originalController.abort();
+    resolveRequest(jsonResponse({ user: { id: "account-a" } }));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(originalController.signal);
+  });
+
   it("ignores caller-shaped dispatch callbacks and always uses the owned fetch", async () => {
     const forgedDispatch = vi.fn(async () => jsonResponse({ user: { id: "account-forged" } }));
     const fetchMock = vi.fn(async () => {
