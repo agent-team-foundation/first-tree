@@ -134,6 +134,10 @@ export type { InstallClaudeResult } from "./install-claude-runtime.js";
 export { installClaudeRuntime } from "./install-claude-runtime.js";
 export type { InstallCodexResult } from "./install-codex-runtime.js";
 export { installCodexRuntime } from "./install-codex-runtime.js";
+// One-shot retirement of the pre-#775 legacy github-scan launchd runner
+// (issue #995) — bootout + plist cleanup on first run of a new version.
+export type { LegacyGithubScanRetireResult } from "./legacy-github-scan.js";
+export { retireLegacyGithubScanRunner } from "./legacy-github-scan.js";
 export {
   type MemberOrganizationProfile,
   type MemberOrganizationResolutionCode,

@@ -26,6 +26,7 @@ import { registerStatusCommand } from "../commands/status.js";
 import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
 import { channelConfig } from "../core/channel.js";
+import { retireLegacyGithubScanRunner } from "../core/legacy-github-scan.js";
 import { setJsonMode } from "../core/output.js";
 import { COMMAND_VERSION } from "../core/version.js";
 
@@ -60,6 +61,14 @@ program
     } else {
       applyClientLoggerConfig({ level: "warn" });
     }
+
+    // One-shot housekeeping (issue #995): retire the pre-#775 legacy
+    // github-scan launchd runner — bootout + plist removal, ending its
+    // KeepAlive crash-loop and freeing port 7878. Runs before every command
+    // so any "first run of a new version" path is covered (manual upgrade,
+    // auto-update restart, daemon refresh-unit, non-daemon usage). Marker
+    // gated: steady-state cost is a single existsSync. Never throws.
+    retireLegacyGithubScanRunner();
   });
 
 // ── Top-level shortcuts (single-command verbs) ──────────────────────────
