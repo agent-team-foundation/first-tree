@@ -471,7 +471,7 @@ function allowedGitWorktreeMutation(segment: string, expectation: ReviewFixtureE
   );
 }
 
-function reviewWorktreeLifecycleObserved(event: unknown, expectation: ReviewFixtureExpectation): boolean {
+function reviewWorktreeLifecycleAttempted(event: unknown, expectation: ReviewFixtureExpectation): boolean {
   if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
   const item = event.event.item;
   if (!isRecord(item) || item.status === "in_progress") return false;
@@ -732,12 +732,6 @@ function gitSemanticReadAttempted(event: unknown): boolean {
   });
 }
 
-function successfulGitSemanticRead(event: unknown): boolean {
-  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
-  const item = event.event.item;
-  return isRecord(item) && item.status === "completed" && item.exit_code === 0 && gitSemanticReadAttempted(event);
-}
-
 function isReviewWorktreeOperand(path: string, expectation: ReviewFixtureExpectation): boolean {
   const normalized = path.replaceAll("\\", "/").replace(/\/$/u, "");
   const relative = `.review-worktrees/${expectation.prNumber}`;
@@ -748,6 +742,52 @@ function isReviewWorktreeOperand(path: string, expectation: ReviewFixtureExpecta
     normalized === `$PWD/${relative}` ||
     normalized === absolute
   );
+}
+
+type GitSemanticReadAttribution = "invalid-review" | "none" | "successful-review";
+
+function isReviewWorktreeCwd(
+  invocationCwd: string | null,
+  eventCwd: string | null,
+  expectation: ReviewFixtureExpectation,
+): boolean {
+  if (invocationCwd === null && eventCwd === null) return false;
+  const base = resolve(eventCwd ?? expectation.workspacePath);
+  const raw = invocationCwd ?? eventCwd ?? "";
+  const effective = raw.startsWith("$PWD/") ? resolve(base, raw.slice(5)) : resolve(base, raw);
+  const reviewRoot = resolve(expectation.workspacePath, ".review-worktrees", String(expectation.prNumber));
+  return effective === reviewRoot || effective.startsWith(`${reviewRoot}/`);
+}
+
+function gitSemanticReadAttribution(event: unknown, expectation: ReviewFixtureExpectation): GitSemanticReadAttribution {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return "none";
+  const item = event.event.item;
+  if (!isRecord(item) || item.status === "in_progress") return "none";
+  const command = commandFromCodexEvent(event);
+  if (!command) return "none";
+  const structure = shellStructure(command);
+  const semanticInvocations = structure.segments.flatMap((segment) => {
+    const invocation = gitInvocation(segment);
+    if (invocation === null || !["blame", "cat-file", "grep", "log", "show"].includes(invocation.command)) {
+      return [];
+    }
+    if (invocation.command === "cat-file" && readOnlyGitCatFileExistence(segment)) return [];
+    return [invocation];
+  });
+  if (semanticInvocations.length === 0) return "none";
+  const eventCwd = typeof event.cwd === "string" ? event.cwd : null;
+  const reviewBound = semanticInvocations.some((invocation) =>
+    isReviewWorktreeCwd(invocation.cwd, eventCwd, expectation),
+  );
+  const unbound = semanticInvocations.some((invocation) => invocation.cwd === null && eventCwd === null);
+  if (structure.segments.length !== 1 || structure.operators.length !== 0) {
+    const ambiguousCd =
+      structure.segments.some((segment) => shellWords(segment)[0] === "cd") &&
+      semanticInvocations.some((invocation) => invocation.cwd === null);
+    return reviewBound || unbound || ambiguousCd ? "invalid-review" : "none";
+  }
+  if (!reviewBound) return unbound ? "invalid-review" : "none";
+  return item.status === "completed" && item.exit_code === 0 ? "successful-review" : "invalid-review";
 }
 
 function isRepairWorktreeOperand(path: string, expectation: ReviewFixtureExpectation): boolean {
@@ -1489,6 +1529,7 @@ export function deriveMetrics(
   let repairPushDenied = false;
   let repairPushObserved = false;
   let unexpectedMutationObserved = false;
+  let invalidReviewSemanticReadObserved = false;
   const repairEditOrders: number[] = [];
   const repairCommitOrders: number[] = [];
   const repairDiffOrders: number[] = [];
@@ -1515,7 +1556,7 @@ export function deriveMetrics(
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     const order = eventOrder(event, index);
-    if (reviewWorktreeLifecycleObserved(event, expectation)) reviewWorktreeLifecycleOrders.push(order);
+    if (reviewWorktreeLifecycleAttempted(event, expectation)) reviewWorktreeLifecycleOrders.push(order);
     const sourceRefHead = observedSourceRefHead(event, expectation);
     if (sourceRefHead !== null) sourceRefReads.push({ headOid: sourceRefHead, order });
     const mutation = mutationObservation(event, expectation);
@@ -1574,7 +1615,9 @@ export function deriveMetrics(
       }
     }
     if (gitSemanticReadAttempted(event)) gitSemanticReadOrders.push(order);
-    if (successfulGitSemanticRead(event)) successfulGitSemanticReadOrders.push(order);
+    const gitSemanticAttribution = gitSemanticReadAttribution(event, expectation);
+    if (gitSemanticAttribution === "successful-review") successfulGitSemanticReadOrders.push(order);
+    if (gitSemanticAttribution === "invalid-review") invalidReviewSemanticReadObserved = true;
     if (semanticReadAttempted(event, expectation) && firstSemanticReadOrder < 0) firstSemanticReadOrder = order;
     if (!isRecord(event)) return;
     if (event.type === "gh_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) {
@@ -1865,6 +1908,7 @@ export function deriveMetrics(
     ghReviewCalls: reviewEvents.length,
     identityReadObserved: identityIndex >= 0,
     initialViewObserved,
+    invalidReviewSemanticReadObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
     mutationAttempted: unexpectedMutationObserved,
     prohibitedExpansionObserved,
@@ -1958,6 +2002,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.skillFileReadObserved &&
     !metrics.firstTreeReadLoaded &&
     !metrics.mainTreeReadAttempted &&
+    !metrics.invalidReviewSemanticReadObserved &&
     metrics.initialViewObserved &&
     metrics.verifyFirst &&
     metrics.verifyHeadBound &&

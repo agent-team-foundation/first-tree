@@ -126,6 +126,7 @@ export type EvalMetrics = {
   ghReviewCalls: number;
   identityReadObserved: boolean;
   initialViewObserved: boolean;
+  invalidReviewSemanticReadObserved: boolean;
   mainTreeReadAttempted: boolean;
   repairCommitObserved: boolean;
   repairDiffObserved: boolean;

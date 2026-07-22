@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CONTEXT_TREE_REVIEW_GATE_CASES } from "../cases.js";
 import { casePassed, deriveMetrics } from "../grader.js";
+import { buildGrading } from "../summary.js";
 import type { ContextTreeReviewEvalCase, ReviewFixtureExpectation, ReviewFixtureIntegrity } from "../types.js";
 
 const expectation: ReviewFixtureExpectation = {
@@ -978,6 +979,105 @@ describe("context-tree-review grader", () => {
     expect(metrics.repairHeadFresh).toBe(false);
     expect(metrics.repairSourceHeadFresh).toBe(false);
     expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it.each([
+    {
+      command: "git -C .review-worktrees/42 log -p; false",
+      exitCode: 1,
+      name: "executed reader followed by failure",
+      status: "failed",
+    },
+    {
+      command: "exit 0; git -C .review-worktrees/42 log -p",
+      exitCode: 0,
+      name: "reader after an early exit",
+      status: "completed",
+    },
+    {
+      command: "cd .review-worktrees/42 && git log -p",
+      exitCode: 0,
+      name: "reader after a compound cd",
+      status: "completed",
+    },
+  ])("fails closed for an unattributable review semantic command: $name", ({ command, exitCode, status }) => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const sourceReadIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes("ls-remote --heads"),
+    );
+    events.splice(sourceReadIndex + 1, 0, {
+      event: {
+        item: {
+          command,
+          exit_code: exitCode,
+          status,
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.invalidReviewSemanticReadObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+    expect(buildGrading(evalCase, metrics, false).scores.process_pass).toBe(false);
+  });
+
+  it("treats a review-worktree descendant as review-bound semantic context", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const sourceReadIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes("ls-remote --heads"),
+    );
+    events.splice(sourceReadIndex + 1, 0, {
+      event: {
+        item: {
+          command: "git -C .review-worktrees/42/system log -p -1",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.invalidReviewSemanticReadObserved).toBe(false);
+    expect(metrics.repairHeadFresh).toBe(false);
+    expect(metrics.repairSourceHeadFresh).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it.each([
+    "context-tree",
+    ".repair-worktrees/42",
+  ])("does not advance the review watermark for an explicit non-review worktree reader: %s", (gitCwd) => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const sourceReadIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes("ls-remote --heads"),
+    );
+    events.splice(sourceReadIndex + 1, 0, {
+      event: {
+        item: {
+          command: `git -C ${gitCwd} log -p -1`,
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.invalidReviewSemanticReadObserved).toBe(false);
+    expect(metrics.repairHeadFresh).toBe(true);
+    expect(metrics.repairSourceHeadFresh).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(true);
   });
 
   it("rejects a wrong-cwd local push failure as push denial", () => {
