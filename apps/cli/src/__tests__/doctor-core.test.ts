@@ -504,4 +504,56 @@ describe("checkServiceLaunchPath", () => {
       detail: expect.stringContaining(target),
     });
   });
+  it("validates every leading absolute token of a node-kind invocation", async () => {
+    const check = await loadCheck();
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, "<plist></plist>");
+    const node = join(home, "node");
+    writeFileSync(node, "#!/bin/sh\n");
+    const script = join(home, "dist cli.mjs");
+    const wrapperPath = join(home, "wrapper");
+    writeFileSync(wrapperPath, `#!/bin/sh\nexec "${node}" "${script}" daemon start --no-interactive\n`);
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining(`launch target missing (${script})`),
+    });
+
+    writeFileSync(script, "// cli\n");
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining(script),
+    });
+  });
+
+  it("validates the script token of a node-kind systemd ExecStart", async () => {
+    const check = await loadCheck();
+    const node = join(home, "node");
+    writeFileSync(node, "#!/bin/sh\n");
+    const unitPath = join(home, "unit.service");
+    const script = join(home, "gone.mjs");
+    writeFileSync(unitPath, `[Service]\nExecStart="${node}" ${script} daemon start --no-interactive\n`);
+    expect(check({ platform: "linux", unitPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining(`launch target missing (${script})`),
+    });
+  });
+
+  it("fails as unreadable when a service file is a directory", async () => {
+    const check = await loadCheck();
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, "<plist></plist>");
+    const wrapperPath = join(home, "wrapper-dir");
+    mkdirSync(wrapperPath, { recursive: true });
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("wrapper unreadable"),
+    });
+
+    const unitPath = join(home, "unit-dir");
+    mkdirSync(unitPath, { recursive: true });
+    expect(check({ platform: "linux", unitPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("service unit unreadable"),
+    });
+  });
 });

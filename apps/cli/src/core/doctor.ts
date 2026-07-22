@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { CapabilityEntry } from "@first-tree/shared";
 import {
   agentConfigSchema,
@@ -277,30 +277,63 @@ export function checkBackgroundService(): CheckResult {
 }
 
 /**
- * First shell word of a command string rendered with `shellQuote`: a bare
- * safe-charset token, or a double-quoted token with `\\` / `\"` escapes.
+ * Shell words of a command string rendered with `shellQuote`: bare
+ * safe-charset tokens, or double-quoted tokens with `\\` / `\"` escapes.
  * Both the launchd wrapper `exec` line and the systemd `ExecStart=` value
- * are rendered that way, so one inverse parser covers both.
+ * are rendered that way, so one inverse parser covers both. An unterminated
+ * quote ends the scan with the tokens collected so far.
  */
-function firstCommandToken(command: string): string | null {
-  const trimmed = command.trim();
-  if (trimmed === "") return null;
-  if (trimmed.startsWith('"')) {
-    let token = "";
-    for (let i = 1; i < trimmed.length; i += 1) {
-      const ch = trimmed[i];
-      if (ch === "\\" && i + 1 < trimmed.length) {
-        token += trimmed[i + 1];
+function commandTokens(command: string): string[] {
+  const tokens: string[] = [];
+  const text = command.trim();
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+    if (i >= text.length) break;
+    if (text[i] === '"') {
+      let token = "";
+      let closed = false;
+      i += 1;
+      while (i < text.length) {
+        const ch = text[i];
+        if (ch === "\\" && i + 1 < text.length) {
+          token += text[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          closed = true;
+          i += 1;
+          break;
+        }
+        token += ch;
         i += 1;
-        continue;
       }
-      if (ch === '"') return token;
-      token += ch;
+      if (!closed) return tokens;
+      tokens.push(token);
+      continue;
     }
-    return null;
+    const start = i;
+    while (i < text.length && !/\s/.test(text[i])) i += 1;
+    tokens.push(text.slice(start, i));
   }
-  const end = trimmed.search(/\s/);
-  return end === -1 ? trimmed : trimmed.slice(0, end);
+  return tokens;
+}
+
+/**
+ * Leading absolute-path tokens of a launch command — the launch binary and,
+ * for node-kind invocations (`node cli.mjs …`), the baked script path. The
+ * first relative token (`daemon`, the CLI subcommand) ends the launch chain.
+ * Every one of these files must exist for the service to start, so a missing
+ * script is as fatal as a missing interpreter (MODULE_NOT_FOUND crash loop).
+ */
+function leadingLaunchPaths(command: string): string[] {
+  const paths: string[] = [];
+  for (const token of commandTokens(command)) {
+    if (!isAbsolute(token)) break;
+    paths.push(token);
+  }
+  return paths;
 }
 
 function unescapeXml(value: string): string {
@@ -315,7 +348,8 @@ function unescapeXml(value: string): string {
 /**
  * Validate that the installed service's launch chain still points at files
  * that exist. The service files bake absolute paths resolved at install time
- * (wrapper `exec` target, plist `PATH` head, unit `ExecStart` binary); a
+ * (the wrapper's / unit's launch binary plus, for node-kind invocations, the
+ * baked script path, and the plist `PATH` head); a
  * Node/npm relocation — `nvm uninstall`, switching the default node — leaves
  * them dangling, and the resulting crash loop cannot self-report because the
  * process never starts. Doctor is the read-only surface that can: this check
@@ -347,16 +381,18 @@ export function checkServiceLaunchPath(
       return { label, ok: false, detail: `wrapper unreadable (${wrapperPath}) — ${repair}` };
     }
     const execLine = wrapperBody.split("\n").find((line) => line.startsWith("exec "));
-    const target = execLine === undefined ? null : firstCommandToken(execLine.slice("exec ".length));
-    if (target === null) {
+    const launchPaths = execLine === undefined ? [] : leadingLaunchPaths(execLine.slice("exec ".length));
+    if (launchPaths.length === 0) {
       return { label, ok: false, detail: `wrapper has no parseable exec command (${wrapperPath}) — ${repair}` };
     }
-    if (!existsSync(target)) {
+    const missingTarget = launchPaths.find((path) => !existsSync(path));
+    if (missingTarget !== undefined) {
       return {
         label,
         ok: false,
         detail:
-          `launch target missing (${target}) — usually a removed Node install ` + `(e.g. \`nvm uninstall\`); ${repair}`,
+          `launch target missing (${missingTarget}) — usually a removed Node install ` +
+          `(e.g. \`nvm uninstall\`); ${repair}`,
       };
     }
     let plistBody: string;
@@ -376,7 +412,7 @@ export function checkServiceLaunchPath(
         };
       }
     }
-    return { label, ok: true, detail: `launch target verified (${target})` };
+    return { label, ok: true, detail: `launch target verified (${launchPaths.join(" ")})` };
   }
 
   if (platform === "linux") {
@@ -391,19 +427,21 @@ export function checkServiceLaunchPath(
       return { label, ok: false, detail: `service unit unreadable (${unitPath}) — ${repair}` };
     }
     const execLine = unitBody.split("\n").find((line) => line.startsWith("ExecStart="));
-    const target = execLine === undefined ? null : firstCommandToken(execLine.slice("ExecStart=".length));
-    if (target === null) {
+    const launchPaths = execLine === undefined ? [] : leadingLaunchPaths(execLine.slice("ExecStart=".length));
+    if (launchPaths.length === 0) {
       return { label, ok: false, detail: `unit has no parseable ExecStart (${unitPath}) — ${repair}` };
     }
-    if (!existsSync(target)) {
+    const missingTarget = launchPaths.find((path) => !existsSync(path));
+    if (missingTarget !== undefined) {
       return {
         label,
         ok: false,
         detail:
-          `launch target missing (${target}) — usually a removed Node install ` + `(e.g. \`nvm uninstall\`); ${repair}`,
+          `launch target missing (${missingTarget}) — usually a removed Node install ` +
+          `(e.g. \`nvm uninstall\`); ${repair}`,
       };
     }
-    return { label, ok: true, detail: `launch target verified (${target})` };
+    return { label, ok: true, detail: `launch target verified (${launchPaths.join(" ")})` };
   }
 
   return { label, ok: true, detail: `not applicable on ${platform}` };
