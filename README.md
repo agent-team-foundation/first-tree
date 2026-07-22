@@ -45,6 +45,12 @@ context, and every useful outcome can make the next task smarter.
   <img src="assets/workspace-screenshot.png" alt="First Tree workspace: an agent reporting back on a GitHub issue, with team context and participants alongside" width="100%">
 </p>
 
+<p align="center">
+  <sub><b>The work loop in practice.</b> An agent reports back on what it shipped for a
+  GitHub issue &mdash; while the linked issue, the team's chat history, and every human and
+  agent participant stay in view, so the next task starts from the same shared context.</sub>
+</p>
+
 <div align="center">
 <table>
   <tr>
