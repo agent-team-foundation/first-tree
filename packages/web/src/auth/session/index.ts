@@ -1,4 +1,11 @@
 export {
+  type AccountStoreRuntimeInstallation,
+  type CapturedAccountStoreRuntime,
+  captureAccountStoreRuntime,
+  installAccountStoreRuntime,
+} from "./account-store-runtime.js";
+export {
+  type AccountContentOperation,
   CONTENT_SCOPE_LOCK_PREFIX,
   type ContentBarrierOptions,
   ContentDatabaseRegistry,
@@ -17,6 +24,7 @@ export {
   captureContentStoreRuntime,
   IMAGE_CONTENT_DATABASE_SPEC,
   installContentStoreRuntime,
+  retireContentStoreRuntime,
 } from "./content-store-runtime.js";
 export {
   type ActiveDispatch,
@@ -29,7 +37,10 @@ export {
   type CoordinatorOptions,
   closeCoordinatorConnections,
   type RetirementResult,
+  readVerifiedActiveMeProof,
   type TransitionCancellationResult,
+  type VerifiedActiveMeProof,
+  type VerifiedActiveMeResult,
   type VerifiedCandidateMeResult,
   type VerifiedCandidateProof,
 } from "./coordinator.js";
@@ -63,6 +74,8 @@ export {
   parseAccountScopeKey,
 } from "./scope.js";
 export {
+  type AccountLease,
+  type AccountLeaseInput,
   type AcquisitionSessionAttempt,
   type AcquisitionSessionAttemptInput,
   type AcquisitionTransitionPermit,
@@ -78,6 +91,7 @@ export {
   type CredentialCursor,
   type CredentialRecord,
   type CredentialRecordInput,
+  createAccountLease,
   createActivationCertificate,
   createCredentialRecord,
   createManagementDeliveryPermit,
@@ -95,11 +109,13 @@ export {
   type RetiringAuthority,
   type SessionAttempt,
   type SessionAttemptInput,
+  sameAccountLease,
   sameActivation,
   sameCredentialCursor,
   type TransitionAuthority,
   type ViewLease,
   type ViewLeaseInput,
+  validateAccountLease,
   validateAcquisitionTransitionPermit,
   validateActivationCertificate,
   validateAuthAuthority,

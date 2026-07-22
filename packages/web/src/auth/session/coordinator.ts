@@ -10,6 +10,7 @@ import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
 import { claimLegacyScrubCompletion, type LegacyScrubCompletion } from "./legacy-scrub.js";
 import { createAccountScopeKey } from "./scope.js";
 import {
+  type AccountLease,
   type AcquisitionSessionAttempt,
   type AcquisitionTransitionPermit,
   type ActivationCertificate,
@@ -20,9 +21,11 @@ import {
   type CredentialRecord,
   createCredentialRecord,
   credentialCursor,
+  sameAccountLease,
   sameActivation,
   sameCredentialCursor,
   type ViewLease,
+  validateAccountLease,
   validateAcquisitionTransitionPermit,
   validateActivationCertificate,
   validateCoordinatorSnapshot,
@@ -74,16 +77,25 @@ export type VerifiedCandidateMeResult = Readonly<{
   proof: VerifiedCandidateProof;
 }>;
 
+export type VerifiedActiveMeResult = Readonly<{
+  payload: Readonly<Record<string, unknown>>;
+  proof: VerifiedActiveMeProof;
+}>;
+
 const REFRESH_ENDPOINT = "/api/v1/auth/refresh";
 const MAX_REFRESH_RESPONSE_BYTES = 64 * 1024;
+const MAX_ACTIVE_ME_RESPONSE_BYTES = 512 * 1024;
+const MAX_ACTIVE_ME_MEMBERSHIPS = 100_000;
 
 declare const activeDispatchAdmissionType: unique symbol;
 declare const verifiedCandidateProofType: unique symbol;
 declare const refreshResponseProofType: unique symbol;
+declare const verifiedActiveMeProofType: unique symbol;
 
 export type ActiveDispatchAdmission = Readonly<{ [activeDispatchAdmissionType]: never }>;
 
 export type VerifiedCandidateProof = Readonly<{ [verifiedCandidateProofType]: never }>;
+export type VerifiedActiveMeProof = Readonly<{ [verifiedActiveMeProofType]: never }>;
 
 type ActiveDispatchState = Readonly<{
   activation: ActivationCertificate;
@@ -119,9 +131,32 @@ type RefreshResponseState = {
   state: "available" | "claimed" | "consumed";
 };
 
+type VerifiedActiveMeEvidence = Readonly<{
+  lease: AccountLease;
+  membershipIds: readonly string[];
+  defaultOrganizationId: string | null;
+  lifecycleGeneration: number;
+  requestKey: string;
+  requestSequence: number;
+}>;
+
+type VerifiedActiveMeProofState = {
+  evidence: VerifiedActiveMeEvidence;
+  state: "available" | "claimed" | "consumed";
+};
+
+export type ClaimedVerifiedActiveMeProof = Readonly<{
+  membershipIds: readonly string[];
+  defaultOrganizationId: string | null;
+  assertCurrent: () => void;
+  settle: () => void;
+}>;
+
 const activeDispatchAdmissions = new WeakMap<ActiveDispatchAdmission, ActiveDispatchState>();
 const verifiedCandidateProofs = new WeakMap<VerifiedCandidateProof, CandidateProofState>();
 const refreshResponseProofs = new WeakMap<RefreshResponseProof, RefreshResponseState>();
+const verifiedActiveMeProofs = new WeakMap<VerifiedActiveMeProof, VerifiedActiveMeProofState>();
+const latestActiveMeRequests = new Map<string, number>();
 
 export type ActiveDispatch<T> = Readonly<{
   admission: ActiveDispatchAdmission;
@@ -154,10 +189,141 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function requireActiveMeOrganizationId(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
+  }
+  return value;
+}
+
+function parseActiveMeResponse(
+  value: unknown,
+  expectedAccountId: string,
+): Readonly<{
+  payload: Readonly<Record<string, unknown>>;
+  membershipIds: readonly string[];
+  defaultOrganizationId: string | null;
+}> {
+  if (!isRecord(value) || !isRecord(value.user) || value.user.id !== expectedAccountId) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
+  }
+  const memberships = value.memberships;
+  if (!Array.isArray(memberships) || memberships.length > MAX_ACTIVE_ME_MEMBERSHIPS) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity memberships are malformed");
+  }
+  const membershipIds: string[] = [];
+  for (let index = 0; index < memberships.length; index += 1) {
+    if (Reflect.getOwnPropertyDescriptor(memberships, String(index)) === undefined) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity memberships are malformed");
+    }
+    const membership = memberships[index];
+    if (!isRecord(membership)) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity memberships are malformed");
+    }
+    membershipIds.push(requireActiveMeOrganizationId(membership.organizationId));
+  }
+  const defaultValue = value.defaultOrganizationId;
+  const defaultOrganizationId =
+    defaultValue === null || defaultValue === undefined ? null : requireActiveMeOrganizationId(defaultValue);
+  return Object.freeze({
+    payload: Object.freeze(value),
+    membershipIds: Object.freeze(membershipIds),
+    defaultOrganizationId,
+  });
+}
+
 function createVerifiedCandidateProof(evidence: VerifiedCandidateEvidence): VerifiedCandidateProof {
   const proof = Object.freeze({}) as VerifiedCandidateProof;
   verifiedCandidateProofs.set(proof, { evidence, state: "available" });
   return proof;
+}
+
+function activeMeRequestKey(lease: AccountLease): string {
+  const { activation } = lease;
+  return JSON.stringify([
+    activation.sessionEpoch,
+    activation.authGeneration,
+    activation.transitionPermitId,
+    activation.serverAuthority,
+    activation.accountId,
+    activation.scopeKey,
+    lease.accountRevision,
+    lease.ownerTabId,
+    lease.documentId,
+  ]);
+}
+
+function nextActiveMeSequence(key: string): number {
+  const next = (latestActiveMeRequests.get(key) ?? 0) + 1;
+  latestActiveMeRequests.set(key, next);
+  return next;
+}
+
+function assertActiveMeSequence(key: string, sequence: number): void {
+  if (latestActiveMeRequests.get(key) !== sequence) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "A newer account identity response superseded this one");
+  }
+}
+
+function requireVerifiedActiveMeEvidence(proofValue: unknown, leaseValue: unknown): VerifiedActiveMeProofState {
+  if (typeof proofValue !== "object" || proofValue === null) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Verified account identity proof is unavailable");
+  }
+  const state = verifiedActiveMeProofs.get(proofValue as VerifiedActiveMeProof);
+  const evidence = state?.evidence;
+  const lease = validateAccountLease(leaseValue);
+  if (
+    !state ||
+    state.state !== "available" ||
+    !evidence ||
+    !sameAccountLease(evidence.lease, lease) ||
+    evidence.lease.signal.aborted ||
+    evidence.lifecycleGeneration !== coordinatorLifecycleGeneration
+  ) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Verified account identity proof is stale");
+  }
+  assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
+  return state;
+}
+
+export function readVerifiedActiveMeProof(
+  proofValue: unknown,
+  leaseValue: unknown,
+): Readonly<{ membershipIds: readonly string[]; defaultOrganizationId: string | null }> {
+  const evidence = requireVerifiedActiveMeEvidence(proofValue, leaseValue).evidence;
+  return Object.freeze({
+    membershipIds: evidence.membershipIds,
+    defaultOrganizationId: evidence.defaultOrganizationId,
+  });
+}
+
+export function claimVerifiedActiveMeProof(proofValue: unknown, leaseValue: unknown): ClaimedVerifiedActiveMeProof {
+  const state = requireVerifiedActiveMeEvidence(proofValue, leaseValue);
+  const lease = state.evidence.lease;
+  state.state = "claimed";
+  let settled = false;
+  const assertCurrent = (): void => {
+    const evidence = state.evidence;
+    if (
+      state.state !== "claimed" ||
+      !sameAccountLease(evidence.lease, lease) ||
+      evidence.lease.signal.aborted ||
+      evidence.lifecycleGeneration !== coordinatorLifecycleGeneration
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Verified account identity claim is stale");
+    }
+    assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
+  };
+  return Object.freeze({
+    membershipIds: state.evidence.membershipIds,
+    defaultOrganizationId: state.evidence.defaultOrganizationId,
+    assertCurrent,
+    settle: (): void => {
+      if (settled) return;
+      settled = true;
+      state.state = "consumed";
+    },
+  });
 }
 
 function readVerifiedCandidateProof(value: unknown): VerifiedCandidateEvidence {
@@ -535,6 +701,7 @@ function replaceCoordinatorSnapshot<T>(snapshot: CoordinatorSnapshot, value: T):
 
 export function closeCoordinatorConnections(): void {
   coordinatorLifecycleGeneration += 1;
+  latestActiveMeRequests.clear();
   for (const database of coordinatorConnections) database.close();
   coordinatorConnections.clear();
 }
@@ -817,6 +984,134 @@ export class AuthSessionCoordinator {
     const activation = validateActivationCertificate(activationValue);
     const captured = await this.captureVerifiedCredential(activation);
     return this.finishCredentialAdmission(captured, activation);
+  }
+
+  public async admitAccountLease(leaseValue: unknown): Promise<ActiveSessionProjection> {
+    const lease = validateAccountLease(leaseValue);
+    const activation = lease.activation;
+    const signal = lease.signal;
+    if (signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Captured account lease has been invalidated");
+    }
+    const captured = await this.captureVerifiedCredential(activation, signal);
+    const projection = await this.finishCredentialAdmission(captured, activation, signal);
+    if (signal.aborted) {
+      throw new SessionError(
+        sessionErrorCodes.staleOperation,
+        "Captured account lease was invalidated during admission",
+      );
+    }
+    return projection;
+  }
+
+  /**
+   * Coordinator-owned active `/me` request. The returned proof is bound to
+   * one account runtime lifecycle and only the newest request for that
+   * runtime may drive organization reconciliation.
+   */
+  public async requestActiveMe(leaseValue: unknown): Promise<VerifiedActiveMeResult> {
+    const lease = validateAccountLease(leaseValue);
+    const signal = lease.signal;
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
+    const requestKey = activeMeRequestKey(lease);
+    const requestSequence = nextActiveMeSequence(requestKey);
+    if (signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity request lifecycle is stale");
+    }
+    const captured = await this.captureVerifiedCredential(lease.activation, signal);
+    assertActiveMeSequence(requestKey, requestSequence);
+
+    const dispatch = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<Readonly<{ request: Promise<Response> }>> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Account identity dispatch lifecycle is stale");
+        }
+        assertActiveMeSequence(requestKey, requestSequence);
+        const projection = activeProjection(snapshot, lease.activation);
+        const current = matchingCredential(snapshot, projection.authority.session);
+        if (!current || !sameCredentialRecord(current, captured)) {
+          throw new SessionError(
+            sessionErrorCodes.admissionDenied,
+            "Credential changed before account identity dispatch",
+          );
+        }
+        let request: Promise<Response>;
+        try {
+          request = fetch("/api/v1/me", {
+            method: "GET",
+            cache: "no-store",
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
+            redirect: "error",
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${current.accessToken}`,
+              ...expectedAuthorityHeaders(lease.activation.serverAuthority),
+            },
+            signal,
+          });
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+        return keepCoordinatorSnapshot(Object.freeze({ request }));
+      },
+      signal,
+    );
+
+    const assertResponseCurrent = async (): Promise<void> => {
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Account identity response crossed a lifecycle fence");
+      }
+      assertActiveMeSequence(requestKey, requestSequence);
+      await this.admitAccountLease(lease);
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Account identity response crossed a lifecycle fence");
+      }
+      assertActiveMeSequence(requestKey, requestSequence);
+    };
+
+    let response: Response;
+    try {
+      response = await dispatch.request;
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity request is unavailable");
+    }
+    await assertResponseCurrent();
+    if (!response.ok) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, `Account identity request failed (${response.status})`);
+    }
+    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
+    }
+
+    let parsedValue: unknown;
+    try {
+      parsedValue = JSON.parse(await readBoundedResponseText(response, MAX_ACTIVE_ME_RESPONSE_BYTES));
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
+    }
+    await assertResponseCurrent();
+    const parsed = parseActiveMeResponse(parsedValue, lease.activation.accountId);
+    const proof = Object.freeze({}) as VerifiedActiveMeProof;
+    verifiedActiveMeProofs.set(proof, {
+      evidence: Object.freeze({
+        lease,
+        membershipIds: parsed.membershipIds,
+        defaultOrganizationId: parsed.defaultOrganizationId,
+        lifecycleGeneration,
+        requestKey,
+        requestSequence,
+      }),
+      state: "available",
+    });
+    return Object.freeze({ payload: parsed.payload, proof });
   }
 
   public async admitView(viewValue: unknown): Promise<ActiveSessionProjection> {

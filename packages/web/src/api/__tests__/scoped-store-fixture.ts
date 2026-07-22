@@ -1,13 +1,17 @@
 import { IDBFactory } from "fake-indexeddb";
 import { vi } from "vitest";
+import { mintContentViewHead } from "../../auth/session/content-view-head-capability.js";
 import {
+  type AccountLease,
   type ActivationCertificate,
   AuthSessionCoordinator,
   ContentScopeBarrier,
+  createAccountLease,
   createAccountScopeKey,
   createActivationCertificate,
   createSessionAttempt,
   createViewLease,
+  installAccountStoreRuntime,
   installContentStoreRuntime,
   type SessionLockManager,
   type SessionLockOptions,
@@ -29,10 +33,13 @@ export type StoreFixture = {
   coordinator: AuthSessionCoordinator;
   barrier: ContentScopeBarrier;
   activation: ActivationCertificate;
+  accountLease: AccountLease;
+  accountController: AbortController;
   lease: ViewLease;
   localStorage: StorageArea;
   sessionStorage: StorageArea;
   dispose: () => void;
+  disposeAccount: () => void;
 };
 
 type ActivateOptions = Readonly<{
@@ -134,24 +141,44 @@ async function activateFromAnonymous(
   );
   await coordinator.completeAcquisitionTransition(permit, verified.proof);
 
+  const sourceController = new AbortController();
+  const accountLease = createAccountLease({
+    activation,
+    accountRevision: `account-revision-${options.label}`,
+    ownerTabId: `owner-tab-${options.label}`,
+    documentId: options.documentId ?? `document-${options.label}`,
+    signal: sourceController.signal,
+  });
+  const disposeAccount = installAccountStoreRuntime({ barrier, lease: accountLease });
   const lease = createViewLease({
     activation,
     organizationId: options.organizationId ?? `org-${options.label}`,
     orgRevision: options.orgRevision ?? `org-revision-${options.label}`,
     ownerTabId: `owner-tab-${options.label}`,
     documentId: options.documentId ?? `document-${options.label}`,
-    signal: new AbortController().signal,
+    signal: sourceController.signal,
   });
-  const dispose = installContentStoreRuntime({ barrier, lease });
+  const disposeView = installContentStoreRuntime({
+    barrier,
+    lease,
+    head: mintContentViewHead(lease, async () => undefined),
+  });
+  const dispose = (): void => {
+    disposeView();
+    disposeAccount();
+  };
   return {
     factory,
     coordinator,
     barrier,
     activation,
+    accountLease,
+    accountController: sourceController,
     lease,
     localStorage,
     sessionStorage,
     dispose,
+    disposeAccount,
   };
 }
 
@@ -195,7 +222,15 @@ export function replaceOrganization(source: StoreFixture, options: ActivateOptio
     documentId: options.documentId ?? source.lease.documentId,
     signal: new AbortController().signal,
   });
-  const dispose = installContentStoreRuntime({ barrier: source.barrier, lease });
+  const disposeView = installContentStoreRuntime({
+    barrier: source.barrier,
+    lease,
+    head: mintContentViewHead(lease, async () => undefined),
+  });
+  const dispose = (): void => {
+    disposeView();
+    source.disposeAccount();
+  };
   return { ...source, lease, dispose };
 }
 

@@ -21,6 +21,21 @@ export type ActivationCertificate = Readonly<{
 
 export type ActivationCertificateInput = Omit<ActivationCertificate, "v">;
 
+/**
+ * Account-level browser state is admitted without inventing an organization.
+ * The owner/document fields fence tab-owned preferences while the exact signal
+ * ties every admission to the lifecycle that captured the lease.
+ */
+export type AccountLease = Readonly<{
+  activation: ActivationCertificate;
+  accountRevision: string;
+  ownerTabId: string;
+  documentId: string;
+  signal: AbortSignal;
+}>;
+
+export type AccountLeaseInput = Omit<AccountLease, "activation"> & Readonly<{ activation: unknown }>;
+
 export type ViewLease = Readonly<{
   activation: ActivationCertificate;
   organizationId: string;
@@ -272,6 +287,57 @@ export function createViewLease(input: ViewLeaseInput): ViewLease {
     documentId: requireOpaqueId(input.documentId, "Document id"),
     signal: input.signal,
   });
+}
+
+export function createAccountLease(input: AccountLeaseInput): AccountLease {
+  // Read every caller-controlled property exactly once. `Readonly` is only a
+  // compile-time promise; a runtime object may still contain mutable getters.
+  const activation = input.activation;
+  const accountRevision = input.accountRevision;
+  const ownerTabId = input.ownerTabId;
+  const documentId = input.documentId;
+  const signal = input.signal;
+  if (!isAbortSignal(signal)) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Account lease requires an AbortSignal");
+  }
+  return Object.freeze({
+    activation: validateActivationCertificate(activation),
+    accountRevision: requireOpaqueId(accountRevision, "Account revision"),
+    ownerTabId: requireOpaqueId(ownerTabId, "Owner tab id"),
+    documentId: requireOpaqueId(documentId, "Document id"),
+    signal,
+  });
+}
+
+export function validateAccountLease(value: unknown): AccountLease {
+  if (!isRecord(value)) throw new SessionError(sessionErrorCodes.invalidState, "Account lease is malformed");
+  // Snapshot the untrusted record before validation so a getter cannot swap
+  // the signal or activation between the coordinator's authority fences.
+  const activation = value.activation;
+  const accountRevision = value.accountRevision;
+  const ownerTabId = value.ownerTabId;
+  const documentId = value.documentId;
+  const signal = value.signal;
+  if (!isAbortSignal(signal)) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Account lease requires an AbortSignal");
+  }
+  return createAccountLease({
+    activation,
+    accountRevision: requireOpaqueId(accountRevision, "Account revision"),
+    ownerTabId: requireOpaqueId(ownerTabId, "Owner tab id"),
+    documentId: requireOpaqueId(documentId, "Document id"),
+    signal,
+  });
+}
+
+export function sameAccountLease(left: AccountLease, right: AccountLease): boolean {
+  return (
+    sameActivation(left.activation, right.activation) &&
+    left.accountRevision === right.accountRevision &&
+    left.ownerTabId === right.ownerTabId &&
+    left.documentId === right.documentId &&
+    left.signal === right.signal
+  );
 }
 
 export function validateViewLease(value: unknown): ViewLease {

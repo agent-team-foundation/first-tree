@@ -1,4 +1,5 @@
 import { type ContentDatabaseSpec, type ContentOperation, ContentScopeBarrier } from "./content-barrier.js";
+import { type ContentViewHead, readContentViewHead } from "./content-view-head-capability.js";
 import { SessionError, sessionErrorCodes } from "./errors.js";
 import { PERSISTENT_CONTENT_DATABASES } from "./persistence-inventory.js";
 import { createViewLease, sameActivation, type ViewLease, validateViewLease } from "./types.js";
@@ -34,6 +35,7 @@ export const IMAGE_CONTENT_DATABASE_SPEC: ContentDatabaseSpec = Object.freeze({
 export type ContentStoreRuntimeInstallation = Readonly<{
   barrier: ContentScopeBarrier;
   lease: ViewLease;
+  head: ContentViewHead;
 }>;
 
 export type CapturedContentStoreRuntime = Readonly<{
@@ -46,6 +48,7 @@ type InstalledRuntime = {
   lease: ViewLease;
   sourceLease: ViewLease;
   controller: AbortController;
+  assertHeadCurrent: () => Promise<void>;
   detachAbortSources: () => void;
 };
 
@@ -132,6 +135,7 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
   if (sourceLease.signal.aborted || retiredSourceSignals.has(sourceLease.signal) || isRetiredSourceView(sourceLease)) {
     throw new SessionError(sessionErrorCodes.staleOperation, "Cannot install an invalidated content view");
   }
+  const assertHeadCurrent = readContentViewHead(input.head, sourceLease);
   const previousSourceView = lastInstalledSourceView;
   if (
     previousSourceView &&
@@ -190,6 +194,7 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
     lease,
     sourceLease,
     controller,
+    assertHeadCurrent,
     detachAbortSources,
   };
   runtimeRecord = runtime;
@@ -241,7 +246,39 @@ export function captureContentStoreRuntime(expectedLeaseValue: unknown): Capture
           new SessionError(sessionErrorCodes.invalidState, "Content store operation requires a callback"),
         );
       }
-      return barrier.withShared(lease, (operation) => callback(operation, lease));
+      return (async () => {
+        if (installedRuntime !== current || current.lease.signal.aborted) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Content view was replaced before admission");
+        }
+        await current.assertHeadCurrent();
+        if (installedRuntime !== current || current.lease.signal.aborted) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Content view head changed before admission");
+        }
+        const value = await barrier.withShared(lease, (operation) => callback(operation, lease));
+        await current.assertHeadCurrent();
+        if (installedRuntime !== current || current.lease.signal.aborted) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Content view head changed before delivery");
+        }
+        return value;
+      })();
     },
   });
+}
+
+/** Explicitly retires the installed organization view (for example when its membership disappears). */
+export function retireContentStoreRuntime(): void {
+  const current = installedRuntime;
+  installedRuntime = null;
+  if (current) {
+    retireSourceView(current.sourceLease);
+    retiredSourceSignals.add(current.sourceLease.signal);
+    retireRuntime(current);
+  }
+  const dormant = dormantRuntime;
+  dormantRuntime = null;
+  if (dormant && dormant !== current) {
+    retireSourceView(dormant.sourceLease);
+    retiredSourceSignals.add(dormant.sourceLease.signal);
+    retireRuntime(dormant);
+  }
 }

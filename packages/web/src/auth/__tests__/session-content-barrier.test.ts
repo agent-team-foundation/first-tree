@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
 import { deleteDatabaseBarrier } from "../session/idb-delete-barrier.js";
 import {
+  type AccountContentOperation,
   type ActivationCertificate,
   AuthSessionCoordinator,
   CONTENT_SCOPE_LOCK_PREFIX,
@@ -11,13 +12,17 @@ import {
   type ContentDatabaseSpec,
   type ContentOperation,
   ContentScopeBarrier,
+  captureAccountStoreRuntime,
   closeCoordinatorConnections,
+  createAccountLease,
   createAccountScopeKey,
   createActivationCertificate,
   createCredentialRecord,
   createScopedDatabaseName,
   createSessionAttempt,
   createViewLease,
+  installAccountStoreRuntime,
+  installSessionLifecycleHooks,
   isDatabaseNameForScope,
   parseAccountScopeKey,
   SessionError,
@@ -269,7 +274,31 @@ async function activeFixture() {
     documentId: "document-a",
     signal: controller.signal,
   });
-  return { factory, coordinator, certificate, controller, lease };
+  const accountLease = createAccountLease({
+    activation: certificate,
+    accountRevision: "account-revision-a",
+    ownerTabId: lease.ownerTabId,
+    documentId: lease.documentId,
+    signal: controller.signal,
+  });
+  return { factory, coordinator, certificate, controller, lease, accountLease };
+}
+
+let accountRuntimeSequence = 0;
+
+function installFixtureAccountRuntime(
+  barrier: ContentScopeBarrier,
+  fixture: Awaited<ReturnType<typeof activeFixture>>,
+) {
+  accountRuntimeSequence += 1;
+  const source = createAccountLease({
+    ...fixture.accountLease,
+    accountRevision: `${fixture.accountLease.accountRevision}-${accountRuntimeSequence}`,
+  });
+  const dispose = installAccountStoreRuntime({ barrier, lease: source });
+  const runtime = captureAccountStoreRuntime(source);
+  if (!runtime) throw new Error("Expected installed account runtime");
+  return { dispose, runtime, source };
 }
 
 function rawOpen(
@@ -799,6 +828,106 @@ describe("ContentScopeBarrier", () => {
       ).rejects.toMatchObject({ code: sessionErrorCodes.invalidState });
       operation.closeDatabase(database);
     });
+  });
+
+  it("uses the account scope lock without inventing an organization and keeps its capability runtime-private", async () => {
+    const fixture = await activeFixture();
+    const locks = new OrderedTestLocks();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks,
+    });
+    const { dispose: disposeAccount, runtime } = installFixtureAccountRuntime(barrier, fixture);
+    let retainedOperation: AccountContentOperation | undefined;
+    let retainedDatabase: IDBDatabase | undefined;
+
+    await runtime.withShared(async (operation) => {
+      retainedOperation = operation;
+      expect(operation.lease.accountRevision).toBe(runtime.sourceLease.accountRevision);
+      expect(operation.lease.signal).toBe(runtime.lease.signal);
+      expect("organizationId" in operation.lease).toBe(false);
+      expect(Reflect.ownKeys(operation)).toEqual([]);
+      expect(Reflect.get(operation, "barrier")).toBeUndefined();
+      expect(Reflect.get(operation, "token")).toBeUndefined();
+      expect(Reflect.get(operation, "#barrier")).toBeUndefined();
+      expect(Reflect.get(operation, "#token")).toBeUndefined();
+      expect(operation.physicalDatabaseName(CONTENT_SPEC)).toBe(
+        createScopedDatabaseName("chat-content", 1, fixture.certificate.scopeKey),
+      );
+
+      retainedDatabase = await operation.openDatabase(CONTENT_SPEC);
+      await operation.runTransaction(retainedDatabase, "rows", "readwrite", (transaction) => {
+        transaction.objectStore("rows").put("org-a", "selected-organization");
+      });
+    });
+
+    expect(locks.events).toContain(`start:shared:${CONTENT_SCOPE_LOCK_PREFIX}${fixture.certificate.scopeKey}`);
+    if (!retainedOperation || !retainedDatabase) throw new Error("Expected retained account operation fixture");
+    await expect(retainedOperation.openDatabase(CONTENT_SPEC)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    await expect(
+      retainedOperation.runTransaction(retainedDatabase, "rows", "readwrite", (transaction) => {
+        transaction.objectStore("rows").put("org-b", "selected-organization");
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    retainedOperation.closeDatabase(retainedDatabase);
+    disposeAccount();
+  });
+
+  it.each([
+    "abort",
+    "pagehide",
+    "freeze",
+  ] as const)("cancels an in-flight account operation on %s before delivery", async (eventName) => {
+    const fixture = await activeFixture();
+    const registry = new ContentDatabaseRegistry();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+      registry,
+    });
+    const entered = deferred();
+    const release = deferred();
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget();
+    const disposeLifecycle = installSessionLifecycleHooks({ registry, windowTarget, documentTarget });
+    const { dispose: disposeAccount, runtime } = installFixtureAccountRuntime(barrier, fixture);
+    const shared = runtime.withShared(async () => {
+      entered.resolve();
+      await release.promise;
+      return "stale-result";
+    });
+    await entered.promise;
+
+    if (eventName === "abort") fixture.controller.abort();
+    else if (eventName === "pagehide") windowTarget.dispatchEvent(new Event("pagehide"));
+    else documentTarget.dispatchEvent(new Event("freeze"));
+
+    await expect(shared).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    release.resolve();
+    disposeLifecycle();
+    disposeAccount();
+  });
+
+  it("does not enter an account callback after the activation begins retirement", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    const { dispose: disposeAccount, runtime } = installFixtureAccountRuntime(barrier, fixture);
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring-account");
+    const callback = vi.fn();
+
+    await expect(runtime.withShared(callback)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect(callback).not.toHaveBeenCalled();
+    disposeAccount();
   });
 
   it("keeps barrier authority runtime-private and revokes a retained operation when its callback settles", async () => {

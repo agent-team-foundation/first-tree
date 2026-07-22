@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
+import { mintContentViewHead } from "../../auth/session/content-view-head-capability.js";
 import {
   CHAT_CONTENT_DATABASE_SPEC,
   captureContentStoreRuntime,
@@ -133,13 +134,21 @@ describe("scoped message cache semantics", () => {
       orgRevision: "revision-b",
       signal: orgA.lease.signal,
     });
-    const disposeOrgB = installContentStoreRuntime({ barrier: orgA.barrier, lease: orgBLease });
+    const disposeOrgB = installContentStoreRuntime({
+      barrier: orgA.barrier,
+      lease: orgBLease,
+      head: mintContentViewHead(orgBLease, async () => undefined),
+    });
     currentFixture = { ...orgA, lease: orgBLease, dispose: disposeOrgB };
     await cacheMessages(orgBLease, "chat-1", [msg("from-b", timestamp(2))]);
 
-    expect(() => installContentStoreRuntime({ barrier: orgA.barrier, lease: orgA.lease })).toThrowError(
-      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
-    );
+    expect(() =>
+      installContentStoreRuntime({
+        barrier: orgA.barrier,
+        lease: orgA.lease,
+        head: mintContentViewHead(orgA.lease, async () => undefined),
+      }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
     expect(await getCachedMessages(orgA.lease, "chat-1")).toEqual([]);
     expect((await getCachedMessages(orgBLease, "chat-1")).map((row) => row.id)).toEqual(["from-b"]);
   });

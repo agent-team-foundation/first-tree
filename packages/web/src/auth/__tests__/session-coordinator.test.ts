@@ -12,12 +12,14 @@ import {
   ContentScopeBarrier,
   type CoordinatorSnapshot,
   closeCoordinatorConnections,
+  createAccountLease,
   createAccountScopeKey,
   createActivationCertificate,
   createCredentialRecord,
   createManagementDeliveryPermit,
   createSessionAttempt,
   createViewLease,
+  readVerifiedActiveMeProof,
   type SessionLockManager,
   type StorageArea,
   scrubLegacyPersistence,
@@ -1209,6 +1211,116 @@ describe("AuthSessionCoordinator", () => {
     secondLatch.release();
     await expect(shared).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("snapshots an account lease signal once and fences admission to that exact lifecycle", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("a", "generation-a");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
+
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let currentSignal = firstController.signal;
+    let signalReads = 0;
+    const mutableLease = Object.defineProperties(
+      {},
+      {
+        activation: { enumerable: true, get: () => certificate },
+        accountRevision: { enumerable: true, get: () => "account-revision-a" },
+        ownerTabId: { enumerable: true, get: () => "owner-tab-a" },
+        documentId: { enumerable: true, get: () => "document-a" },
+        signal: {
+          enumerable: true,
+          get: () => {
+            signalReads += 1;
+            return currentSignal;
+          },
+        },
+      },
+    );
+    const latch = deferNextOpen(factory);
+    const admission = coordinator.admitAccountLease(mutableLease);
+    await latch.started;
+    currentSignal = secondController.signal;
+    firstController.abort();
+    latch.release();
+
+    await expect(admission).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(signalReads).toBe(1);
+    await expect(
+      coordinator.admitAccountLease(
+        createAccountLease({
+          activation: certificate,
+          accountRevision: "account-revision-b",
+          ownerTabId: "owner-tab-a",
+          documentId: "document-a",
+          signal: secondController.signal,
+        }),
+      ),
+    ).resolves.toMatchObject({ authority: { session: certificate } });
+  });
+
+  it("owns active me dispatch and lets only the newest exact account lifecycle prove memberships", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("active-me", "generation-active-me");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me");
+    const controller = new AbortController();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me",
+      ownerTabId: "owner-tab-active-me",
+      documentId: "document-active-me",
+      signal: controller.signal,
+    });
+
+    let resolveFirst = (_response: Response): void => undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          user: { id: certificate.accountId },
+          defaultOrganizationId: "org-new",
+          memberships: [{ organizationId: "org-new" }],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = coordinator.requestActiveMe(lease);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const second = await coordinator.requestActiveMe(lease);
+    expect(readVerifiedActiveMeProof(second.proof, lease)).toEqual({
+      membershipIds: ["org-new"],
+      defaultOrganizationId: "org-new",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/me");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      signal: controller.signal,
+    });
+
+    resolveFirst(
+      jsonResponse({
+        user: { id: certificate.accountId },
+        defaultOrganizationId: "org-old",
+        memberships: [{ organizationId: "org-old" }],
+      }),
+    );
+    await expect(first).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+
+    controller.abort();
+    expect(() => readVerifiedActiveMeProof(second.proof, lease)).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
   });
 
   it("lets logout retire a refreshed session but ignores an old-revision owned 401", async () => {

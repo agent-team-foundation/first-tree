@@ -1,3 +1,4 @@
+import { readBoundAccountLease } from "./account-lease-capability.js";
 import type { AuthSessionCoordinator } from "./coordinator.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
 import { deleteDatabaseBarrier } from "./idb-delete-barrier.js";
@@ -5,6 +6,7 @@ import { LEGACY_DATABASE_NAMES, type LegacyStorageAreas, scrubLegacyWebStorage }
 import { PERSISTENT_CONTENT_DATABASE_INVENTORY } from "./persistence-inventory.js";
 import { createScopedDatabaseName } from "./scope.js";
 import {
+  type AccountLease,
   type ActivationCertificate,
   type ViewLease,
   validateActivationCertificate,
@@ -66,16 +68,19 @@ export type VerifiedPurgeClaim = Readonly<{
   settle: (committed: boolean) => void;
 }>;
 
-type OperationToken = {
+type OperationTokenState = {
   active: boolean;
   generation: number;
-  lease: ViewLease;
   transactions: Set<IDBTransaction>;
   pendingOpenCount: number;
   cancelled: Promise<void>;
   resolveCancellation: () => void;
   abortListener: () => void;
 };
+
+type AccountOperationToken = OperationTokenState & Readonly<{ kind: "account"; lease: AccountLease }>;
+type ViewOperationToken = OperationTokenState & Readonly<{ kind: "view"; lease: ViewLease }>;
+type OperationToken = AccountOperationToken | ViewOperationToken;
 
 type QueuedLockToken = Readonly<{
   generation: number;
@@ -234,22 +239,37 @@ export class ContentDatabaseRegistry {
     this.assertCurrent(token);
   }
 
-  public createOperation(lease: ViewLease, generation = this.generation): OperationToken {
+  public createAccountOperation(lease: AccountLease, generation = this.generation): AccountOperationToken {
+    return this.createOperationToken("account", lease, generation) as AccountOperationToken;
+  }
+
+  public createOperation(lease: ViewLease, generation = this.generation): ViewOperationToken {
+    return this.createOperationToken("view", lease, generation) as ViewOperationToken;
+  }
+
+  private createOperationToken(
+    kind: OperationToken["kind"],
+    lease: AccountLease | ViewLease,
+    generation: number,
+  ): OperationToken {
     this.assertGeneration(generation);
     let resolveCancellation = (): void => undefined;
     const cancelled = new Promise<void>((resolve) => {
       resolveCancellation = resolve;
     });
-    const token: OperationToken = {
+    const state: OperationTokenState = {
       active: true,
       generation,
-      lease,
       transactions: new Set(),
       pendingOpenCount: 0,
       cancelled,
       resolveCancellation,
       abortListener: () => undefined,
     };
+    const token: OperationToken =
+      kind === "account"
+        ? { ...state, kind: "account", lease: lease as AccountLease }
+        : { ...state, kind: "view", lease: lease as ViewLease };
     this.operations.add(token);
     const invalidate = (): void => this.invalidateOperation(token);
     token.abortListener = invalidate;
@@ -388,11 +408,24 @@ export interface ContentOperation {
   closeDatabase(database: IDBDatabase): void;
 }
 
+export interface AccountContentOperation {
+  readonly lease: AccountLease;
+  physicalDatabaseName(spec: Pick<ContentDatabaseSpec, "logicalName" | "namespaceVersion">): string;
+  openDatabase(spec: ContentDatabaseSpec): Promise<IDBDatabase>;
+  runTransaction(
+    database: IDBDatabase,
+    stores: string | readonly string[],
+    mode: IDBTransactionMode,
+    start: (transaction: IDBTransaction) => void,
+  ): Promise<void>;
+  closeDatabase(database: IDBDatabase): void;
+}
+
 class ContentOperationCapability implements ContentOperation {
   readonly #barrier: ContentScopeBarrier;
-  readonly #token: OperationToken;
+  readonly #token: ViewOperationToken;
 
-  public constructor(barrier: ContentScopeBarrier, token: OperationToken) {
+  public constructor(barrier: ContentScopeBarrier, token: ViewOperationToken) {
     this.#barrier = barrier;
     this.#token = token;
   }
@@ -405,6 +438,41 @@ class ContentOperationCapability implements ContentOperation {
     if (organizationId !== this.#token.lease.organizationId) {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Content operation targeted a different organization");
     }
+  }
+
+  public physicalDatabaseName(spec: Pick<ContentDatabaseSpec, "logicalName" | "namespaceVersion">): string {
+    return createScopedDatabaseName(spec.logicalName, spec.namespaceVersion, this.#token.lease.activation.scopeKey);
+  }
+
+  public openDatabase(spec: ContentDatabaseSpec): Promise<IDBDatabase> {
+    return this.#barrier.openDatabase(this.#token, spec);
+  }
+
+  public runTransaction(
+    database: IDBDatabase,
+    stores: string | readonly string[],
+    mode: IDBTransactionMode,
+    start: (transaction: IDBTransaction) => void,
+  ): Promise<void> {
+    return this.#barrier.runTransaction(this.#token, database, stores, mode, start);
+  }
+
+  public closeDatabase(database: IDBDatabase): void {
+    this.#barrier.closeDatabase(database);
+  }
+}
+
+class AccountContentOperationCapability implements AccountContentOperation {
+  readonly #barrier: ContentScopeBarrier;
+  readonly #token: AccountOperationToken;
+
+  public constructor(barrier: ContentScopeBarrier, token: AccountOperationToken) {
+    this.#barrier = barrier;
+    this.#token = token;
+  }
+
+  public get lease(): AccountLease {
+    return this.#token.lease;
   }
 
   public physicalDatabaseName(spec: Pick<ContentDatabaseSpec, "logicalName" | "namespaceVersion">): string {
@@ -469,6 +537,46 @@ export class ContentScopeBarrier {
         }
       });
       await this.coordinator.admitView(lease);
+      this.registry.assertGeneration(queuedLock.generation);
+      return result;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw staleOperation("Content-scope lock request was cancelled");
+      }
+      throw error;
+    } finally {
+      queuedLock.release();
+    }
+  }
+
+  public async withAccountShared<T>(
+    leaseValue: unknown,
+    callback: (operation: AccountContentOperation) => T | PromiseLike<T>,
+  ): Promise<T> {
+    const { lease } = readBoundAccountLease(leaseValue, this);
+    const signal = lease.signal;
+    if (signal.aborted) throw staleOperation("Captured account lease has been invalidated");
+    const lockName = `${CONTENT_SCOPE_LOCK_PREFIX}${lease.activation.scopeKey}`;
+    const queuedLock = this.registry.createQueuedLock(signal);
+    try {
+      const result = await this.locks.request(lockName, { mode: "shared", signal: queuedLock.signal }, async () => {
+        this.registry.assertGeneration(queuedLock.generation);
+        await this.coordinator.admitAccountLease(lease);
+        this.registry.assertGeneration(queuedLock.generation);
+        const token = this.registry.createAccountOperation(lease, queuedLock.generation);
+        const operation = new AccountContentOperationCapability(this, token);
+        try {
+          const value = await this.registry.raceCancellation(token, Promise.resolve(callback(operation)));
+          if (!this.registry.isCurrent(token)) throw staleOperation("Account-content operation became stale");
+          await this.coordinator.admitAccountLease(lease);
+          this.registry.assertGeneration(queuedLock.generation);
+          if (!this.registry.isCurrent(token)) throw staleOperation("Account-content operation became stale");
+          return value;
+        } finally {
+          this.registry.finishOperation(token);
+        }
+      });
+      await this.coordinator.admitAccountLease(lease);
       this.registry.assertGeneration(queuedLock.generation);
       return result;
     } catch (error) {
@@ -554,9 +662,15 @@ export class ContentScopeBarrier {
     });
   }
 
+  private admitOperation(token: OperationToken): Promise<unknown> {
+    return token.kind === "account"
+      ? this.coordinator.admitAccountLease(token.lease)
+      : this.coordinator.admitView(token.lease);
+  }
+
   public async openDatabase(token: OperationToken, spec: ContentDatabaseSpec): Promise<IDBDatabase> {
     this.registry.assertOperation(token);
-    await this.coordinator.admitView(token.lease);
+    await this.admitOperation(token);
     this.registry.assertOperation(token);
     if (!Number.isSafeInteger(spec.databaseVersion) || spec.databaseVersion < 1) {
       throw new SessionError(sessionErrorCodes.invalidState, "IndexedDB schema version must be a positive integer");
@@ -632,7 +746,7 @@ export class ContentScopeBarrier {
           rejectOnce(staleOperation("Scoped database opened after invalidation"));
           return;
         }
-        void this.coordinator.admitView(token.lease).then(
+        void this.admitOperation(token).then(
           () => {
             try {
               this.registry.registerHandle(token, request.result);
@@ -661,7 +775,7 @@ export class ContentScopeBarrier {
     start: (transaction: IDBTransaction) => void,
   ): Promise<void> {
     this.registry.assertHandle(token, database);
-    await this.coordinator.admitView(token.lease);
+    await this.admitOperation(token);
     this.registry.assertHandle(token, database);
     if (mode !== "readonly" && mode !== "readwrite") {
       throw new SessionError(
