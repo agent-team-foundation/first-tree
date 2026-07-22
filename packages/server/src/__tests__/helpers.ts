@@ -1,5 +1,5 @@
 import type { AgentType, RuntimeProvider } from "@first-tree/shared";
-import { setConfig } from "@first-tree/shared/config";
+import { deriveAvatarAuthorityTag, setConfig } from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -25,6 +25,9 @@ import { uuidv7 } from "../uuid.js";
  * throwing.
  */
 export const INVALID_BCRYPT_PLACEHOLDER = `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`;
+
+/** Matches the stable authority in createTestApp's default server config. */
+export const TEST_AVATAR_AUTHORITY_TAG = deriveAvatarAuthorityTag("http://127.0.0.1:0/api/v1");
 
 const DEFAULT_TEST_PASSWORD = "testpassword123";
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
@@ -132,6 +135,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     server: {
       port: 0,
       host: "127.0.0.1",
+      authority: undefined,
       publicUrl: undefined,
     },
     workspace: {

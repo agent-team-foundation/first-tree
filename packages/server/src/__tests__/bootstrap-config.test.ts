@@ -25,6 +25,28 @@ describe("GET /bootstrap/config", () => {
   });
 });
 
+describe("GET /bootstrap/server-authority", () => {
+  const getApp = useTestApp();
+
+  it("returns the configured token-free authority without caching", async () => {
+    const res = await getApp().inject({ method: "GET", url: "/api/v1/bootstrap/server-authority" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.json()).toEqual({ v: 1, authority: "http://127.0.0.1:0/api/v1" });
+  });
+
+  it("does not derive authority from request host or forwarded headers", async () => {
+    const res = await getApp().inject({
+      method: "GET",
+      url: "/api/v1/bootstrap/server-authority",
+      headers: { host: "s2.example", "x-forwarded-host": "s3.example" },
+    });
+
+    expect(res.json().authority).toBe("http://127.0.0.1:0/api/v1");
+  });
+});
+
 describe("GET /bootstrap/config — non-dev channel", () => {
   const getApp = useTestApp({ channel: "staging" });
 

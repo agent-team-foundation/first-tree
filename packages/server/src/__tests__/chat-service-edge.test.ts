@@ -20,7 +20,7 @@ import {
 import { createMember } from "../services/member.js";
 import { createOrganization } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestApp } from "./helpers.js";
+import { createAdminContext, createTestApp, TEST_AVATAR_AUTHORITY_TAG } from "./helpers.js";
 
 describe("chat service edge coverage", () => {
   let app: FastifyInstance;
@@ -438,12 +438,18 @@ describe("chat service edge coverage", () => {
       accessMode: "watcher",
     });
 
-    await expect(getChatDetail(app.db, chat.id, null)).resolves.toMatchObject({ viewerMembershipKind: null });
-    await expect(getChatDetail(app.db, chat.id, uuidv7())).resolves.toMatchObject({ viewerMembershipKind: null });
-    await expect(getChatDetail(app.db, chat.id, seed.humanAgentUuid)).resolves.toMatchObject({
-      viewerMembershipKind: "participant",
+    await expect(getChatDetail(app.db, chat.id, null, TEST_AVATAR_AUTHORITY_TAG)).resolves.toMatchObject({
+      viewerMembershipKind: null,
     });
-    await expect(getChatDetail(app.db, chat.id, watcherId)).resolves.toMatchObject({
+    await expect(getChatDetail(app.db, chat.id, uuidv7(), TEST_AVATAR_AUTHORITY_TAG)).resolves.toMatchObject({
+      viewerMembershipKind: null,
+    });
+    await expect(getChatDetail(app.db, chat.id, seed.humanAgentUuid, TEST_AVATAR_AUTHORITY_TAG)).resolves.toMatchObject(
+      {
+        viewerMembershipKind: "participant",
+      },
+    );
+    await expect(getChatDetail(app.db, chat.id, watcherId, TEST_AVATAR_AUTHORITY_TAG)).resolves.toMatchObject({
       viewerMembershipKind: "watching",
     });
   });

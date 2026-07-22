@@ -5,7 +5,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createChat } from "../services/chat.js";
 import { createMeChat, listMeChats } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * `purpose: "agent-final-text"` bypass channel.
@@ -280,11 +280,18 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       purpose: "agent-final-text",
     });
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 10,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 10,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
   });
@@ -316,11 +323,18 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       purpose: "agent-final-text",
     });
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 10,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 10,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
   });
@@ -348,11 +362,18 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       purpose: "agent-final-text",
     });
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 10,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 10,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.unreadMentionCount).toBe(1);
   });

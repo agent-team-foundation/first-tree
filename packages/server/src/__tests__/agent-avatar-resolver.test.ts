@@ -1,15 +1,20 @@
+import { deriveAvatarAuthorityTag } from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { agentAvatarImageUrl, resolveAvatarImageUrl } from "../services/agent.js";
 
+const AUTHORITY_TAG = deriveAvatarAuthorityTag("https://first-tree.example/api/v1");
+
 describe("agentAvatarImageUrl", () => {
   it("returns null when no upload timestamp", () => {
-    expect(agentAvatarImageUrl("agent-1", null)).toBeNull();
-    expect(agentAvatarImageUrl("agent-1", undefined)).toBeNull();
+    expect(agentAvatarImageUrl("agent-1", null, AUTHORITY_TAG)).toBeNull();
+    expect(agentAvatarImageUrl("agent-1", undefined, AUTHORITY_TAG)).toBeNull();
   });
 
   it("returns versioned URL when upload timestamp is present", () => {
     const ts = new Date("2026-05-15T08:00:00.000Z");
-    expect(agentAvatarImageUrl("agent-1", ts)).toBe(`/api/v1/agents/agent-1/avatar?v=${ts.getTime()}`);
+    expect(agentAvatarImageUrl("agent-1", ts, AUTHORITY_TAG)).toBe(
+      `/api/v1/agents/agent-1/avatar?v=${ts.getTime()}&ft_authority=${AUTHORITY_TAG}`,
+    );
   });
 });
 
@@ -23,8 +28,9 @@ describe("resolveAvatarImageUrl", () => {
       type: "human",
       avatarImageUpdatedAt: ts,
       userAvatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
+      authorityTag: AUTHORITY_TAG,
     });
-    expect(result).toBe(`/api/v1/agents/${uuid}/avatar?v=${ts.getTime()}`);
+    expect(result).toBe(`/api/v1/agents/${uuid}/avatar?v=${ts.getTime()}&ft_authority=${AUTHORITY_TAG}`);
   });
 
   it("falls back to GitHub URL for human agents without an uploaded image", () => {
@@ -34,6 +40,7 @@ describe("resolveAvatarImageUrl", () => {
       type: "human",
       avatarImageUpdatedAt: null,
       userAvatarUrl: githubUrl,
+      authorityTag: AUTHORITY_TAG,
     });
     expect(result).toBe(githubUrl);
   });
@@ -45,6 +52,7 @@ describe("resolveAvatarImageUrl", () => {
         type: "human",
         avatarImageUpdatedAt: null,
         userAvatarUrl: null,
+        authorityTag: AUTHORITY_TAG,
       }),
     ).toBeNull();
   });
@@ -56,8 +64,9 @@ describe("resolveAvatarImageUrl", () => {
       type: "agent",
       avatarImageUpdatedAt: ts,
       userAvatarUrl: null,
+      authorityTag: AUTHORITY_TAG,
     });
-    expect(result).toBe(`/api/v1/agents/${uuid}/avatar?v=${ts.getTime()}`);
+    expect(result).toBe(`/api/v1/agents/${uuid}/avatar?v=${ts.getTime()}&ft_authority=${AUTHORITY_TAG}`);
   });
 
   it("ignores userAvatarUrl for non-human agents (no upload, no fallback)", () => {
@@ -70,6 +79,7 @@ describe("resolveAvatarImageUrl", () => {
       type: "agent",
       avatarImageUpdatedAt: null,
       userAvatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
+      authorityTag: AUTHORITY_TAG,
     });
     expect(result).toBeNull();
   });

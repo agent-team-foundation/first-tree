@@ -31,6 +31,19 @@ export {
   setConfigValue,
 } from "./resolver.js";
 export { defineConfig, field, optional } from "./schema.js";
+export type { ServerAuthorityConfig } from "./server-authority.js";
+export {
+  AVATAR_AUTHORITY_QUERY_KEY,
+  AVATAR_AUTHORITY_TAG_LENGTH,
+  canonicalizeServerAuthority,
+  deriveAvatarAuthorityTag,
+  EXPECTED_SERVER_AUTHORITY_HEADER,
+  isAvatarAuthorityTag,
+  resolveServerAuthority,
+  SERVER_AUTHORITY_MAX_LENGTH,
+  SERVER_AUTHORITY_PATH,
+  serverAuthorityFromPublicUrl,
+} from "./server-authority.js";
 export type { ServerConfig } from "./server-config.js";
 // Typed config schemas and accessors
 export { createServerConfigSchema, getServerConfig, serverConfigSchema } from "./server-config.js";

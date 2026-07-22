@@ -1367,6 +1367,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
+| `FIRST_TREE_SERVER_AUTHORITY` | Stable canonical API authority (`https://host/api/v1`) used to partition Web credentials and persistent account data. Required when neither an origin-only `FIRST_TREE_PUBLIC_URL` nor an unambiguous bind host can supply it. It may intentionally differ from a temporary OAuth tunnel URL. | derived when unambiguous |
 | `FIRST_TREE_PUBLIC_URL` | Public-facing server origin. Used to stamp the issuer on short connect codes and to build invite-link URLs plus Google and GitHub OAuth callbacks. **Required in production.** | — |
 | `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |

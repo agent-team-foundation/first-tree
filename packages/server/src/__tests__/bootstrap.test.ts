@@ -40,7 +40,7 @@ const baseServerConfig: ServerConfig = {
   },
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
-  server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },
+  server: { port: 0, host: "127.0.0.1", authority: undefined, publicUrl: "https://first-tree.example" },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",

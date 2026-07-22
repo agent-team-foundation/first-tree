@@ -770,7 +770,12 @@ export async function updateChatMetadata(
  * message are both empty). Callers that don't have a self agent (admin
  * paths) can pass `null` — the fallback degrades to "all displayNames".
  */
-export async function getChatDetail(db: Database, chatId: string, selfAgentId: string | null = null) {
+export async function getChatDetail(
+  db: Database,
+  chatId: string,
+  selfAgentId: string | null,
+  avatarAuthorityTag: string,
+) {
   const chat = await getChat(db, chatId);
   // Participants JOIN `agents` so each row carries `name / displayName /
   // type` — needed by the wire chatDetailSchema (PR #402 identity-
@@ -837,6 +842,7 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
       type: p.type,
       avatarImageUpdatedAt: p.avatarImageUpdatedAt,
       userAvatarUrl: p.userAvatarUrl,
+      authorityTag: avatarAuthorityTag,
     }),
   }));
 
@@ -939,7 +945,7 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
  * runtime to resolve `@<name>` mentions against the authoritative participant
  * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
  */
-export async function listChatParticipantsWithNames(db: Database, chatId: string) {
+export async function listChatParticipantsWithNames(db: Database, chatId: string, avatarAuthorityTag: string) {
   // v2: chat_membership.mode is decision-inert; we no longer SELECT it. The
   // route layer projects the wire `mode` field from the WIRE_RECIPIENT_MODE
   // constant — see api/agent/chats.ts. Drop together with the wire field
@@ -974,6 +980,7 @@ export async function listChatParticipantsWithNames(db: Database, chatId: string
       type: r.type,
       avatarImageUpdatedAt: r.avatarImageUpdatedAt,
       userAvatarUrl: r.userAvatarUrl,
+      authorityTag: avatarAuthorityTag,
     }),
   }));
 }

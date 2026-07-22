@@ -32,7 +32,7 @@ import { createAgent } from "../services/agent.js";
 import { listMeChatSourceCounts, listMeChats } from "../services/me-chat.js";
 import { addChatParticipants } from "../services/participant-mode.js";
 import { uuidv7 } from "../uuid.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 type SeedSpec = {
   metadata: Record<string, unknown>;
@@ -115,32 +115,53 @@ describe("conversation-list source tags", () => {
     );
 
     // Default (no source param) returns all chats across sources.
-    const all = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-    });
+    const all = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(all.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId, agentChatId].sort());
 
     // manual: must NOT leak github chats — that was the regression
     // risk when this filter was first wired.
-    const manualOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["manual"],
-    });
+    const manualOnly = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["manual"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(manualOnly.rows.map((r) => r.chatId)).toEqual([manualChatId]);
 
     // origin collapses PR + Issue into a single `github` bucket — the
     // per-entity granularity now rides on `row.entityType` for the
     // leading-icon renderer, not on the filter dimension.
-    const githubOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["github"],
-    });
+    const githubOnly = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["github"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(githubOnly.rows.map((r) => r.chatId).sort()).toEqual([issueChatId, prChatId].sort());
 
     // `entityType` is projected from `chats.metadata->>'entityType'`
@@ -150,22 +171,36 @@ describe("conversation-list source tags", () => {
     expect(prRow?.entityType).toBe("pull_request");
     expect(issueRow?.entityType).toBe("issue");
 
-    const agentOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["agent"],
-    });
+    const agentOnly = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["agent"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(agentOnly.rows.map((r) => r.chatId)).toEqual([agentChatId]);
     expect(agentOnly.rows[0]?.source).toBe("agent");
     expect(agentOnly.rows[0]?.entityType).toBeNull();
 
-    const manualAndGithub = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["manual", "github", "github"],
-    });
+    const manualAndGithub = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["manual", "github", "github"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(manualAndGithub.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId].sort());
   });
 
@@ -209,11 +244,18 @@ describe("conversation-list source tags", () => {
       ]);
     });
 
-    const rows = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-    });
+    const rows = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const byId = new Map(rows.rows.map((r) => [r.chatId, r.createdByMe]));
     expect(byId.get(ownedByMe)).toBe(true);
     expect(byId.get(ownedByPeer)).toBe(false);
@@ -314,12 +356,19 @@ describe("conversation-list source tags", () => {
     expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
     expect(counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["github"],
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["github"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(list.rows.map((r) => r.chatId)).toEqual([futureChatId]);
     // Unknown entityType narrows to null on the row — known values
     // (`pull_request` etc.) flow through; "release" doesn't.
@@ -355,12 +404,19 @@ describe("conversation-list source tags", () => {
       { chatId: issueUnread, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
     ]);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "unread",
-      engagement: "active",
-      origin: ["github"],
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "unread",
+        engagement: "active",
+        origin: ["github"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(res.rows.map((r) => r.chatId).sort()).toEqual([prUnread, issueUnread].sort());
   });
 
@@ -402,12 +458,19 @@ describe("conversation-list source tags", () => {
     expect(archivedCounts.counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
     // Sanity: the list query mirrors the same engagement view.
-    const archivedList = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "archived",
-      origin: ["github"],
-    });
+    const archivedList = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "archived",
+        origin: ["github"],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(archivedList.rows.map((r) => r.chatId)).toEqual([prChatId]);
   });
 
@@ -469,13 +532,20 @@ describe("conversation-list source tags", () => {
     // Filtering by origin AND `watching=true` surfaces the watcher row.
     // Phase B lifted `watching` out of the filter enum into an
     // independent boolean — the two now compose freely.
-    const watchingPr = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["github"],
-      watching: true,
-    });
+    const watchingPr = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+        origin: ["github"],
+        watching: true,
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(watchingPr.rows.map((r) => r.chatId)).toEqual([chatId]);
     expect(watchingPr.rows[0]?.membershipKind).toBe("watching");
     // Sub-type still rides on the row — popover collapse is per-origin,

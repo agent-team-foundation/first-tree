@@ -516,9 +516,9 @@ export async function selectAttentionCandidateRows(
 async function enrichMeChatRows(
   db: Database,
   rawRows: RawMeChatRow[],
-  params: { humanAgentId: string; managedAgentIds: ReadonlySet<string> },
+  params: { humanAgentId: string; managedAgentIds: ReadonlySet<string>; avatarAuthorityTag: string },
 ): Promise<{ rows: MeChatRow[]; failedByChat: Map<string, string[]> }> {
-  const { humanAgentId, managedAgentIds } = params;
+  const { humanAgentId, managedAgentIds, avatarAuthorityTag } = params;
   if (rawRows.length === 0) return { rows: [], failedByChat: new Map() };
 
   const chatIds = rawRows.map((r) => r.chat_id);
@@ -555,6 +555,7 @@ async function enrichMeChatRows(
         type: p.type,
         avatarImageUpdatedAt: p.avatarImageUpdatedAt,
         userAvatarUrl: p.userAvatarUrl,
+        authorityTag: avatarAuthorityTag,
       }),
     });
     participantsByChat.set(p.chatId, list);
@@ -703,6 +704,7 @@ export async function listMeChats(
   callerMemberId: string,
   organizationId: string,
   query: ListMeChatsQuery,
+  avatarAuthorityTag: string,
 ): Promise<ListMeChatsResponse> {
   const limit = query.limit;
   // Resolve the cursor into a keyset anchor. A recognized `legacy` cursor (a
@@ -787,6 +789,7 @@ export async function listMeChats(
     const { rows: priorityRowsFlat, failedByChat } = await enrichMeChatRows(db, priorityRawUnion, {
       humanAgentId,
       managedAgentIds,
+      avatarAuthorityTag,
     });
     const priorityRowById = new Map(priorityRowsFlat.map((r) => [r.chatId, r]));
 
@@ -830,7 +833,7 @@ export async function listMeChats(
   const last = pageRaw[pageRaw.length - 1];
   const lastActivity = last ? toChatDate(last.activity_at) : null;
   const nextCursor = hasMore && last && lastActivity ? encodeCursor(lastActivity, last.chat_id) : null;
-  const { rows } = await enrichMeChatRows(db, pageRaw, { humanAgentId, managedAgentIds });
+  const { rows } = await enrichMeChatRows(db, pageRaw, { humanAgentId, managedAgentIds, avatarAuthorityTag });
 
   return {
     priorityRows: { attention, pinned },

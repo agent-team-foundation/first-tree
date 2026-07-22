@@ -45,7 +45,7 @@ import {
 } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { recomputeChatWatchers } from "../services/watcher.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 describe("chat-first workspace service layer", () => {
   const getApp = useTestApp();
@@ -53,11 +53,18 @@ describe("chat-first workspace service layer", () => {
   it("listMeChats: empty when user has no participations", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(res.rows).toEqual([]);
     expect(res.nextCursor).toBeNull();
   });
@@ -99,11 +106,18 @@ describe("chat-first workspace service layer", () => {
       participantIds: [teammate.humanAgentUuid, bot.agent.uuid],
     });
 
-    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row).toBeDefined();
     const participantsById = new Map((row?.participants ?? []).map((p) => [p.agentId, p]));
@@ -122,11 +136,18 @@ describe("chat-first workspace service layer", () => {
       participantIds: [peerA.agent.uuid, peerB.agent.uuid],
     });
 
-    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.participants.map((p) => p.agentId).sort()).toEqual(
       [owner.humanAgentUuid, peerA.agent.uuid, peerB.agent.uuid].sort(),
@@ -147,20 +168,34 @@ describe("chat-first workspace service layer", () => {
       participantIds: [peerB.agent.uuid],
     });
 
-    const peerAOnly = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-      with: [peerA.agent.uuid, peerA.agent.uuid],
-    });
+    const peerAOnly = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        with: [peerA.agent.uuid, peerA.agent.uuid],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(peerAOnly.rows.map((r) => r.chatId)).toEqual([chatA.chatId]);
 
-    const blankFilter = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-      with: [""],
-    });
+    const blankFilter = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        with: [""],
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(blankFilter.rows.map((r) => r.chatId).sort()).toEqual([chatA.chatId, chatB.chatId].sort());
   });
 
@@ -186,22 +221,36 @@ describe("chat-first workspace service layer", () => {
     const findChat = (res: Awaited<ReturnType<typeof listMeChats>>) =>
       [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].find((r) => r.chatId === chatId);
 
-    const before = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const before = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(findChat(before)).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
     });
 
     await markMeChatRead(app.db, chatId, owner.humanAgentUuid);
-    const after = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const after = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(findChat(after)).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
@@ -235,11 +284,18 @@ describe("chat-first workspace service layer", () => {
       { allowRecipientlessSend: true },
     );
 
-    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(list.rows.find((r) => r.chatId === topicChat.chatId)?.title).toBe("Pinned topic");
     expect(list.rows.find((r) => r.chatId === untitledChat.chatId)?.title).toBe("Fallback title from first message");
   });
@@ -267,11 +323,18 @@ describe("chat-first workspace service layer", () => {
     });
 
     // admin (manager of `managed`) should now see this chat as a watcher
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === result.chatId);
     expect(row).toBeDefined();
     expect(row?.membershipKind).toBe("watching");
@@ -353,11 +416,18 @@ describe("chat-first workspace service layer", () => {
     expect(projRow?.last_message_preview).toContain("Please review");
 
     // watcher counter incremented for admin (manager of `managed`)
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 10,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 10,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
     void applyAfterFanOut;
@@ -590,11 +660,18 @@ describe("chat-first workspace service layer", () => {
     const result = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
     expect(result.membershipKind).toBe("watching");
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.membershipKind).toBe("watching");
   });
@@ -817,21 +894,35 @@ describe("chat-first workspace service layer", () => {
 
     // Page size 2: first page is [c1, one of c2/c3]; second page returns
     // exactly the missing one.
-    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 2,
-      filter: "all",
-      engagement: "all",
-    });
+    const page1 = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 2,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(page1.rows).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
     expect(page1.rows[0]?.chatId).toBe(c1.chatId); // most-recent message wins
 
-    const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 2,
-      filter: "all",
-      engagement: "all",
-      cursor: page1.nextCursor ?? undefined,
-    });
+    const page2 = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 2,
+        filter: "all",
+        engagement: "all",
+        cursor: page1.nextCursor ?? undefined,
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const seen = new Set([...page1.rows.map((r) => r.chatId), ...page2.rows.map((r) => r.chatId)]);
     expect(seen.has(c1.chatId)).toBe(true);
     expect(seen.has(c2.chatId)).toBe(true);
@@ -866,21 +957,35 @@ describe("chat-first workspace service layer", () => {
       { allowRecipientlessSend: true },
     );
 
-    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 1,
-      filter: "all",
-      engagement: "all",
-    });
+    const page1 = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 1,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(page1.rows).toHaveLength(1);
     expect(page1.nextCursor).toBeTruthy();
     expect(page1.rows[0]?.chatId).toBe(c2.chatId);
 
-    const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 1,
-      filter: "all",
-      engagement: "all",
-      cursor: page1.nextCursor ?? undefined,
-    });
+    const page2 = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 1,
+        filter: "all",
+        engagement: "all",
+        cursor: page1.nextCursor ?? undefined,
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(page2.rows[0]?.chatId).toBe(c1.chatId);
   });
 
@@ -893,12 +998,19 @@ describe("chat-first workspace service layer", () => {
     // Use the deployed null-tail shape `|<chatId>` (empty timestamp) the old
     // encoder emitted for a `last_message_at IS NULL` boundary.
     const legacy = Buffer.from("|old-chat", "utf8").toString("base64url");
-    const recovered = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-      cursor: legacy,
-    });
+    const recovered = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        cursor: legacy,
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(recovered.priorityRows).toEqual({ attention: [], pinned: [] });
     expect(Array.isArray(recovered.rows)).toBe(true);
 
@@ -906,12 +1018,19 @@ describe("chat-first workspace service layer", () => {
     // a typed 400 so a real client/API bug is not masked as a first-page request.
     const invalid = Buffer.from("v9|2026-05-06T10:24:00.000Z|chat", "utf8").toString("base64url");
     await expect(
-      listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-        limit: 50,
-        filter: "all",
-        engagement: "all",
-        cursor: invalid,
-      }),
+      listMeChats(
+        app.db,
+        admin.humanAgentUuid,
+        admin.memberId,
+        admin.organizationId,
+        {
+          limit: 50,
+          filter: "all",
+          engagement: "all",
+          cursor: invalid,
+        },
+        TEST_AVATAR_AUTHORITY_TAG,
+      ),
     ).rejects.toThrow(/invalid cursor/i);
   });
 
@@ -936,11 +1055,18 @@ describe("chat-first workspace service layer", () => {
       VALUES ('nested-x', ${admin.humanAgentUuid}, 'member', 'speaker')
     `);
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const list = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const ids = list.rows.map((r) => r.chatId);
     expect(ids).toContain(chatId);
     expect(ids).not.toContain("nested-x");
@@ -967,11 +1093,18 @@ describe("chat-first workspace service layer", () => {
     await setChatEngagement(app.db, hides.chatId, admin.humanAgentUuid, "archived");
     await setChatEngagement(app.db, gone.chatId, admin.humanAgentUuid, "deleted");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const ids = res.rows.map((r) => r.chatId);
     expect(ids).toContain(stays.chatId);
     expect(ids).not.toContain(hides.chatId);
@@ -1019,11 +1152,18 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "archived",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "archived",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const ids = res.rows.map((r) => r.chatId);
     expect(ids).toContain(archived.chatId);
     expect(ids).not.toContain(active.chatId);
@@ -1046,11 +1186,18 @@ describe("chat-first workspace service layer", () => {
     await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
     await setChatEngagement(app.db, deleted.chatId, admin.humanAgentUuid, "deleted");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     const ids = res.rows.map((r) => r.chatId);
     expect(ids).toContain(active.chatId);
     expect(ids).toContain(archived.chatId);
@@ -1123,11 +1270,18 @@ describe("chat-first workspace service layer", () => {
     );
     expect(stateRows[0]?.count).toBe(0);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "active",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(res.rows.find((r) => r.chatId === chatId)?.engagementStatus).toBe("active");
   });
 

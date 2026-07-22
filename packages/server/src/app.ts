@@ -30,6 +30,7 @@ import { githubOauthRoutes } from "./api/auth/github.js";
 import { googleOauthRoutes } from "./api/auth/google.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
+import { cacheEvictionRoutes } from "./api/cache-eviction.js";
 import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
@@ -500,6 +501,7 @@ export async function buildApp(config: Config) {
       await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
       await api.register(gitlabWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
+      await api.register(cacheEvictionRoutes);
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(googleOauthRoutes, { prefix: "/auth/google" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });

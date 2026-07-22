@@ -61,6 +61,7 @@ import { notifyRecipients } from "../services/notifier.js";
 import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
 import { extractSummary } from "../services/session.js";
 import { listChatSpeakerEvents, summarizeChatTokenUsage } from "../services/session-event.js";
+import { configuredAvatarAuthorityTag } from "../utils/server-authority.js";
 import { sendFollowResult } from "./github-entity-reply.js";
 
 /**
@@ -70,6 +71,7 @@ import { sendFollowResult } from "./github-entity-reply.js";
  * and gates participation/supervision.
  */
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   async function requireDirectHumanChatMembership(chatId: string, humanAgentId: string): Promise<void> {
     const [direct] = await app.db
       .select({ chatId: chatMembership.chatId })
@@ -145,6 +147,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         type: p.type,
         avatarImageUpdatedAt: p.avatarImageUpdatedAt,
         userAvatarUrl: p.userAvatarUrl,
+        authorityTag: avatarAuthorityTag,
       }),
     }));
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
@@ -215,6 +218,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           type: p.type,
           avatarImageUpdatedAt: p.avatarImageUpdatedAt,
           userAvatarUrl: p.userAvatarUrl,
+          authorityTag: avatarAuthorityTag,
         }),
       })),
     };

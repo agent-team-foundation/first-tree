@@ -48,6 +48,7 @@ import {
 } from "../services/onboarding-kickoff.js";
 import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
+import { configuredAvatarAuthorityTag } from "../utils/server-authority.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -126,6 +127,7 @@ function buildPortableBootstrapCommand(options: {
  * fallback when localStorage is wiped).
  */
 export async function meRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   app.get("/me", async (request) => {
     const { userId } = requireUser(request);
 
@@ -643,6 +645,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         type: r.type,
         avatarImageUpdatedAt: r.avatarImageUpdatedAt,
         userAvatarUrl: r.userAvatarUrl,
+        authorityTag: avatarAuthorityTag,
       }),
     }));
   });

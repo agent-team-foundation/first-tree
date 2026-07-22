@@ -6,7 +6,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { organizations } from "../db/schema/organizations.js";
 import { listMeChats } from "../services/me-chat.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * Regression coverage for cross-org chat pollution at the read layer.
@@ -84,11 +84,18 @@ describe("cross-org chat pollution — read-side guard rails", () => {
       .where(eq(chatMembership.agentId, admin.humanAgentUuid));
     expect(participantRow?.chatId).toBe(dirtyChatId);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const res = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(res.rows.find((r) => r.chatId === dirtyChatId)).toBeUndefined();
   });
 });

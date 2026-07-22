@@ -29,6 +29,7 @@ import {
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { resolveAgentScmBindingPair } from "../../services/scm-attention-line.js";
+import { configuredAvatarAuthorityTag } from "../../utils/server-authority.js";
 import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -42,6 +43,7 @@ function serializeChat(chat: { createdAt: Date; updatedAt: Date; [key: string]: 
 }
 
 export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   app.post("/", async (request, reply) => {
     const identity = requireAgent(request);
     const rawBody = request.body;
@@ -135,7 +137,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const detail = await chatService.getChatDetail(app.db, request.params.chatId, identity.uuid);
+    const detail = await chatService.getChatDetail(app.db, request.params.chatId, identity.uuid, avatarAuthorityTag);
     return {
       ...serializeChat(detail),
       participants: detail.participants.map((p) => ({
@@ -153,7 +155,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/participants", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const rows = await chatService.listChatParticipantsWithNames(app.db, request.params.chatId);
+    const rows = await chatService.listChatParticipantsWithNames(app.db, request.params.chatId, avatarAuthorityTag);
     return rows.map((r) => ({
       agentId: r.agentId,
       role: r.role,

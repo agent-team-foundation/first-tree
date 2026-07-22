@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
+import { configuredServerAuthority } from "../../utils/server-authority.js";
 
 export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void> {
+  const serverAuthority = configuredServerAuthority(app.config);
+
+  app.get("/server-authority", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { v: 1 as const, authority: serverAuthority };
+  });
+
   /**
    * Public endpoint — returns bootstrap prerequisites for CLI auto-discovery.
    *

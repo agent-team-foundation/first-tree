@@ -8,7 +8,7 @@ import { members } from "../db/schema/members.js";
 import { createAgent } from "../services/agent.js";
 import { createMeChat, listMeChats, pinMeChat, selectAttentionCandidateRows } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * Server-side priority projection (PR3): `listMeChats` splits its result into
@@ -100,12 +100,19 @@ describe("listMeChats — server priority projection (PR3)", () => {
     owner: Admin,
     query: Partial<Parameters<typeof listMeChats>[4]> = {},
   ): Promise<ListResult> {
-    return listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-      ...query,
-    });
+    return listMeChats(
+      app.db,
+      owner.humanAgentUuid,
+      owner.memberId,
+      owner.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        ...query,
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
   }
 
   function groupOf(res: ListResult, chatId: string): "attention" | "pinned" | "rows" | null {

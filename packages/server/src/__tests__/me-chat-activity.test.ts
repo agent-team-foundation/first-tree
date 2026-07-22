@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { previewAssistantText, previewToolArgs, toLiveActivity } from "../services/agent-chat-status.js";
 import { createMeChat, listMeChats } from "../services/me-chat.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 describe("listMeChats: liveActivity derivation from session_events", () => {
   const getApp = useTestApp();
@@ -58,11 +58,18 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
 
   async function rowFor(chatId: string, viewerAgentId: string, viewerMemberId: string, organizationId: string) {
     const app = getApp();
-    const { rows } = await listMeChats(app.db, viewerAgentId, viewerMemberId, organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const { rows } = await listMeChats(
+      app.db,
+      viewerAgentId,
+      viewerMemberId,
+      organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     return rows.find((r) => r.chatId === chatId) ?? null;
   }
 

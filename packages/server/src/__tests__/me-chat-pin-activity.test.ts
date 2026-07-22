@@ -18,7 +18,7 @@ import { chats } from "../db/schema/chats.js";
 import { updateChatMetadata } from "../services/chat.js";
 import { applyAfterFanOut } from "../services/chat-projection.js";
 import { createMeChat, listMeChats, pinMeChat } from "../services/me-chat.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 describe("pinMeChat + chats.activity_at", () => {
   const getApp = useTestApp();
@@ -45,6 +45,7 @@ describe("pinMeChat + chats.activity_at", () => {
         filter: "all",
         engagement: "all",
       },
+      TEST_AVATAR_AUTHORITY_TAG,
     );
     // A chat can surface in any group now (attention > pinned > ordinary rows) —
     // a pinned chat lives in `priorityRows.pinned`, so search all three.

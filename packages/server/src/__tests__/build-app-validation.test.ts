@@ -25,7 +25,7 @@ const baseConfig: Config = {
   },
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
-  server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
+  server: { port: 0, host: "127.0.0.1", authority: undefined, publicUrl: undefined },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
@@ -167,6 +167,46 @@ describe("buildApp — server secret validation", () => {
     } finally {
       await safeClose(app);
     }
+  });
+});
+
+describe("buildApp — stable server authority validation", () => {
+  it("rejects an ambiguous wildcard bind without an explicit authority", async () => {
+    const cfg: Config = {
+      ...baseConfig,
+      server: { ...baseConfig.server, host: "0.0.0.0" },
+    };
+    await expect(buildApp(cfg)).rejects.toThrow("FIRST_TREE_SERVER_AUTHORITY");
+  });
+
+  it("allows a stable explicit authority to differ from the public OAuth origin", async () => {
+    const cfg: Config = {
+      ...baseConfig,
+      server: {
+        ...baseConfig.server,
+        publicUrl: "https://s1.example",
+        authority: "https://s2.example/api/v1",
+      },
+    };
+    const app = await buildApp(cfg);
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/server-authority" });
+      expect(res.json()).toEqual({ v: 1, authority: "https://s2.example/api/v1" });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a public callback URL with a path instead of deriving a different authority", async () => {
+    const cfg: Config = {
+      ...baseConfig,
+      server: {
+        ...baseConfig.server,
+        publicUrl: "https://s1.example/tunnel-prefix",
+        authority: "https://s2.example/api/v1",
+      },
+    };
+    await expect(buildApp(cfg)).rejects.toThrow("without a path");
   });
 });
 

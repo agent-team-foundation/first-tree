@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createChat, getChatDetail } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * v1.7 follow-up to §四 改造 3 — server-resolved `title` field on
@@ -33,7 +33,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
       participantIds: [peer.agent.uuid],
       topic: "Q2 launch",
     });
-    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid);
+    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid, TEST_AVATAR_AUTHORITY_TAG);
     expect(detail.topic).toBe("Q2 launch");
     expect(detail.title).toBe("Q2 launch");
   });
@@ -57,7 +57,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
       },
       { allowRecipientlessSend: true },
     );
-    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid);
+    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid, TEST_AVATAR_AUTHORITY_TAG);
     expect(detail.topic).toBeNull();
     expect(detail.title).toBe("Let's coordinate the design review tomorrow");
     expect(detail.firstMessagePreview).toBe("Let's coordinate the design review tomorrow");
@@ -71,7 +71,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
       type: "group",
       participantIds: [peer.agent.uuid],
     });
-    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid);
+    const detail = await getChatDetail(app.db, chat.id, owner.agent.uuid, TEST_AVATAR_AUTHORITY_TAG);
     expect(detail.topic).toBeNull();
     expect(detail.firstMessagePreview).toBeNull();
     // Excludes self (alice was the requester) — only Bob Bot survives.

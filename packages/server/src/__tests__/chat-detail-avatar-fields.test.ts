@@ -5,6 +5,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
+import { configuredAvatarAuthorityTag } from "../utils/server-authority.js";
 import { createAdminContext, createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -119,7 +120,7 @@ describe("chat-detail wire shape — participant avatar fields", () => {
     };
 
     expect(body.participants.find((p) => p.agentId === teammate.humanAgentUuid)?.avatarImageUrl).toBe(
-      `/api/v1/agents/${teammate.humanAgentUuid}/avatar?v=${uploadedAt.getTime()}`,
+      `/api/v1/agents/${teammate.humanAgentUuid}/avatar?v=${uploadedAt.getTime()}&ft_authority=${configuredAvatarAuthorityTag(app.config)}`,
     );
   });
 

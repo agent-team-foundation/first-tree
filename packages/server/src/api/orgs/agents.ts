@@ -13,6 +13,7 @@ import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
 import { sendToClient } from "../../services/connection-manager.js";
 import { assertMetadataDoesNotClaimLandingCampaignTrial } from "../../services/landing-campaigns/guards.js";
+import { configuredAvatarAuthorityTag } from "../../utils/server-authority.js";
 
 function serializeNewChatDefaultCandidate(agent: agentService.NewChatDefaultCandidateAgent) {
   return { ...agent, createdAt: agent.createdAt.toISOString() };
@@ -24,6 +25,7 @@ function serializeNewChatDefaultCandidate(agent: agentService.NewChatDefaultCand
  * are Class C and live in `api/agents.ts`.
  */
 export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   function notifyClientAgentPinned(agent: {
     uuid: string;
     name: string | null;
@@ -76,6 +78,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
           type: a.type,
           avatarImageUpdatedAt,
           userAvatarUrl,
+          authorityTag: avatarAuthorityTag,
         }),
       })),
       nextCursor: result.nextCursor,
@@ -112,6 +115,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
           type: a.type,
           avatarImageUpdatedAt,
           userAvatarUrl,
+          authorityTag: avatarAuthorityTag,
         }),
       })),
       nextCursor: result.nextCursor,

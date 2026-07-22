@@ -25,6 +25,7 @@ import {
   recordCampaignActionConversion,
   resolveCampaignActionContext,
 } from "../../services/onboarding-kickoff.js";
+import { configuredAvatarAuthorityTag } from "../../utils/server-authority.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -39,6 +40,7 @@ import {
  *   - `POST /:chatId/...`      → see api/chats.ts (Class C)
  */
 export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   /**
    * GET /orgs/:orgId/chats — workspace list by default; pass `scope=all`
    * for the admin audit view (returns 403 for non-admins).
@@ -104,7 +106,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
 
     // Default: workspace conversation list for the caller's HUMAN agent.
     const query = listMeChatsQuerySchema.parse(request.query);
-    return listMeChats(app.db, scope.humanAgentId, scope.memberId, scope.organizationId, query);
+    return listMeChats(app.db, scope.humanAgentId, scope.memberId, scope.organizationId, query, avatarAuthorityTag);
   });
 
   /**

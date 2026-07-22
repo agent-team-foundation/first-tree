@@ -12,6 +12,7 @@ import * as agentService from "../services/agent.js";
 import {
   agentAvatarImageUrl,
   fetchUserAvatarForHumanAgent,
+  isAgentAvatarId,
   resolveAvatarImageUrl,
   SUPPORTED_AVATAR_IMAGE_MIMES,
 } from "../services/agent.js";
@@ -33,6 +34,7 @@ import {
 } from "../services/landing-campaigns/guards.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import * as presenceService from "../services/presence.js";
+import { configuredAvatarAuthorityTag } from "../utils/server-authority.js";
 
 type AgentRow = {
   uuid: string;
@@ -53,7 +55,7 @@ type AgentRow = {
  * (e.g. GitHub) when no upload exists. `createdAt`/`updatedAt` are
  * coerced to ISO strings so the response is pure JSON.
  */
-function serializeAgent(agent: AgentRow, userAvatarUrl: string | null): Record<string, unknown> {
+function serializeAgent(agent: AgentRow, userAvatarUrl: string | null, authorityTag: string): Record<string, unknown> {
   const { avatarImageData: _data, avatarImageMime: _mime, avatarImageUpdatedAt, createdAt, updatedAt, ...rest } = agent;
   return {
     ...rest,
@@ -65,6 +67,7 @@ function serializeAgent(agent: AgentRow, userAvatarUrl: string | null): Record<s
       type: agent.type,
       avatarImageUpdatedAt,
       userAvatarUrl,
+      authorityTag,
     }),
   };
 }
@@ -76,6 +79,7 @@ function serializeAgent(agent: AgentRow, userAvatarUrl: string | null): Record<s
  * that org and enforces visibility / manage rules.
  */
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
   function readRuntimeSwitchFaultHeader(
     request: FastifyRequest,
   ): agentRuntimeSwitchService.RuntimeSwitchFault | undefined {
@@ -161,7 +165,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { uuid: string } }>("/:uuid", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
-    return serializeAgent(agent, userAvatarUrl);
+    return serializeAgent(agent, userAvatarUrl, avatarAuthorityTag);
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid", { config: { otelRecordBody: true } }, async (request) => {
@@ -187,7 +191,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       notifyClientAgentPinned(agent);
     }
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
-    return serializeAgent(agent, userAvatarUrl);
+    return serializeAgent(agent, userAvatarUrl, avatarAuthorityTag);
   });
 
   app.post<{ Params: { uuid: string } }>(
@@ -217,7 +221,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         sendToAgent(result.agent.uuid, { type: "session:terminate", chatId });
       }
       const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, result.agent);
-      return serializeAgent(result.agent, userAvatarUrl);
+      return serializeAgent(result.agent, userAvatarUrl, avatarAuthorityTag);
     },
   );
 
@@ -240,7 +244,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         sendToAgent(result.agent.uuid, { type: "session:terminate", chatId });
       }
       const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, result.agent);
-      return serializeAgent(result.agent, userAvatarUrl);
+      return serializeAgent(result.agent, userAvatarUrl, avatarAuthorityTag);
     },
   );
 
@@ -263,7 +267,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     forceDisconnect(request.params.uuid, "agent_suspended");
     await presenceService.setOffline(app.db, request.params.uuid);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
-    return serializeAgent(agent, userAvatarUrl);
+    return serializeAgent(agent, userAvatarUrl, avatarAuthorityTag);
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
@@ -273,7 +277,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
     notifyClientAgentPinned(agent);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
-    return serializeAgent(agent, userAvatarUrl);
+    return serializeAgent(agent, userAvatarUrl, avatarAuthorityTag);
   });
 
   app.delete<{ Params: { uuid: string } }>("/:uuid", async (request, reply) => {
@@ -317,7 +321,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       }
       const updatedAt = await agentService.setAgentAvatarImage(app.db, request.params.uuid, body, mime);
       return reply.status(200).send({
-        avatarImageUrl: agentAvatarImageUrl(request.params.uuid, updatedAt),
+        avatarImageUrl: agentAvatarImageUrl(request.params.uuid, updatedAt, avatarAuthorityTag),
       });
     },
   );
@@ -473,17 +477,36 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
  * exposed through authenticated agent-list calls.
  */
 export async function publicAgentAvatarRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { uuid: string }; Querystring: { v?: string } }>("/:uuid/avatar", async (request, reply) => {
-    const image = await agentService.getAgentAvatarImage(app.db, request.params.uuid);
-    if (!image) {
-      return reply.status(404).send({ error: "Avatar not set" });
-    }
-    // Strong cache: each upload bumps the `?v=<epoch>` suffix on the URL,
-    // so immutable + 30d is safe and avoids round-trips from chat surfaces
-    // that render the image hundreds of times per session.
-    reply.header("Content-Type", image.mime);
-    reply.header("Cache-Control", "public, max-age=2592000, immutable");
-    reply.header("ETag", `"${image.updatedAt.getTime()}"`);
-    return reply.send(image.data);
-  });
+  const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
+  app.get<{ Params: { uuid: string }; Querystring: { v?: string; ft_authority?: string } }>(
+    "/:uuid/avatar",
+    async (request, reply) => {
+      const rawUrl = request.raw.url ?? "";
+      const match =
+        /^\/api\/v1\/agents\/([a-z0-9_-]{1,100})\/avatar\?v=(0|[1-9]\d{0,15})&ft_authority=([A-Za-z0-9_-]{43})$/.exec(
+          rawUrl,
+        );
+      if (
+        !match ||
+        !isAgentAvatarId(request.params.uuid) ||
+        match[1] !== request.params.uuid ||
+        match[2] !== request.query.v ||
+        match[3] !== request.query.ft_authority ||
+        match[3] !== avatarAuthorityTag
+      ) {
+        return reply.status(421).send({ error: "Avatar authority mismatch" });
+      }
+      const image = await agentService.getAgentAvatarImage(app.db, request.params.uuid);
+      if (!image) {
+        return reply.status(404).send({ error: "Avatar not set" });
+      }
+      // Strong cache: each upload bumps the `?v=<epoch>` suffix on the URL,
+      // so immutable + 30d is safe and avoids round-trips from chat surfaces
+      // that render the image hundreds of times per session.
+      reply.header("Content-Type", image.mime);
+      reply.header("Cache-Control", "public, max-age=2592000, immutable");
+      reply.header("ETag", `"${image.updatedAt.getTime()}"`);
+      return reply.send(image.data);
+    },
+  );
 }

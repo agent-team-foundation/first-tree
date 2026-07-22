@@ -5,8 +5,9 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { normalizeViteProxyTarget } from "./vite/authority-firewall.js";
 
-const HUB_TARGET = process.env.VITE_PROXY_TARGET ?? "http://localhost:8000";
+const HUB_TARGET = normalizeViteProxyTarget(process.env.VITE_PROXY_TARGET ?? "http://localhost:8000");
 const SENTRY_WEB_PROJECT = "first-tree-web";
 
 /**

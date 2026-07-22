@@ -6,6 +6,7 @@ import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgent, unbindAgent } from "../services/presence.js";
+import { configuredAvatarAuthorityTag } from "../utils/server-authority.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -399,10 +400,21 @@ describe("Admin Agents API", () => {
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
+    const avatarAuthorityTag = configuredAvatarAuthorityTag(app.config);
+    const missingUrl = `/api/v1/agents/${agent.uuid}/avatar?v=0&ft_authority=${avatarAuthorityTag}`;
 
-    const missing = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar` });
+    const missing = await app.inject({ method: "GET", url: missingUrl });
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ error: "Avatar not set" });
+
+    const untagged = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar?v=0` });
+    expect(untagged.statusCode).toBe(421);
+
+    const mismatched = await app.inject({
+      method: "GET",
+      url: `/api/v1/agents/${agent.uuid}/avatar?v=0&ft_authority=${"a".repeat(43)}`,
+    });
+    expect(mismatched.statusCode).toBe(421);
 
     const badUpload = await app.inject({
       method: "PUT",
@@ -439,7 +451,9 @@ describe("Admin Agents API", () => {
     });
     expect(upload.statusCode).toBe(200);
     const uploadBody = upload.json<{ avatarImageUrl: string }>();
-    expect(uploadBody.avatarImageUrl).toMatch(new RegExp(`^/api/v1/agents/${agent.uuid}/avatar\\?v=\\d+$`));
+    expect(uploadBody.avatarImageUrl).toMatch(
+      new RegExp(`^/api/v1/agents/${agent.uuid}/avatar\\?v=\\d+&ft_authority=${avatarAuthorityTag}$`),
+    );
 
     const download = await app.inject({ method: "GET", url: uploadBody.avatarImageUrl });
     expect(download.statusCode).toBe(200);
@@ -455,8 +469,35 @@ describe("Admin Agents API", () => {
     });
     expect(clear.statusCode).toBe(204);
 
-    const afterClear = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar` });
+    const afterClear = await app.inject({ method: "GET", url: uploadBody.avatarImageUrl });
     expect(afterClear.statusCode).toBe(404);
+  });
+
+  it("serves an upgraded historical non-UUID agent id with an exact authority tag", async () => {
+    const app = getApp();
+    const { ctx } = await authedRequest(app);
+    const updatedAt = new Date("2026-07-22T00:00:00.000Z");
+    await app.db.insert(agents).values({
+      uuid: "github-adapter",
+      name: `legacy-avatar-${crypto.randomUUID().slice(0, 6)}`,
+      organizationId: ctx.organizationId,
+      type: "agent",
+      displayName: "GitHub Adapter",
+      inboxId: `inbox_${crypto.randomUUID()}`,
+      managerId: ctx.memberId,
+      avatarImageData: Buffer.from("legacy-avatar"),
+      avatarImageMime: "image/png",
+      avatarImageUpdatedAt: updatedAt,
+    });
+    const authorityTag = configuredAvatarAuthorityTag(app.config);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/agents/github-adapter/avatar?v=${updatedAt.getTime()}&ft_authority=${authorityTag}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.equals(Buffer.from("legacy-avatar"))).toBe(true);
   });
 
   it("rejects unauthenticated requests", async () => {

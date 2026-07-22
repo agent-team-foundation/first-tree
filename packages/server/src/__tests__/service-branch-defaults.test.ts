@@ -30,6 +30,8 @@ import { maybeUnwrapDoubleEncoded, preflightMessageSendIntent } from "../service
 import { createResourcesService } from "../services/resources.js";
 import { listAgentTurns, summarizeAgent } from "../services/usage.js";
 
+const TEST_AVATAR_AUTHORITY_TAG = "CQ1GqD6V9SWLbT1omzf33FtTfpaUHTrQjqLhKR7wYLc";
+
 type ChainRows = unknown[];
 
 function queryChain(rows: unknown[]): unknown {
@@ -167,18 +169,27 @@ describe("service branch defaults", () => {
     expect(stripReservedAgentMetadata({ runtimeSwitch: { claimId: "c1" }, public: true })).toEqual({ public: true });
     expect(() => assertUserAgentMetadataHasNoReservedKeys({ runtimeSession: {} })).toThrow(BadRequestError);
 
-    expect(agentAvatarImageUrl("agent_1", null)).toBeNull();
-    expect(agentAvatarImageUrl("agent_1", new Date(1000))).toBe("/api/v1/agents/agent_1/avatar?v=1000");
+    expect(agentAvatarImageUrl("agent_1", null, TEST_AVATAR_AUTHORITY_TAG)).toBeNull();
+    expect(agentAvatarImageUrl("agent_1", new Date(1000), TEST_AVATAR_AUTHORITY_TAG)).toBe(
+      `/api/v1/agents/agent_1/avatar?v=1000&ft_authority=${TEST_AVATAR_AUTHORITY_TAG}`,
+    );
     expect(
       resolveAvatarImageUrl({
         uuid: "human_1",
         type: "human",
         avatarImageUpdatedAt: undefined,
         userAvatarUrl: "https://avatars.example/u.png",
+        authorityTag: TEST_AVATAR_AUTHORITY_TAG,
       }),
     ).toBe("https://avatars.example/u.png");
     expect(
-      resolveAvatarImageUrl({ uuid: "agent_1", type: "agent", avatarImageUpdatedAt: null, userAvatarUrl: "x" }),
+      resolveAvatarImageUrl({
+        uuid: "agent_1",
+        type: "agent",
+        avatarImageUpdatedAt: null,
+        userAvatarUrl: "x",
+        authorityTag: TEST_AVATAR_AUTHORITY_TAG,
+      }),
     ).toBeNull();
     expect(legacyWireAgentType("human")).toBe("human");
     expect(legacyWireAgentType("agent")).toBe("personal_assistant");
@@ -995,10 +1006,10 @@ describe("service branch defaults", () => {
       () => agentService.checkAgentNameAvailability(db, "org_1", "missing"),
       () => agentService.getNewChatDefaultCandidate(db, orgScope, null),
       () => chatService.getChat(db, "missing-chat"),
-      () => chatService.getChatDetail(db, "missing-chat", null),
+      () => chatService.getChatDetail(db, "missing-chat", null, TEST_AVATAR_AUTHORITY_TAG),
       () => chatService.listActiveRuntimeChatIds(db, "agent_1", "human_1", "org_1"),
       () => chatService.listChats(db, "agent_1", 1, "2026-01-01"),
-      () => chatService.listChatParticipantsWithNames(db, "chat_1"),
+      () => chatService.listChatParticipantsWithNames(db, "chat_1", TEST_AVATAR_AUTHORITY_TAG),
       () => chatService.assertParticipant(db, "chat_1", "agent_1"),
       () => chatService.assertOwner(db, "chat_1", "agent_1"),
       () => chatService.isParticipant(db, "chat_1", "agent_1"),

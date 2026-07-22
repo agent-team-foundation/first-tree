@@ -20,6 +20,9 @@ Configure a real GitHub App when you need to test any of these flows:
 Set these in the root `.env` used by `pnpm --filter @first-tree/server dev`:
 
 ```dotenv
+# Stable identity for the local API and its browser storage namespaces. Keep
+# this fixed when the public tunnel below rotates.
+FIRST_TREE_SERVER_AUTHORITY=http://127.0.0.1:8000/api/v1
 FIRST_TREE_PUBLIC_URL=https://your-public-tunnel.example
 
 FIRST_TREE_GITHUB_APP_ID=123456
@@ -46,6 +49,9 @@ can still be configured, but the install URL endpoint returns 503.
 
 `FIRST_TREE_PUBLIC_URL` must be the public HTTPS URL that GitHub can call. For
 local development, that is normally your tunnel URL, not `http://127.0.0.1:8000`.
+It is a callback/return origin, not the persistent server identity;
+`FIRST_TREE_SERVER_AUTHORITY` may therefore remain stable while the tunnel
+rotates.
 
 ## Private Key Formatting
 

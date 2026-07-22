@@ -1,5 +1,6 @@
 import type { Config } from "./config.js";
 import { assertEncryptionKeyValid } from "./services/crypto.js";
+import { configuredServerAuthority } from "./utils/server-authority.js";
 
 /**
  * Boot-time configuration sanity checks. Called from `buildApp` (and thus
@@ -10,7 +11,12 @@ import { assertEncryptionKeyValid } from "./services/crypto.js";
 export function assertBootConfigValid(config: Config): void {
   assertSecretsValid(config);
   assertProductionRequiresPublicUrl(config);
+  assertServerAuthorityValid(config);
   assertGithubAppConfigComplete(config);
+}
+
+function assertServerAuthorityValid(config: Config): void {
+  configuredServerAuthority(config);
 }
 
 function assertSecretsValid(config: Config): void {

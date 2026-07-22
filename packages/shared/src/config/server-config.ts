@@ -160,6 +160,8 @@ export const serverConfigSchema = defineConfig({
   server: {
     port: field(z.number().default(8000), { env: "FIRST_TREE_PORT" }),
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
+    /** Stable canonical API authority. Required for ambiguous local binds. */
+    authority: field(z.string().optional(), { env: "FIRST_TREE_SERVER_AUTHORITY" }),
     /**
      * Public-facing URL of this First Tree server. Required in production — used to:
      *   1. Stamp the issuer on short connect codes so exchange can reject codes

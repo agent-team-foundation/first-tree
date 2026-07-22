@@ -19,6 +19,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
+import { isAvatarAuthorityTag } from "@first-tree/shared/config";
 import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -91,9 +92,23 @@ export function agentMetadataUpdateExpressionPreservingRuntimeState(metadata: Re
  * Keeping it unauthenticated lets `<img src>` render without bespoke
  * fetch-and-blob plumbing.
  */
-export function agentAvatarImageUrl(uuid: string, updatedAt: Date | null | undefined): string | null {
+const AGENT_AVATAR_ID_RE = /^[a-z0-9_-]{1,100}$/;
+
+export function isAgentAvatarId(value: string): boolean {
+  return AGENT_AVATAR_ID_RE.test(value);
+}
+
+export function agentAvatarImageUrl(
+  uuid: string,
+  updatedAt: Date | null | undefined,
+  authorityTag: string,
+): string | null {
   if (!updatedAt) return null;
-  return `/api/v1/agents/${uuid}/avatar?v=${updatedAt.getTime()}`;
+  if (!isAgentAvatarId(uuid)) throw new Error("Agent avatar id is not canonical");
+  if (!isAvatarAuthorityTag(authorityTag)) throw new Error("Avatar authority tag is not canonical");
+  const version = updatedAt.getTime();
+  if (!Number.isSafeInteger(version) || version < 0) throw new Error("Agent avatar timestamp is not canonical");
+  return `/api/v1/agents/${uuid}/avatar?v=${version}&ft_authority=${authorityTag}`;
 }
 
 /**
@@ -113,8 +128,11 @@ export function resolveAvatarImageUrl(args: {
   type: string;
   avatarImageUpdatedAt: Date | null | undefined;
   userAvatarUrl: string | null | undefined;
+  authorityTag: string;
 }): string | null {
-  const uploaded = agentAvatarImageUrl(args.uuid, args.avatarImageUpdatedAt);
+  const uploaded = args.avatarImageUpdatedAt
+    ? agentAvatarImageUrl(args.uuid, args.avatarImageUpdatedAt, args.authorityTag)
+    : null;
   if (uploaded) return uploaded;
   if (args.type === AGENT_TYPES.HUMAN && args.userAvatarUrl) return args.userAvatarUrl;
   return null;

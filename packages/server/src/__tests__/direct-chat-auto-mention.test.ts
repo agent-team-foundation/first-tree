@@ -6,7 +6,7 @@ import { messages } from "../db/schema/messages.js";
 import { createChat } from "../services/chat.js";
 import { createMeChat, listMeChats } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * 1:1 chat wake-up + unread badge — explicit-mention contract.
@@ -49,11 +49,18 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     organizationId: string,
   ): Promise<number> {
     const app = getApp();
-    const { priorityRows, rows } = await listMeChats(app.db, agentUuid, memberId, organizationId, {
-      limit: 10,
-      filter: "all",
-      engagement: "all",
-    });
+    const { priorityRows, rows } = await listMeChats(
+      app.db,
+      agentUuid,
+      memberId,
+      organizationId,
+      {
+        limit: 10,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     // A `request` DM opens a request, routing the chat into the attention group
     // rather than ordinary `rows` — search all groups for the unread counter.
     return (

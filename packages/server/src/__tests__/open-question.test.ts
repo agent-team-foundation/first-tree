@@ -7,7 +7,7 @@ import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { listMeChats } from "../services/me-chat.js";
 import { editMessage, sendMessage } from "../services/message.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, TEST_AVATAR_AUTHORITY_TAG, useTestApp } from "./helpers.js";
 
 /**
  * Open-question (group-chat-unified-send P4) service-layer contract:
@@ -822,11 +822,18 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
     const findChat = (res: Awaited<ReturnType<typeof listMeChats>>) =>
       [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].find((r) => r.chatId === chat.id);
 
-    const listAfterRaise = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const listAfterRaise = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(findChat(listAfterRaise)?.openRequestCount).toBe(1);
 
     // Human answers explicitly (metadata.resolves) → counter clears.
@@ -844,11 +851,18 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
       { allowRecipientlessSend: true },
     );
 
-    const listAfterAnswer = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
+    const listAfterAnswer = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+      TEST_AVATAR_AUTHORITY_TAG,
+    );
     expect(findChat(listAfterAnswer)?.openRequestCount).toBe(0);
   });
 });
