@@ -462,11 +462,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       withProviders(
         <>
           <div data-working-agent="agent-nova" />
-          <ComposeStatusBar
-            chatId="chat-1"
-            agents={[agent("agent-nova", "Nova")]}
-            fallbackFocusRef={fallbackRef}
-          />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} fallbackFocusRef={fallbackRef} />
           <button ref={externalRef} type="button">
             Later control
           </button>
