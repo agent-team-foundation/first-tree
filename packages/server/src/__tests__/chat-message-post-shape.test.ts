@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, fetchPresignedAttachment, useTestApp } from "./helpers.js";
 
 /**
  * Wire-level shape of `POST /api/v1/chats/:chatId/messages` (the web
@@ -167,9 +167,11 @@ describe("POST /chats/:chatId/messages — response carries metadata + inReplyTo
       url: `/api/v1/attachments/${encodeURIComponent(uploaded.id)}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
-    expect(download.statusCode).toBe(200);
-    expect(download.headers["content-type"]).toBe("text/csv");
-    expect(download.rawPayload.equals(bytes)).toBe(true);
+    // S3-backed rows redirect to a presigned URL that serves the bytes.
+    expect(download.statusCode).toBe(302);
+    const objectRes = await fetchPresignedAttachment(download.headers.location);
+    expect(objectRes.contentType).toBe("text/csv");
+    expect(objectRes.body.equals(bytes)).toBe(true);
   });
 
   it("accepts a document-only chat message when the file ref is valid and addressed", async () => {

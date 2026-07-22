@@ -7,6 +7,14 @@
 export type AppErrorAttrs = Record<string, string | number | boolean>;
 
 export class AppError extends Error {
+  /**
+   * Optional stable machine-readable code. When present, the central error
+   * handler serializes it onto the JSON body (`{ error, code, traceId }`) so
+   * clients can branch without message-sniffing. Subclasses declare it as a
+   * `readonly code = "..."` class field.
+   */
+  readonly code?: string;
+
   constructor(
     public readonly statusCode: number,
     message: string,
@@ -64,6 +72,31 @@ export class BadRequestError extends AppError {
   constructor(message = "Bad request", attrs?: AppErrorAttrs) {
     super(400, message, attrs);
     this.name = "BadRequestError";
+  }
+}
+
+/**
+ * 413 — the request body exceeded a server byte cap. On the attachment
+ * streaming path this is thrown by the counting stream (route `bodyLimit`
+ * does not fire for stream pass-through parsers), so it carries the real
+ * enforcement semantics.
+ */
+export class PayloadTooLargeError extends AppError {
+  constructor(message = "Payload too large", attrs?: AppErrorAttrs) {
+    super(413, message, attrs);
+    this.name = "PayloadTooLargeError";
+  }
+}
+
+/**
+ * 429 — application-level concurrency guard rejections (distinct from the
+ * `@fastify/rate-limit` plugin's 429s, which carry no stable `code`).
+ * Callers may retry once in-flight work drains.
+ */
+export class TooManyRequestsError extends AppError {
+  constructor(message = "Too many requests", attrs?: AppErrorAttrs) {
+    super(429, message, attrs);
+    this.name = "TooManyRequestsError";
   }
 }
 

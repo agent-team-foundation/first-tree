@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import {
   ATTACHMENT_FILENAME_HEADER,
   ATTACHMENT_MIME_HEADER,
@@ -7,7 +8,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
-import { createAttachment } from "../../services/attachment.js";
+import { createAttachmentFromStream } from "../../services/attachment.js";
 
 /**
  * Object-storage primitive — upload surface (Class B, org-scoped).
@@ -23,13 +24,29 @@ import { createAttachment } from "../../services/attachment.js";
  * Upload protocol: `Content-Type: application/octet-stream` body + the
  * `x-attachment-mime` / `x-attachment-filename` headers carry the logical
  * metadata. This keeps the body parser uniform and avoids a multipart
- * dependency. The byte cap is enforced both as a route `bodyLimit` and again
- * in the service layer.
+ * dependency.
+ *
+ * The scoped parser below passes the body through as a STREAM (it replaces
+ * the old global buffering parser, which loaded every upload fully into the
+ * Node heap). Bytes flow straight to S3 behind a counting stream in the
+ * service — the single-file cap is enforced there (413), NOT by the route
+ * `bodyLimit`: Fastify enforces `bodyLimit` only for buffering parsers
+ * (`parseAs: "buffer"`), so with a pass-through stream the counting stream
+ * is the one real size gate. `bodyLimit` stays as documentation of intent.
  *
  * Download lives separately at `GET /api/v1/attachments/:id` — see
  * api/attachments.ts.
  */
 export async function orgAttachmentRoutes(app: FastifyInstance): Promise<void> {
+  // Scoped content-type parser: hands the raw request stream to the route
+  // as `request.body` without buffering it. Registering it inside this
+  // plugin scope (Fastify encapsulation) overrides any inherited parser for
+  // these routes only — precedent: the GitHub App webhook's scoped raw-body
+  // JSON parser (api/webhooks/github-app.ts).
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
+    done(null, payload);
+  });
+
   // Single value for both client visibility (415 if wrong type) and route
   // bodyLimit. 16 KB headroom beyond MAX_ATTACHMENT_BYTES leaves space for
   // misc small request overhead without inflating the cap.
@@ -55,7 +72,7 @@ export async function orgAttachmentRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const body = request.body;
-      if (!Buffer.isBuffer(body)) {
+      if (!(body instanceof Readable)) {
         throw new BadRequestError("Request body must be raw bytes");
       }
 
@@ -68,11 +85,12 @@ export async function orgAttachmentRoutes(app: FastifyInstance): Promise<void> {
       const filenameHeader = request.headers[ATTACHMENT_FILENAME_HEADER];
       const filename = (Array.isArray(filenameHeader) ? filenameHeader[0] : filenameHeader)?.trim() || "blob";
 
-      const row = await createAttachment(app.db, {
+      const row = await createAttachmentFromStream(app.db, app.attachmentStore, {
         mimeType,
         filename,
-        data: body,
+        stream: body,
         uploadedBy: scope.humanAgentId,
+        orgId: scope.organizationId,
       });
 
       const response: UploadAttachmentResponse = {

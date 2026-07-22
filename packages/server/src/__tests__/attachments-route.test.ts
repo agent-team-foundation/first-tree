@@ -1,11 +1,13 @@
 import { ATTACHMENT_FILENAME_HEADER, ATTACHMENT_MIME_HEADER, MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { attachments } from "../db/schema/attachments.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAttachment } from "../services/attachment.js";
 import { ensureMembership } from "../services/membership.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAdmin, fetchPresignedAttachment, useTestApp } from "./helpers.js";
 
 type Admin = Awaited<ReturnType<typeof createTestAdmin>>;
 
@@ -52,15 +54,28 @@ describe("attachments route — upload + capability download", () => {
     expect(body.sizeBytes).toBe(bytes.byteLength);
     expect(body.uploadedBy).toBe(admin.humanAgentUuid);
 
+    // S3-backed row: bytes live in the object store, Postgres keeps metadata.
+    const [row] = await app.db
+      .select({ objectKey: attachments.objectKey, data: attachments.data, orgId: attachments.orgId })
+      .from(attachments)
+      .where(eq(attachments.id, body.id))
+      .limit(1);
+    expect(row?.objectKey).toBe(`attachments/${admin.organizationId}/${body.id}`);
+    expect(row?.data).toBeNull();
+    expect(row?.orgId).toBe(admin.organizationId);
+
     const download = await getAttachment(app, admin, body.id);
-    expect(download.statusCode).toBe(200);
-    expect(download.headers["content-type"]).toBe("image/png");
-    expect(download.headers["content-length"]).toBe(String(bytes.byteLength));
-    expect(download.headers["x-content-type-options"]).toBe("nosniff");
-    expect(download.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+    expect(download.statusCode).toBe(302);
+    expect(download.headers["cache-control"]).toBe("private, no-cache");
     expect(download.headers.etag).toBe(`"${body.id}"`);
-    expect(download.headers["content-disposition"]).toBe('inline; filename="kitten.png"');
-    expect(download.rawPayload.equals(bytes)).toBe(true);
+    const location = download.headers.location;
+    expect(location).toBeDefined();
+
+    // The presigned URL serves the bytes with the stored mime / filename.
+    const objectRes = await fetchPresignedAttachment(location);
+    expect(objectRes.contentType).toBe("image/png");
+    expect(objectRes.contentDisposition).toBe('inline; filename="kitten.png"');
+    expect(objectRes.body.equals(bytes)).toBe(true);
   });
 
   it("capability model: any authenticated user with the id can download", async () => {
@@ -76,8 +91,9 @@ describe("attachments route — upload + capability download", () => {
     // unguessable id is the bearer capability; no chat/uploader relation
     // required. Stronger ACL is the consumer's job, not the primitive's.
     const download = await getAttachment(app, other, id);
-    expect(download.statusCode).toBe(200);
-    expect(download.rawPayload.equals(bytes)).toBe(true);
+    expect(download.statusCode).toBe(302);
+    const objectRes = await fetchPresignedAttachment(download.headers.location);
+    expect(objectRes.body.equals(bytes)).toBe(true);
   });
 
   it("rejects download without a JWT (401)", async () => {
@@ -173,14 +189,15 @@ describe("attachments route — upload + capability download", () => {
     ).rejects.toThrow("Attachment insert returned no row");
   });
 
-  it("rejects oversize at bodyLimit (413) or service cap (400)", async () => {
+  it("rejects oversize at the streaming cap (413)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `os-${crypto.randomUUID().slice(0, 6)}` });
-    // 1 KB over the cap — well under the route bodyLimit, so the service-
-    // layer cap is what fires.
+    // 1 KB over the cap. With the stream pass-through parser, Fastify's
+    // bodyLimit does not fire — the service's counting stream is the gate
+    // and it answers 413 (PayloadTooLargeError).
     const oversize = Buffer.alloc(MAX_ATTACHMENT_BYTES + 1024);
     const reply = await postAttachment(app, admin, oversize);
-    expect([400, 413]).toContain(reply.statusCode);
+    expect(reply.statusCode).toBe(413);
   });
 
   it("returns 404 for unknown attachment id", async () => {

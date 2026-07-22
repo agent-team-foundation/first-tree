@@ -89,6 +89,7 @@ import {
   rootLogger,
 } from "./observability/index.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
+import { createAttachmentStore } from "./services/attachment-store.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { invalidateChatAudienceLocal, registerChatAudienceDispatcher } from "./services/chat-audience-cache.js";
@@ -167,10 +168,10 @@ export async function buildApp(config: Config) {
     );
   }
 
-  // GitHub App config sanity (PEM header / blank-secret / half-config).
-  // Runs here so a misconfigured App env block fails the boot, not the
-  // first App JWT call hours later. Cheap; only fires when the App
-  // block is present.
+  // Cross-field config sanity (GitHub App PEM header / blank-secret /
+  // half-config, S3 all-or-none). Runs here so a misconfigured env block
+  // fails the boot, not the first dependent call hours later. Cheap; each
+  // check only fires when its block is present.
   assertBootConfigValid(config);
 
   applyLoggerConfig({
@@ -341,6 +342,12 @@ export async function buildApp(config: Config) {
   const resourcesService = createResourcesService({ db, notifier });
   app.decorate("resourcesService", resourcesService);
 
+  // Attachment object store (S3). `null` when the deployment has no `s3`
+  // config block — the server still boots, legacy bytea downloads keep
+  // working, and the upload / delete paths fail fast with 503 at the
+  // service layer.
+  app.decorate("attachmentStore", config.s3 ? createAttachmentStore(config.s3) : null);
+
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
   // or buggy client cannot OOM the server with one giant message. Frames in
   // this codebase are JSON envelopes; image content travels via HTTP.
@@ -348,15 +355,15 @@ export async function buildApp(config: Config) {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
   });
 
-  // Body parser for `application/octet-stream` — needed by the attachment
-  // upload route. Fastify's built-in parsers cover json / text only; without
-  // this registration `request.body` would be undefined on an octet-stream
-  // POST and the route would 415. Registered globally because Fastify only
-  // supports global content-type parsers; the route still owns its own
-  // `bodyLimit` so the byte cap is route-local.
-  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
-    done(null, body);
-  });
+  // `application/octet-stream` bodies are parsed by scoped content-type
+  // parsers inside the plugin that consumes them (the attachment upload
+  // route registers a stream pass-through parser — see
+  // api/orgs/attachments.ts). Fastify content-type parsers are NOT global-
+  // only: a parser registered inside a plugin's encapsulation context
+  // overrides the inherited one for that scope (same precedent as the
+  // GitHub App webhook's raw-body JSON parser). No global octet-stream
+  // parser is registered here on purpose: the old buffering global parser
+  // loaded every upload fully into the Node heap.
 
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
@@ -447,7 +454,12 @@ export async function buildApp(config: Config) {
         [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
-      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
+      // Serialize the stable machine-readable `code` when the error carries
+      // one (e.g. ATTACHMENT_QUOTA_EXCEEDED) so clients can branch without
+      // message-sniffing. Additive only — bodies without a code are
+      // byte-identical to before.
+      const codeField = error.code ? { code: error.code } : {};
+      return reply.status(error.statusCode).send({ error: error.message, ...codeField, ...traceField });
     }
 
     if (error instanceof ZodError) {

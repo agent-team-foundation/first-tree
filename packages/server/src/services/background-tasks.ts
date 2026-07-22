@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
+import * as attachmentService from "./attachment.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
@@ -17,6 +18,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let attachmentSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -83,6 +85,26 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
+      // Attachment orphan sweeper — deletes unreferenced attachments (S3
+      // object + row) past the 24h grace. Cadence follows runtime config
+      // (0 disables); per-tick candidate cap and reference discovery live
+      // in services/attachment.ts. Deletion of S3-backed rows requires the
+      // store to be configured; without it those rows fail per-row and are
+      // retried next tick.
+      const attachmentSweepSeconds = app.config.runtime.attachmentSweepIntervalSeconds;
+      if (attachmentSweepSeconds > 0) {
+        attachmentSweepTimer = setInterval(async () => {
+          try {
+            const stats = await attachmentService.sweepOrphanAttachments(app.db, app.attachmentStore);
+            if (stats.deleted > 0 || stats.failed > 0) {
+              log.info(stats, "attachment orphan sweep removed unreferenced attachments");
+            }
+          } catch (err) {
+            log.error({ err }, "attachment orphan sweep failed");
+          }
+        }, attachmentSweepSeconds * 1000);
+      }
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -101,6 +123,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (attachmentSweepTimer) {
+        clearInterval(attachmentSweepTimer);
+        attachmentSweepTimer = null;
       }
     },
   };

@@ -26,6 +26,8 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
+import { attachmentIdsFromMessageContent, deleteUnreferencedAttachments } from "./attachment.js";
+import type { AttachmentStore } from "./attachment-store.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 import { hasRemainingLandingCampaignTrialBudget } from "./landing-campaigns/chat-state.js";
@@ -1042,6 +1044,7 @@ export async function editMessage(
   messageId: string,
   senderId: string,
   data: { format?: string; content?: unknown },
+  attachmentStore: AttachmentStore | null = null,
 ) {
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
@@ -1099,6 +1102,26 @@ export async function editMessage(
 
   const [updated] = await db.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+
+  // Attachment lifecycle: an edit replaces content, so any attachment id the
+  // OLD content referenced but the NEW content does not may have lost its
+  // last reference. metadata.attachments is never rewritten by an edit, so
+  // diffing content refs is sufficient. Delete immediately when the
+  // reference-point registry finds no other reference; failures are
+  // best-effort (the orphan sweep is the backstop) and never fail the edit.
+  if (data.content !== undefined) {
+    const removedRefs = attachmentIdsFromMessageContent(msg.content).filter(
+      (id) => !attachmentIdsFromMessageContent(updated.content).includes(id),
+    );
+    if (removedRefs.length > 0) {
+      try {
+        await deleteUnreferencedAttachments(db, attachmentStore, removedRefs);
+      } catch (err) {
+        log.warn({ err, messageId }, "attachment cleanup after message edit failed; orphan sweep will retry");
+      }
+    }
+  }
+
   return updated;
 }
 

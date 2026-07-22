@@ -15,3 +15,5 @@ export const MAX_FORKS = Number.isFinite(envCap) && envCap > 0 ? envCap : isCi ?
 
 export const WORKER_DB_PREFIX = "vitest_w";
 export const TEMPLATE_DB = "vitest_template";
+/** Per-worker attachment bucket names: `attachments-w1..wN` (see setup.ts). */
+export const WORKER_BUCKET_PREFIX = "attachments-w";
