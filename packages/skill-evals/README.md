@@ -132,14 +132,19 @@ the same read trigger oracle. This covers the generated-briefing and
 skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
 live First Tree runtime E2E remain outside skill evals.
 
-`eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
-request review gate. Its deterministic GitHub shim permits only PR state reads,
-identity lookup, and one body-file review submission; all other `gh` commands
-remain blocked. The cases require validator-first ordering and cover structural
-failure, semantic failure, ready approval, draft deferral, archive-only scope,
-human authority, self-approval, and stale-head suppression. The fixture records
-the real source-tree validator result before the sandboxed model run so the
-agent receives the exact structural verdict without contacting GitHub.
+`eval:gate -- --suite context-tree-review` runs the repair-first Context Tree
+pull request review gate. A task-local bare Git origin permits only an
+allowlisted normal commit and fast-forward push to the PR source branch; a hook
+mirrors that push to the local PR ref so the gate can require a dynamic
+successor-head validation and complete re-review. A separate hook supplies the
+push-denied case. The deterministic GitHub shim still permits only PR state
+reads, identity lookup, and one body-file review submission, so no external
+GitHub side effect is possible. Cases require validator-first ordering, safe
+repair before escalation, protected-only mixed handoff, exact successor-head
+binding, ready approval, draft deferral, archive-only scope, human authority,
+self-approval, and stale-head suppression. The fixture runs the real
+source-tree validator for both review and repair worktrees without contacting
+GitHub.
 
 `eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
 against deterministic local default-branch fixtures. It requires the Audit

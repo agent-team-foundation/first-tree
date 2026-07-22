@@ -11,9 +11,10 @@ surfaces: [cli, client, server, github, runtime]
 
 Confirm that supported activity on a pull request in the bound Context Tree
 repository creates or reuses one PR-scoped Reviewer Chat and wakes the assigned
-review agent. Confirm the agent reviews the latest live PR, may repair it with
-its local identity, publishes the formal verdict through the GitHub App, and
-uses its local identity for squash merge.
+review agent. Confirm the agent reviews the latest live PR, repairs every safely
+determined finding with its local identity before escalation, publishes the
+formal verdict through the GitHub App, and uses its local identity for squash
+merge.
 
 Deterministic schemas and Skill wording belong in product tests and Skill
 evals. This case proves the assembled App webhook, Chat/Inbox, runtime, CLI,
@@ -35,9 +36,10 @@ GitHub review and repository gate.
   configure the App as a bypass actor. For a migrated repository, confirm no
   effective ruleset still requires the retired `first-tree/context-review`
   status, which the App-review-only workflow no longer publishes.
-- Prepare ready, draft, fork, validator-failing, semantic-failing, repairable,
-  check-failing and merge-failing PRs. The PR body needs no repair-consent or
-  machine-readable scope block.
+- Prepare ready, draft, fork, repairable validator-failing, repairable
+  semantic-failing, mixed safe/protected, push-denied, check-failing and
+  merge-failing PRs. The PR body needs no repair-consent or machine-readable
+  scope block.
 - Store redacted evidence outside the repository.
 
 ## Operate and Observe
@@ -59,15 +61,24 @@ GitHub review and repository gate.
 - Confirm the Reviewer resolves the bound repository and latest live PR,
   creates an isolated worktree, and runs `first-tree tree verify --json` before
   semantic review. Draft and fork PRs remain non-approving/read-only.
-- Exercise validation and semantic failures. Confirm the Reviewer uses
-  `first-tree tree review --run ... --event REQUEST_CHANGES|COMMENT --body-file ...`;
-  the removed GitHub command, `--head`, and `--agent` are unavailable.
-- Exercise a repair on a same-repository branch. Confirm local git/`gh`
-  credentials create and push decision-preserving changes, never force-push,
-  amend, rebase, edit protected ownership/decision-lock material without clear
-  authority, or use an App token. After push, confirm the agent fetches and
-  fully checks the latest resulting PR state. A synchronize-triggered duplicate
-  run is acceptable.
+- Exercise repairable validator and semantic failures on a same-repository
+  branch. Confirm local git/`gh` credentials repair, commit, and push every
+  objectively determined, decision-preserving finding before the agent chooses
+  an App outcome. A fully repairable ready PR must not ask the author to change
+  it and must approve only after validating and semantically reviewing the
+  successor head.
+- Exercise mixed safe and protected findings. Confirm the Reviewer repairs the
+  safe batch first, then uses
+  `first-tree tree review --run ... --event COMMENT --body-file ...` to hand off
+  only the residual ownership, decision-lock, governance, or ambiguous product
+  decision. Confirm the removed GitHub command, `--head`, and `--agent` remain
+  unavailable.
+- Deny a normal source-branch push. Confirm the Reviewer does not force-push,
+  amend, rebase, alter remotes, or use an App token; it reconciles observable
+  refs and submits `REQUEST_CHANGES` with the specific push blocker and one
+  recovery action. After every successful repair push, confirm the agent
+  fetches, validates, and fully reviews the latest resulting PR state. A
+  synchronize-triggered duplicate run is acceptable.
 - For a clean ready PR, wait for required checks and invoke `tree review` with
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
@@ -88,15 +99,19 @@ GitHub review and repository gate.
 
 ## Expected Result
 
-PASS: the App webhook owns review dispatch; the Reviewer can repair with its
-local identity; the App alone publishes the PR review; the repository requires
-a current approval and dismisses it after push; and local squash merge does not
-bypass the gate.
+PASS: the App webhook owns review dispatch; the Reviewer repairs every safely
+determined finding with its local identity before escalating only residual
+protected or blocked findings; the App alone publishes the PR review; the
+repository requires a current approval and dismisses it after push; and local
+squash merge does not bypass the gate.
 
 FAIL: a writer can create review authority; a task packet or legacy marker
-changes routing; a fork/draft run mutates or approves; the App merges; the local
-identity publishes the review; an old approval survives a push; or a bypass,
-force push, `--admin`, or `--auto` path is used.
+changes routing; a fork/draft run mutates or approves; a safely repairable
+finding goes directly to `REQUEST_CHANGES`; a mixed review returns its safe and
+protected findings together to the author; a repair push is not followed by a
+complete successor-head review; the App merges; the local identity publishes
+the review; an old approval survives a push; or a bypass, force push, `--admin`,
+or `--auto` path is used.
 
 BLOCKED: the isolated cell cannot provide the candidate surfaces, disposable
 GitHub repository, real accepted App installation, eligible runtime or

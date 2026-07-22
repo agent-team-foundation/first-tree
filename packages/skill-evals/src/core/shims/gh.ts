@@ -11,6 +11,7 @@ export function createGhShim(
 ): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
@@ -74,6 +75,14 @@ function artifactBody(argv) {
   } catch {
     return "";
   }
+}
+
+function liveReviewHead(fixture) {
+  if (!fixture.originPath || !fixture.pullRef) return fixture.submissionHeadOid || fixture.reviewHeadOid;
+  const result = spawnSync("git", ["--git-dir", fixture.originPath, "rev-parse", fixture.pullRef], {
+    encoding: "utf8",
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
 }
 
 function auditPublishedRefs(fixture) {
@@ -284,6 +293,26 @@ if (AUDIT_FIXTURE_PATH) {
   }
 }
 
+if (REVIEW_FIXTURE_PATH && argv[0] === "api" && argv[1] === "user" && ghMethod(argv) === "GET") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  append({
+    type: "github_identity_read",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    login: fixture.reviewerLogin,
+  });
+  const jq = argAfter(argv, "--jq");
+  finish(
+    argv,
+    phase,
+    0,
+    jq === ".login" ? fixture.reviewerLogin + "\\n" : JSON.stringify({ login: fixture.reviewerLogin }) + "\\n",
+    "",
+    { reviewFixture: true },
+  );
+}
+
 if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const statePath = REVIEW_FIXTURE_PATH + ".state";
@@ -297,7 +326,8 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
       reviewFixtureViolation: true,
     });
   }
-  const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const template = fixture.view || fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const view = { ...template, headRefOid: liveReviewHead(fixture) };
   const viewIndex = state.views;
   state.views += 1;
   writeFileSync(statePath, JSON.stringify(state), "utf8");
@@ -316,6 +346,26 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
 }
 
+if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "checks") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  if (argv[2] !== String(fixture.prNumber) || argAfter(argv, "--repo") !== fixture.repo) {
+    finish(argv, phase, 2, "", "Review fixture requires the configured repository and pull request.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  append({
+    type: "github_pr_checks_viewed",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    headRefOid: liveReviewHead(fixture),
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+  });
+  finish(argv, phase, 0, "All checks passed\\n", "", { reviewFixture: true });
+}
+
 if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const statePath = REVIEW_FIXTURE_PATH + ".state";
@@ -323,6 +373,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
   try {
     state = JSON.parse(readFileSync(statePath, "utf8"));
   } catch {}
+  const liveHead = liveReviewHead(fixture);
   const exact =
     argv[2] === String(fixture.prNumber) &&
     argAfter(argv, "--repo") === fixture.repo &&
@@ -331,7 +382,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
     !argv.includes("--auto") &&
     !argv.includes("--merge") &&
     !argv.includes("--rebase") &&
-    state.approvedHead === fixture.reviewHeadOid &&
+    state.approvedHead === liveHead &&
     !argv.includes("--match-head-commit");
   if (!exact) {
     finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
@@ -344,7 +395,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
     phase,
     argv,
     cwd: process.cwd(),
-    commitOid: fixture.reviewHeadOid,
+    commitOid: liveHead,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
   });

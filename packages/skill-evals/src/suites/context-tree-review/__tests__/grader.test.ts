@@ -8,27 +8,39 @@ const expectation: ReviewFixtureExpectation = {
   baseOid: "base",
   chatId: "review-chat",
   expectedFinalDraft: false,
-  expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
   governedPaths: ["system/review-contract.md"],
   headOid: "head",
+  initialVerifyMustPass: true,
   prNumber: 42,
+  repair: "none",
+  repairPaths: [],
+  repairWorktreePath: "/workspace/.repair-worktrees/42",
   repo: "owner/context-tree",
   reviewerAgentUuid: "reviewer-agent",
   runId: "019review-run",
   runtimeSessionToken: "runtime-session-token",
   runtimeSessionTokenFile: "/workspace/.first-tree-eval/runtime-session.token",
-  submissionHeadOid: "head",
+  sourceBranch: "review-change",
   workspacePath: "/workspace",
 };
 
 const integrity: ReviewFixtureIntegrity = {
+  finalDiffEmpty: false,
+  finalHeadOid: "head",
   mainHeadUnchanged: true,
   mainWorktreeClean: true,
-  originRefsUnchanged: true,
+  originRefsValid: true,
+  repairCommitValid: true,
+  repairContentValid: true,
+  repairPathsExact: true,
+  repairPathsRemoved: false,
+  repairWorktreeCleaned: true,
   reviewWorktreeCleaned: true,
+  sourceAndPullMatch: true,
+  sourceHeadOid: "head",
   treeConfigUnchanged: true,
-  treeRefsUnchanged: true,
+  treeRefsValid: true,
   treeWorktreesUnchanged: true,
 };
 
@@ -61,9 +73,11 @@ function passingEvents(): unknown[] {
     },
     { login: "reviewer", type: "github_identity_read" },
     {
+      actualHead: "head",
       argv: ["tree", "verify", "--json"],
       exitCode: 0,
       phase: "model",
+      reviewVerifyKind: "initial-review",
       type: "first_tree_result",
       verifyBindingValid: true,
     },
@@ -105,9 +119,379 @@ function passes(events: unknown[], fixtureIntegrity = integrity): boolean {
   return casePassed(evalCase, deriveMetrics(events, evalCase, expectation, fixtureIntegrity, 0));
 }
 
+function repairCase(
+  scenario: "mixed-repair-authority" | "push-denied" | "semantic-failure",
+): ContextTreeReviewEvalCase {
+  const found = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);
+  if (!found) throw new Error(`Missing ${scenario} context-tree-review case.`);
+  return found;
+}
+
+function repairExpectation(evalCase: ContextTreeReviewEvalCase): ReviewFixtureExpectation {
+  const governedPaths =
+    evalCase.fixture.scenario === "mixed-repair-authority"
+      ? ["system/review-wording.md", "system/authority-contract.md"]
+      : ["system/review-contract.md"];
+  return {
+    ...expectation,
+    governedPaths,
+    initialVerifyMustPass: evalCase.expected.initialVerifyMustPass,
+    repair: evalCase.expected.repair,
+    repairPaths: evalCase.expected.repairPaths,
+  };
+}
+
+function repairIntegrity(repair: "push-denied" | "success"): ReviewFixtureIntegrity {
+  return {
+    ...integrity,
+    finalHeadOid: repair === "success" ? "successor" : "head",
+    sourceHeadOid: "successor",
+  };
+}
+
+function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
+  const pushDenied = evalCase.expected.repair === "push-denied";
+  const mixed = evalCase.fixture.scenario === "mixed-repair-authority";
+  const safePath = mixed ? "system/review-wording.md" : "system/review-contract.md";
+  const finalHead = pushDenied ? "head" : "successor";
+  const finalAction = evalCase.expected.action;
+  const finalBody = mixed
+    ? "## Human decision required\n\nThe ownership and decision lock in system/authority-contract.md require owner authority."
+    : pushDenied
+      ? "## Changes requested\n\nRepair is blocked: push to review-change was denied. The author must restore branch push access. system/review-contract.md"
+      : "## Approved\n\nThe safely determined repair is complete and no blockers remain.";
+  const events: unknown[] = [
+    {
+      event: {
+        item: {
+          command: "cat .agents/skills/context-tree-review/SKILL.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+    {
+      headRefOid: "head",
+      isDraft: false,
+      prNumber: 42,
+      repo: "owner/context-tree",
+      state: "OPEN",
+      type: "github_pr_viewed",
+    },
+    { login: "reviewer", type: "github_identity_read" },
+    {
+      actualHead: "head",
+      argv: ["tree", "verify", "--json"],
+      exitCode: 0,
+      phase: "model",
+      reviewVerifyKind: "initial-review",
+      type: "first_tree_result",
+      verifyBindingValid: true,
+    },
+    {
+      event: {
+        item: {
+          command: `cat .review-worktrees/42/${safePath}`,
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+  ];
+  if (mixed) {
+    events.push({
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/authority-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+  }
+  events.push(
+    {
+      event: {
+        item: {
+          changes: [{ kind: "update", path: `.repair-worktrees/42/${safePath}` }],
+          type: "file_change",
+        },
+      },
+      type: "codex_event",
+    },
+    {
+      event: {
+        item: {
+          command: "git -C .repair-worktrees/42 commit -m 'fix: repair review finding'",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+    {
+      actualHead: "successor",
+      argv: ["tree", "verify", "--json"],
+      exitCode: 0,
+      phase: "model",
+      reviewVerifyKind: "repair",
+      type: "first_tree_result",
+      verifyBindingValid: true,
+    },
+    {
+      event: {
+        item: {
+          command: "git -C .repair-worktrees/42 push origin HEAD:refs/heads/review-change",
+          exit_code: pushDenied ? 1 : 0,
+          status: pushDenied ? "failed" : "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+    {
+      headRefOid: finalHead,
+      isDraft: false,
+      prNumber: 42,
+      repo: "owner/context-tree",
+      state: "OPEN",
+      type: "github_pr_viewed",
+    },
+  );
+  if (!pushDenied) {
+    events.push(
+      {
+        actualHead: "successor",
+        argv: ["tree", "verify", "--json"],
+        exitCode: 0,
+        phase: "model",
+        reviewVerifyKind: "successor-review",
+        type: "first_tree_result",
+        verifyBindingValid: true,
+      },
+      {
+        event: {
+          item: {
+            command: `cat .review-worktrees/42/${safePath}`,
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    );
+    if (mixed) {
+      events.push({
+        event: {
+          item: {
+            command: "cat .review-worktrees/42/system/authority-contract.md",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      });
+    }
+    events.push({
+      headRefOid: "successor",
+      isDraft: false,
+      prNumber: 42,
+      repo: "owner/context-tree",
+      state: "OPEN",
+      type: "github_pr_viewed",
+    });
+  }
+  events.push({
+    action: finalAction,
+    body: finalBody,
+    bodyFileUsed: true,
+    commitOid: finalHead,
+    currentHeadOid: finalHead,
+    prNumber: 42,
+    repo: "owner/context-tree",
+    runId: expectation.runId,
+    type: "context_review_submitted",
+  });
+  return events;
+}
+
 describe("context-tree-review grader", () => {
   it("accepts the complete head-bound review sequence", () => {
     expect(passes(passingEvents())).toBe(true);
+  });
+
+  it("accepts repeated validation of the same unchanged review head", () => {
+    const events = passingEvents();
+    events.splice(5, 0, {
+      actualHead: "head",
+      argv: ["tree", "verify", "--json"],
+      exitCode: 0,
+      phase: "model",
+      reviewVerifyKind: "initial-review",
+      type: "first_tree_result",
+      verifyBindingValid: true,
+    });
+    expect(passes(events)).toBe(true);
+  });
+
+  it("accepts one exact repair commit, push, successor verify, and complete re-review", () => {
+    const evalCase = repairCase("semantic-failure");
+    const metrics = deriveMetrics(
+      repairEvents(evalCase),
+      evalCase,
+      repairExpectation(evalCase),
+      repairIntegrity("success"),
+      0,
+    );
+    expect(metrics).toMatchObject({
+      authorHandoffForRepairableFinding: false,
+      authorizedRepairObserved: true,
+      finalReviewBoundToSuccessorHead: true,
+      repairCommitObserved: true,
+      repairPathsExact: true,
+      repairPushObserved: true,
+      successorSemanticReviewComplete: true,
+      successorVerifyPassed: true,
+      unexpectedMutationAttempted: false,
+    });
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("accepts a mixed review only after safe repair and protected-only handoff", () => {
+    const evalCase = repairCase("mixed-repair-authority");
+    const events = repairEvents(evalCase);
+    Object.assign(events.at(-1) as object, {
+      body: "## Human decision required\n\nI repaired system/review-wording.md.\n\nThe author or owner must decide system/authority-contract.md.",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.authorHandoffForRepairableFinding).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("attributes successful readers surrounding a pipeline but not the pipeline's unchecked producer", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const successorRead = events.findLast(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(".review-worktrees/42"),
+    ) as { event: { item: { command: string } } };
+    successorRead.event.item.command =
+      "cat .review-worktrees/42/system/review-contract.md && find .review-worktrees/42/system -type f | sort && gh pr checks 42 --repo owner/context-tree";
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.successorSemanticReviewComplete).toBe(true);
+  });
+
+  it("accepts a normal push denial only as a specific repair blocker", () => {
+    const evalCase = repairCase("push-denied");
+    const metrics = deriveMetrics(
+      repairEvents(evalCase),
+      evalCase,
+      repairExpectation(evalCase),
+      repairIntegrity("push-denied"),
+      0,
+    );
+    expect(metrics).toMatchObject({
+      repairCommitObserved: true,
+      repairPushDenied: true,
+      repairPushObserved: false,
+      successorVerifyPassed: false,
+      unexpectedMutationAttempted: false,
+    });
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("rejects repair handoff, old-head review, and incomplete successor review", () => {
+    const evalCase = repairCase("semantic-failure");
+    const expected = repairExpectation(evalCase);
+    const repaired = repairIntegrity("success");
+
+    const handoff = repairEvents(evalCase);
+    Object.assign(handoff.at(-1) as object, {
+      body: "## Approved\n\nAuthor must fix the implementation in system/review-contract.md.",
+    });
+    expect(casePassed(evalCase, deriveMetrics(handoff, evalCase, expected, repaired, 0))).toBe(false);
+
+    const stale = repairEvents(evalCase);
+    Object.assign(stale.at(-1) as object, { commitOid: "head", currentHeadOid: "head" });
+    expect(casePassed(evalCase, deriveMetrics(stale, evalCase, expected, repaired, 0))).toBe(false);
+
+    const incomplete = repairEvents(evalCase);
+    incomplete.splice(-3, 1);
+    expect(casePassed(evalCase, deriveMetrics(incomplete, evalCase, expected, repaired, 0))).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "non-governed path",
+      event: {
+        event: {
+          item: {
+            changes: [{ kind: "update", path: ".repair-worktrees/42/system/unrelated.md" }],
+            type: "file_change",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "force push",
+      event: {
+        event: {
+          item: {
+            command: "git -C .repair-worktrees/42 push --force origin HEAD:refs/heads/review-change",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "amend",
+      event: {
+        event: {
+          item: {
+            command: "git -C .repair-worktrees/42 commit --amend --no-edit",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "remote rewrite",
+      event: {
+        event: {
+          item: {
+            command: "git -C context-tree remote set-url origin /tmp/other.git",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+  ])("rejects $name during a repair", ({ event }) => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    events.splice(-1, 0, event);
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.unexpectedMutationAttempted).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it("requires an exact skill read from tool input rather than command output", () => {
@@ -265,7 +649,7 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(false);
   });
 
-  it("rejects semantic tree reads after a failed validator", () => {
+  it("allows only narrow repair context after a failed validator and rejects direct handoff", () => {
     const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
     if (!evalCase) throw new Error("Missing validator-failure case.");
     const events = passingEvents();
@@ -274,17 +658,33 @@ describe("context-tree-review grader", () => {
       action: "request-changes",
       body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
     });
-    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
-    expect(metrics.semanticReadAfterFailedVerify).toBe(true);
+    const validatorExpectation = {
+      ...expectation,
+      initialVerifyMustPass: false,
+      repair: "success" as const,
+      repairPaths: ["system/review-contract.md"],
+    };
+    const metrics = deriveMetrics(events, evalCase, validatorExpectation, integrity, 0);
+    expect(metrics.semanticReadAfterFailedVerify).toBe(false);
     expect(casePassed(evalCase, metrics)).toBe(false);
 
-    events.splice(4, 1);
-    const shortCircuited = deriveMetrics(events, evalCase, expectation, integrity, 0);
-    expect(shortCircuited.semanticReadAfterFailedVerify).toBe(false);
-    expect(casePassed(evalCase, shortCircuited)).toBe(true);
+    events[4] = {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/unrelated.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    const expanded = deriveMetrics(events, evalCase, validatorExpectation, integrity, 0);
+    expect(expanded.semanticReadAfterFailedVerify).toBe(true);
+    expect(casePassed(evalCase, expanded)).toBe(false);
   });
 
-  it("rejects a detached Git object read after a failed validator", () => {
+  it("allows a validator-targeted Git object read but rejects unrelated Git expansion", () => {
     const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
     if (!evalCase) throw new Error("Missing validator-failure case.");
     const events = passingEvents();
@@ -304,9 +704,30 @@ describe("context-tree-review grader", () => {
       action: "request-changes",
       body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
     });
-    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
-    expect(metrics.semanticReadAfterFailedVerify).toBe(true);
+    const validatorExpectation = {
+      ...expectation,
+      initialVerifyMustPass: false,
+      repair: "success" as const,
+      repairPaths: ["system/review-contract.md"],
+    };
+    const metrics = deriveMetrics(events, evalCase, validatorExpectation, integrity, 0);
+    expect(metrics.semanticReadAfterFailedVerify).toBe(false);
     expect(casePassed(evalCase, metrics)).toBe(false);
+
+    events[4] = {
+      event: {
+        item: {
+          command: "git -C .review-worktrees/42 show HEAD:system/unrelated.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(deriveMetrics(events, evalCase, validatorExpectation, integrity, 0).semanticReadAfterFailedVerify).toBe(
+      true,
+    );
   });
 
   it("allows detached snapshot setup and changed-path inspection before validation", () => {
@@ -337,10 +758,15 @@ describe("context-tree-review grader", () => {
     '/bin/bash -lc "pwd"',
     "sed -n '1,240p' .first-tree/workspace.json",
     'rg -n "Tree Location|Context Tree" AGENTS.md CLAUDE.md 2>/dev/null',
+    'rg -n "Tree Location|Context Tree" .first-tree AGENTS.md context-tree/AGENTS.md 2>/dev/null',
+    "rg -n \"Tree Location|context-tree|upstream|branch\" .first-tree .agents -g '*.md' -g '*.json' | head -120",
     "true",
     "git -C context-tree remote -v",
     '/bin/bash -lc "pwd && sed -n \'1,240p\' .first-tree/workspace.json && rg -n \\"Tree Location|Context Tree\\" AGENTS.md CLAUDE.md 2>/dev/null || true && git -C context-tree remote -v"',
     "git -C context-tree config --list --show-origin && git -C context-tree branch -a -vv",
+    "git -C context-tree worktree list",
+    "git -C context-tree fetch origin refs/heads/review-change refs/pull/42/head",
+    "git -C context-tree fetch origin review-change refs/pull/42/head",
     "git -C context-tree remote get-url origin && sed -n '1,120p' ../context-tree-origin.git/config && sed -n '1,80p' ../context-tree-origin.git/description",
     'test ! -e .review-worktrees/42 && git -C context-tree worktree list --porcelain && test "$(git -C context-tree rev-parse FETCH_HEAD)" = head',
   ])("allows an observed repository-identity preflight: %s", (command) => {
@@ -541,7 +967,7 @@ describe("context-tree-review grader", () => {
   it("rejects a dirty or uncleaned fixture", () => {
     expect(passes(passingEvents(), { ...integrity, reviewWorktreeCleaned: false })).toBe(false);
     expect(passes(passingEvents(), { ...integrity, treeConfigUnchanged: false })).toBe(false);
-    expect(passes(passingEvents(), { ...integrity, treeRefsUnchanged: false })).toBe(false);
+    expect(passes(passingEvents(), { ...integrity, treeRefsValid: false })).toBe(false);
     expect(passes(passingEvents(), { ...integrity, treeWorktreesUnchanged: false })).toBe(false);
   });
 });

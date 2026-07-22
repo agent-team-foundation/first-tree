@@ -29,10 +29,8 @@ export async function runContextTreeReviewCase(
   mkdirSync(modelPaths.binDir, { recursive: true });
   createFirstTreeShim(modelPaths, {
     modelVerifyMode: "real",
-    recordedModelVerifyCwd: fixture.reviewWorktreePath,
-    recordedModelVerifyHead: fixture.expectation.headOid,
-    recordedModelVerifyPath: fixture.verifyResultPath,
     reviewFixturePath: fixture.fixturePath,
+    reviewVerifyRunnerPath: fixture.verifyRunnerPath,
   });
   createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
   writeShellPathBootstrap(modelPaths, {
