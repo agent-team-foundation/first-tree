@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { readEvents } from "../events.js";
 import { createRunPaths } from "../paths.js";
 import { createFirstTreeShim } from "../shims/first-tree.js";
+import { createGhShim } from "../shims/gh.js";
 
 describe("first-tree eval shim", () => {
   it("requires trusted runtime authority for Context Review submission fixtures", () => {
@@ -20,7 +30,6 @@ describe("first-tree eval shim", () => {
         startedAt: "2026-07-21T00:00:00.000Z",
       });
       const fixturePath = join(paths.workspacePath, ".first-tree-eval", "review-fixture.json");
-      const privateFixturePath = join(paths.runRoot, "review-private-fixture.json");
       const reviewStatePath = join(paths.runRoot, "review-state.json");
       const bodyPath = join(paths.workspacePath, "review.md");
       const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
@@ -31,16 +40,15 @@ describe("first-tree eval shim", () => {
         reviewerAgentUuid: "reviewer-agent",
         runId: "01900000-0000-7000-8000-000000000042",
         runtimeSessionToken: "runtime-session-token",
+        views: [{ headRefOid: "a".repeat(40) }],
       };
       const submissionHeadOid = "a".repeat(40);
       writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
-      writeFileSync(privateFixturePath, `${JSON.stringify({ submissionHeadOid })}\n`, "utf8");
       writeFileSync(reviewStatePath, `${JSON.stringify({ views: 0 })}\n`, "utf8");
       writeFileSync(bodyPath, "## Approved\n", "utf8");
       writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
       createFirstTreeShim(paths, {
         reviewFixturePath: fixturePath,
-        reviewPrivateFixturePath: privateFixturePath,
         reviewStatePath,
       });
       const argv = ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath];
@@ -71,6 +79,10 @@ describe("first-tree eval shim", () => {
       expect(JSON.parse(trusted.stdout)).toMatchObject({
         data: { action: "APPROVE", reviewedHead: submissionHeadOid },
         ok: true,
+      });
+      expect(JSON.parse(readFileSync(reviewStatePath, "utf8"))).toEqual({
+        approvedHead: submissionHeadOid,
+        views: 0,
       });
       expect(readEvents(paths.eventsPath)).toEqual(
         expect.arrayContaining([
@@ -121,6 +133,94 @@ describe("first-tree eval shim", () => {
         expect(invalid.status).toBe(2);
         expect(invalid.stderr).toContain("Invalid Context Reviewer App submission fixture.");
       }
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("shares only the App response head through private state with the merge shim", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-response-head-integration-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "context-review-response-head-integration",
+        packageRoot,
+        startedAt: "2026-07-22T00:00:00.000Z",
+      });
+      const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
+      const reviewStatePath = join(paths.runRoot, "shim-state", "context-review-state.json");
+      const bodyPath = join(paths.workspacePath, "review.md");
+      const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
+      const inspectedHead = "a".repeat(40);
+      const approvedHead = "b".repeat(40);
+      const fixture = {
+        chatId: "review-chat",
+        mergeCurrentHeadOid: null,
+        mergeOutcome: "success",
+        prNumber: 42,
+        repo: "owner/context-tree",
+        reviewHeadMode: "random-response",
+        reviewerAgentUuid: "reviewer-agent",
+        runId: "01900000-0000-7000-8000-000000000042",
+        runtimeSessionToken: "runtime-session-token",
+        views: [{ headRefOid: inspectedHead }],
+      };
+      mkdirSync(join(paths.runRoot, "shim-state"), { recursive: true });
+      writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
+      writeFileSync(reviewStatePath, `${JSON.stringify({ approvedHead })}\n`, "utf8");
+      writeFileSync(bodyPath, "## Approved\n", "utf8");
+      writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
+      createFirstTreeShim(paths, { reviewFixturePath: fixturePath, reviewStatePath });
+      createGhShim(paths, { reviewFixturePath: fixturePath, reviewStatePath });
+      const env = {
+        ...process.env,
+        FIRST_TREE_AGENT_ID: fixture.reviewerAgentUuid,
+        FIRST_TREE_CHAT_ID: fixture.chatId,
+        FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+      };
+      const review = spawnSync(
+        join(paths.binDir, "first-tree"),
+        ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath],
+        { cwd: paths.workspacePath, encoding: "utf8", env },
+      );
+      expect(review.status).toBe(0);
+      const reviewedHead = JSON.parse(review.stdout).data.reviewedHead as string;
+      expect(reviewedHead).toMatch(/^[0-9a-f]{40}$/u);
+      expect(reviewedHead).toBe(approvedHead);
+      expect(reviewedHead).not.toBe(inspectedHead);
+
+      const mergeArgs = (head: string) => [
+        "api",
+        "--method",
+        "PUT",
+        "repos/owner/context-tree/pulls/42/merge",
+        "--raw-field",
+        `sha=${head}`,
+        "--raw-field",
+        "merge_method=squash",
+      ];
+      const substituted = spawnSync(join(paths.binDir, "gh"), mergeArgs(inspectedHead), {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env,
+      });
+      expect(substituted.status).toBe(2);
+
+      const exact = spawnSync(join(paths.binDir, "gh"), mergeArgs(reviewedHead), {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env,
+      });
+      expect(exact.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ commitOid: reviewedHead, type: "github_pr_merged" })]),
+      );
+      expect(readEvents(paths.eventsPath)).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ commitOid: inspectedHead, type: "github_pr_merged" })]),
+      );
     } finally {
       rmSync(repoRoot, { force: true, recursive: true });
     }

@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.1
+version: 0.3.2
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
@@ -190,20 +190,50 @@ After `tree review --event APPROVE` succeeds and `REVIEWED_HEAD` has been
 extracted from that response, merge only with the host local `gh` identity:
 
 ```bash
-gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash --match-head-commit "$REVIEWED_HEAD"
+MERGE_RESPONSE="$(
+  gh api --method PUT \
+    "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" \
+    --raw-field "sha=$REVIEWED_HEAD" \
+    --raw-field "merge_method=squash"
+)"
 ```
 
-Never use `--admin`, `--auto`, another merge method or an App credential. The
-repository gate must require at least one approval and dismiss stale approvals
-after a push. Preserve that governance: merge CAS is defense in depth and does
-not replace required approval or stale-review dismissal.
+Require this one response to be valid JSON with `merged: true`; otherwise treat
+the mutation result as unconfirmed. The REST `sha` field is the GitHub-side CAS:
+it must be exactly `REVIEWED_HEAD`. Never call the higher-level `gh pr merge`,
+which can enable auto-merge or enqueue on a queue-protected branch. Never omit
+or replace `sha` or use another merge method. Never use `--admin`, `--auto`,
+another bypass, or an App credential. The repository gate must require at
+least one approval and dismiss stale approvals after a push. Preserve that
+governance: merge CAS is defense in depth and does not replace required
+approval or stale-review dismissal.
 
-If App approval succeeds but local merge fails, report the review URL and merge
-error as approved-but-not-merged. A head mismatch, unsupported local `gh` flag,
-permission denial, failed check, ruleset rejection, merge-queue requirement or
-provider error all fail closed. Do not retry the merge automatically, drop
-`--match-head-commit`, substitute another head, add a bypass flag or claim the
-PR merged. Do not roll back or duplicate the approval.
+If the merge command exits nonzero, its response is malformed, or it does not
+confirm `merged: true`, do not repeat any merge mutation. Reconcile once through
+the read-only local-identity call:
+
+```bash
+MERGE_RECONCILIATION="$(
+  gh api --method GET \
+    "repos/$REPOSITORY/pulls/$PR_NUMBER"
+)"
+```
+
+Report exactly what that read proves:
+
+- `merged: true` with `head.sha == REVIEWED_HEAD`: merged despite the
+  unconfirmed mutation response;
+- `state: open` with `merged: false`: App-approved but not merged; include the
+  merge error and observed live head without using that head in another merge;
+- an unreadable, closed-unmerged, contradictory or otherwise inconclusive
+  state: merge result unknown and one concrete human verification action.
+
+A head mismatch, unavailable merge endpoint, permission denial, failed check,
+ruleset rejection or merge-queue requirement therefore creates no deferred
+merge state. Do not retry the merge automatically, substitute another head,
+call `gh pr merge`, schedule auto-merge, add a bypass, or claim success/open
+state without reconciliation evidence. Do not roll back or duplicate the App
+approval.
 
 ## Recovery and reporting
 

@@ -7,14 +7,33 @@ export type ReviewScenario =
   | "archive-only"
   | "authority"
   | "draft"
-  | "merge-flag-unsupported"
+  | "merge-api-unsupported"
+  | "merge-delivery-merged"
+  | "merge-delivery-open"
+  | "merge-delivery-unknown"
   | "merge-head-race"
+  | "merge-queue-required"
   | "merge-response-provenance"
   | "passing"
   | "semantic-failure"
   | "validator-failure";
-export type ExpectedMergeOutcome = "head-mismatch" | "merged" | "not-attempted" | "unsupported-flag";
-export type MergeAttemptOutcome = "head-mismatch" | "success" | "unsupported-flag";
+export type ExpectedMergeOutcome =
+  | "api-unsupported"
+  | "delivery-merged"
+  | "delivery-open"
+  | "delivery-unknown"
+  | "head-mismatch"
+  | "merged"
+  | "not-attempted"
+  | "queue-required";
+export type MergeAttemptOutcome =
+  | "api-unsupported"
+  | "head-mismatch"
+  | "queue-required"
+  | "success"
+  | "transport-merged"
+  | "transport-open"
+  | "transport-unknown";
 
 export type ContextTreeReviewEvalCase = {
   briefingMode: "minimal";
@@ -59,13 +78,20 @@ export type ReviewEvent = {
 };
 
 export type MergeEvent = {
-  approvedHeadOid: string;
   argv: readonly string[];
   currentHeadOid: string;
   eventIndex: number;
   exitCode: number;
-  matchHeadCommit: string;
   outcome: MergeAttemptOutcome;
+  requestedHead: string;
+};
+
+export type MergeReconciliationEvent = {
+  eventIndex: number;
+  exitCode: number;
+  headRefOid: string | null;
+  merged: boolean | null;
+  state: string | null;
 };
 
 export type ReviewFixtureExpectation = {
@@ -82,7 +108,6 @@ export type ReviewFixtureExpectation = {
   runId: string;
   runtimeSessionToken: string;
   runtimeSessionTokenFile: string;
-  submissionHeadOid: string;
   workspacePath: string;
 };
 
@@ -109,6 +134,7 @@ export type EvalMetrics = {
   bodyHintsObserved: boolean;
   blockedGithubAttempts: number;
   expectedHeadingObserved: boolean;
+  finalResponse: string;
   finalViewFresh: boolean;
   firstTreeReadLoaded: boolean;
   firstTreeVerifyCalls: number;
@@ -118,11 +144,14 @@ export type EvalMetrics = {
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
+  privateArtifactReadAttempted: boolean;
   mergeAfterApproval: boolean;
   mergeAttempts: readonly MergeEvent[];
   mergeContractExact: boolean;
   mergeHeadFromReviewResponse: boolean;
   mergeOutcomeObserved: ExpectedMergeOutcome;
+  mergeReconciliations: readonly MergeReconciliationEvent[];
+  mergeReportCorrect: boolean;
   mergeRetryAttempted: boolean;
   pullRequestMerged: boolean;
   reviewAfterFinalView: boolean;

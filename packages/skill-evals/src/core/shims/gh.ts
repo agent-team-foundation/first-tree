@@ -11,7 +11,7 @@ export function createGhShim(
 ): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
@@ -65,6 +65,15 @@ function argAfter(argv, name) {
   return index >= 0 ? argv[index + 1] || "" : "";
 }
 
+function rawField(argv, name) {
+  for (let index = 0; index < argv.length - 1; index += 1) {
+    if (argv[index] !== "--raw-field" && argv[index] !== "-f") continue;
+    const value = argv[index + 1] || "";
+    if (value.startsWith(name + "=")) return value.slice(name.length + 1);
+  }
+  return "";
+}
+
 function artifactBody(argv) {
   const inline = argAfter(argv, "--body") || argAfter(argv, "-b");
   if (inline) return inline;
@@ -77,24 +86,68 @@ function artifactBody(argv) {
   }
 }
 
-function auditPublishedRefs(fixture) {
+function recordedEvents() {
   try {
     return readFileSync(EVENTS_PATH, "utf8")
       .split("\\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter(
-        (event) =>
-          event.type === "audit_tree_publication_succeeded" &&
-          event.phase === "model" &&
-          event.repo === fixture.repo &&
-          event.remote === "origin" &&
-          typeof event.publishedRef === "string",
-      )
-      .map((event) => event.publishedRef);
+      .map((line) => JSON.parse(line));
   } catch {
     return [];
   }
+}
+
+function successfulApprovalResponse(events, fixture, requestedHead) {
+  return events.filter((result, index) => {
+    if (
+      result.type !== "first_tree_result" ||
+      result.phase !== "model" ||
+      result.exitCode !== 0 ||
+      !Array.isArray(result.argv) ||
+      result.argv[0] !== "tree" ||
+      result.argv[1] !== "review" ||
+      argAfter(result.argv, "--run") !== fixture.runId ||
+      argAfter(result.argv, "--event") !== "APPROVE"
+    ) {
+      return false;
+    }
+    const submission = events[index - 1];
+    if (
+      !submission ||
+      submission.type !== "context_review_submitted" ||
+      submission.phase !== "model" ||
+      submission.action !== "approve" ||
+      submission.repo !== fixture.repo ||
+      submission.prNumber !== fixture.prNumber ||
+      submission.runId !== fixture.runId ||
+      submission.reviewedHead !== requestedHead
+    ) {
+      return false;
+    }
+    try {
+      const response = JSON.parse(result.stdoutPreview);
+      return (
+        response.ok === true &&
+        response.data?.action === "APPROVE" &&
+        response.data?.reviewedHead === requestedHead
+      );
+    } catch {
+      return false;
+    }
+  }).length === 1;
+}
+
+function auditPublishedRefs(fixture) {
+  return recordedEvents()
+    .filter(
+      (event) =>
+        event.type === "audit_tree_publication_succeeded" &&
+        event.phase === "model" &&
+        event.repo === fixture.repo &&
+        event.remote === "origin" &&
+        typeof event.publishedRef === "string",
+    )
+    .map((event) => event.publishedRef);
 }
 
 function ghMethod(argv) {
@@ -287,20 +340,14 @@ if (AUDIT_FIXTURE_PATH) {
 
 if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
-  let state = { views: 0 };
-  try {
-    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
-  } catch {}
   if (argv[2] !== String(fixture.prNumber) || argAfter(argv, "--repo") !== fixture.repo) {
     finish(argv, phase, 2, "", "Review fixture requires the configured repository and pull request.\\n", {
       reviewFixture: true,
       reviewFixtureViolation: true,
     });
   }
-  const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
-  const viewIndex = state.views;
-  state.views += 1;
-  writeFileSync(REVIEW_STATE_PATH, JSON.stringify(state), "utf8");
+  const viewIndex = recordedEvents().filter((event) => event.type === "github_pr_viewed").length;
+  const view = fixture.views[Math.min(viewIndex, fixture.views.length - 1)];
   append({
     type: "github_pr_viewed",
     phase,
@@ -316,30 +363,38 @@ if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === 
   finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
 }
 
-if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === "merge") {
+if (
+  REVIEW_FIXTURE_PATH &&
+  REVIEW_STATE_PATH &&
+  argv[0] === "api" &&
+  ghMethod(argv) === "PUT" &&
+  endpointArg(argv).endsWith("/merge")
+) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   let state = { views: 0 };
   try {
     state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
   } catch {}
-  const matchHeadCommit = argAfter(argv, "--match-head-commit");
-  const matchHeadOptions = argv.filter((arg) => arg === "--match-head-commit");
+  const events = recordedEvents();
+  const mergeAttempts = events.filter((event) => event.type === "gh_result" && event.mergeAttempt);
+  const endpoint = "repos/" + fixture.repo + "/pulls/" + fixture.prNumber + "/merge";
+  const requestedHead = rawField(argv, "sha");
+  const rawFieldOptions = argv.filter((arg) => arg === "--raw-field" || arg === "-f");
   const exact =
     argv.length === 8 &&
-    argv[0] === "pr" &&
-    argv[1] === "merge" &&
-    argv[2] === String(fixture.prNumber) &&
-    argv[3] === "--repo" &&
-    argv[4] === fixture.repo &&
-    argv[5] === "--squash" &&
-    argv[6] === "--match-head-commit" &&
-    matchHeadOptions.length === 1 &&
-    matchHeadCommit === state.approvedHead &&
-    !argv.includes("--admin") &&
-    !argv.includes("--auto") &&
-    !argv.includes("--merge") &&
-    !argv.includes("--rebase") &&
-    (state.mergeAttempts || 0) === 0;
+    argv[0] === "api" &&
+    argv[1] === "--method" &&
+    argv[2] === "PUT" &&
+    argv[3] === endpoint &&
+    argv[4] === "--raw-field" &&
+    argv[5] === "sha=" + requestedHead &&
+    argv[6] === "--raw-field" &&
+    argv[7] === "merge_method=squash" &&
+    rawFieldOptions.length === 2 &&
+    /^[0-9a-f]{40}$/u.test(requestedHead) &&
+    requestedHead === state.approvedHead &&
+    successfulApprovalResponse(events, fixture, requestedHead) &&
+    mergeAttempts.length === 0;
   if (!exact) {
     finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
       reviewFixture: true,
@@ -348,38 +403,122 @@ if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === 
   }
   const currentHeadOid = fixture.mergeCurrentHeadOid || state.approvedHead;
   const mergeOutcome = fixture.mergeOutcome || "success";
-  writeFileSync(REVIEW_STATE_PATH, JSON.stringify({ ...state, mergeAttempts: 1 }), "utf8");
   const mergeEvidence = {
-    approvedHeadOid: state.approvedHead,
     currentHeadOid,
-    matchHeadCommit,
     mergeAttempt: true,
     mergeOutcome,
+    requestedHead,
     reviewFixture: true,
   };
-  if (mergeOutcome === "head-mismatch" || currentHeadOid !== state.approvedHead) {
-    finish(
-      argv,
-      phase,
-      1,
-      "",
-      "Pull request head changed before merge; expected " + state.approvedHead + ", found " + currentHeadOid + ".\\n",
-      mergeEvidence,
-    );
+  if (mergeOutcome === "head-mismatch" || currentHeadOid !== requestedHead) {
+    finish(argv, phase, 1, "", "gh: Head branch was modified. (HTTP 409)\\n", mergeEvidence);
   }
-  if (mergeOutcome === "unsupported-flag") {
-    finish(argv, phase, 1, "", "unknown flag: --match-head-commit\\n", mergeEvidence);
+  if (mergeOutcome === "api-unsupported") {
+    finish(argv, phase, 1, "", "gh: Not Found (HTTP 404)\\n", mergeEvidence);
+  }
+  if (mergeOutcome === "queue-required") {
+    finish(argv, phase, 1, "", "gh: Merge queue required. (HTTP 405)\\n", mergeEvidence);
+  }
+  if (mergeOutcome === "transport-open" || mergeOutcome === "transport-unknown") {
+    finish(argv, phase, 1, "", "connection reset before a response was received\\n", mergeEvidence);
+  }
+  if (mergeOutcome === "transport-merged") {
+    append({
+      type: "github_pr_merged",
+      phase,
+      argv,
+      cwd: process.cwd(),
+      commitOid: requestedHead,
+      prNumber: fixture.prNumber,
+      repo: fixture.repo,
+    });
+    finish(argv, phase, 1, "", "connection reset before a response was received\\n", mergeEvidence);
   }
   append({
     type: "github_pr_merged",
     phase,
     argv,
     cwd: process.cwd(),
-    commitOid: state.approvedHead,
+    commitOid: requestedHead,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
   });
-  finish(argv, phase, 0, "✓ Pull request merged\\n", "", { ...mergeEvidence, recordedOnly: true });
+  finish(
+    argv,
+    phase,
+    0,
+    JSON.stringify({ sha: "c".repeat(40), merged: true, message: "Pull Request successfully merged" }) + "\\n",
+    "",
+    { ...mergeEvidence, recordedOnly: true },
+  );
+}
+
+if (
+  REVIEW_FIXTURE_PATH &&
+  REVIEW_STATE_PATH &&
+  argv[0] === "api" &&
+  ghMethod(argv) === "GET" &&
+  endpointArg(argv).includes("/pulls/") &&
+  !endpointArg(argv).endsWith("/merge")
+) {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  let state = { views: 0 };
+  try {
+    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
+  } catch {}
+  const events = recordedEvents();
+  const mergeAttempts = events.filter((event) => event.type === "gh_result" && event.mergeAttempt);
+  const reconciliationAttempts = events.filter(
+    (event) => event.type === "gh_result" && event.mergeReconciliation,
+  );
+  const lastRequestedHead = mergeAttempts.at(-1)?.requestedHead;
+  const endpoint = "repos/" + fixture.repo + "/pulls/" + fixture.prNumber;
+  const exact =
+    argv.length === 4 &&
+    argv[0] === "api" &&
+    argv[1] === "--method" &&
+    argv[2] === "GET" &&
+    argv[3] === endpoint &&
+    mergeAttempts.length === 1 &&
+    reconciliationAttempts.length === 0 &&
+    fixture.mergeOutcome !== "success";
+  if (!exact) {
+    finish(argv, phase, 2, "", "Review fixture rejected a non-exact merge reconciliation.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  if (fixture.mergeOutcome === "transport-unknown") {
+    finish(argv, phase, 1, "", "connection reset while reconciling pull request state\\n", {
+      mergeReconciliation: true,
+      reviewFixture: true,
+    });
+  }
+  const merged = fixture.mergeOutcome === "transport-merged";
+  const headOid = merged ? lastRequestedHead : fixture.mergeCurrentHeadOid || lastRequestedHead;
+  const response = {
+    html_url: "https://github.com/" + fixture.repo + "/pull/" + fixture.prNumber,
+    merged,
+    merged_at: merged ? "2026-07-22T00:00:00Z" : null,
+    state: merged ? "closed" : "open",
+    head: { sha: headOid },
+  };
+  append({
+    type: "github_pr_reconciled",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode: 0,
+    headRefOid: headOid,
+    merged,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+    state: response.state,
+  });
+  finish(argv, phase, 0, JSON.stringify(response) + "\\n", "", {
+    mergeReconciliation: true,
+    reviewFixture: true,
+  });
 }
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;

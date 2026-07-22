@@ -33,7 +33,6 @@ export async function runContextTreeReviewCase(
     recordedModelVerifyHead: fixture.expectation.headOid,
     recordedModelVerifyPath: fixture.verifyResultPath,
     reviewFixturePath: fixture.fixturePath,
-    reviewPrivateFixturePath: fixture.privateFixturePath,
     reviewStatePath: fixture.reviewStatePath,
   });
   createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath, reviewStatePath: fixture.reviewStatePath });

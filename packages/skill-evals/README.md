@@ -135,14 +135,20 @@ live First Tree runtime E2E remain outside skill evals.
 `eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
 request review gate. Its deterministic GitHub shim permits only PR state reads,
 identity lookup, one body-file review submission, and—after a successful App
-approval—one exact-head local squash-merge attempt; all other `gh` commands
-remain blocked. The cases require validator-first ordering and cover structural
-failure, semantic failure, ready approval, response-head provenance, a head
-race, unsupported merge-CAS flags, draft deferral, archive-only scope, human
-authority, self-approval, and stale-head suppression. The fixture records the
-real source-tree validator result before the sandboxed model run so the agent
+approval—one immediate REST squash-merge mutation whose `sha` is the successful
+App response head. An unconfirmed mutation permits exactly one read-only PR
+state reconciliation; high-level `gh pr merge`, repeated mutation, fallback,
+and all other `gh` commands remain blocked. The cases require validator-first
+ordering and cover structural failure, semantic failure, ready approval,
+response-only head provenance, a head race, unsupported merge API, merge-queue
+rejection, transport outcomes reconciled as open/merged/unknown, draft
+deferral, archive-only scope, and human authority. The fixture records the real
+source-tree validator result before the sandboxed model run so the agent
 receives the exact structural verdict without contacting GitHub. Merge effects
-are recorded by the shim only; the gate never mutates a real pull request.
+are recorded by the shim only; the gate never mutates a real pull request. In
+particular, the merge-queue rejection row is deterministic simulation rather
+than evidence from a queue-protected GitHub repository. The real provider queue
+boundary remains part of the cross-surface QA case.
 
 `eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
 against deterministic local default-branch fixtures. It requires the Audit

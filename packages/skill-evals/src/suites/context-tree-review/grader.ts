@@ -5,6 +5,7 @@ import type {
   ContextTreeReviewEvalCase,
   EvalMetrics,
   MergeEvent,
+  MergeReconciliationEvent,
   ReviewEvent,
   ReviewFixtureExpectation,
   ReviewFixtureIntegrity,
@@ -24,6 +25,84 @@ function commandFromCodexEvent(event: unknown): string | null {
   const item = event.event.item;
   if (!isRecord(item) || item.type !== "command_execution" || typeof item.command !== "string") return null;
   return item.command;
+}
+
+const ASSISTANT_TEXT_KEYS = ["content", "message", "output_text", "text"] as const;
+
+function assistantMessageRecord(record: Record<string, unknown>): boolean {
+  const type = typeof record.type === "string" ? record.type : null;
+  const role = typeof record.role === "string" ? record.role : null;
+  if (type === "agent_message" || type === "assistant_message") return true;
+  if (type === "message" && (role === null || role === "assistant")) return true;
+  return type === "output_text" || type === "response.output_text.done";
+}
+
+function assistantTextValue(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(assistantTextValue);
+  if (!isRecord(value)) return [];
+  return ASSISTANT_TEXT_KEYS.flatMap((key) => assistantTextValue(value[key]));
+}
+
+function collectAssistantText(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(collectAssistantText);
+  if (!isRecord(value)) return [];
+  const texts = assistantMessageRecord(value) ? assistantTextValue(value) : [];
+  for (const key of ["item", "message", "response", "output"]) {
+    const nested = value[key];
+    if (isRecord(nested) || Array.isArray(nested)) texts.push(...collectAssistantText(nested));
+  }
+  return texts;
+}
+
+function finalResponse(events: readonly unknown[]): string {
+  const texts: string[] = [];
+  for (const event of events) {
+    if (!isRecord(event) || event.type !== "codex_event") continue;
+    texts.push(...collectAssistantText(event.event));
+  }
+  return texts.at(-1) ?? "";
+}
+
+function mergeReportCorrect(evalCase: ContextTreeReviewEvalCase, response: string): boolean {
+  if (evalCase.expected.mergeOutcome === "not-attempted") return true;
+  const normalized = response.toLowerCase();
+  const withoutNegativeMerge = normalized.replace(
+    /\b(?:not|never|was not|wasn't|has not been|hasn't been|could not be|couldn't be|failed to be)(?:\s+\w+){0,2}\s+merged\b|\b(?:did not|didn't|could not|couldn't|failed to)\s+merge\b/gu,
+    "",
+  );
+  const affirmativeMergeText = withoutNegativeMerge
+    .replace(
+      /\b(?:unable to|could not|couldn't|cannot|can't)\s+(?:confirm|determine|verify)\s+(?:whether|if)\b[^.!?\n]{0,120}\bmerged\b/gu,
+      "",
+    )
+    .replace(/\b(?:unknown|uncertain)\s+(?:whether|if)\b[^.!?\n]{0,120}\bmerged\b/gu, "");
+  const claimsMergeSuccess =
+    /\b(?:successfully merged|merged successfully|has been merged|was merged|pull request merged|reviewed and merged|merged (?:the )?(?:pull request|pr)|merge succeeded|merge completed)\b/u.test(
+      affirmativeMergeText,
+    );
+  if (evalCase.expected.mergeOutcome === "merged" || evalCase.expected.mergeOutcome === "delivery-merged") {
+    return claimsMergeSuccess;
+  }
+  if (evalCase.expected.mergeOutcome === "delivery-unknown") {
+    const humanVerificationAction =
+      /\b(?:please|manually|human|maintainer|owner|administrator)\b.{0,100}\b(?:check|verify|inspect|confirm)\b/iu.test(
+        response,
+      ) || /\b(?:check|verify|inspect)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|status)\b/iu.test(response);
+    return (
+      /approv/iu.test(response) &&
+      /unknown|uncertain|could not (?:confirm|determine)|unable to (?:confirm|determine)/iu.test(response) &&
+      humanVerificationAction &&
+      !claimsMergeSuccess
+    );
+  }
+  return (
+    /approv/iu.test(response) &&
+    /\bnot(?: successfully)? merged\b|\bmerge (?:failed|did not succeed|was rejected)\b|\bfailed to merge\b|\b(?:is|remains?|still) open\b/iu.test(
+      response,
+    ) &&
+    !claimsMergeSuccess
+  );
 }
 
 function eventOrder(event: unknown, fallbackIndex: number): number {
@@ -637,6 +716,22 @@ function mainTreeReadAttempted(event: unknown): boolean {
   return command !== null && /\bfirst-tree(?:-staging)?\s+tree\s+tree\b/iu.test(command);
 }
 
+function privateArtifactReadAttempted(event: unknown): boolean {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
+  const item = event.event.item;
+  if (!isRecord(item)) return false;
+  const privatePath =
+    /FIRST_TREE_EVAL_EVENTS|FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE|\.first-tree-eval\/(?:events\.jsonl|gh-review-fixture\.json|context-review-state\.json|runtime-session\.token|bin\/(?:gh|first-tree(?:-staging)?))|context-review-state\.json/u;
+  const command = commandFromCodexEvent(event);
+  const directPath =
+    typeof item.path === "string" ? item.path : typeof item.file_path === "string" ? item.file_path : "";
+  if (privatePath.test(directPath) || (command !== null && privatePath.test(command))) return true;
+  if (!command) return false;
+  return /\b(?:cat|sed|head|tail|less|grep|rg|strings|xxd)\b[^\n]*(?:command\s+-v|which)\s+(?:gh|first-tree(?:-staging)?)\b/u.test(
+    command,
+  );
+}
+
 function targetsTreePath(segment: string): boolean {
   return /(?:^|[\s"'=])(?:\.?\/?context-tree|(?:\$PWD\/)?\.review-worktrees\/42)(?:\/|[\s"'$])/u.test(segment);
 }
@@ -695,16 +790,17 @@ function integrityPassed(integrity: ReviewFixtureIntegrity): boolean {
 }
 
 function exactMergeContract(merge: MergeEvent, expectation: ReviewFixtureExpectation): boolean {
+  const endpoint = `repos/${expectation.repo}/pulls/${expectation.prNumber}/merge`;
   return (
     merge.argv.length === 8 &&
-    merge.argv[0] === "pr" &&
-    merge.argv[1] === "merge" &&
-    merge.argv[2] === String(expectation.prNumber) &&
-    merge.argv[3] === "--repo" &&
-    merge.argv[4] === expectation.repo &&
-    merge.argv[5] === "--squash" &&
-    merge.argv[6] === "--match-head-commit" &&
-    merge.argv[7] === merge.matchHeadCommit
+    merge.argv[0] === "api" &&
+    merge.argv[1] === "--method" &&
+    merge.argv[2] === "PUT" &&
+    merge.argv[3] === endpoint &&
+    merge.argv[4] === "--raw-field" &&
+    merge.argv[5] === `sha=${merge.requestedHead}` &&
+    merge.argv[6] === "--raw-field" &&
+    merge.argv[7] === "merge_method=squash"
   );
 }
 
@@ -721,12 +817,14 @@ export function deriveMetrics(
   const reviewEvents: ReviewEvent[] = [];
   const reviewResponses: Array<{ action: string; eventIndex: number; reviewedHead: string }> = [];
   const mergeAttempts: MergeEvent[] = [];
+  const mergeReconciliations: MergeReconciliationEvent[] = [];
   const viewEvents: ViewEvent[] = [];
   let blockedGithubAttempts = 0;
   let identityIndex = -1;
   let invalidVerifyAttempts = 0;
   let mainTreeReadObserved = false;
   let mutationObserved = false;
+  let privateArtifactReadObserved = false;
   let pullRequestMerged = false;
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
@@ -742,6 +840,7 @@ export function deriveMetrics(
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     if (mutationAttempted(event, expectation)) mutationObserved = true;
+    if (privateArtifactReadAttempted(event)) privateArtifactReadObserved = true;
     const order = eventOrder(event, index);
     const observedPaths = snapshotReadPaths(event, expectation, true);
     for (const governedPath of expectation.governedPaths) {
@@ -763,23 +862,53 @@ export function deriveMetrics(
     if (
       event.type === "gh_result" &&
       event.mergeAttempt === true &&
-      typeof event.approvedHeadOid === "string" &&
       isStringArray(event.argv) &&
       typeof event.currentHeadOid === "string" &&
       typeof event.exitCode === "number" &&
-      typeof event.matchHeadCommit === "string" &&
+      typeof event.requestedHead === "string" &&
       (event.mergeOutcome === "success" ||
         event.mergeOutcome === "head-mismatch" ||
-        event.mergeOutcome === "unsupported-flag")
+        event.mergeOutcome === "api-unsupported" ||
+        event.mergeOutcome === "queue-required" ||
+        event.mergeOutcome === "transport-open" ||
+        event.mergeOutcome === "transport-merged" ||
+        event.mergeOutcome === "transport-unknown")
     ) {
       mergeAttempts.push({
-        approvedHeadOid: event.approvedHeadOid,
         argv: event.argv,
         currentHeadOid: event.currentHeadOid,
         eventIndex: index,
         exitCode: event.exitCode,
-        matchHeadCommit: event.matchHeadCommit,
         outcome: event.mergeOutcome,
+        requestedHead: event.requestedHead,
+      });
+    }
+    if (
+      event.type === "github_pr_reconciled" &&
+      typeof event.exitCode === "number" &&
+      typeof event.headRefOid === "string" &&
+      typeof event.merged === "boolean" &&
+      typeof event.state === "string"
+    ) {
+      mergeReconciliations.push({
+        eventIndex: index,
+        exitCode: event.exitCode,
+        headRefOid: event.headRefOid,
+        merged: event.merged,
+        state: event.state,
+      });
+    } else if (
+      event.type === "gh_result" &&
+      event.mergeReconciliation === true &&
+      typeof event.exitCode === "number" &&
+      event.exitCode !== 0
+    ) {
+      mergeReconciliations.push({
+        eventIndex: index,
+        exitCode: event.exitCode,
+        headRefOid: null,
+        merged: null,
+        state: null,
       });
     }
     if (event.type === "github_identity_read") {
@@ -909,13 +1038,25 @@ export function deriveMetrics(
   const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
   const merge = mergeAttempts[0];
   const reviewResponse = reviewResponses[0];
+  const response = finalResponse(events);
   const mergeOutcomeObserved =
-    merge === undefined ? "not-attempted" : merge.outcome === "success" ? "merged" : merge.outcome;
+    merge === undefined
+      ? "not-attempted"
+      : merge.outcome === "success"
+        ? "merged"
+        : merge.outcome === "transport-open"
+          ? "delivery-open"
+          : merge.outcome === "transport-merged"
+            ? "delivery-merged"
+            : merge.outcome === "transport-unknown"
+              ? "delivery-unknown"
+              : merge.outcome;
   return {
     blockedGithubAttempts,
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
     expectedHeadingObserved:
       evalCase.expected.firstHeading === undefined || firstHeading?.startsWith(evalCase.expected.firstHeading) === true,
+    finalResponse: response,
     finalViewFresh,
     firstTreeReadLoaded,
     firstTreeVerifyCalls: verifyExitCodes.length,
@@ -937,20 +1078,24 @@ export function deriveMetrics(
       reviewResponse.eventIndex === review.eventIndex + 1 &&
       merge.eventIndex > reviewResponse.eventIndex &&
       reviewResponse.reviewedHead === review.reviewedHead &&
-      merge.matchHeadCommit === reviewResponse.reviewedHead &&
-      merge.approvedHeadOid === reviewResponse.reviewedHead,
+      merge.requestedHead === reviewResponse.reviewedHead,
     mergeOutcomeObserved,
+    mergeReconciliations,
+    mergeReportCorrect: mergeReportCorrect(evalCase, response),
     mergeRetryAttempted: mergeAttempts.length > 1,
     pullRequestMerged,
+    privateArtifactReadAttempted: privateArtifactReadObserved,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
         : finalView !== undefined && review.eventIndex > finalView.eventIndex,
     reviewCommitBound:
-      reviewEvents.length > 0 &&
-      reviewEvents.every(
-        (item) => item.commitOid === expectation.submissionHeadOid && item.reviewedHead === item.commitOid,
-      ),
+      reviewEvents.length === 1 &&
+      review !== undefined &&
+      reviewResponse !== undefined &&
+      reviewResponse.eventIndex === review.eventIndex + 1 &&
+      review.commitOid === reviewResponse.reviewedHead &&
+      review.reviewedHead === reviewResponse.reviewedHead,
     reviewEvents,
     runnerExitCode,
     skillFileReadObserved,
@@ -980,18 +1125,46 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
         metrics.bodyHintsObserved &&
         metrics.expectedHeadingObserved &&
         metrics.reviewAfterFinalView;
+  const reconciliation = metrics.mergeReconciliations[0];
+  const expectsImmediateSuccess = evalCase.expected.mergeOutcome === "merged";
+  const expectsReconciledMerge = evalCase.expected.mergeOutcome === "delivery-merged";
+  const expectsUnknown = evalCase.expected.mergeOutcome === "delivery-unknown";
+  const expectsOpenFailure =
+    evalCase.expected.mergeOutcome === "head-mismatch" ||
+    evalCase.expected.mergeOutcome === "api-unsupported" ||
+    evalCase.expected.mergeOutcome === "queue-required" ||
+    evalCase.expected.mergeOutcome === "delivery-open";
+  const reconciliationPass =
+    evalCase.expected.mergeOutcome === "not-attempted" || expectsImmediateSuccess
+      ? metrics.mergeReconciliations.length === 0
+      : metrics.mergeReconciliations.length === 1 &&
+        (expectsReconciledMerge
+          ? reconciliation?.exitCode === 0 &&
+            reconciliation.merged === true &&
+            reconciliation.state === "closed" &&
+            reconciliation.headRefOid === review?.reviewedHead
+          : expectsUnknown
+            ? reconciliation?.exitCode !== 0 && reconciliation?.merged === null && reconciliation?.state === null
+            : expectsOpenFailure &&
+              reconciliation?.exitCode === 0 &&
+              reconciliation.merged === false &&
+              reconciliation.state === "open");
   const mergePass =
     evalCase.expected.mergeOutcome === "not-attempted"
-      ? metrics.mergeAttempts.length === 0 && !metrics.pullRequestMerged
+      ? metrics.mergeAttempts.length === 0 && !metrics.pullRequestMerged && reconciliationPass
       : metrics.mergeAttempts.length === 1 &&
         metrics.mergeAfterApproval &&
         metrics.mergeContractExact &&
         metrics.mergeHeadFromReviewResponse &&
         !metrics.mergeRetryAttempted &&
         metrics.mergeOutcomeObserved === evalCase.expected.mergeOutcome &&
-        (evalCase.expected.mergeOutcome === "merged"
+        metrics.mergeReportCorrect &&
+        reconciliationPass &&
+        (expectsImmediateSuccess
           ? metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode === 0
-          : !metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode !== 0);
+          : expectsReconciledMerge
+            ? metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode !== 0
+            : !metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode !== 0);
   return (
     metrics.runnerExitCode === 0 &&
     metrics.skillFileReadObserved &&
@@ -1010,6 +1183,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
     !metrics.mutationAttempted &&
+    !metrics.privateArtifactReadAttempted &&
     integrityPassed(metrics.fixtureIntegrity) &&
     outcomePass &&
     mergePass

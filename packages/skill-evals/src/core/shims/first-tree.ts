@@ -19,7 +19,6 @@ export function createFirstTreeShim(
     recordedModelVerifyPath?: string;
     auditFixturePath?: string;
     reviewFixturePath?: string;
-    reviewPrivateFixturePath?: string;
     reviewStatePath?: string;
     seedPreflight?: {
       branch: string;
@@ -58,7 +57,6 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
-const REVIEW_PRIVATE_FIXTURE_PATH = ${JSON.stringify(options.reviewPrivateFixturePath ?? null)};
 const REVIEW_STATE_PATH = ${JSON.stringify(options.reviewStatePath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
@@ -503,13 +501,21 @@ if (
   argv[0] === "tree" &&
   argv[1] === "review" &&
   REVIEW_FIXTURE_PATH &&
-  REVIEW_PRIVATE_FIXTURE_PATH &&
   REVIEW_STATE_PATH
 ) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
-  const privateFixture = JSON.parse(readFileSync(REVIEW_PRIVATE_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
-  const commitOid = privateFixture.submissionHeadOid;
+  const finalView = fixture.views.at(-1);
+  let state = {};
+  try {
+    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
+  } catch {}
+  const commitOid =
+    fixture.reviewHeadMode === "random-response"
+      ? state.approvedHead
+      : finalView && typeof finalView.headRefOid === "string"
+        ? finalView.headRefOid
+        : null;
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
   const exactOptions = argv.length === 8 && !argv.includes("--head") && !argv.includes("--agent");
@@ -535,7 +541,14 @@ if (
     body.trim().length > 0 &&
     Buffer.byteLength(body, "utf8") <= CONTEXT_REVIEW_BODY_MAX_BYTES &&
     !body.includes(CONTEXT_REVIEW_RUN_MARKER_PREFIX);
-  const valid = exactOptions && trustedRuntime && runId === fixture.runId && action && validBody;
+  const valid =
+    exactOptions &&
+    trustedRuntime &&
+    runId === fixture.runId &&
+    action &&
+    validBody &&
+    typeof commitOid === "string" &&
+    /^[0-9a-f]{40}$/u.test(commitOid);
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }
@@ -553,11 +566,7 @@ if (
     reviewedHead: commitOid,
     runId,
   });
-  if (action === "approve") {
-    let state = { views: 0 };
-    try {
-      state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
-    } catch {}
+  if (action === "approve" && state.approvedHead !== commitOid) {
     writeFileSync(REVIEW_STATE_PATH, JSON.stringify({ ...state, approvedHead: commitOid }), "utf8");
   }
   finish(

@@ -1069,14 +1069,21 @@ installation, bound repository, pull request, run, configured Reviewer and
 current PR head before the GitHub App creates the review. Unauthorized
 submissions fail closed. The command never merges. After a successful
 `APPROVE`, the Reviewer takes the merge head only from that successful
-response's `reviewedHead` and uses its local GitHub identity to run
-`gh pr merge <number> --repo <owner/repo> --squash --match-head-commit
-<reviewedHead>`. It never uses `--admin` or `--auto`, substitutes a webhook,
-local, or newly queried head, drops the match flag, or retries automatically.
-A head race, unsupported local `gh`, permission/check/ruleset/queue failure, or
-provider error leaves the pull request approved but open. The repository's
-required approval and stale-review dismissal remain mandatory; merge CAS is
-defense in depth, not a replacement for repository governance.
+response's `reviewedHead` and uses its local GitHub identity for one immediate
+REST squash-merge attempt: `gh api --method PUT
+repos/<owner/repo>/pulls/<number>/merge --raw-field sha=<reviewedHead>
+--raw-field merge_method=squash`. The REST `sha` field is the GitHub-side
+compare-and-set value. The Reviewer never uses the higher-level `gh pr merge`,
+which may implicitly enable auto-merge or enter a merge queue, and never
+substitutes a webhook, local, or newly queried head, omits the response head,
+chooses another method, adds a bypass, or retries the mutation. If the mutation
+response does not confirm `merged: true`, the Reviewer performs exactly one
+read-only `GET repos/<owner/repo>/pulls/<number>` reconciliation and reports
+only what that evidence proves: merged at the reviewed head, approved but open,
+or unknown. Head races and permission, check, ruleset, queue, endpoint, or
+transport errors create no fallback or deferred merge request. The
+repository's required approval and stale-review dismissal remain mandatory;
+merge CAS is defense in depth, not a replacement for repository governance.
 
 Existing Context Tree repositories should require pull requests, at least one
 current approval, and stale-review dismissal after every push. An administrator

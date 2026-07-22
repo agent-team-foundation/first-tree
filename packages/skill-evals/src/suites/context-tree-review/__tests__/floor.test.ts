@@ -21,7 +21,11 @@ describe("context-tree-review floor", () => {
       "passing",
       "merge-response-provenance",
       "merge-head-race",
-      "merge-flag-unsupported",
+      "merge-api-unsupported",
+      "merge-queue-required",
+      "merge-delivery-open",
+      "merge-delivery-merged",
+      "merge-delivery-unknown",
       "draft",
       "archive-only",
       "authority",
@@ -33,7 +37,11 @@ describe("context-tree-review floor", () => {
       "passing",
       "merge-response-provenance",
       "merge-head-race",
-      "merge-flag-unsupported",
+      "merge-api-unsupported",
+      "merge-queue-required",
+      "merge-delivery-open",
+      "merge-delivery-merged",
+      "merge-delivery-unknown",
       "draft",
       "archive-only",
       "authority",
@@ -73,11 +81,13 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("same-repository, non-fork PR");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
-    expect(skill).toContain(
-      'gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash --match-head-commit "$REVIEWED_HEAD"',
-    );
+    expect(skill).toContain('"repos/$REPOSITORY/pulls/$PR_NUMBER/merge"');
+    expect(skill).toContain('--raw-field "sha=$REVIEWED_HEAD"');
+    expect(skill).toContain('--raw-field "merge_method=squash"');
+    expect(skill).toContain("gh api --method GET");
+    expect(skill).toContain("Never call the higher-level `gh pr merge`");
     expect(skill).toContain("The immediately successful Server response");
-    expect(skill).toContain("Do not retry the merge automatically");
+    expect(skill).toContain("do not repeat any merge mutation");
     expect(skill).not.toContain("parse-repair-scope");
     expect(skill).toContain("Never use `--admin`");
     expect(skill).toContain("App-authored PR review is the only GitHub verdict");

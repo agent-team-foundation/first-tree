@@ -79,20 +79,30 @@ GitHub review and repository gate.
 - Confirm the App approval satisfies the generic one-approval gate. Push a new
   commit and verify GitHub dismisses the stale approval, so the old approval no
   longer satisfies the gate.
-- After approval, confirm the Reviewer uses only local
-  `gh pr merge <number> --repo <repo> --squash --match-head-commit
-  <reviewedHead>`, where the exact SHA comes from the immediately successful
-  `tree review` response. Reject local snapshot, webhook, dispatch-time, branch,
-  or newly queried current-head substitution; a missing/wrong match value;
-  `--admin`; `--auto`; force push; App-token merge; and alternate merge methods.
+- After approval, confirm the Reviewer uses only one immediate local-identity
+  `gh api --method PUT repos/<repo>/pulls/<number>/merge --raw-field
+  sha=<reviewedHead> --raw-field merge_method=squash`, where the exact SHA comes
+  from the immediately successful `tree review` response. Reject local
+  snapshot, webhook, dispatch-time, branch, or newly queried current-head
+  substitution; a missing/wrong `sha`; high-level `gh pr merge`; `--admin`;
+  `--auto`; force push; App-token merge; alternate methods; and repeated
+  mutation attempts.
 - Approve head X, then push Y before local merge. Confirm the X-bound merge
-  attempt fails, Y remains open, and the Reviewer does not retry, drop the
-  match flag, substitute Y, add a bypass option, or schedule an automatic
-  merge. Repeat with a local `gh` that rejects `--match-head-commit` and confirm
-  the same approved-but-open, zero-fallback result.
-- Force local merge permission, ruleset, check and transient provider failures.
-  Confirm the agent reports approval plus the merge error, does not duplicate
-  or roll back the App review, does not retry, and does not claim success.
+  API attempt fails, exactly one read-only PR-state reconciliation proves Y is
+  open, and the Reviewer does not retry, omit or replace `sha`, substitute Y,
+  add a bypass, call `gh pr merge`, or schedule an automatic merge. Repeat with
+  a local `gh` or GitHub host that does not support the merge endpoint and
+  confirm the same approved-but-open, zero-fallback result.
+- Require a merge queue and confirm the immediate REST attempt is rejected,
+  the read-only reconciliation proves the PR remains open, and no auto-merge
+  or queue entry was created.
+- Force local merge permission, ruleset, check and transport failures. Confirm
+  every unconfirmed mutation is followed by exactly one read-only
+  `gh api --method GET repos/<repo>/pulls/<number>` and no mutation retry.
+  Exercise all three reports: the PR is still open; the reviewed head merged
+  despite a lost response; and the outcome is unknown because reconciliation
+  also failed. Confirm the agent never turns an error alone into an open-state
+  claim, duplicates or rolls back the App review, or falsely claims success.
 
 ## Expected Result
 
@@ -120,7 +130,8 @@ Keep target refs; redacted permission and binding/assignment summaries;
 webhook delivery ids; stable Chat and run ids; validation output; repair diff;
 GitHub App review actor/event/commit id; ruleset and stale-dismissal evidence;
 check and merge records; and proof that no removed dispatch or bypass path was
-used. For merge failures, retain the App response head, attempted match head,
-live PR head, error, open-PR state, and proof of zero fallback/retry. Never
-retain credentials, installation tokens, private sessions, hidden prompts or
-unrelated content.
+used. For merge failures, retain the App response head, requested REST `sha`,
+mutation result, the single read-only reconciliation result, final
+merged/open/unknown disposition, and proof of zero fallback/retry or deferred
+merge state. Never retain credentials, installation tokens, private sessions,
+hidden prompts or unrelated content.
