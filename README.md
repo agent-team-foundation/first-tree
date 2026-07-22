@@ -41,6 +41,10 @@ before they work; useful outcomes can flow back into it after the work is done.
 The result is a human-agent work loop where every task can start with more team
 context, and every useful outcome can make the next task smarter.
 
+<p align="center">
+  <img src="assets/workspace-screenshot.png" alt="First Tree workspace: an agent reporting back on a GitHub issue, with team context and participants alongside" width="100%">
+</p>
+
 <div align="center">
 <table>
   <tr>
