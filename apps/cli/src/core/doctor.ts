@@ -14,6 +14,7 @@ import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
+import { launchdPlistPath, launchdWrapperPath, systemdUnitPath } from "./supervisor/index.js";
 
 export type CheckResult = {
   label: string;
@@ -273,6 +274,139 @@ export function checkBackgroundService(): CheckResult {
     ok: false,
     detail: `not installed — re-run \`${channelConfig.binName} login <code>\` to install`,
   };
+}
+
+/**
+ * First shell word of a command string rendered with `shellQuote`: a bare
+ * safe-charset token, or a double-quoted token with `\\` / `\"` escapes.
+ * Both the launchd wrapper `exec` line and the systemd `ExecStart=` value
+ * are rendered that way, so one inverse parser covers both.
+ */
+function firstCommandToken(command: string): string | null {
+  const trimmed = command.trim();
+  if (trimmed === "") return null;
+  if (trimmed.startsWith('"')) {
+    let token = "";
+    for (let i = 1; i < trimmed.length; i += 1) {
+      const ch = trimmed[i];
+      if (ch === "\\" && i + 1 < trimmed.length) {
+        token += trimmed[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === '"') return token;
+      token += ch;
+    }
+    return null;
+  }
+  const end = trimmed.search(/\s/);
+  return end === -1 ? trimmed : trimmed.slice(0, end);
+}
+
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Validate that the installed service's launch chain still points at files
+ * that exist. The service files bake absolute paths resolved at install time
+ * (wrapper `exec` target, plist `PATH` head, unit `ExecStart` binary); a
+ * Node/npm relocation — `nvm uninstall`, switching the default node — leaves
+ * them dangling, and the resulting crash loop cannot self-report because the
+ * process never starts. Doctor is the read-only surface that can: this check
+ * only inspects files and never spawns or mutates anything. Path overrides
+ * exist for tests.
+ */
+export function checkServiceLaunchPath(
+  opts: { platform?: NodeJS.Platform; plistPath?: string; wrapperPath?: string; unitPath?: string } = {},
+): CheckResult {
+  const label = "Service launch path";
+  const platform = opts.platform ?? process.platform;
+  const repair =
+    `re-run \`${channelConfig.binName} login <code>\` ` +
+    `(or \`${channelConfig.binName} daemon ensure-service\`) to re-render the service files`;
+
+  if (platform === "darwin") {
+    const plistPath = opts.plistPath ?? launchdPlistPath();
+    if (!existsSync(plistPath)) {
+      return { label, ok: true, detail: "service not installed — nothing to validate" };
+    }
+    const wrapperPath = opts.wrapperPath ?? launchdWrapperPath();
+    if (!existsSync(wrapperPath)) {
+      return { label, ok: false, detail: `wrapper missing (${wrapperPath}) — ${repair}` };
+    }
+    let wrapperBody: string;
+    try {
+      wrapperBody = readFileSync(wrapperPath, "utf-8");
+    } catch {
+      return { label, ok: false, detail: `wrapper unreadable (${wrapperPath}) — ${repair}` };
+    }
+    const execLine = wrapperBody.split("\n").find((line) => line.startsWith("exec "));
+    const target = execLine === undefined ? null : firstCommandToken(execLine.slice("exec ".length));
+    if (target === null) {
+      return { label, ok: false, detail: `wrapper has no parseable exec command (${wrapperPath}) — ${repair}` };
+    }
+    if (!existsSync(target)) {
+      return {
+        label,
+        ok: false,
+        detail:
+          `launch target missing (${target}) — usually a removed Node install ` + `(e.g. \`nvm uninstall\`); ${repair}`,
+      };
+    }
+    let plistBody: string;
+    try {
+      plistBody = readFileSync(plistPath, "utf-8");
+    } catch {
+      return { label, ok: false, detail: `service plist unreadable (${plistPath}) — ${repair}` };
+    }
+    const pathMatch = plistBody.match(/<key>\s*PATH\s*<\/key>\s*<string>([^<]*)<\/string>/);
+    if (pathMatch !== null) {
+      const pathHead = unescapeXml(pathMatch[1]).split(":")[0];
+      if (pathHead !== "" && !existsSync(pathHead)) {
+        return {
+          label,
+          ok: false,
+          detail: `service PATH head missing (${pathHead}) — the pinned Node directory is gone; ${repair}`,
+        };
+      }
+    }
+    return { label, ok: true, detail: `launch target verified (${target})` };
+  }
+
+  if (platform === "linux") {
+    const unitPath = opts.unitPath ?? systemdUnitPath();
+    if (!existsSync(unitPath)) {
+      return { label, ok: true, detail: "service not installed — nothing to validate" };
+    }
+    let unitBody: string;
+    try {
+      unitBody = readFileSync(unitPath, "utf-8");
+    } catch {
+      return { label, ok: false, detail: `service unit unreadable (${unitPath}) — ${repair}` };
+    }
+    const execLine = unitBody.split("\n").find((line) => line.startsWith("ExecStart="));
+    const target = execLine === undefined ? null : firstCommandToken(execLine.slice("ExecStart=".length));
+    if (target === null) {
+      return { label, ok: false, detail: `unit has no parseable ExecStart (${unitPath}) — ${repair}` };
+    }
+    if (!existsSync(target)) {
+      return {
+        label,
+        ok: false,
+        detail:
+          `launch target missing (${target}) — usually a removed Node install ` + `(e.g. \`nvm uninstall\`); ${repair}`,
+      };
+    }
+    return { label, ok: true, detail: `launch target verified (${target})` };
+  }
+
+  return { label, ok: true, detail: `not applicable on ${platform}` };
 }
 
 export async function checkWebSocket(): Promise<CheckResult> {

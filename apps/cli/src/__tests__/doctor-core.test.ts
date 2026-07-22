@@ -397,3 +397,111 @@ describe("doctor core checks", () => {
     ).toEqual(["claude-code", "zed"]);
   });
 });
+
+describe("checkServiceLaunchPath", () => {
+  async function loadCheck() {
+    const { checkServiceLaunchPath } = await import("../core/doctor.js");
+    return checkServiceLaunchPath;
+  }
+
+  it("reports not applicable on platforms without a validated service chain", async () => {
+    const check = await loadCheck();
+    expect(check({ platform: "win32" })).toMatchObject({
+      label: "Service launch path",
+      ok: true,
+      detail: expect.stringContaining("not applicable"),
+    });
+  });
+
+  it("passes quietly when no service is installed", async () => {
+    const check = await loadCheck();
+    expect(check({ platform: "darwin", plistPath: join(home, "absent.plist") })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining("not installed"),
+    });
+    expect(check({ platform: "linux", unitPath: join(home, "absent.service") })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining("not installed"),
+    });
+  });
+
+  it("fails when the plist exists but the wrapper script is gone", async () => {
+    const check = await loadCheck();
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, "<plist></plist>");
+    expect(check({ platform: "darwin", plistPath, wrapperPath: join(home, "no-wrapper") })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("wrapper missing"),
+    });
+  });
+
+  it("fails when the wrapper exec target no longer exists", async () => {
+    const check = await loadCheck();
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, "<plist></plist>");
+    const wrapperPath = join(home, "wrapper");
+    writeFileSync(wrapperPath, "#!/bin/sh\nexec /missing/node/first-tree daemon start --no-interactive\n");
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("launch target missing (/missing/node/first-tree)"),
+    });
+  });
+
+  it("fails when the wrapper has no parseable exec command", async () => {
+    const check = await loadCheck();
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, "<plist></plist>");
+    const wrapperPath = join(home, "wrapper");
+    writeFileSync(wrapperPath, "#!/bin/sh\n# hand-edited\n");
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("no parseable exec"),
+    });
+  });
+
+  it("fails when the plist PATH head directory is gone, unescaping XML entities", async () => {
+    const check = await loadCheck();
+    const target = join(home, "node bin");
+    writeFileSync(target, "#!/bin/sh\n");
+    const wrapperPath = join(home, "wrapper");
+    writeFileSync(wrapperPath, `#!/bin/sh\nexec "${target}" daemon start --no-interactive\n`);
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, `<dict>\n  <key>PATH</key>\n  <string>${home}/a&amp;b:/usr/bin</string>\n</dict>\n`);
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining(`service PATH head missing (${home}/a&b)`),
+    });
+  });
+
+  it("passes on a fully healthy launchd chain, including a quoted target with spaces", async () => {
+    const check = await loadCheck();
+    const target = join(home, "node bin");
+    writeFileSync(target, "#!/bin/sh\n");
+    const wrapperPath = join(home, "wrapper");
+    writeFileSync(wrapperPath, `#!/bin/sh\nexec "${target}" daemon start --no-interactive\n`);
+    const plistPath = join(home, "service.plist");
+    writeFileSync(plistPath, `<dict>\n  <key>PATH</key>\n  <string>${home}:/usr/bin</string>\n</dict>\n`);
+    expect(check({ platform: "darwin", plistPath, wrapperPath })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining(target),
+    });
+  });
+
+  it("validates the systemd ExecStart target on linux", async () => {
+    const check = await loadCheck();
+    const unitPath = join(home, "unit.service");
+    writeFileSync(unitPath, "[Service]\nExecStart=/missing/node cli.mjs daemon start --no-interactive\n");
+    expect(check({ platform: "linux", unitPath })).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("launch target missing (/missing/node)"),
+    });
+
+    const target = join(home, "node");
+    writeFileSync(target, "#!/bin/sh\n");
+    writeFileSync(unitPath, `[Service]\nExecStart="${target}" daemon start --no-interactive\n`);
+    expect(check({ platform: "linux", unitPath })).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining(target),
+    });
+  });
+});

@@ -61,6 +61,7 @@ export {
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
+  checkServiceLaunchPath,
   checkWebSocket,
   classifyContextTreeUpdateError,
   computeWorkspaceStatus,
