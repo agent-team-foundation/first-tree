@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.1
+version: 0.3.2
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
@@ -261,7 +261,8 @@ verification result, material context checked, challenge result, any repair and
 every unresolved blocker. Do not paste an internal checklist or manufacture an
 empty ledger merely to signal completion.
 
-Write the review body to a temporary file and submit only through:
+Write the review body to a temporary file. For `REQUEST_CHANGES` and
+`COMMENT`, submit only through:
 
 ```bash
 first-tree tree review \
@@ -270,10 +271,12 @@ first-tree tree review \
   --body-file "$REVIEW_BODY"
 ```
 
-The command derives the repository, PR, reviewer and active Chat from the
-trusted run and runtime. The server reads the current PR head and publishes the
-App review for that commit. Do not fall back to `gh pr review`, the GitHub
-review API, a top-level comment or a status. Do not invent a run id.
+For `APPROVE`, wait for checks and use the single publication-and-merge
+sequence below instead of running this command separately. The command derives
+the repository, PR, reviewer and active Chat from the trusted run and runtime.
+The server reads the current PR head and publishes the App review for that
+commit. Do not fall back to `gh pr review`, the GitHub review API, a top-level
+comment or a status. Do not invent a run id.
 
 If delivery is reported unknown, retain that fail-closed remote truth and use
 the same command only as its documented reconciliation path; never post a
@@ -287,21 +290,99 @@ Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 produces a non-approving outcome. If checks remain pending at the deadline,
 submit no approval and report the wait state without creating a watcher or job.
 
-After `tree review --event APPROVE` succeeds, merge only with the host local
-`gh` identity:
+After the App approval command succeeds, the exact full SHA in that command's
+`data.reviewedHead` is the only merge authority. Do not use the earlier local
+snapshot head, webhook data or another `gh pr view`. Run this sequence once
+with the host local `gh` identity:
 
-```bash
-gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash
+<!-- context-review-merge-contract:start -->
+```sh
+APPROVAL_RESPONSE="$(
+  first-tree tree review \
+    --run "$CONTEXT_REVIEW_RUN_ID" \
+    --event APPROVE \
+    --body-file "$REVIEW_BODY"
+)" || {
+  printf '%s\n' 'Context Review approval failed; do not merge.' >&2
+  exit 1
+}
+
+REVIEWED_HEAD="$(
+  APPROVAL_RESPONSE="$APPROVAL_RESPONSE" node -e '
+    const response = JSON.parse(process.env.APPROVAL_RESPONSE ?? "");
+    const head = response?.data?.reviewedHead;
+    if (
+      response?.ok !== true ||
+      response?.data?.action !== "APPROVE" ||
+      typeof head !== "string" ||
+      !/^[0-9a-f]{40}$/iu.test(head)
+    ) process.exit(1);
+    process.stdout.write(head.toLowerCase());
+  '
+)" || {
+  printf '%s\n' 'Context Review approval returned no valid reviewedHead; do not merge.' >&2
+  exit 1
+}
+printf '%s\n' "$APPROVAL_RESPONSE"
+
+MERGE_RESPONSE=""
+if MERGE_RESPONSE="$(
+  gh api \
+    --method PUT \
+    "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" \
+    --raw-field "sha=$REVIEWED_HEAD" \
+    --raw-field merge_method=squash \
+    2>&1
+)"; then
+  if MERGE_RESPONSE="$MERGE_RESPONSE" node -e '
+    const response = JSON.parse(process.env.MERGE_RESPONSE ?? "");
+    process.exit(response?.merged === true ? 0 : 1);
+  '; then
+    printf '%s\n' 'CONTEXT_REVIEW_MERGE_OUTCOME=merged'
+    exit 0
+  fi
+fi
+printf '%s\n' "$MERGE_RESPONSE" >&2
+
+PR_RESPONSE=""
+if PR_RESPONSE="$(
+  gh api \
+    --method GET \
+    "repos/$REPOSITORY/pulls/$PR_NUMBER" \
+    2>&1
+)"; then
+  MERGE_OUTCOME="$(
+    PR_RESPONSE="$PR_RESPONSE" REVIEWED_HEAD="$REVIEWED_HEAD" node -e '
+      const response = JSON.parse(process.env.PR_RESPONSE ?? "");
+      const reviewedHead = (process.env.REVIEWED_HEAD ?? "").toLowerCase();
+      const currentHead = typeof response?.head?.sha === "string" ? response.head.sha.toLowerCase() : "";
+      const outcome =
+        response?.merged === true && currentHead === reviewedHead
+          ? "merged"
+          : response?.merged === false && response?.state === "open"
+            ? "open"
+            : "unknown";
+      process.stdout.write(outcome);
+    '
+  )" || MERGE_OUTCOME=unknown
+  printf 'CONTEXT_REVIEW_MERGE_OUTCOME=%s\n' "$MERGE_OUTCOME"
+  exit 0
+fi
+printf '%s\n' "$PR_RESPONSE" >&2
+printf '%s\n' 'CONTEXT_REVIEW_MERGE_OUTCOME=unknown'
+exit 0
 ```
+<!-- context-review-merge-contract:end -->
 
-Never use `--admin`, `--auto`, another merge method or an App credential. The
-repository gate must require at least one approval and dismiss stale approvals
-after a push. That gate, rather than a second CLI head argument, prevents an old
-approval from merging a newer commit.
-
-If App approval succeeds but local merge fails, report the review URL and merge
-error. Do not roll back or duplicate the approval and do not claim the PR
-merged.
+This is one immediate squash-merge compare-and-set: exactly one merge `PUT`,
+with no `gh pr merge`, queue/auto state, admin bypass, head substitution,
+alternate merge method, fallback or mutation retry. A confirmed `merged: true`
+response completes the attempt. Any unconfirmed result permits only the one
+read-only PR `GET` shown above. Report `merged`, `open` or `unknown` from that
+evidence; a merged reconciliation is valid only when its PR head is the exact
+`reviewedHead`. On mismatch, unsupported API, permission, checks, ruleset,
+queue or transport failure, leave the App approval intact and do not attempt
+another merge. Never use `--admin` or `--auto`.
 
 ## Recovery and reporting
 
