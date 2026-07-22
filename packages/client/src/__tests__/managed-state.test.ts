@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  isManagedSkillName,
   MANAGED_STATE_REL,
   type ManagedState,
   readManagedState,
@@ -180,5 +181,48 @@ describe("managed-state", () => {
 
     const agentDir = join(workspace, ".first-tree-workspace");
     expect(readdirSync(agentDir).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("isManagedSkillName accepts current and historical skill slugs", () => {
+    for (const name of ["first-tree-write", "context-tree-review", "first-tree-gitlab", "a", "0", "x".repeat(63)]) {
+      expect(isManagedSkillName(name)).toBe(true);
+    }
+  });
+
+  it("isManagedSkillName rejects path-like and malformed names (#1610)", () => {
+    for (const name of [
+      "..",
+      "../..",
+      "../../etc",
+      "/etc/passwd",
+      "a/b",
+      "a\\b",
+      "C:\\temp",
+      "",
+      "has space",
+      "line\nbreak",
+      "nul\u0000byte",
+      "Foo",
+      "under_score",
+      "dot.name",
+      "-leading-dash",
+      "x".repeat(64),
+    ]) {
+      expect(isManagedSkillName(name)).toBe(false);
+    }
+  });
+
+  it("drops invalid skill names on read — the state file is untrusted input (#1610)", () => {
+    writeFileSync(
+      join(workspace, MANAGED_STATE_REL),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: null,
+        updatedAt: "2026-06-08T16:00:00.000Z",
+        skills: ["first-tree-write", "../../outside", "/etc/passwd", "..", "", "has space", "Foo"],
+      }),
+      "utf-8",
+    );
+    expect(readManagedState(workspace)?.skills).toEqual(["first-tree-write"]);
   });
 });
