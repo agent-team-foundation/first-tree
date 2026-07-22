@@ -168,7 +168,7 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
   const finalHead = pushDenied ? "head" : "successor";
   const finalAction = evalCase.expected.action;
   const finalBody = mixed
-    ? "## Human decision required\n\nThe ownership and decision lock in system/authority-contract.md require owner authority."
+    ? "## Changes requested\n\nThe ownership and decision lock in system/authority-contract.md are proven unauthorized and require owner authority."
     : pushDenied
       ? "## Changes requested\n\nRepair is blocked: push to review-change was denied. The author must restore branch push access. system/review-contract.md"
       : "## Approved\n\nThe safely determined repair is complete and no blockers remain.";
@@ -451,7 +451,7 @@ describe("context-tree-review grader", () => {
     const evalCase = repairCase("mixed-repair-authority");
     const events = repairEvents(evalCase);
     Object.assign(events.at(-1) as object, {
-      body: "## Human decision required\n\nI repaired system/review-wording.md.\n\nThe author or owner must decide system/authority-contract.md.",
+      body: "## Changes requested\n\nI repaired system/review-wording.md.\n\nThe ownership and decision lock in system/authority-contract.md are proven unauthorized and require owner authority.",
     });
     const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
     expect(metrics.authorHandoffForRepairableFinding).toBe(false);
@@ -462,7 +462,7 @@ describe("context-tree-review grader", () => {
     const evalCase = repairCase("mixed-repair-authority");
     const events = repairEvents(evalCase);
     Object.assign(events.at(-1) as object, {
-      body: "## Human decision required\n\nFix system/review-wording.md before approval.\n\nThe owner must decide system/authority-contract.md.",
+      body: "## Changes requested\n\nFix system/review-wording.md before approval.\n\nThe ownership and decision lock in system/authority-contract.md are proven unauthorized and require owner authority.",
     });
     const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
     expect(metrics.authorHandoffForRepairableFinding).toBe(true);

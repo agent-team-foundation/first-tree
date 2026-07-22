@@ -67,9 +67,9 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     id: "mixed-repair-authority-repairs-safe-first",
     fixture: { scenario: "mixed-repair-authority" },
     expected: {
-      action: "comment",
+      action: "request-changes",
       bodyHints: ["authority", "owner", "system/authority-contract.md"],
-      firstHeading: "## Human decision required",
+      firstHeading: "## Changes requested",
       initialVerifyMustPass: true,
       repair: "success",
       repairPaths: ["system/review-wording.md"],
@@ -182,7 +182,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     expected: {
       action: "request-changes",
       bodyHints: ["authority", "owner"],
-      firstHeading: "## Human decision required",
+      firstHeading: "## Changes requested",
       initialVerifyMustPass: true,
       repair: "none",
       repairPaths: [],

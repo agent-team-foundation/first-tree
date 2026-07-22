@@ -62,13 +62,20 @@ describe("context-tree-review floor", () => {
 
     expect(validator?.expected).toMatchObject({ action: "approve", repair: "success" });
     expect(semantic?.expected).toMatchObject({ action: "approve", repair: "success" });
-    expect(mixed?.expected).toMatchObject({ action: "comment", repair: "success" });
+    expect(mixed?.expected).toMatchObject({
+      action: "request-changes",
+      firstHeading: "## Changes requested",
+      repair: "success",
+    });
     expect(denied?.expected).toMatchObject({ action: "request-changes", repair: "push-denied" });
   });
 
   it("maps a proven authority violation to request changes", () => {
     const authority = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "authority");
-    expect(authority?.expected.action).toBe("request-changes");
+    expect(authority?.expected).toMatchObject({
+      action: "request-changes",
+      firstHeading: "## Changes requested",
+    });
   });
 
   it("uses one trusted App-run publication path", () => {
