@@ -595,6 +595,26 @@ function snapshotReadPaths(
   return paths.map((path) => normalizeObservedPath(path, expectation));
 }
 
+function snapshotGitContentAttemptPaths(event: unknown, expectation: ReviewFixtureExpectation): string[] {
+  const command = commandFromCodexEvent(event);
+  if (!command) return [];
+  const paths: string[] = [];
+  let cwdIsReviewWorktree = false;
+  for (const segment of shellSegments(command)) {
+    const words = shellWords(segment);
+    if (words[0] === "cd") {
+      cwdIsReviewWorktree = isReviewWorktreeOperand(words[1] ?? "", expectation);
+      continue;
+    }
+    const gitCwd = gitWorkingDirectory(segment);
+    const gitUsesReviewWorktree = gitCwd !== null && isReviewWorktreeOperand(gitCwd, expectation);
+    for (const path of [...gitDiffContentPaths(segment), ...gitShowContentPaths(segment)]) {
+      if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
+    }
+  }
+  return paths.map((path) => normalizeObservedPath(path, expectation));
+}
+
 function referenceSearchObserved(event: unknown, expectation: ReviewFixtureExpectation, requiredPath: string): boolean {
   if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
   const item = event.event.item;
@@ -611,14 +631,8 @@ function referenceSearchObserved(event: unknown, expectation: ReviewFixtureExpec
   if (executable !== "rg" && executable !== "grep") return false;
   const flagOptions = new Set(["-E", "-F", "-i", "-n", "-q", "--fixed-strings", "--line-number", "--no-heading"]);
   const positionals: string[] = [];
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index] ?? "";
-    if (flagOptions.has(word) || word.startsWith("--glob=")) continue;
-    if (word === "-g" || word === "--glob") {
-      if (!words[index + 1] || words[index + 1]?.startsWith("-")) return false;
-      index += 1;
-      continue;
-    }
+  for (const word of words) {
+    if (flagOptions.has(word)) continue;
     if (word.startsWith("-")) return false;
     positionals.push(word);
   }
@@ -807,7 +821,10 @@ export function deriveMetrics(
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     if (mutationAttempted(event, expectation)) mutationObserved = true;
     const order = eventOrder(event, index);
-    const attemptedPaths = snapshotReadPaths(event, expectation);
+    const attemptedPaths = [
+      ...snapshotReadPaths(event, expectation),
+      ...snapshotGitContentAttemptPaths(event, expectation),
+    ];
     if (expectation.forbiddenPaths.some((path) => attemptedPaths.includes(path))) {
       prohibitedExpansionObserved = true;
     }

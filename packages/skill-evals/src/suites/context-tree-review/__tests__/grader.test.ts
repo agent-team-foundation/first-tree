@@ -385,6 +385,32 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
+  it("detects a forbidden git show read from a predecessor revision", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          aggregated_output: "unrelated predecessor content\n",
+          command: "git -C .review-worktrees/42 show HEAD^:experience/NODE.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/NODE.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
   it("requires an attributable incoming-reference search for the leaf-local branch", () => {
     const evalCase = passingCase();
     const requiredExpectation = {
@@ -426,6 +452,22 @@ describe("context-tree-review grader", () => {
     const rejected = deriveMetrics(falsePass, evalCase, requiredExpectation, integrity, 0);
     expect(rejected.referenceSearchAfterVerify).toBe(false);
     expect(casePassed(evalCase, rejected)).toBe(false);
+
+    const zeroFileSearch = passingEvents();
+    zeroFileSearch.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n -F --glob='!**/*' 'system/review-contract.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const zeroFileRejected = deriveMetrics(zeroFileSearch, evalCase, requiredExpectation, integrity, 0);
+    expect(zeroFileRejected.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, zeroFileRejected)).toBe(false);
   });
 
   it("requires governed reads and reference search before the final view and verdict", () => {
