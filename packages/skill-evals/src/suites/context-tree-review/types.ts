@@ -11,6 +11,7 @@ export type ReviewScenario =
   | "mixed-repair-authority"
   | "passing"
   | "push-denied"
+  | "relationship-change"
   | "semantic-failure"
   | "validator-failure";
 
@@ -61,7 +62,9 @@ export type ReviewFixtureExpectation = {
   baseOid: string;
   chatId: string;
   expectedFinalDraft: boolean;
+  expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
+  forbiddenPaths: readonly string[];
   governedPaths: readonly string[];
   headOid: string;
   initialVerifyMustPass: boolean;
@@ -75,6 +78,8 @@ export type ReviewFixtureExpectation = {
   runtimeSessionToken: string;
   runtimeSessionTokenFile: string;
   sourceBranch: string;
+  requiredReferenceSearches: readonly string[];
+  submissionHeadOid: string;
   workspacePath: string;
 };
 
@@ -130,6 +135,9 @@ export type EvalMetrics = {
   repairPushObserved: boolean;
   repairSequenceValid: boolean;
   repairSourceHeadFresh: boolean;
+  mutationAttempted: boolean;
+  prohibitedExpansionObserved: boolean;
+  referenceSearchAfterVerify: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

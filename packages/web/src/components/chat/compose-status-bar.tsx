@@ -107,6 +107,7 @@ export function ComposeStatusBar({
   const surfaceRef = useRef<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const focusWithinRef = useRef(false);
+  const pointerOriginOutsideRef = useRef<boolean | null>(null);
   const { data: rawStatuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
@@ -117,6 +118,7 @@ export function ComposeStatusBar({
   // must never resurrect Working after runtime freshness has expired.
   const statuses = rawStatuses ?? [];
   const attention = useMemo(() => selectAttention(statuses), [statuses]);
+  const hasAttention = attention.length > 0;
   const mounted = useMountedAnchors();
   const nameOf = useMemo(() => nameFor(agents), [agents]);
   const announcement = useMemo(() => activityAnnouncement(attention, nameOf), [attention, nameOf]);
@@ -140,15 +142,99 @@ export function ComposeStatusBar({
     setExpanded(false);
   }, [chatId]);
 
+  // Keep the listener lifetime stable while the actionable set changes so a
+  // live 1 -> 2 agent update cannot erase an in-flight pointer origin.
   useEffect(() => {
-    if (attention.length === 0) return;
-    const clearOutsidePointerFocus = (event: PointerEvent) => {
+    if (!hasAttention) return;
+    const isOutside = (event: Event) => {
       const target = event.target;
-      if (target instanceof Node && !surfaceRef.current?.contains(target)) focusWithinRef.current = false;
+      return target instanceof Node && !surfaceRef.current?.contains(target);
     };
-    document.addEventListener("pointerdown", clearOutsidePointerFocus, true);
-    return () => document.removeEventListener("pointerdown", clearOutsidePointerFocus, true);
-  }, [attention.length]);
+    const collapse = () => {
+      focusWithinRef.current = false;
+      if (expanded) setExpanded(false);
+    };
+    if (!expanded) {
+      const clearOutsidePointerFocus = (event: PointerEvent) => {
+        if (isOutside(event)) focusWithinRef.current = false;
+      };
+      document.addEventListener("pointerdown", clearOutsidePointerFocus, true);
+      return () => document.removeEventListener("pointerdown", clearOutsidePointerFocus, true);
+    }
+
+    let pointerCompletionFrame: number | null = null;
+    const settlePointerAfterActivation = (startedOutside: boolean) => {
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = requestAnimationFrame(() => {
+        pointerCompletionFrame = null;
+        if (pointerOriginOutsideRef.current !== startedOutside) return;
+        pointerOriginOutsideRef.current = null;
+        if (startedOutside) collapse();
+      });
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = null;
+      pointerOriginOutsideRef.current = isOutside(event);
+      if (pointerOriginOutsideRef.current) focusWithinRef.current = false;
+    };
+    const onPointerUp = () => {
+      const startedOutside = pointerOriginOutsideRef.current;
+      if (startedOutside !== null) settlePointerAfterActivation(startedOutside);
+    };
+    const onPointerCancel = () => {
+      const startedOutside = pointerOriginOutsideRef.current;
+      if (startedOutside !== null) settlePointerAfterActivation(startedOutside);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      if (pointerOriginOutsideRef.current === null && isOutside(event)) collapse();
+    };
+    const onOutsideIntent = (event: Event) => {
+      if (isOutside(event)) collapse();
+    };
+    const onClickCapture = (event: MouseEvent) => {
+      const pointerOriginOutside = pointerOriginOutsideRef.current;
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = null;
+      if (pointerOriginOutside === false) {
+        pointerOriginOutsideRef.current = null;
+        return;
+      }
+      if (pointerOriginOutside !== true && !isOutside(event)) return;
+      focusWithinRef.current = false;
+      // Capture sees Workspace controls that stop click propagation; defer the
+      // layout change until their target action has completed.
+      pointerCompletionFrame = requestAnimationFrame(() => {
+        pointerCompletionFrame = null;
+        pointerOriginOutsideRef.current = null;
+        collapse();
+      });
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointercancel", onPointerCancel, true);
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("click", onClickCapture, true);
+    document.addEventListener("keydown", onOutsideIntent);
+    document.addEventListener("beforeinput", onOutsideIntent);
+    document.addEventListener("paste", onOutsideIntent, true);
+    document.addEventListener("wheel", onOutsideIntent, true);
+    document.addEventListener("drop", onOutsideIntent, true);
+    return () => {
+      pointerOriginOutsideRef.current = null;
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointercancel", onPointerCancel, true);
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("click", onClickCapture, true);
+      document.removeEventListener("keydown", onOutsideIntent);
+      document.removeEventListener("beforeinput", onOutsideIntent);
+      document.removeEventListener("paste", onOutsideIntent, true);
+      document.removeEventListener("wheel", onOutsideIntent, true);
+      document.removeEventListener("drop", onOutsideIntent, true);
+    };
+  }, [expanded, hasAttention]);
 
   useEffect(() => {
     if (attention.length === 0) {
@@ -226,7 +312,19 @@ export function ComposeStatusBar({
           </button>
 
           {expanded ? (
-            <CurrentOutputDetails id={detailsId} attention={attention} nameOf={nameOf} mounted={mounted} />
+            <CurrentOutputDetails
+              id={detailsId}
+              attention={attention}
+              nameOf={nameOf}
+              mounted={mounted}
+              onTimelineNavigate={() => {
+                // A pointer jump does not transfer focus to timeline evidence.
+                // Clear ownership before its focused button is unmounted so a
+                // later status removal cannot steal focus back to the composer.
+                focusWithinRef.current = false;
+                setExpanded(false);
+              }}
+            />
           ) : null}
         </section>
       ) : null}
@@ -308,11 +406,13 @@ function CurrentOutputDetails({
   attention,
   nameOf,
   mounted,
+  onTimelineNavigate,
 }: {
   id: string;
   attention: AgentChatStatus[];
   nameOf: (agentId: string) => string;
   mounted: ReadonlySet<string>;
+  onTimelineNavigate: () => void;
 }) {
   const showIdentity = attention.length > 1;
   return (
@@ -336,6 +436,7 @@ function CurrentOutputDetails({
               name={nameOf(status.agentId)}
               mounted={mounted}
               showIdentity={showIdentity}
+              onTimelineNavigate={onTimelineNavigate}
             />
           </li>
         ))}
@@ -349,11 +450,13 @@ function CurrentOutputItem({
   name,
   mounted,
   showIdentity,
+  onTimelineNavigate,
 }: {
   status: AgentChatStatus;
   name: string;
   mounted: ReadonlySet<string>;
   showIdentity: boolean;
+  onTimelineNavigate: () => void;
 }) {
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
@@ -390,6 +493,7 @@ function CurrentOutputItem({
           target={jumpTarget}
           anchored
           ariaLabel={`View ${name} in the timeline`}
+          onNavigate={onTimelineNavigate}
           className="compose-status-jump"
           interactiveClassName="rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >

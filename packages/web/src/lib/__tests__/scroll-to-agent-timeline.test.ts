@@ -25,7 +25,7 @@ describe("scrollToAgentTimeline", () => {
     first.scrollIntoView = firstScroll;
     latest.scrollIntoView = latestScroll;
 
-    scrollToAgentTimeline("agent-1", "working");
+    expect(scrollToAgentTimeline("agent-1", "working")).toBe(true);
 
     expect(firstScroll).not.toHaveBeenCalled();
     expect(latestScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
@@ -41,7 +41,7 @@ describe("scrollToAgentTimeline", () => {
     target.scrollIntoView = vi.fn();
     document.body.append(target);
 
-    scrollToAgentTimeline("agent-1", "working", { focus: true });
+    expect(scrollToAgentTimeline("agent-1", "working", { focus: true })).toBe(true);
 
     expect(document.activeElement).toBe(target);
     expect(target.tabIndex).toBe(-1);
@@ -64,7 +64,7 @@ describe("scrollToAgentTimeline", () => {
       vi.fn(() => ({ matches: true })),
     );
 
-    scrollToAgentTimeline("agent-1", "working");
+    expect(scrollToAgentTimeline("agent-1", "working")).toBe(true);
 
     expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" });
     vi.unstubAllGlobals();
@@ -79,10 +79,10 @@ describe("scrollToAgentTimeline", () => {
     error.scrollIntoView = vi.fn();
     reason.scrollIntoView = vi.fn();
 
-    scrollToAgentTimeline("agent-1", "failed");
-    scrollToAgentTimeline("agent-1", "reason");
-    scrollToAgentTimeline("agent-1", "ready");
-    scrollToAgentTimeline("missing", "working");
+    expect(scrollToAgentTimeline("agent-1", "failed")).toBe(true);
+    expect(scrollToAgentTimeline("agent-1", "reason")).toBe(true);
+    expect(scrollToAgentTimeline("agent-1", "ready")).toBe(false);
+    expect(scrollToAgentTimeline("missing", "working")).toBe(false);
 
     expect(error.scrollIntoView).toHaveBeenCalledTimes(1);
     expect(reason.scrollIntoView).toHaveBeenCalledTimes(1);

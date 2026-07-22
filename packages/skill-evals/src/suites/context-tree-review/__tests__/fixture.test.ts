@@ -33,6 +33,7 @@ function applySemanticRepair(fixture: ReviewFixture): void {
 describe("context-tree-review fixture", () => {
   it.each([
     ["passing", 0],
+    ["relationship-change", 0],
     ["validator-failure", 1],
   ] as const)("records the real source validator result for %s", (scenario, expectedExitCode) => {
     const paths = createRunPaths({

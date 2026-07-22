@@ -8,7 +8,9 @@ const expectation: ReviewFixtureExpectation = {
   baseOid: "base",
   chatId: "review-chat",
   expectedFinalDraft: false,
+  expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
+  forbiddenPaths: [],
   governedPaths: ["system/review-contract.md"],
   headOid: "head",
   initialVerifyMustPass: true,
@@ -22,6 +24,8 @@ const expectation: ReviewFixtureExpectation = {
   runtimeSessionToken: "runtime-session-token",
   runtimeSessionTokenFile: "/workspace/.first-tree-eval/runtime-session.token",
   sourceBranch: "review-change",
+  requiredReferenceSearches: [],
+  submissionHeadOid: "head",
   workspacePath: "/workspace",
 };
 
@@ -110,7 +114,7 @@ function passingEvents(): unknown[] {
     },
     {
       action: "approve",
-      body: "## Approved\n\nNo blocking findings.",
+      body: "## Approved\n\nAdvisory: the optional wording suggestion does not block this ready PR.",
       bodyFileUsed: true,
       commitOid: "head",
       currentHeadOid: "head",
@@ -1212,6 +1216,266 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(true);
   });
 
+  it("does not credit successful zsh-batched detached reads", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command:
+            "/bin/zsh -lc \"sed -n '1,200p' .review-worktrees/42/system/review-contract.md; sed -n '1,120p' .review-worktrees/42/system/NODE.md\"",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it.each([
+    "/bin/zsh -lc 'if false; then cat .review-worktrees/42/system/review-contract.md; fi'",
+    "/bin/zsh -lc 'exit 0; cat .review-worktrees/42/system/review-contract.md'",
+  ])("does not credit an unexecuted reader in control flow: %s", (command) => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: { command, exit_code: 0, status: "completed", type: "command_execution" },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not credit an empty git diff as governed content", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "",
+          command: "git -C .review-worktrees/42 diff -- system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not credit every pathspec in a multi-path git diff", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "diff --git a/system/review-contract.md b/system/review-contract.md\n+updated\n",
+          command:
+            "git -C .review-worktrees/42 diff HEAD^ -- system/review-contract.md system/NODE.md product/review-outcomes.md operations/review-routing.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      {
+        ...expectation,
+        governedPaths: [
+          "system/review-contract.md",
+          "system/NODE.md",
+          "product/review-outcomes.md",
+          "operations/review-routing.md",
+        ],
+      },
+      integrity,
+      0,
+    );
+    expect(metrics.semanticReadAfterVerify).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("does not credit git show content from the base revision as a final-head read", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "base content\n",
+          command: "git -C .review-worktrees/42 show base:system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects a prohibited leaf-local scope expansion", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/experience/navigation.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/navigation.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("detects a forbidden read inside a successful shell batch", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/experience/NODE.md; true",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/NODE.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("detects a forbidden git show read from a predecessor revision", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          aggregated_output: "unrelated predecessor content\n",
+          command: "git -C .review-worktrees/42 show HEAD^:experience/NODE.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/NODE.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("requires an attributable incoming-reference search for the leaf-local branch", () => {
+    const evalCase = passingCase();
+    const requiredExpectation = {
+      ...expectation,
+      requiredReferenceSearches: ["system/review-contract.md"],
+    };
+    const missing = deriveMetrics(passingEvents(), evalCase, requiredExpectation, integrity, 0);
+    expect(missing.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, missing)).toBe(false);
+
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n -F 'system/review-contract.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const observed = deriveMetrics(events, evalCase, requiredExpectation, integrity, 0);
+    expect(observed.referenceSearchAfterVerify).toBe(true);
+    expect(casePassed(evalCase, observed)).toBe(true);
+
+    const falsePass = passingEvents();
+    falsePass.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n 'definitely-absent' .review-worktrees/42/system/review-contract.md",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const rejected = deriveMetrics(falsePass, evalCase, requiredExpectation, integrity, 0);
+    expect(rejected.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, rejected)).toBe(false);
+
+    const zeroFileSearch = passingEvents();
+    zeroFileSearch.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n -F --glob='!**/*' 'system/review-contract.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const zeroFileRejected = deriveMetrics(zeroFileSearch, evalCase, requiredExpectation, integrity, 0);
+    expect(zeroFileRejected.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, zeroFileRejected)).toBe(false);
+  });
+
+  it("requires governed reads and reference search before the final view and verdict", () => {
+    const evalCase = passingCase();
+    const requiredExpectation = {
+      ...expectation,
+      requiredReferenceSearches: ["system/review-contract.md"],
+    };
+    const events = passingEvents();
+    const [governedRead] = events.splice(4, 1);
+    events.push(governedRead, {
+      event: {
+        item: {
+          command: "rg -n -F 'system/review-contract.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, requiredExpectation, integrity, 0);
+    expect(metrics.semanticReadAfterVerify).toBe(false);
+    expect(metrics.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
   it("does not accept a governed read from a shell branch that never executes", () => {
     const events = passingEvents();
     events[4] = {
@@ -1362,8 +1626,14 @@ describe("context-tree-review grader", () => {
     "git -C context-tree worktree list",
     "git -C context-tree fetch origin refs/heads/review-change refs/pull/42/head",
     "git -C context-tree fetch origin review-change refs/pull/42/head",
+    "git -C context-tree branch --show-current",
     "git -C context-tree remote get-url origin && sed -n '1,120p' ../context-tree-origin.git/config && sed -n '1,80p' ../context-tree-origin.git/description",
     'test ! -e .review-worktrees/42 && git -C context-tree worktree list --porcelain && test "$(git -C context-tree rev-parse FETCH_HEAD)" = head',
+    "git -C context-tree cat-file -e 0123456789abcdef0123456789abcdef01234567^{commit}",
+    "git -C context-tree worktree list --porcelain && if [ -e .review-worktrees/42 ]; then find .review-worktrees/42 -maxdepth 1 -print; fi",
+    "git -C context-tree worktree list --porcelain && if [ -e .review-worktrees/42 ]; then find .review-worktrees/42 -maxdepth 2 -mindepth 1 -print; fi",
+    "git -C context-tree diff --name-status base head",
+    "git -C context-tree rev-parse 0123456789abcdef0123456789abcdef01234567^{commit}",
   ])("allows an observed repository-identity preflight: %s", (command) => {
     const events = passingEvents();
     events.splice(3, 0, {

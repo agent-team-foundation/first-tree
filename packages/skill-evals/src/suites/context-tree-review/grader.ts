@@ -34,7 +34,7 @@ function eventOrder(event: unknown, fallbackIndex: number): number {
 }
 
 function shellStructure(command: string): { operators: string[]; segments: string[] } {
-  let source = command.trim().replace(/^\/?(?:usr\/)?bin\/(?:ba)?sh\s+-lc\s+/u, "");
+  let source = command.trim().replace(/^\/?(?:usr\/)?bin\/(?:ba|z)?sh\s+-lc\s+/u, "");
   const outerQuote = source[0];
   if ((outerQuote === '"' || outerQuote === "'") && source.at(-1) === outerQuote) {
     source = source.slice(1, -1);
@@ -336,8 +336,16 @@ function readOnlyGitRevParse(segment: string): boolean {
   return (
     ["HEAD", "FETCH_HEAD", "--show-toplevel", "--is-inside-work-tree", "--git-dir"].includes(target) ||
     /^[0-9a-f]{7,40}$/iu.test(target) ||
+    /^[0-9a-f]{40}\^\{commit\}$/iu.test(target) ||
     /^refs\/[a-z0-9._/-]+$/iu.test(target)
   );
+}
+
+function readOnlyGitCatFileExistence(segment: string): boolean {
+  if (hasUnquotedRedirection(segment)) return false;
+  const invocation = gitInvocation(segment);
+  if (invocation?.command !== "cat-file" || invocation.args.length !== 2 || invocation.args[0] !== "-e") return false;
+  return /^[0-9a-f]{40}\^\{commit\}$/iu.test(invocation.args[1] ?? "");
 }
 
 function reviewRefNames(expectation: ReviewFixtureExpectation): string[] {
@@ -466,14 +474,43 @@ function allowedGitWorktreeMutation(segment: string, expectation: ReviewFixtureE
   );
 }
 
+function readOnlyReviewWorktreeProbe(segment: string, expectation: ReviewFixtureExpectation): boolean {
+  if (hasUnquotedRedirection(segment)) return false;
+  const words = shellWords(segment);
+  if (words[0] !== "find" || !reviewWorktreePathAllowed(words[1] ?? "", expectation)) return false;
+  let maxDepthObserved = false;
+  let printObserved = false;
+  for (let index = 2; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (word === "-maxdepth" && !maxDepthObserved) {
+      const depth = words[index + 1] ?? "";
+      if (depth !== "1" && depth !== "2") return false;
+      maxDepthObserved = true;
+      index += 1;
+      continue;
+    }
+    if (word === "-mindepth") {
+      if (!/^[0-2]$/u.test(words[index + 1] ?? "")) return false;
+      index += 1;
+      continue;
+    }
+    if (word === "-print" && !printObserved) {
+      printObserved = true;
+      continue;
+    }
+    return false;
+  }
+  return maxDepthObserved && printObserved;
+}
+
 function readOnlyGitChangedPaths(segment: string): boolean {
   if (hasUnquotedRedirection(segment)) return false;
   const invocation = gitInvocation(segment);
   return (
     invocation?.command === "diff" &&
-    invocation.args.length === 2 &&
+    (invocation.args.length === 2 || invocation.args.length === 3) &&
     ["--name-only", "--name-status"].includes(invocation.args[0] ?? "") &&
-    !invocation.args[1]?.startsWith("-")
+    invocation.args.slice(1).every((arg) => !arg.startsWith("-"))
   );
 }
 
@@ -649,12 +686,13 @@ function boundSnapshotShowContentPaths(segment: string): string[] {
   return target.startsWith("HEAD:") && target.length > 5 ? [target.slice(5)] : [];
 }
 
-function gitShowContentPaths(segment: string): string[] {
+function gitShowContentPaths(segment: string, allowedRevisions?: ReadonlySet<string>): string[] {
   const invocation = gitInvocation(segment);
   if (invocation?.command !== "show") return [];
   return invocation.args.flatMap((arg) => {
     const separator = arg.indexOf(":");
     if (separator <= 0 || separator === arg.length - 1) return [];
+    if (allowedRevisions && !allowedRevisions.has(arg.slice(0, separator))) return [];
     return [arg.slice(separator + 1)];
   });
 }
@@ -673,6 +711,7 @@ function gitSemanticReadAttempted(event: unknown): boolean {
   if (!command) return false;
   return shellSegments(command).some((segment) => {
     const commandName = gitInvocation(segment)?.command;
+    if (commandName === "cat-file" && readOnlyGitCatFileExistence(segment)) return false;
     return commandName !== undefined && ["blame", "cat-file", "grep", "log", "show"].includes(commandName);
   });
 }
@@ -730,6 +769,16 @@ function observedReadPaths(
   const command = commandFromCodexEvent(event);
   if (!command) return [];
   if (requireSuccessfulCommand && (item.status !== "completed" || item.exit_code !== 0)) return [];
+  if (requireSuccessfulCommand) {
+    const words = shellWords(command);
+    const executable = words[0]?.split("/").at(-1);
+    if (
+      ["bash", "dash", "sh", "zsh"].includes(executable ?? "") &&
+      words.some((word) => word === "-c" || word === "-lc")
+    ) {
+      return [];
+    }
+  }
   const structure = shellStructure(command);
   const unattributableSegments = new Set<number>();
   if (requireSuccessfulCommand && structure.operators.length > 0) {
@@ -768,6 +817,16 @@ function snapshotReadPaths(
   const command = commandFromCodexEvent(event);
   if (!command) return [];
   if (requireSuccessfulCommand && (item.status !== "completed" || item.exit_code !== 0)) return [];
+  if (requireSuccessfulCommand) {
+    const words = shellWords(command);
+    const executable = words[0]?.split("/").at(-1);
+    if (
+      ["bash", "dash", "sh", "zsh"].includes(executable ?? "") &&
+      words.some((word) => word === "-c" || word === "-lc")
+    ) {
+      return [];
+    }
+  }
 
   const paths: string[] = [];
   const structure = shellStructure(command);
@@ -827,6 +886,53 @@ function snapshotReadPaths(
   return paths.map((path) => normalizeObservedPath(path, expectation));
 }
 
+function snapshotGitContentAttemptPaths(event: unknown, expectation: ReviewFixtureExpectation): string[] {
+  const command = commandFromCodexEvent(event);
+  if (!command) return [];
+  const paths: string[] = [];
+  let cwdIsReviewWorktree = false;
+  for (const segment of shellSegments(command)) {
+    const words = shellWords(segment);
+    if (words[0] === "cd") {
+      cwdIsReviewWorktree = isReviewWorktreeOperand(words[1] ?? "", expectation);
+      continue;
+    }
+    const gitCwd = gitWorkingDirectory(segment);
+    const gitUsesReviewWorktree = gitCwd !== null && isReviewWorktreeOperand(gitCwd, expectation);
+    for (const path of [...gitDiffContentPaths(segment), ...gitShowContentPaths(segment)]) {
+      if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
+    }
+  }
+  return paths.map((path) => normalizeObservedPath(path, expectation));
+}
+
+function referenceSearchObserved(event: unknown, expectation: ReviewFixtureExpectation, requiredPath: string): boolean {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
+  const item = event.event.item;
+  if (!isRecord(item) || (item.status !== "completed" && item.status !== "failed")) return false;
+  if (item.exit_code !== 0 && item.exit_code !== 1) return false;
+  const command = commandFromCodexEvent(event);
+  if (!command) return false;
+  const structure = shellStructure(command);
+  if (structure.segments.length !== 1 || structure.operators.length !== 0) return false;
+  const segment = structure.segments[0] ?? "";
+  const words = shellWords(segment);
+  if (words[0] === "command") words.shift();
+  const executable = words.shift()?.split("/").at(-1);
+  if (executable !== "rg" && executable !== "grep") return false;
+  const flagOptions = new Set(["-E", "-F", "-i", "-n", "-q", "--fixed-strings", "--line-number", "--no-heading"]);
+  const positionals: string[] = [];
+  for (const word of words) {
+    if (flagOptions.has(word)) continue;
+    if (word.startsWith("-")) return false;
+    positionals.push(word);
+  }
+  if (positionals.length !== 2) return false;
+  const [pattern, scope] = positionals;
+  const literalPattern = pattern?.replace(/\\(.)/gu, "$1");
+  return literalPattern === requiredPath && isReviewWorktreeOperand(scope ?? "", expectation);
+}
+
 function treeContentReadPaths(event: unknown, expectation: ReviewFixtureExpectation): string[] {
   const paths = observedReadPaths(event, expectation);
   const command = commandFromCodexEvent(event);
@@ -865,10 +971,12 @@ function allowedPreVerifySegment(segment: string, expectation: ReviewFixtureExpe
   if (/^find\s+context-tree\b/iu.test(segment)) {
     return !/(?:-delete|-exec|-execdir|-ok|-okdir)\b/iu.test(segment) && /(?:AGENTS|README)\.md/iu.test(segment);
   }
+  if (readOnlyReviewWorktreeProbe(segment, expectation)) return true;
   const gitCommands = gitSubcommands(segment);
   if (gitCommands.length > 0) {
-    if (gitCommands.some((command) => ["show", "cat-file", "log", "blame", "grep"].includes(command))) return false;
+    if (gitCommands.some((command) => ["show", "log", "blame", "grep"].includes(command))) return false;
     return gitCommands.every((command) => {
+      if (command === "cat-file") return readOnlyGitCatFileExistence(segment);
       if (command === "fetch") return readOnlyGitFetch(segment, expectation);
       if (command === "rev-parse") return readOnlyGitRevParse(segment);
       if (command === "status") return readOnlyGitStatus(segment);
@@ -1317,6 +1425,7 @@ export function deriveMetrics(
   const repairStageOrders: number[] = [];
   const repairStatusOrders: number[] = [];
   const repairPushOrders: number[] = [];
+  let prohibitedExpansionObserved = false;
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
   let firstReviewIndex = -1;
@@ -1324,6 +1433,7 @@ export function deriveMetrics(
   const governedReadOrders = new Map<string, number[]>();
   const successfulSnapshotReads: Array<{ order: number; paths: readonly string[] }> = [];
   const treeContentReads: Array<{ order: number; paths: readonly string[] }> = [];
+  const referenceSearchOrders = new Map<string, number>();
   const gitSemanticReadOrders: number[] = [];
   const reviewDiffReadOrders: number[] = [];
   const sourceRefReads: Array<{ headOid: string; order: number }> = [];
@@ -1355,6 +1465,18 @@ export function deriveMetrics(
     const observedPaths =
       isRecord(event) && event.type === "codex_event" ? snapshotReadPaths(event, expectation, true) : [];
     if (observedPaths.length > 0) successfulSnapshotReads.push({ order, paths: observedPaths });
+    const attemptedPaths = [
+      ...snapshotReadPaths(event, expectation),
+      ...snapshotGitContentAttemptPaths(event, expectation),
+    ];
+    if (expectation.forbiddenPaths.some((path) => attemptedPaths.includes(path))) {
+      prohibitedExpansionObserved = true;
+    }
+    for (const requiredPath of expectation.requiredReferenceSearches) {
+      if (referenceSearchObserved(event, expectation, requiredPath) && !referenceSearchOrders.has(requiredPath)) {
+        referenceSearchOrders.set(requiredPath, order);
+      }
+    }
     for (const governedPath of expectation.governedPaths) {
       if (observedPaths.includes(governedPath)) {
         governedReadOrders.set(governedPath, [...(governedReadOrders.get(governedPath) ?? []), order]);
@@ -1490,11 +1612,15 @@ export function deriveMetrics(
     );
   const initialViewObserved =
     firstView !== undefined && firstView.headRefOid === expectation.headOid && firstView.eventIndex < firstVerifyIndex;
+  const finalViewOrder = finalView ? eventOrder(events[finalView.eventIndex], finalView.eventIndex) : -1;
   const semanticReadAfterVerify =
     expectation.governedPaths.length > 0 &&
     expectation.governedPaths.every((path) =>
       (governedReadOrders.get(path) ?? []).some(
-        (order) => order > firstVerifyOrder && (firstRepairEditOrder === undefined || order < firstRepairEditOrder),
+        (order) =>
+          order > firstVerifyOrder &&
+          order < finalViewOrder &&
+          (firstRepairEditOrder === undefined || order < firstRepairEditOrder),
       ),
     );
   const firstSuccessfulVerifyAfterFailure = verifyEvents.find(
@@ -1518,6 +1644,12 @@ export function deriveMetrics(
       order < failedVerifyWindowEnd &&
       !treeContentReads.some((read) => read.order === order),
   );
+  const referenceSearchAfterVerify =
+    expectation.requiredReferenceSearches.length === 0 ||
+    expectation.requiredReferenceSearches.every((path) => {
+      const order = referenceSearchOrders.get(path) ?? -1;
+      return order > firstVerifyOrder && order < finalViewOrder;
+    });
   const semanticReadAfterFailedVerify =
     verifyExitCodes[0] !== undefined &&
     verifyExitCodes[0] !== 0 &&
@@ -1637,6 +1769,9 @@ export function deriveMetrics(
     identityReadObserved: identityIndex >= 0,
     initialViewObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
+    mutationAttempted: unexpectedMutationObserved,
+    prohibitedExpansionObserved,
+    referenceSearchAfterVerify,
     repairCommitObserved,
     repairDiffObserved,
     repairHeadFresh,
@@ -1740,6 +1875,9 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
     !metrics.unexpectedMutationAttempted &&
+    !metrics.mutationAttempted &&
+    !metrics.prohibitedExpansionObserved &&
+    metrics.referenceSearchAfterVerify &&
     integrityPassed(metrics.fixtureIntegrity) &&
     repairPass &&
     outcomePass

@@ -20,7 +20,7 @@ export function scrollToAgentTimeline(
   agentId: string,
   main: AgentMainStatus | "reason",
   options: TimelineJumpOptions = {},
-): void {
+): boolean {
   const attr =
     main === "failed"
       ? "data-error-agent"
@@ -29,10 +29,10 @@ export function scrollToAgentTimeline(
         : main === "reason"
           ? "data-status-reason-agent"
           : null;
-  if (!attr) return;
+  if (!attr) return false;
   const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
   const target = els[els.length - 1];
-  if (!target) return;
+  if (!target) return false;
 
   const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   target.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center" });
@@ -66,4 +66,5 @@ export function scrollToAgentTimeline(
       { once: true },
     );
   }
+  return true;
 }

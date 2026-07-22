@@ -53,7 +53,7 @@ export function buildGrading(
       ),
       evidence(
         "process_pass",
-        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; invalid expansion after failed verify=${metrics.semanticReadAfterFailedVerify}; repair=${evalCase.expected.repair}; repair PR head fresh=${metrics.repairHeadFresh}; repair source head fresh=${metrics.repairSourceHeadFresh}; repair diff=${metrics.repairDiffObserved}; repair sequence=${metrics.repairSequenceValid}; successor verify=${metrics.successorVerifyPassed}; successor semantic=${metrics.successorSemanticReviewComplete}; checks current=${metrics.checksCurrentHead}; final fresh=${metrics.finalViewFresh}`,
+        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; reference search after verify=${metrics.referenceSearchAfterVerify}; prohibited expansion=${metrics.prohibitedExpansionObserved}; invalid expansion after failed verify=${metrics.semanticReadAfterFailedVerify}; repair=${evalCase.expected.repair}; repair PR head fresh=${metrics.repairHeadFresh}; repair source head fresh=${metrics.repairSourceHeadFresh}; repair diff=${metrics.repairDiffObserved}; repair sequence=${metrics.repairSequenceValid}; successor verify=${metrics.successorVerifyPassed}; successor semantic=${metrics.successorSemanticReviewComplete}; checks current=${metrics.checksCurrentHead}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
       ),
       evidence(
         "outcome_pass",
@@ -78,6 +78,8 @@ export function buildGrading(
         metrics.verifyHeadBound &&
         !metrics.semanticReadBeforeVerify &&
         !metrics.semanticReadAfterFailedVerify &&
+        !metrics.prohibitedExpansionObserved &&
+        metrics.referenceSearchAfterVerify &&
         (!evalCase.expected.initialVerifyMustPass ||
           evalCase.fixture.scenario === "archive-only" ||
           metrics.semanticReadAfterVerify) &&

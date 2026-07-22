@@ -38,7 +38,7 @@ const DEFAULT_SKILL_NAMES = [
 
 function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
   const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for all ownership changes and \`decisionLocksCode\`. Member or parent ownership does not implicitly assign an owner to another node. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The current durable review decision is that the GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.\n`;
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Tree Location\n\n- Path: \`./context-tree\`\n- Upstream: \`https://github.com/owner/context-tree\`\n- Default branch: \`main\`\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for all ownership changes and \`decisionLocksCode\`. Member or parent ownership does not implicitly assign an owner to another node. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The current durable review decision is that the GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.\n`;
 }
 
 function changedBodies(
@@ -94,12 +94,20 @@ function changedBodies(
       },
     ];
   }
+  if (scenario === "relationship-change") {
+    return [
+      {
+        path: "system/review-contract.md",
+        content: `---\ntitle: "Review Contract"\nowners: [eval-owner]\nsoft_links: [product/review-outcomes.md]\n---\n\n# Review Contract\n\n## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.\n\n## Cross-Domain\n\nProduct owns the user-visible review outcome contract.\n`,
+      },
+    ];
+  }
   return [
     {
-      path: "system/approval-freshness.md",
+      path: "system/review-contract.md",
       content: node(
-        "Approval Freshness",
-        "## Decision\n\nA Context Tree approval applies only to the exact reviewed head.\n\n## Rationale\n\nDismissing stale approvals after a push prevents an earlier verdict from authorizing unreviewed content.\n\n## Constraints\n\nA newer head requires a complete validator-first review before merge.",
+        "Review Contract",
+        "## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.\n\n## Constraints\n\nRepositories dismiss stale approvals after a push.",
       ),
     },
   ];
@@ -188,6 +196,41 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       "## Decision\n\nThe GitHub App publishes the formal review verdict while the local reviewer identity performs safely determined repairs.\n\n## Rationale\n\nThis preserves one provider-native verdict without giving App credentials to the runtime.",
     ),
   );
+  writeText(
+    join(treePath, "experience", "NODE.md"),
+    node("Experience", "## Decision\n\nExperience decisions define user navigation."),
+  );
+  writeText(
+    join(treePath, "experience", "navigation.md"),
+    node("Navigation", "## Decision\n\nPrimary navigation keeps frequent destinations directly accessible."),
+  );
+  if (evalCase.fixture.scenario === "passing" || evalCase.fixture.scenario === "relationship-change") {
+    writeText(
+      join(treePath, "system", "review-contract.md"),
+      node(
+        "Review Contract",
+        "## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.",
+      ),
+    );
+  }
+  if (evalCase.fixture.scenario === "relationship-change") {
+    writeText(
+      join(treePath, "product", "NODE.md"),
+      node("Product", "## Decision\n\nProduct decisions define user-visible review outcomes."),
+    );
+    writeText(
+      join(treePath, "product", "review-outcomes.md"),
+      node("Review Outcomes", "## Decision\n\nReview outcomes remain visible through one provider-native verdict."),
+    );
+    writeText(
+      join(treePath, "operations", "NODE.md"),
+      node("Operations", "## Decision\n\nOperational routing consumes the review contract."),
+    );
+    writeText(
+      join(treePath, "operations", "review-routing.md"),
+      `---\ntitle: "Review Routing"\nowners: [eval-owner]\nsoft_links: [system/review-contract.md]\n---\n\n# Review Routing\n\n## Decision\n\nReview delivery routes through the canonical system contract.\n`,
+    );
+  }
   writeText(join(treePath, "members", "NODE.md"), node("Members", "Ownership routing for the eval tree."));
   writeText(
     join(treePath, "members", "eval-owner", "NODE.md"),
@@ -258,6 +301,15 @@ exit 0
     baseRefName: "main",
     baseRefOid: baseOid,
     body: "Update the durable review contract.",
+    comments:
+      evalCase.fixture.scenario === "passing"
+        ? [
+            {
+              author: { login: "eval-owner" },
+              body: "Optional wording suggestion: a later edit could shorten the rationale. The current text is acceptable and this is advisory only.",
+            },
+          ]
+        : [],
     files: changed.map((item) => ({ path: item.path })),
     headRefName: "review-change",
     headRefOid: headOid,
@@ -265,6 +317,7 @@ exit 0
     isCrossRepository: false,
     isDraft: evalCase.fixture.scenario === "draft",
     number: 42,
+    reviews: [],
     state: "OPEN",
     title: "Update review contract",
     url: "https://github.com/owner/context-tree/pull/42",
@@ -317,8 +370,20 @@ exit 0
       baseOid,
       chatId,
       expectedFinalDraft: view.isDraft,
+      expectedFinalHeadOid: headOid,
       expectedFinalState: "OPEN",
-      governedPaths: evalCase.fixture.scenario === "archive-only" ? [] : changed.map((item) => item.path),
+      forbiddenPaths:
+        evalCase.fixture.scenario === "passing" || evalCase.fixture.scenario === "relationship-change"
+          ? ["experience/NODE.md", "experience/navigation.md"]
+          : [],
+      governedPaths:
+        evalCase.fixture.scenario === "archive-only"
+          ? []
+          : evalCase.fixture.scenario === "relationship-change"
+            ? [changed[0]?.path ?? "", "system/NODE.md", "product/review-outcomes.md", "operations/review-routing.md"]
+            : evalCase.fixture.scenario === "passing"
+              ? [changed[0]?.path ?? "", "system/NODE.md"]
+              : changed.map((item) => item.path),
       headOid,
       initialVerifyMustPass: evalCase.expected.initialVerifyMustPass,
       prNumber,
@@ -330,7 +395,10 @@ exit 0
       runId,
       runtimeSessionToken,
       runtimeSessionTokenFile,
+      requiredReferenceSearches:
+        evalCase.fixture.scenario === "passing" && changed[0] !== undefined ? [changed[0].path] : [],
       sourceBranch: "review-change",
+      submissionHeadOid: headOid,
       workspacePath: paths.workspacePath,
     },
     fixturePath,
