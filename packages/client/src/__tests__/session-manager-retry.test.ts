@@ -67,7 +67,7 @@ class FakeRateLimit extends Error {
   status = 429;
 }
 
-describe("SessionManager: transient retry on session start", () => {
+describe("SessionManager: transient session retry", () => {
   it("keeps the entry alive and schedules a retry on RateLimitError", async () => {
     const handler: AgentHandler = {
       start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),
@@ -329,5 +329,108 @@ describe("SessionManager: transient retry on session start", () => {
     expect(recoverChat).not.toHaveBeenCalled();
 
     await sm.shutdown();
+  });
+
+  it("retries the message that failed resume and drains newer work behind it", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    let initialCtx: SessionContext | undefined;
+    let initialMessage: SessionMessage | undefined;
+    let retryCtx: SessionContext | undefined;
+    let retryMessage: SessionMessage | undefined;
+    const injected: SessionMessage[] = [];
+    const established: AgentHandler = {
+      start: vi.fn(async (message, ctx) => {
+        initialMessage = message;
+        initialCtx = ctx;
+        return "established-session";
+      }),
+      resume: vi.fn().mockRejectedValue(new FakeRateLimit("resume transport failed")),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const recovered: AgentHandler = {
+      start: vi.fn(),
+      resume: vi.fn(async (message, _sessionId, ctx) => {
+        retryMessage = message;
+        retryCtx = ctx;
+        return "resumed-session";
+      }),
+      inject: vi.fn((message) => {
+        injected.push(message);
+        return { kind: "owned", mode: "queued" } as const;
+      }),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const sm = makeManager({ handlers: [established, recovered], ackEntry, recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-resume-head", messageId: "msg-1" }));
+    if (!initialCtx || !initialMessage) throw new Error("initial session was not captured");
+    await initialCtx.finishTurn(initialMessage, { status: "success", terminal: true });
+    await sm.handleCommand("chat-resume-head", "session:suspend");
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-resume-head", messageId: "msg-2" }));
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-resume-head", messageId: "msg-3" }));
+    await vi.waitFor(() => expect(recovered.resume).toHaveBeenCalledTimes(1));
+
+    expect(retryMessage?.id).toBe("msg-2");
+    expect(retryMessage?.inboxEntryId).toBe(2);
+    expect(retryMessage?.id).not.toBe("msg-1");
+    expect(injected.map((message) => message.id)).toEqual(["msg-3"]);
+    if (!retryCtx || !retryMessage || !injected[0]) throw new Error("retry routing was not captured");
+
+    await retryCtx.finishTurn(retryMessage, { status: "success", terminal: true });
+    await retryCtx.finishTurn(injected[0], { status: "success", terminal: true });
+
+    expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
+    expect(ackEntry).toHaveBeenNthCalledWith(3, 3);
+    expect(recoverChat).not.toHaveBeenCalled();
+    expect(sm.activeCount).toBe(1);
+
+    await sm.shutdown();
+  });
+
+  it("retries a control resume without replaying the previous user message", async () => {
+    vi.useFakeTimers();
+    try {
+      let initialCtx: SessionContext | undefined;
+      let initialMessage: SessionMessage | undefined;
+      const established: AgentHandler = {
+        start: vi.fn(async (message, ctx) => {
+          initialMessage = message;
+          initialCtx = ctx;
+          return "control-session";
+        }),
+        resume: vi.fn().mockRejectedValue(new FakeRateLimit("control resume transport failed")),
+        inject: vi.fn(),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const recovered: AgentHandler = {
+        start: vi.fn(),
+        resume: vi.fn().mockResolvedValue("control-session-resumed"),
+        inject: vi.fn(),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const sm = makeManager({ handlers: [established, recovered] });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-control-retry", messageId: "old-user-message" }));
+      if (!initialCtx || !initialMessage) throw new Error("initial control session was not captured");
+      await initialCtx.finishTurn(initialMessage, { status: "success", terminal: true });
+      await sm.handleCommand("chat-control-retry", "session:suspend");
+      await sm.handleCommand("chat-control-retry", "session:resume");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(recovered.resume).toHaveBeenCalledWith(undefined, "control-session", expect.anything());
+      expect(recovered.start).not.toHaveBeenCalled();
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -9,6 +9,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
+import { parseProviderRetryEventMessage } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import type { DeliveryDecision, DeliveryRouteOwnership, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
@@ -32,7 +33,7 @@ type SessionRecord = {
   lastRetryCategory: string | null;
   lastRetryScope: "session_start" | "session_resume" | null;
   lastRetryRawError: string | null;
-  startMessage: SessionMessage | null;
+  retryHeadMessage: SessionMessage | null;
   retryQueuedMessages: SessionMessage[];
   pendingRuntimeFailureNotice: ProviderRetryEventPayload | null;
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
@@ -47,12 +48,19 @@ type SessionManagerInternals = {
   inboxDelivery: {
     receive(entry: InboxEntryWithMessage): DeliveryDecision;
     markOwned(work: DeliveryWork): DeliveryRouteOwnership;
+    hasEntry(work: DeliveryWork): boolean;
     markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void;
     prepareOperatorSuspend(chatId: string): Promise<void>;
     hasRecoveryDebt(chatId: string): boolean;
+    hasUnsettledWork(chatId: string): boolean;
   };
   _activeCount: number;
-  acquireActiveSlot(chatId: string, message: SessionMessage | null): boolean;
+  acquireActiveSlot(
+    chatId: string,
+    message: SessionMessage | null,
+    deliveryKind?: string,
+    opts?: { queueOnFailure?: boolean },
+  ): boolean;
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
   resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined): Promise<void>;
   runRetry(chatId: string): Promise<void>;
@@ -262,7 +270,7 @@ function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {
     lastRetryCategory: null,
     lastRetryScope: null,
     lastRetryRawError: null,
-    startMessage: makeMessage(chatId),
+    retryHeadMessage: null,
     retryQueuedMessages: [],
     pendingRuntimeFailureNotice: null,
     retryFromEvicted: null,
@@ -856,7 +864,7 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
-  it("covers retry early returns, retry re-queue, empty-message start, resume fallback, and emit failures", async () => {
+  it("covers retry early returns, retry re-queue, start, resume fallback, and emit failures", async () => {
     const events: SessionEvent[] = [];
     const sm = makeManager({
       concurrency: 1,
@@ -875,7 +883,7 @@ describe("SessionManager edge coverage", () => {
       retryAttempt: 1,
       status: "suspended",
       claudeSessionId: "",
-      startMessage: null,
+      retryHeadMessage: makeMessage("chat-retry-queue"),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-retry-queue", queued);
@@ -899,6 +907,7 @@ describe("SessionManager edge coverage", () => {
       status: "suspended",
       claudeSessionId: "",
       retryFromEvicted: { claudeSessionId: "evicted-session", lastActivity: 1 },
+      retryHeadMessage: makeMessage("chat-retry-evicted"),
       lastRetryReason: "network_error",
     });
     internals(sm).sessions.set("chat-retry-evicted", fromEvicted);
@@ -927,7 +936,7 @@ describe("SessionManager edge coverage", () => {
     const retrying = makeSessionRecord(chatId, {
       retryAttempt: 1,
       status: "suspended",
-      startMessage: makeMessage(chatId),
+      retryHeadMessage: makeMessage(chatId),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set(chatId, retrying);
@@ -937,6 +946,176 @@ describe("SessionManager edge coverage", () => {
     expect(recoverChat).toHaveBeenCalledWith(chatId);
     expect(recovered.start).not.toHaveBeenCalled();
     expect(retrying.retryAttempt).toBe(0);
+    await sm.shutdown();
+  });
+
+  it("keeps a message retry head out of the pending queue while a provider slot is busy", async () => {
+    vi.useFakeTimers();
+    const recovered = handler({ resume: vi.fn().mockResolvedValue("resumed-once") });
+    const sm = makeManager({ handlers: [recovered], concurrency: 1 });
+    const i = internals(sm);
+    const chatId = "chat-retry-slot-message";
+    const head = makeMessage(chatId);
+    const retrying = makeSessionRecord(chatId, {
+      retryAttempt: 1,
+      status: "suspended",
+      claudeSessionId: "previous-session",
+      retryHeadMessage: head,
+      lastRetryReason: "network_error",
+    });
+    const blocker = makeSessionRecord("chat-retry-slot-blocker", { status: "active" });
+    i.sessions.set(chatId, retrying);
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const blockerEntry = mockEntry({ id: 901, chatId: blocker.chatId, messageId: "msg-slot-blocker" });
+    const blockerMessage = messageFromEntry(blockerEntry);
+    i.inboxDelivery.receive(blockerEntry);
+    i.inboxDelivery.markOwned({ chatId: blocker.chatId, entryId: blockerEntry.id, messageId: blockerMessage.id });
+    i.inboxDelivery.markProcessingStarted(blocker.chatId, blockerMessage);
+
+    await i.runRetry(chatId);
+
+    expect(recovered.resume).not.toHaveBeenCalled();
+    expect(i.pendingQueue.some((queued) => queued.chatId === chatId)).toBe(false);
+    expect(retrying.retryTimer).not.toBeNull();
+
+    blocker.status = "suspended";
+    i._activeCount = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(recovered.resume).toHaveBeenCalledTimes(1);
+    expect(recovered.resume).toHaveBeenCalledWith(head, "previous-session", expect.anything(), expect.anything());
+    expect(recovered.inject).not.toHaveBeenCalled();
+    expect(retrying.retryAttempt).toBe(0);
+    expect(retrying.retryTimer).toBeNull();
+
+    await sm.shutdown();
+  });
+
+  it("keeps a control resume retry out of the pending queue while a provider slot is busy", async () => {
+    vi.useFakeTimers();
+    const recovered = handler({ resume: vi.fn().mockResolvedValue("control-resumed-once") });
+    const sm = makeManager({ handlers: [recovered], concurrency: 1 });
+    const i = internals(sm);
+    const chatId = "chat-retry-slot-control";
+    const retrying = makeSessionRecord(chatId, {
+      retryAttempt: 1,
+      status: "suspended",
+      claudeSessionId: "previous-control-session",
+      retryHeadMessage: null,
+      lastRetryReason: "network_error",
+    });
+    const blocker = makeSessionRecord("chat-control-slot-blocker", { status: "active" });
+    i.sessions.set(chatId, retrying);
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const blockerEntry = mockEntry({ id: 902, chatId: blocker.chatId, messageId: "msg-control-blocker" });
+    const blockerMessage = messageFromEntry(blockerEntry);
+    i.inboxDelivery.receive(blockerEntry);
+    i.inboxDelivery.markOwned({ chatId: blocker.chatId, entryId: blockerEntry.id, messageId: blockerMessage.id });
+    i.inboxDelivery.markProcessingStarted(blocker.chatId, blockerMessage);
+
+    await i.runRetry(chatId);
+
+    expect(recovered.resume).not.toHaveBeenCalled();
+    expect(i.pendingQueue.some((queued) => queued.chatId === chatId)).toBe(false);
+    expect(retrying.retryTimer).not.toBeNull();
+
+    blocker.status = "suspended";
+    i._activeCount = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(recovered.resume).toHaveBeenCalledTimes(1);
+    expect(recovered.resume).toHaveBeenCalledWith(undefined, "previous-control-session", expect.anything());
+    expect(retrying.retryAttempt).toBe(0);
+    expect(retrying.retryTimer).toBeNull();
+
+    await sm.shutdown();
+  });
+
+  it("recovers a retry head whose inbox custody is missing before creating a handler", async () => {
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const blockedHandler = handler();
+    const factory = vi.fn<HandlerFactory>(() => blockedHandler);
+    const events: SessionEvent[] = [];
+    const sm = makeManager({
+      handlerFactory: factory,
+      recoverChat,
+      onSessionEvent: (_chatId, event) => events.push(event),
+    });
+    const chatId = "chat-retry-missing-custody";
+    const retrying = makeSessionRecord(chatId, {
+      retryAttempt: 1,
+      status: "suspended",
+      claudeSessionId: "previous-session",
+      retryHeadMessage: {
+        ...makeMessage(chatId),
+        id: "settled-message",
+        inboxEntryId: 404,
+      },
+      lastRetryReason: "network_error",
+    });
+    internals(sm).sessions.set(chatId, retrying);
+
+    await internals(sm).runRetry(chatId);
+
+    expect(factory).not.toHaveBeenCalled();
+    expect(blockedHandler.start).not.toHaveBeenCalled();
+    expect(blockedHandler.resume).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+    expect(internals(sm).sessions.has(chatId)).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "error" &&
+          parseProviderRetryEventMessage(event.payload.message)?.event === "provider_retry_succeeded",
+      ),
+    ).toBe(false);
+
+    await sm.shutdown();
+  });
+
+  it("recovers an unconsumed queued tail after a retry head fails terminally", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const terminal = handler({
+      resume: vi.fn().mockRejectedValue({ name: "ClientUserMismatchError", message: "runtime authorization changed" }),
+    });
+    const sm = makeManager({
+      handlers: [terminal],
+      ackEntry,
+      recoverChat,
+      confirmSessionEvent: vi.fn().mockResolvedValue(undefined),
+    });
+    const i = internals(sm);
+    const chatId = "chat-retry-terminal-tail";
+    const headEntry = mockEntry({ id: 2, chatId, messageId: "msg-terminal-head" });
+    const tailEntry = mockEntry({ id: 3, chatId, messageId: "msg-terminal-tail" });
+    const head = messageFromEntry(headEntry);
+    const tail = messageFromEntry(tailEntry);
+    i.inboxDelivery.receive(headEntry);
+    i.inboxDelivery.receive(tailEntry);
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        retryAttempt: 1,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+        retryHeadMessage: head,
+        retryQueuedMessages: [tail],
+      }),
+    );
+
+    await i.runRetry(chatId);
+
+    expect(ackEntry).toHaveBeenCalledWith(2);
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+    expect(i.inboxDelivery.hasEntry({ chatId, entryId: tailEntry.id, messageId: tail.id })).toBe(false);
+    expect(i.inboxDelivery.hasUnsettledWork(chatId)).toBe(false);
+    expect(i.sessions.has(chatId)).toBe(false);
+
     await sm.shutdown();
   });
 
@@ -960,7 +1139,7 @@ describe("SessionManager edge coverage", () => {
       retryAttempt: 1,
       status: "suspended",
       claudeSessionId: "",
-      startMessage: makeMessage("chat-retry-transient"),
+      retryHeadMessage: makeMessage("chat-retry-transient"),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-retry-transient", retrying);
@@ -971,7 +1150,7 @@ describe("SessionManager edge coverage", () => {
       retryAttempt: 1,
       status: "suspended",
       claudeSessionId: "",
-      startMessage: makeMessage("chat-retry-permanent"),
+      retryHeadMessage: makeMessage("chat-retry-permanent"),
     });
     internals(sm).sessions.set("chat-retry-permanent", failing);
     await internals(sm).runRetry("chat-retry-permanent");
@@ -1007,7 +1186,7 @@ describe("SessionManager edge coverage", () => {
       retryAttempt: 1,
       status: "suspended",
       claudeSessionId: "",
-      startMessage: makeMessage("chat-rearm"),
+      retryHeadMessage: makeMessage("chat-rearm"),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-rearm", retrying);
@@ -1039,7 +1218,7 @@ describe("SessionManager edge coverage", () => {
       retryAttempt: 1,
       status: "suspended",
       claudeSessionId: "previous-session",
-      startMessage: null,
+      retryHeadMessage: null,
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-retry-success", succeeds);
@@ -1051,7 +1230,7 @@ describe("SessionManager edge coverage", () => {
       status: "suspended",
       claudeSessionId: "previous-session-again",
       retryTimer: existingTimer,
-      startMessage: makeMessage("chat-retry-again"),
+      retryHeadMessage: makeMessage("chat-retry-again"),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-retry-again", retriesAgain);
@@ -1071,7 +1250,7 @@ describe("SessionManager edge coverage", () => {
       status: "suspended",
       claudeSessionId: "",
       retryFromEvicted: { claudeSessionId: "evicted-session", lastActivity: 1 },
-      startMessage: makeMessage("chat-retry-from-evicted"),
+      retryHeadMessage: makeMessage("chat-retry-from-evicted"),
       lastRetryReason: "rate_limit",
     });
     internals(sm).sessions.set("chat-retry-from-evicted", retrying);
@@ -1640,6 +1819,7 @@ describe("SessionManager edge coverage", () => {
         retryAttempt: 1,
         status: "suspended",
         claudeSessionId: "previous-retry",
+        retryHeadMessage: makeMessage("chat-retry-resume-lost"),
       }),
     );
     internals(retryResumeManager).markRouteOwned = loseOwnership;
@@ -1655,6 +1835,7 @@ describe("SessionManager edge coverage", () => {
         retryAttempt: 1,
         status: "suspended",
         claudeSessionId: "",
+        retryHeadMessage: makeMessage("chat-retry-start-lost"),
       }),
     );
     internals(retryStartManager).markRouteOwned = loseOwnership;

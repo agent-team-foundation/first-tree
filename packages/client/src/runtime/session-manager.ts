@@ -97,11 +97,15 @@ type SessionEntry = {
    * nothing actionable). Cleared on a successful start/resume.
    */
   lastRetryRawError: string | null;
-  /** Original message used to bootstrap this session, replayed on retry. */
-  startMessage: SessionMessage | null;
+  /**
+   * Input for the current transient start/resume retry window. This is set at
+   * the failure boundary from the message that actually failed, and cleared
+   * once the retry succeeds or the retry state is torn down.
+   */
+  retryHeadMessage: SessionMessage | null;
   /**
    * Messages that arrived while start/resume is in transient retry. They must
-   * not replace `startMessage`: the older accepted inbox entry is still ahead
+   * not replace `retryHeadMessage`: the older accepted inbox entry is still ahead
    * of them in the ACK prefix, so retry consumes the original trigger first and
    * injects these only after the handler is live again.
    */
@@ -389,10 +393,6 @@ const RUNTIME_REAFFIRM_JITTER_RATIO = 0.2;
 function jitteredReaffirmDelay(): number {
   const offset = (Math.random() * 2 - 1) * RUNTIME_REAFFIRM_BASE_MS * RUNTIME_REAFFIRM_JITTER_RATIO;
   return RUNTIME_REAFFIRM_BASE_MS + offset;
-}
-
-function buildEmptySessionMessage(chatId: string): SessionMessage {
-  return { id: "", chatId, senderId: "", format: "text", content: "", metadata: {} };
 }
 
 function previousAvailable(entry: SessionEntry): boolean {
@@ -916,7 +916,7 @@ export class SessionManager {
     return this.inboxDelivery.hasUnsettledWork(chatId);
   }
 
-  private clearRetryState(entry: SessionEntry): void {
+  private clearRetryAttemptState(entry: SessionEntry): void {
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
     entry.retryAttempt = 0;
     entry.retryNextAt = null;
@@ -925,6 +925,11 @@ export class SessionManager {
     entry.lastRetryCategory = null;
     entry.lastRetryScope = null;
     entry.lastRetryRawError = null;
+    entry.retryHeadMessage = null;
+  }
+
+  private clearRetryState(entry: SessionEntry): void {
+    this.clearRetryAttemptState(entry);
     entry.retryQueuedMessages = [];
   }
 
@@ -1282,7 +1287,7 @@ export class SessionManager {
       lastRetryCategory: null,
       lastRetryScope: null,
       lastRetryRawError: null,
-      startMessage: message,
+      retryHeadMessage: null,
       retryQueuedMessages: [],
       pendingRuntimeFailureNotice: null,
       retryFromEvicted: evicted ?? null,
@@ -1337,6 +1342,7 @@ export class SessionManager {
         err,
         phase,
         classification,
+        attemptedMessage: message,
       });
       if (this.sessions.get(chatId) !== entry) return;
       if (handling.kind === "terminal") await this.teardownTerminalSessionFailure(entry, message, handling);
@@ -1406,6 +1412,7 @@ export class SessionManager {
         err,
         phase: "resume",
         classification,
+        attemptedMessage: message ?? null,
       });
       if (this.sessions.get(entry.chatId) !== entry) return;
       if (handling.kind === "terminal") await this.teardownTerminalSessionFailure(entry, message ?? null, handling);
@@ -1429,8 +1436,9 @@ export class SessionManager {
     err: unknown;
     phase: "start" | "resume";
     classification: ProviderFailureClassification;
+    attemptedMessage: SessionMessage | null;
   }): Promise<SessionFailureHandling> {
-    const { entry, ctx, err, phase, classification } = args;
+    const { entry, ctx, err, phase, classification, attemptedMessage } = args;
     const errMsg = err instanceof Error ? err.message : String(err);
     const chatId = entry.chatId;
     const provider = this.runtimeProvider();
@@ -1449,6 +1457,7 @@ export class SessionManager {
     );
 
     if (decision.action === "retry") {
+      entry.retryHeadMessage = attemptedMessage;
       entry.retryAttempt = decision.attempt;
       entry.lastRetryReason = decision.reasonCode;
       entry.lastRetryCategory = classification.category;
@@ -1587,6 +1596,7 @@ export class SessionManager {
   ): Promise<void> {
     const chatId = entry.chatId;
     if (this.sessions.get(chatId) !== entry) return;
+    this.clearRetryState(entry);
     if (handling.terminalEventPersisted && message) {
       await this.completeDeliveryTurn(chatId, message, {
         status: "error",
@@ -1594,9 +1604,8 @@ export class SessionManager {
         completion: "consumed",
         reason: `session_failure_terminal:${handling.reasonCode}`,
       });
-    } else {
-      await this.inboxDelivery.drainForTerminate(chatId);
     }
+    await this.inboxDelivery.drainForTerminate(chatId);
 
     if (this.sessions.get(chatId) !== entry) return;
     this.sessions.delete(chatId);
@@ -1621,6 +1630,40 @@ export class SessionManager {
       this.clearRetryState(entry);
       await this.inboxDelivery.recoverIfNeeded(chatId, "session_retry:recovery_debt");
       this.projectSessionRuntime(chatId);
+      return;
+    }
+
+    const retryHeadMessage = entry.retryHeadMessage;
+    const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+    const retryRoute = previousSessionId
+      ? { kind: "resume" as const, message: retryHeadMessage, previousSessionId }
+      : retryHeadMessage
+        ? { kind: "start" as const, message: retryHeadMessage }
+        : null;
+    if (
+      retryHeadMessage?.inboxEntryId !== undefined &&
+      !this.inboxDelivery.hasEntry({
+        chatId,
+        messageId: retryHeadMessage.id,
+        entryId: retryHeadMessage.inboxEntryId,
+      })
+    ) {
+      this.config.log.warn(
+        {
+          chatId,
+          messageId: retryHeadMessage.id,
+          entryId: retryHeadMessage.inboxEntryId,
+        },
+        "session retry head lost inbox custody; requesting recovery",
+      );
+      this.failSessionForRecovery(chatId, "session_retry_head_custody_missing", previousSessionId);
+      await this.inboxDelivery.recoverIfNeeded(chatId, "session_retry_head_custody_missing");
+      return;
+    }
+    if (!retryRoute) {
+      this.config.log.error({ chatId }, "session start retry has no input; requesting recovery");
+      this.failSessionForRecovery(chatId, "session_retry_head_missing");
+      await this.inboxDelivery.recoverIfNeeded(chatId, "session_retry_head_missing");
       return;
     }
 
@@ -1661,7 +1704,7 @@ export class SessionManager {
     // Enforce concurrency limit before claiming the slot. If we cannot, the
     // entry stays in transient-retry state and a future retry / message will
     // try again.
-    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId), "recovery")) {
+    if (!this.acquireActiveSlot(chatId, retryRoute.message, "recovery", { queueOnFailure: false })) {
       // Couldn't get a slot — re-arm the timer with a short delay.
       const nextDelay = 5_000;
       entry.retryNextAt = Date.now() + nextDelay;
@@ -1689,31 +1732,29 @@ export class SessionManager {
     this.notifySessionState(chatId, "active");
     this.projectSessionRuntime(chatId, { drainPendingOnIdle: false });
     try {
-      const resumeMessage = entry.startMessage ?? null;
-      const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
-      if (resumeMessage) this.setCurrentTrigger(chatId, resumeMessage);
-      const token = resumeMessage ? this.createDeliveryToken(chatId) : undefined;
-      if (previousSessionId) {
+      if (retryHeadMessage) this.setCurrentTrigger(chatId, retryHeadMessage);
+      const token = retryHeadMessage ? this.createDeliveryToken(chatId) : undefined;
+      if (retryRoute.kind === "resume") {
         const resumeResult = token
-          ? await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx, token)
-          : await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
+          ? await newHandler.resume(retryHeadMessage ?? undefined, retryRoute.previousSessionId, ctx, token)
+          : await newHandler.resume(undefined, retryRoute.previousSessionId, ctx);
         if (this.sessions.get(chatId) !== entry) return;
         const receipt = normalizeResumeReceipt(resumeResult);
         entry.claudeSessionId = receipt.sessionId;
-        if (resumeMessage && receipt.route) {
-          const ownership = this.markRouteOwned(chatId, resumeMessage, receipt.route);
+        if (retryHeadMessage && receipt.route) {
+          const ownership = this.markRouteOwned(chatId, retryHeadMessage, receipt.route);
           if (ownership === "lost") {
             this.abortUnownedRoute(entry, "session_retry_resume_unowned_delivery");
             return;
           }
         }
       } else {
-        // No resume key yet — fall back to fresh start.
-        const message = resumeMessage ?? buildEmptySessionMessage(chatId);
-        const receipt = normalizeStartReceipt(await newHandler.start(message, ctx, this.createDeliveryToken(chatId)));
+        const receipt = normalizeStartReceipt(
+          await newHandler.start(retryRoute.message, ctx, this.createDeliveryToken(chatId)),
+        );
         if (this.sessions.get(chatId) !== entry) return;
         entry.claudeSessionId = receipt.sessionId;
-        if (this.markRouteOwned(chatId, message, receipt.route) === "lost") {
+        if (this.markRouteOwned(chatId, retryRoute.message, receipt.route) === "lost") {
           this.abortUnownedRoute(entry, "session_retry_start_unowned_delivery");
           return;
         }
@@ -1721,12 +1762,7 @@ export class SessionManager {
       const totalAttempts = entry.retryAttempt;
       const succeededScope = entry.lastRetryScope ?? (previousAvailable(entry) ? "session_resume" : "session_start");
       const succeededClassification = this.retryClassificationForEntry(entry);
-      entry.retryAttempt = 0;
-      entry.retryNextAt = null;
-      entry.lastRetryReason = null;
-      entry.lastRetryCategory = null;
-      entry.lastRetryScope = null;
-      entry.lastRetryRawError = null;
+      this.clearRetryAttemptState(entry);
       this.config.log.info(
         {
           chatId,
@@ -1758,7 +1794,7 @@ export class SessionManager {
       this.persistRegistry();
     } catch (err) {
       if (this.sessions.get(chatId) !== entry) return;
-      const phase = previousAvailable(entry) ? "resume" : "start";
+      const phase = retryRoute.kind;
       const classification = classifyProviderFailure(err, {
         provider: this.runtimeProvider(),
         scope: phase === "start" ? "session_start" : "session_resume",
@@ -1770,9 +1806,10 @@ export class SessionManager {
         err,
         phase,
         classification,
+        attemptedMessage: retryHeadMessage,
       });
       if (this.sessions.get(chatId) !== entry) return;
-      if (handling.kind === "terminal") await this.teardownTerminalSessionFailure(entry, entry.startMessage, handling);
+      if (handling.kind === "terminal") await this.teardownTerminalSessionFailure(entry, retryHeadMessage, handling);
     }
   }
 
@@ -1830,7 +1867,9 @@ export class SessionManager {
    *    working session as a last resort and force recovery for its work.
    * 3. Queue recovery/internal traffic instead of displacing working sessions.
    *
-   * Returns true if slot acquired, false if queued. The in-flight entryId
+   * Returns true if a slot is acquired and false if it remains unavailable.
+   * Callers normally enqueue on failure; retry-scoped callers can opt out so
+   * their timer/head state remains the single waiting source. The in-flight entryId
    * is tracked separately in `InboxDeliveryCoordinator` (populated at dispatch),
    * so the queue doesn't carry inbox metadata.
    */
@@ -1838,6 +1877,7 @@ export class SessionManager {
     chatId: string,
     message: SessionMessage | null,
     deliveryKind: SlotDeliveryKind = "fresh",
+    opts: { queueOnFailure?: boolean } = {},
   ): boolean {
     if (this._activeCount < this.config.concurrency) return true;
 
@@ -1897,7 +1937,9 @@ export class SessionManager {
       return true;
     }
 
-    this.queueForSlot(chatId, message, deliveryKind, "concurrency_limit");
+    if (opts.queueOnFailure !== false) {
+      this.queueForSlot(chatId, message, deliveryKind, "concurrency_limit");
+    }
     return false;
   }
 
