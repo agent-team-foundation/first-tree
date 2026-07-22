@@ -209,6 +209,71 @@ describe("Context Tree setup preview handoff", () => {
     );
   });
 
+  it("keeps expiry scoped to each role when only Member regenerates", async () => {
+    const container = await renderPreview("/preview/context-tree-setup?role=admin&code=expired&controls=1");
+    const activeAdmin = container.querySelector('a[aria-current="page"]') as HTMLAnchorElement | null;
+    expect(activeAdmin?.href).toContain("code=expired");
+
+    await act(async () => activeAdmin?.click());
+    await flush();
+    expect(container.querySelector('[data-testid="location-probe"]')?.textContent).toContain("code=expired");
+    expect(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Fixture expired"))
+        ?.disabled,
+    ).toBe(true);
+
+    const memberLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Member");
+    await act(async () => memberLink?.click());
+    await flush();
+    expect(container.querySelector('[data-context-tree-setup-preview="member"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="location-probe"]')?.textContent).toContain("code=expired");
+    expect(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Fixture expired"))
+        ?.disabled,
+    ).toBe(true);
+
+    await clickButton(container, "Generate new fixture");
+    expect(container.textContent).toContain("FT-PREVIEW-STAGING-1-MEMBER");
+    expect(container.querySelector('[data-testid="location-probe"]')?.textContent).not.toContain("code=expired");
+
+    const adminLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Admin");
+    await act(async () => adminLink?.click());
+    await flush();
+    expect(container.querySelector('[data-context-tree-setup-preview="admin"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="location-probe"]')?.textContent).toContain("code=expired");
+    expect(container.textContent).toContain("FT-PREVIEW-STAGING-ADMIN");
+    expect(container.textContent).not.toContain("FT-PREVIEW-STAGING-1-ADMIN");
+    expect(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Fixture expired"))
+        ?.disabled,
+    ).toBe(true);
+  });
+
+  it("preserves regenerated fixture identity without stealing focus on role return", async () => {
+    const container = await renderPreview("/preview/context-tree-setup?role=admin&code=expired&controls=1");
+
+    await clickButton(container, "Generate new fixture");
+    expect(container.textContent).toContain("FT-PREVIEW-STAGING-1-ADMIN");
+
+    const memberLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Member");
+    await act(async () => memberLink?.click());
+    await flush();
+    expect(container.querySelector('[data-context-tree-setup-preview="member"]')).not.toBeNull();
+    expect(container.textContent).toContain("FT-PREVIEW-STAGING-MEMBER");
+    expect(container.textContent).not.toContain("FT-PREVIEW-STAGING-1-MEMBER");
+
+    const adminLink = [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Admin",
+    ) as HTMLAnchorElement | undefined;
+    adminLink?.focus();
+    await act(async () => adminLink?.click());
+    await flush();
+    expect(container.querySelector('[data-context-tree-setup-preview="admin"]')).not.toBeNull();
+    expect(container.textContent).toContain("FT-PREVIEW-STAGING-1-ADMIN");
+    expect(container.textContent).not.toContain("FT-PREVIEW-STAGING-ADMIN");
+    expect(document.activeElement).toBe(adminLink);
+  });
+
   it("announces clipboard rejection and focuses the opened fallback", async () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,

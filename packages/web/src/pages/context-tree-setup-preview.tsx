@@ -50,11 +50,27 @@ export function ContextTreeSetupPreviewPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const query = useMemo(() => normalizeContextTreeSetupPreviewQuery(location.search), [location.search]);
+  const [fixtureStates, setFixtureStates] = useState<
+    Record<ContextTreeSetupPreviewRole, { version: number; expired: boolean }>
+  >(() => ({
+    admin: { version: 0, expired: query.expired },
+    member: { version: 0, expired: query.expired },
+  }));
 
   useEffect(() => {
     if (!query.changed) return;
     void navigate({ pathname: location.pathname, search: query.search }, { replace: true });
   }, [location.pathname, navigate, query.changed, query.search]);
+
+  useEffect(() => {
+    setFixtureStates((current) => {
+      if (current[query.role].expired === query.expired) return current;
+      return {
+        ...current,
+        [query.role]: { ...current[query.role], expired: query.expired },
+      };
+    });
+  }, [query.expired, query.role]);
 
   const clearExpired = (): void => {
     const params = new URLSearchParams(query.search);
@@ -62,15 +78,40 @@ export function ContextTreeSetupPreviewPage() {
     void navigate({ pathname: location.pathname, search: params.toString() }, { replace: true });
   };
 
+  const regenerate = (): void => {
+    setFixtureStates((current) => ({
+      ...current,
+      [query.role]: {
+        version: current[query.role].version + 1,
+        expired: false,
+      },
+    }));
+    clearExpired();
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground" data-context-tree-setup-preview={query.role}>
-      <PreviewHeader role={query.role} controls={query.controls} />
-      <HandoffPage key={query.role} role={query.role} expired={query.expired} onRegenerate={clearExpired} />
+      <PreviewHeader role={query.role} controls={query.controls} fixtureStates={fixtureStates} />
+      <HandoffPage
+        key={query.role}
+        role={query.role}
+        version={fixtureStates[query.role].version}
+        expired={fixtureStates[query.role].expired}
+        onRegenerate={regenerate}
+      />
     </div>
   );
 }
 
-function PreviewHeader({ role, controls }: { role: ContextTreeSetupPreviewRole; controls: boolean }) {
+function PreviewHeader({
+  role,
+  controls,
+  fixtureStates,
+}: {
+  role: ContextTreeSetupPreviewRole;
+  controls: boolean;
+  fixtureStates: Record<ContextTreeSetupPreviewRole, { version: number; expired: boolean }>;
+}) {
   return (
     <header className="border-b border-border-faint bg-background">
       <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-10">
@@ -91,8 +132,8 @@ function PreviewHeader({ role, controls }: { role: ContextTreeSetupPreviewRole; 
         <div className="flex items-center gap-3">
           {controls ? (
             <nav aria-label="Context Tree setup preview role" className="hidden items-center gap-1 sm:flex">
-              <RoleLink previewRole="admin" activeRole={role} />
-              <RoleLink previewRole="member" activeRole={role} />
+              <RoleLink previewRole="admin" activeRole={role} expired={fixtureStates.admin.expired} />
+              <RoleLink previewRole="member" activeRole={role} expired={fixtureStates.member.expired} />
             </nav>
           ) : null}
           <a href="#preview-help" className="hidden text-body text-fg-2 hover:text-foreground sm:inline">
@@ -112,8 +153,8 @@ function PreviewHeader({ role, controls }: { role: ContextTreeSetupPreviewRole; 
           aria-label="Context Tree setup preview role on narrow screens"
           className="flex items-center justify-center gap-1 border-t border-border-faint px-4 py-2 sm:hidden"
         >
-          <RoleLink previewRole="admin" activeRole={role} />
-          <RoleLink previewRole="member" activeRole={role} />
+          <RoleLink previewRole="admin" activeRole={role} expired={fixtureStates.admin.expired} />
+          <RoleLink previewRole="member" activeRole={role} expired={fixtureStates.member.expired} />
         </nav>
       ) : null}
     </header>
@@ -123,11 +164,14 @@ function PreviewHeader({ role, controls }: { role: ContextTreeSetupPreviewRole; 
 function RoleLink({
   previewRole,
   activeRole,
+  expired,
 }: {
   previewRole: ContextTreeSetupPreviewRole;
   activeRole: ContextTreeSetupPreviewRole;
+  expired: boolean;
 }) {
   const params = new URLSearchParams({ role: previewRole, controls: "1" });
+  if (expired) params.set("code", "expired");
   return (
     <Link
       to={{ pathname: "/preview/context-tree-setup", search: params.toString() }}
@@ -146,18 +190,20 @@ function RoleLink({
 
 function HandoffPage({
   role,
+  version,
   expired,
   onRegenerate,
 }: {
   role: ContextTreeSetupPreviewRole;
+  version: number;
   expired: boolean;
   onRegenerate: () => void;
 }) {
   const copy = HANDOFF_COPY[role];
   const copyButtonRef = useRef<HTMLButtonElement>(null);
+  const focusAfterRegenerationRef = useRef(false);
   const terminalRef = useRef<HTMLPreElement>(null);
   const { status: copyStatus, copy: copyPrompt, reset: resetCopy } = useCopyFeedback();
-  const [version, setVersion] = useState(0);
   const [showCommand, setShowCommand] = useState(false);
   const [showMemberHelp, setShowMemberHelp] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Preview fixture · simulated expiry 9:42");
@@ -178,13 +224,15 @@ function HandoffPage({
   }, [copyStatus, showCommand]);
 
   useEffect(() => {
-    if (version > 0 && !expired) copyButtonRef.current?.focus();
+    if (!focusAfterRegenerationRef.current || expired) return;
+    copyButtonRef.current?.focus();
+    focusAfterRegenerationRef.current = false;
   }, [expired, version]);
 
   const regenerate = (): void => {
-    setVersion((current) => current + 1);
     setStatusMessage("New preview fixture generated · simulated expiry 9:42");
     resetCopy();
+    focusAfterRegenerationRef.current = true;
     onRegenerate();
   };
 
