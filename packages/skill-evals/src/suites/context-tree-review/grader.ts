@@ -946,6 +946,7 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
   if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return empty;
   const item = event.event.item;
   if (!isRecord(item)) return empty;
+  if (item.type === "command_execution" && item.status === "in_progress") return empty;
   const repairsAllowed = expectation.repair !== "none";
   if (item.type === "file_change" && Array.isArray(item.changes)) {
     const changedPaths = item.changes.flatMap((change) => {

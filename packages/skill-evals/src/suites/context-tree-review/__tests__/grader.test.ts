@@ -607,6 +607,25 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
+  it("does not grade an in-progress mutation event before its completed result", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    events.splice(1, 0, {
+      event: {
+        item: {
+          command:
+            "git -C context-tree worktree list --porcelain && git -C context-tree worktree add --detach ../.review-worktrees/42 refs/review/pr-42",
+          status: "in_progress",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.unexpectedMutationAttempted).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
   it("requires current-head checks and a freshness view after final review evidence", () => {
     const missingChecks = passingEvents().filter(
       (event) => (event as { type?: unknown }).type !== "github_pr_checks_viewed",
