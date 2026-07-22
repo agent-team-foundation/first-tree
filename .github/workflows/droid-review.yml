@@ -1,4 +1,8 @@
-name: Droid Auto Review
+name: Droid Auto Review (Disabled)
+
+# Temporarily disabled by maintainer decision. Keep the workflow body intact so
+# automatic review can be restored without reconstructing its permissions and
+# pinned action configuration.
 
 on:
   workflow_dispatch:
@@ -9,7 +13,7 @@ concurrency:
 
 jobs:
   droid-review:
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
