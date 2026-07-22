@@ -426,8 +426,11 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
 
     const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Expand current agent output"]');
+    const chevron = trigger?.querySelector<SVGSVGElement>(".lucide-chevron-down");
+    expect(chevron?.style.transform).toBe("rotate(180deg)");
     trigger?.focus();
     await click(h, trigger);
+    expect(chevron?.style.transform).toBe("none");
     const inspector = h.container.querySelector<HTMLElement>("[data-current-agent-output]");
     expect(inspector).not.toBeNull();
     const domPosition = trigger?.compareDocumentPosition(inspector ?? document.body) ?? 0;
@@ -435,6 +438,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).toBe(trigger);
 
     await click(h, trigger);
+    expect(chevron?.style.transform).toBe("rotate(180deg)");
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
