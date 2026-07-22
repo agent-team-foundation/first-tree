@@ -24,6 +24,7 @@ type SessionRecord = {
   claudeSessionId: string;
   handler: AgentHandler;
   status: SessionState;
+  activeSlotHeld: boolean;
   lastActivity: number;
   suspending: Promise<void> | null;
   retryAttempt: number;
@@ -34,7 +35,8 @@ type SessionRecord = {
   lastRetryScope: "session_start" | "session_resume" | null;
   lastRetryRawError: string | null;
   retryHeadMessage: SessionMessage | null;
-  retryQueuedMessages: SessionMessage[];
+  deferredMessages: SessionMessage[];
+  routeTransitionPending: boolean;
   pendingRuntimeFailureNotice: ProviderRetryEventPayload | null;
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
@@ -256,11 +258,13 @@ function messageFromEntry(entry: InboxEntryWithMessage): SessionMessage {
 }
 
 function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
+  const status = overrides.status ?? "suspended";
   return {
     chatId,
     claudeSessionId: `session-${chatId}`,
     handler: handler(),
-    status: "suspended",
+    status,
+    activeSlotHeld: status === "active",
     lastActivity: Date.now(),
     suspending: null,
     retryAttempt: 0,
@@ -271,7 +275,8 @@ function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {
     lastRetryScope: null,
     lastRetryRawError: null,
     retryHeadMessage: null,
-    retryQueuedMessages: [],
+    deferredMessages: [],
+    routeTransitionPending: false,
     pendingRuntimeFailureNotice: null,
     retryFromEvicted: null,
     ...overrides,
@@ -1104,7 +1109,7 @@ describe("SessionManager edge coverage", () => {
         status: "suspended",
         claudeSessionId: "previous-session",
         retryHeadMessage: head,
-        retryQueuedMessages: [tail],
+        deferredMessages: [tail],
       }),
     );
 
@@ -1116,6 +1121,308 @@ describe("SessionManager edge coverage", () => {
     expect(i.inboxDelivery.hasUnsettledWork(chatId)).toBe(false);
     expect(i.sessions.has(chatId)).toBe(false);
 
+    await sm.shutdown();
+  });
+
+  it("recovers deferred work when operator suspend races a late terminal resume failure", async () => {
+    let signalResumeStarted: (() => void) | undefined;
+    let rejectResume: ((reason?: unknown) => void) | undefined;
+    const resumeStarted = new Promise<void>((resolve) => {
+      signalResumeStarted = resolve;
+    });
+    const pendingResume = new Promise<string>((_resolve, reject) => {
+      rejectResume = reject;
+    });
+    const existingHandler = handler({
+      resume: vi.fn().mockImplementation(() => {
+        signalResumeStarted?.();
+        return pendingResume;
+      }),
+    });
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      ackEntry,
+      recoverChat,
+      confirmSessionEvent: vi.fn().mockResolvedValue(undefined),
+    });
+    const i = internals(sm);
+    const chatId = "chat-suspend-late-terminal-resume";
+    const headEntry = mockEntry({ id: 2, chatId, messageId: "msg-late-terminal-head" });
+    const tailEntry = mockEntry({ id: 3, chatId, messageId: "msg-late-terminal-tail" });
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        handler: existingHandler,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+      }),
+    );
+    const blocker = makeSessionRecord("chat-suspend-race-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(headEntry);
+    await resumeStarted;
+    expect(sm.activeCount).toBe(2);
+    await sm.dispatch(tailEntry);
+    expect(i.sessions.get(chatId)?.deferredMessages).toHaveLength(1);
+
+    await sm.handleCommand(chatId, "session:suspend");
+    await vi.waitFor(() => expect(i.inboxDelivery.hasRecoveryDebt(chatId)).toBe(true));
+    expect(sm.activeCount).toBe(1);
+
+    rejectResume?.({ name: "ClientUserMismatchError", message: "runtime authorization changed" });
+    await headDispatch;
+
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+    expect(ackEntry).not.toHaveBeenCalledWith(2);
+    expect(ackEntry).not.toHaveBeenCalledWith(3);
+    expect(i.inboxDelivery.hasUnsettledWork(chatId)).toBe(false);
+    expect(i.sessions.has(chatId)).toBe(false);
+    expect(i.sessions.has(blocker.chatId)).toBe(true);
+    expect(sm.activeCount).toBe(1);
+
+    await sm.shutdown();
+  });
+
+  it("does not release a blocker slot twice when suspended resume fails transiently", async () => {
+    let signalResumeStarted: (() => void) | undefined;
+    let rejectResume: ((reason?: unknown) => void) | undefined;
+    const resumeStarted = new Promise<void>((resolve) => {
+      signalResumeStarted = resolve;
+    });
+    const pendingResume = new Promise<string>((_resolve, reject) => {
+      rejectResume = reject;
+    });
+    const existingHandler = handler({
+      resume: vi.fn().mockImplementation(() => {
+        signalResumeStarted?.();
+        return pendingResume;
+      }),
+    });
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({ recoverChat });
+    const i = internals(sm);
+    const chatId = "chat-suspend-late-transient-resume";
+    const headEntry = mockEntry({ id: 2, chatId, messageId: "msg-late-transient-head" });
+    const tailEntry = mockEntry({ id: 3, chatId, messageId: "msg-late-transient-tail" });
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        handler: existingHandler,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+      }),
+    );
+    const blocker = makeSessionRecord("chat-transient-race-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(headEntry);
+    await resumeStarted;
+    expect(sm.activeCount).toBe(2);
+    await sm.dispatch(tailEntry);
+
+    await sm.handleCommand(chatId, "session:suspend");
+    await vi.waitFor(() => expect(i.inboxDelivery.hasRecoveryDebt(chatId)).toBe(true));
+    expect(sm.activeCount).toBe(1);
+
+    rejectResume?.({ status: 429, message: "provider still limited" });
+    await headDispatch;
+
+    expect(i.sessions.get(chatId)?.retryAttempt).toBeGreaterThan(0);
+    expect(sm.activeCount).toBe(1);
+
+    await i.runRetry(chatId);
+
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+    expect(i.inboxDelivery.hasUnsettledWork(chatId)).toBe(false);
+    expect(i.sessions.has(blocker.chatId)).toBe(true);
+    expect(sm.activeCount).toBe(1);
+
+    await sm.shutdown();
+  });
+
+  it("releases an errored transition slot when terminate wins before failure event confirmation", async () => {
+    let signalConfirmStarted: (() => void) | undefined;
+    let resolveConfirm: (() => void) | undefined;
+    const confirmStarted = new Promise<void>((resolve) => {
+      signalConfirmStarted = resolve;
+    });
+    const pendingConfirm = new Promise<void>((resolve) => {
+      resolveConfirm = resolve;
+    });
+    const targetHandler = handler({
+      resume: vi.fn().mockRejectedValue({ name: "ClientUserMismatchError", message: "wrong client" }),
+    });
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      recoverChat,
+      confirmSessionEvent: vi.fn().mockImplementation(() => {
+        signalConfirmStarted?.();
+        return pendingConfirm;
+      }),
+    });
+    const i = internals(sm);
+    const chatId = "chat-terminal-confirm-terminate";
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        handler: targetHandler,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+      }),
+    );
+    const blocker = makeSessionRecord("chat-terminal-confirm-terminate-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(mockEntry({ id: 2, chatId, messageId: "msg-terminal-confirm-terminate" }));
+    await confirmStarted;
+
+    expect(i.sessions.get(chatId)?.status).toBe("errored");
+    expect(i.sessions.get(chatId)?.activeSlotHeld).toBe(true);
+    expect(sm.activeCount).toBe(2);
+
+    await sm.handleCommand(chatId, "session:terminate");
+
+    expect(i.sessions.has(chatId)).toBe(false);
+    expect(targetHandler.shutdown).toHaveBeenCalledTimes(1);
+    expect(sm.activeCount).toBe(1);
+
+    resolveConfirm?.();
+    await headDispatch;
+
+    expect(i.sessions.has(blocker.chatId)).toBe(true);
+    expect(sm.activeCount).toBe(1);
+    await sm.shutdown();
+  });
+
+  it("releases an errored transition slot when LRU eviction wins before failure event confirmation", async () => {
+    let signalConfirmStarted: (() => void) | undefined;
+    let resolveConfirm: (() => void) | undefined;
+    const confirmStarted = new Promise<void>((resolve) => {
+      signalConfirmStarted = resolve;
+    });
+    const pendingConfirm = new Promise<void>((resolve) => {
+      resolveConfirm = resolve;
+    });
+    const targetHandler = handler({
+      resume: vi.fn().mockRejectedValue({ name: "ClientUserMismatchError", message: "wrong client" }),
+    });
+    const sm = makeManager({
+      maxSessions: 2,
+      confirmSessionEvent: vi.fn().mockImplementation(() => {
+        signalConfirmStarted?.();
+        return pendingConfirm;
+      }),
+    });
+    const i = internals(sm);
+    const chatId = "chat-terminal-confirm-evict";
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        handler: targetHandler,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+      }),
+    );
+    const blocker = makeSessionRecord("chat-terminal-confirm-evict-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(mockEntry({ id: 2, chatId, messageId: "msg-terminal-confirm-evict" }));
+    await confirmStarted;
+
+    expect(i.sessions.get(chatId)?.status).toBe("errored");
+    expect(i.sessions.get(chatId)?.activeSlotHeld).toBe(true);
+    expect(sm.activeCount).toBe(2);
+
+    i.evictIfNeeded();
+
+    expect(i.sessions.has(chatId)).toBe(false);
+    expect(targetHandler.shutdown).toHaveBeenCalledTimes(1);
+    expect(sm.activeCount).toBe(1);
+
+    resolveConfirm?.();
+    await headDispatch;
+
+    expect(i.sessions.has(blocker.chatId)).toBe(true);
+    expect(sm.activeCount).toBe(1);
+    await sm.shutdown();
+  });
+
+  it("blocks retry, tail, and control resume re-entry while terminal retry confirmation is pending", async () => {
+    let signalConfirmStarted: (() => void) | undefined;
+    let resolveConfirm: (() => void) | undefined;
+    const confirmStarted = new Promise<void>((resolve) => {
+      signalConfirmStarted = resolve;
+    });
+    const pendingConfirm = new Promise<void>((resolve) => {
+      resolveConfirm = resolve;
+    });
+    const terminalRetry = handler({
+      resume: vi.fn().mockRejectedValue({ name: "ClientUserMismatchError", message: "wrong client" }),
+    });
+    const replacement = handler({ start: vi.fn().mockResolvedValue("tail-session") });
+    const sm = makeManager({
+      handlers: [terminalRetry, replacement],
+      confirmSessionEvent: vi.fn().mockImplementation(() => {
+        signalConfirmStarted?.();
+        return pendingConfirm;
+      }),
+    });
+    const i = internals(sm);
+    const chatId = "chat-terminal-confirm-admission";
+    const headEntry = mockEntry({ id: 2, chatId, messageId: "msg-terminal-confirm-head" });
+    const tailEntry = mockEntry({ id: 3, chatId, messageId: "msg-terminal-confirm-tail" });
+    const head = messageFromEntry(headEntry);
+    i.inboxDelivery.receive(headEntry);
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        retryAttempt: 1,
+        status: "suspended",
+        claudeSessionId: "previous-session",
+        retryHeadMessage: head,
+        lastRetryReason: "network_error",
+      }),
+    );
+    const blocker = makeSessionRecord("chat-terminal-confirm-admission-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const retryPromise = i.runRetry(chatId);
+    await confirmStarted;
+
+    expect(i.sessions.get(chatId)?.status).toBe("errored");
+    expect(i.sessions.get(chatId)?.activeSlotHeld).toBe(true);
+    expect(i.sessions.get(chatId)?.retryAttempt).toBe(0);
+    expect(sm.activeCount).toBe(2);
+
+    await sm.dispatch(tailEntry);
+    await sm.handleCommand(chatId, "session:resume");
+    await i.runRetry(chatId);
+
+    expect(terminalRetry.resume).toHaveBeenCalledTimes(1);
+    expect(replacement.start).not.toHaveBeenCalled();
+    expect(replacement.resume).not.toHaveBeenCalled();
+    expect(i.pendingQueue.some((queued) => queued.message?.id === tailEntry.message.id)).toBe(true);
+    expect(sm.activeCount).toBe(2);
+
+    resolveConfirm?.();
+    await retryPromise;
+    await vi.waitFor(() => expect(replacement.start).toHaveBeenCalledTimes(1));
+
+    expect(replacement.start).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tailEntry.message.id }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(terminalRetry.resume).toHaveBeenCalledTimes(1);
+    expect(i.sessions.has(blocker.chatId)).toBe(true);
+    expect(sm.activeCount).toBe(2);
     await sm.shutdown();
   });
 
@@ -1921,7 +2228,7 @@ describe("SessionManager edge coverage", () => {
       status: "suspended",
       claudeSessionId: "previous-session",
     });
-    retrying.retryQueuedMessages.push(makeMessage("chat-retry-inject-fail"));
+    retrying.deferredMessages.push(makeMessage("chat-retry-inject-fail"));
     internals(sm).sessions.set("chat-retry-inject-fail", retrying);
 
     await internals(sm).runRetry("chat-retry-inject-fail");

@@ -393,6 +393,85 @@ describe("SessionManager: transient session retry", () => {
     await sm.shutdown();
   });
 
+  it("moves a tail that arrives during a pending resume onto the retry handler", async () => {
+    vi.useFakeTimers();
+    try {
+      const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+      let initialCtx: SessionContext | undefined;
+      let initialMessage: SessionMessage | undefined;
+      let retryCtx: SessionContext | undefined;
+      let retryMessage: SessionMessage | undefined;
+      let rejectResume: ((reason?: unknown) => void) | undefined;
+      let signalResumeStarted: (() => void) | undefined;
+      const resumeStarted = new Promise<void>((resolve) => {
+        signalResumeStarted = resolve;
+      });
+      const pendingResume = new Promise<string>((_resolve, reject) => {
+        rejectResume = reject;
+      });
+      const injected: SessionMessage[] = [];
+      const established: AgentHandler = {
+        start: vi.fn(async (message, ctx) => {
+          initialMessage = message;
+          initialCtx = ctx;
+          return "deferred-resume-session";
+        }),
+        resume: vi.fn(() => {
+          signalResumeStarted?.();
+          return pendingResume;
+        }),
+        inject: vi.fn(),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const recovered: AgentHandler = {
+        start: vi.fn(),
+        resume: vi.fn(async (message, _sessionId, ctx) => {
+          retryMessage = message;
+          retryCtx = ctx;
+          return "deferred-resume-recovered";
+        }),
+        inject: vi.fn((message) => {
+          injected.push(message);
+          return { kind: "owned", mode: "queued" } as const;
+        }),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const sm = makeManager({ handlers: [established, recovered], ackEntry });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-pending-resume", messageId: "msg-1" }));
+      if (!initialCtx || !initialMessage) throw new Error("initial deferred session was not captured");
+      await initialCtx.finishTurn(initialMessage, { status: "success", terminal: true });
+      await sm.handleCommand("chat-pending-resume", "session:suspend");
+
+      const headDispatch = sm.dispatch(mockEntry({ id: 2, chatId: "chat-pending-resume", messageId: "msg-2" }));
+      await resumeStarted;
+      await sm.dispatch(mockEntry({ id: 3, chatId: "chat-pending-resume", messageId: "msg-3" }));
+      expect(established.inject).not.toHaveBeenCalled();
+
+      rejectResume?.(new FakeRateLimit("deferred resume transport failed"));
+      await headDispatch;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(recovered.resume).toHaveBeenCalledTimes(1);
+      expect(retryMessage?.id).toBe("msg-2");
+      expect(injected.map((message) => message.id)).toEqual(["msg-3"]);
+      if (!retryCtx || !retryMessage || !injected[0]) throw new Error("deferred retry routing was not captured");
+
+      await retryCtx.finishTurn(retryMessage, { status: "success", terminal: true });
+      await retryCtx.finishTurn(injected[0], { status: "success", terminal: true });
+
+      expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
+      expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
+      expect(ackEntry).toHaveBeenNthCalledWith(3, 3);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries a control resume without replaying the previous user message", async () => {
     vi.useFakeTimers();
     try {

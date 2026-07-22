@@ -68,6 +68,8 @@ type SessionEntry = {
   claudeSessionId: string;
   handler: AgentHandler;
   status: SessionState;
+  /** Whether this entry currently owns one unit of `_activeCount`. */
+  activeSlotHeld: boolean;
   lastActivity: number;
   /** In-flight suspend promise; awaited before resume to avoid race conditions. */
   suspending: Promise<void> | null;
@@ -104,12 +106,15 @@ type SessionEntry = {
    */
   retryHeadMessage: SessionMessage | null;
   /**
-   * Messages that arrived while start/resume is in transient retry. They must
+   * Messages that arrived while a start/resume transition or its transient
+   * retry is pending. They must
    * not replace `retryHeadMessage`: the older accepted inbox entry is still ahead
    * of them in the ACK prefix, so retry consumes the original trigger first and
    * injects these only after the handler is live again.
    */
-  retryQueuedMessages: SessionMessage[];
+  deferredMessages: SessionMessage[];
+  /** True while handler.start / handler.resume has not established its route. */
+  routeTransitionPending: boolean;
   /**
    * Latest terminal, user-actionable provider failure observed on the session
    * event channel. Posting the durable chat notice at the delivery-settlement
@@ -687,7 +692,7 @@ export class SessionManager {
     if (command === "session:suspend") {
       const session = this.sessions.get(chatId);
       if (session) this.clearRetryState(session);
-      if (session?.status === "active") {
+      if (session?.activeSlotHeld) {
         this.config.log.info({ chatId }, "suspend command received");
         this.suspendSession(session, {
           reason: "operator_suspended",
@@ -709,7 +714,13 @@ export class SessionManager {
         return;
       }
       const current = this.sessions.get(chatId);
-      if (current && current.status !== "active") {
+      if (current?.retryAttempt && current.status === "suspended" && !current.activeSlotHeld) {
+        this.triggerImmediateRetry(chatId);
+      } else if (
+        current &&
+        (current.status === "suspended" || current.status === "evicted") &&
+        !current.activeSlotHeld
+      ) {
         this.config.log.info({ chatId }, "resume command received");
         await this.resumeSession(current, undefined, "fresh");
       }
@@ -728,8 +739,9 @@ export class SessionManager {
         clearTimeout(session.retryTimer);
         session.retryTimer = null;
       }
-      if (session?.status === "active") {
-        this._activeCount--;
+      const activeSlotHeld = session?.activeSlotHeld === true;
+      if (session) this.releaseActiveSlot(session);
+      if (activeSlotHeld && session) {
         await session.handler.shutdown().catch(() => {});
       }
 
@@ -797,7 +809,7 @@ export class SessionManager {
     }
 
     const shutdowns = [...this.sessions.values()].map((s) =>
-      s.status === "active" ? s.handler.shutdown(reason) : Promise.resolve(),
+      s.activeSlotHeld ? s.handler.shutdown(reason) : Promise.resolve(),
     );
     await Promise.allSettled(shutdowns);
 
@@ -930,7 +942,21 @@ export class SessionManager {
 
   private clearRetryState(entry: SessionEntry): void {
     this.clearRetryAttemptState(entry);
-    entry.retryQueuedMessages = [];
+    entry.deferredMessages = [];
+    entry.routeTransitionPending = false;
+  }
+
+  private claimActiveSlot(entry: SessionEntry): void {
+    if (entry.activeSlotHeld) return;
+    entry.activeSlotHeld = true;
+    this._activeCount++;
+  }
+
+  private releaseActiveSlot(entry: SessionEntry): boolean {
+    if (!entry.activeSlotHeld) return false;
+    entry.activeSlotHeld = false;
+    this._activeCount = Math.max(0, this._activeCount - 1);
+    return true;
   }
 
   private runtimeProvider(): RuntimeProvider {
@@ -1021,9 +1047,7 @@ export class SessionManager {
         lastActivity: entry.lastActivity,
       });
     }
-    if (entry.status === "active") {
-      this._activeCount = Math.max(0, this._activeCount - 1);
-    }
+    this.releaseActiveSlot(entry);
 
     this.inboxDelivery.prepareEvict(chatId, reason);
     this.sessions.delete(chatId);
@@ -1040,7 +1064,7 @@ export class SessionManager {
     const { chatId } = entry;
     if (this.sessions.get(chatId) !== entry) return;
     this.config.log.warn({ chatId, reason }, "handler route completed after inbox custody was cleared");
-    if (entry.status === "active") this._activeCount = Math.max(0, this._activeCount - 1);
+    this.releaseActiveSlot(entry);
     void entry.handler.shutdown(reason).catch((err) => {
       this.config.log.warn({ chatId, reason, err }, "failed to shut down unowned handler route");
     });
@@ -1168,12 +1192,20 @@ export class SessionManager {
   ): Promise<void> {
     const existing = this.sessions.get(chatId);
 
-    // Transient retry path: keep the original start/resume message at the head
-    // of the provider retry. Newer messages sit later in the inbox ACK prefix,
-    // so they are queued and injected only after retry succeeds.
-    if (existing && existing.retryAttempt > 0) {
-      existing.retryQueuedMessages.push(message);
-      this.triggerImmediateRetry(chatId);
+    // A terminal decision closes route admission before its durable event is
+    // confirmed. New delivery waits for teardown instead of reviving the same
+    // SessionEntry while its original transition still owns the active slot.
+    if (existing?.status === "errored") {
+      this.queueForSlot(chatId, message, deliveryKind, "terminal_teardown_pending");
+      return;
+    }
+
+    // Start/resume transitions and their transient retries keep the original
+    // attempted message at the head. Newer messages sit later in the inbox ACK
+    // prefix, so SessionManager holds them until the winning handler is live.
+    if (existing && (existing.routeTransitionPending || existing.retryAttempt > 0)) {
+      existing.deferredMessages.push(message);
+      if (existing.retryAttempt > 0) this.triggerImmediateRetry(chatId);
       return;
     }
 
@@ -1198,10 +1230,6 @@ export class SessionManager {
         case "suspended":
         case "evicted":
           await this.resumeSession(existing, message, deliveryKind);
-          return;
-
-        case "errored":
-          this.queueForSlot(chatId, message, deliveryKind, "terminal_teardown_pending");
           return;
       }
     }
@@ -1278,6 +1306,7 @@ export class SessionManager {
       claudeSessionId: evicted?.claudeSessionId ?? "",
       handler,
       status: "active",
+      activeSlotHeld: false,
       lastActivity: Date.now(),
       suspending: null,
       retryAttempt: 0,
@@ -1288,13 +1317,14 @@ export class SessionManager {
       lastRetryScope: null,
       lastRetryRawError: null,
       retryHeadMessage: null,
-      retryQueuedMessages: [],
+      deferredMessages: [],
+      routeTransitionPending: true,
       pendingRuntimeFailureNotice: null,
       retryFromEvicted: evicted ?? null,
     };
 
     this.sessions.set(chatId, entry);
-    this._activeCount++;
+    this.claimActiveSlot(entry);
     if (evicted) this.evictedMappings.delete(chatId);
 
     // Report `active` before runtime projection. `session:runtime` frames are
@@ -1327,6 +1357,8 @@ export class SessionManager {
         }
         this.config.log.info({ chatId, sessionId: entry.claudeSessionId }, "session created");
       }
+      entry.routeTransitionPending = false;
+      this.drainDeferredMessages(entry);
       this.persistRegistry();
     } catch (err) {
       if (this.sessions.get(chatId) !== entry) return;
@@ -1367,7 +1399,8 @@ export class SessionManager {
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
-    this._activeCount++;
+    entry.routeTransitionPending = true;
+    this.claimActiveSlot(entry);
     entry.lastActivity = Date.now();
 
     this.notifySessionState(entry.chatId, "active");
@@ -1397,6 +1430,8 @@ export class SessionManager {
           return;
         }
       }
+      entry.routeTransitionPending = false;
+      this.drainDeferredMessages(entry);
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
     } catch (err) {
@@ -1439,6 +1474,7 @@ export class SessionManager {
     attemptedMessage: SessionMessage | null;
   }): Promise<SessionFailureHandling> {
     const { entry, ctx, err, phase, classification, attemptedMessage } = args;
+    entry.routeTransitionPending = false;
     const errMsg = err instanceof Error ? err.message : String(err);
     const chatId = entry.chatId;
     const provider = this.runtimeProvider();
@@ -1487,7 +1523,7 @@ export class SessionManager {
       // retry_scheduled` event emitted just below is the canonical signal
       // for "we're in the backoff window". Server-side `agent_chat_sessions.
       // state` therefore stays `active` for the entire retry window.
-      this._activeCount--;
+      this.releaseActiveSlot(entry);
       entry.status = "suspended";
       this.sessionRuntimeStates.delete(chatId);
       this.projectSessionRuntime(chatId);
@@ -1542,6 +1578,10 @@ export class SessionManager {
 
     // Stop decision — legacy F2 teardown still owns ACK/recovery, but the
     // visible signal is now the standard provider retry payload.
+    // Close retry admission before awaiting durable event confirmation. The
+    // attempted message is already owned by the caller and deferred custody
+    // remains on the entry for terminal teardown.
+    this.clearRetryAttemptState(entry);
     entry.status = "errored";
     this.notifySessionState(chatId, "errored");
     this.projectSessionRuntime(chatId);
@@ -1596,23 +1636,29 @@ export class SessionManager {
   ): Promise<void> {
     const chatId = entry.chatId;
     if (this.sessions.get(chatId) !== entry) return;
+    const hasDeferredTail = entry.deferredMessages.length > 0;
+    const hasRecoveryDebt = this.inboxDelivery.hasRecoveryDebt(chatId);
     this.clearRetryState(entry);
-    if (handling.terminalEventPersisted && message) {
+    if (handling.terminalEventPersisted && message && !hasRecoveryDebt) {
       await this.completeDeliveryTurn(chatId, message, {
         status: "error",
         terminal: true,
         completion: "consumed",
         reason: `session_failure_terminal:${handling.reasonCode}`,
       });
+      if (hasDeferredTail || this.inboxDelivery.hasRecoveryDebt(chatId)) {
+        await this.inboxDelivery.drainForTerminate(chatId);
+      }
+    } else {
+      await this.inboxDelivery.drainForTerminate(chatId);
     }
-    await this.inboxDelivery.drainForTerminate(chatId);
 
     if (this.sessions.get(chatId) !== entry) return;
     this.sessions.delete(chatId);
     this.sessionRuntimeStates.delete(chatId);
     this.currentTrigger.delete(chatId);
     this.recomputeRuntimeState();
-    this._activeCount = Math.max(0, this._activeCount - 1);
+    this.releaseActiveSlot(entry);
     this.drainPendingQueue();
   }
 
@@ -1625,7 +1671,7 @@ export class SessionManager {
   private async runRetry(chatId: string): Promise<void> {
     const entry = this.sessions.get(chatId);
     if (!entry) return;
-    if (entry.status === "active") return; // racing inject already revived it
+    if (entry.status !== "suspended" || entry.activeSlotHeld || entry.retryAttempt === 0) return;
     if (this.inboxDelivery.hasRecoveryDebt(chatId)) {
       this.clearRetryState(entry);
       await this.inboxDelivery.recoverIfNeeded(chatId, "session_retry:recovery_debt");
@@ -1718,7 +1764,8 @@ export class SessionManager {
     }
 
     entry.status = "active";
-    this._activeCount++;
+    entry.routeTransitionPending = true;
+    this.claimActiveSlot(entry);
     entry.lastActivity = Date.now();
 
     // Fresh handler — the old one may have closed its SDK transport.
@@ -1762,6 +1809,7 @@ export class SessionManager {
       const totalAttempts = entry.retryAttempt;
       const succeededScope = entry.lastRetryScope ?? (previousAvailable(entry) ? "session_resume" : "session_start");
       const succeededClassification = this.retryClassificationForEntry(entry);
+      entry.routeTransitionPending = false;
       this.clearRetryAttemptState(entry);
       this.config.log.info(
         {
@@ -1790,7 +1838,7 @@ export class SessionManager {
       } catch (emitErr) {
         this.config.log.warn({ chatId, emitErr }, "resilience retry_succeeded emit failed");
       }
-      this.drainRetryQueuedMessages(entry);
+      this.drainDeferredMessages(entry);
       this.persistRegistry();
     } catch (err) {
       if (this.sessions.get(chatId) !== entry) return;
@@ -1829,10 +1877,10 @@ export class SessionManager {
     void this.runRetry(chatId);
   }
 
-  private drainRetryQueuedMessages(entry: SessionEntry): void {
-    if (entry.retryQueuedMessages.length === 0) return;
+  private drainDeferredMessages(entry: SessionEntry): void {
+    if (entry.deferredMessages.length === 0) return;
 
-    const queued = entry.retryQueuedMessages.splice(0);
+    const queued = entry.deferredMessages.splice(0);
     for (const message of queued) {
       this.setCurrentTrigger(entry.chatId, message);
       try {
@@ -2007,7 +2055,7 @@ export class SessionManager {
         ? this.inboxDelivery.prepareSuspend(entry.chatId, opts.reason)
         : Promise.resolve(this.inboxDelivery.prepareEvict(entry.chatId, opts.reason));
     entry.status = "suspended";
-    this._activeCount--;
+    this.releaseActiveSlot(entry);
     // Clear per-session runtime state on suspend
     this.sessionRuntimeStates.delete(entry.chatId);
     this.recomputeRuntimeState();
@@ -2150,8 +2198,9 @@ export class SessionManager {
       });
 
       this.config.log.info({ chatId: candidate.key }, "session evicted (max_sessions reached)");
-      if (candidate.session.status === "active") {
-        this._activeCount--;
+      const activeSlotHeld = candidate.session.activeSlotHeld;
+      this.releaseActiveSlot(candidate.session);
+      if (activeSlotHeld) {
         candidate.session.handler.shutdown().catch(() => {});
       }
       // LRU eviction is local memory-management, not operator intent — do

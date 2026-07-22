@@ -33,6 +33,12 @@ fixed head, injects message three only after the handler is live, and settles
 the inbox prefix in the order two then three. No later entry may ACK ahead of
 the retry head.
 
+Repeat with message three arriving while the original resume transition is
+still pending, before the controlled transient failure is released. The old
+handler must not receive that tail. After the resume fails, the replacement
+handler must receive message two as its retry head and message three as its
+deferred tail, with the same ordered settlement.
+
 Also exercise an explicit control resume with no new user message. Inject the
 same transient pre-provider failure and verify the retry calls provider resume
 without a message. It must not synthesize an empty user turn or replay the most
