@@ -114,6 +114,11 @@ policy rule, future-agent impact and actionable correction.
 
 For every finding in a trusted run, classify it before choosing an outcome:
 
+A draft PR is read-only even when its findings would be mechanically
+repairable on a ready PR. Do not mutate, commit or push from a draft run;
+record the findings in an `## Approval deferred` `COMMENT` and wait for a
+fresh ready-for-review run before classifying them for repair.
+
 - `SAFE_REPAIR` — the PR is ready for review, same-repository and non-fork, the live source ref
   exists, the current local git/`gh` identity can push, Tree and source evidence
   determine one correction, and the change does not cross a protected boundary.
@@ -155,9 +160,12 @@ member ownership does not implicitly assign ownership to another node.
 Immediately before mutation, re-read the live PR and source ref and require both
 to equal `REVIEWED_HEAD`. If either moved, discard every finding and restart the
 validator-first review at the successor head. Attach a unique agent-owned
-worktree to that unchanged live source ref, make the repair, run
-`first-tree tree verify --json`, and inspect the complete base-to-result diff
-with `git diff "$BASE_OID"` before staging or committing.
+worktree to that unchanged live source ref and make the repair. Stage only the
+exact repair paths, including additions, moves and deletions, then run
+`first-tree tree verify --json`. Inspect `git status --short` and the complete
+staged base-to-result diff with `git diff --cached "$BASE_OID"`; require the
+staged path set to equal the repair scope and no unstaged or untracked Tree
+content to remain. Make no further content or index mutation before committing.
 Commit normally with the host git identity and push with the host git/`gh`
 credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
 base branch or retarget the PR. If a remote write result is unknown, fetch and
@@ -223,6 +231,9 @@ Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 10 minutes. A repairable failure returns to repair; another failed check
 produces a non-approving outcome. If checks remain pending at the deadline,
 submit no approval and report the wait state without creating a watcher or job.
+After check polling completes, repeat the final `gh pr view` freshness read
+immediately before submitting any outcome. If the head or state moved, discard
+the conclusion and restart review; never publish from the pre-wait snapshot.
 
 After `tree review --event APPROVE` succeeds, merge only with the host local
 `gh` identity:

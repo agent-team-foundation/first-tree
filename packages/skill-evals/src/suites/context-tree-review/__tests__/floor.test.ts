@@ -43,6 +43,15 @@ describe("context-tree-review floor", () => {
     expect(passing?.expected.action).toBe("approve");
   });
 
+  it("keeps draft findings read-only and deferred", () => {
+    const draft = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "draft");
+    expect(draft?.expected).toMatchObject({
+      action: "comment",
+      firstHeading: "## Approval deferred",
+      repair: "none",
+    });
+  });
+
   it("requires repair-first behavior for deterministic findings", () => {
     const validator = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
     const semantic = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "semantic-failure");
@@ -90,7 +99,9 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
     expect(skill).toContain("Immediately before mutation, re-read the live PR and source ref");
-    expect(skill).toContain('with `git diff "$BASE_OID"` before staging or committing');
+    expect(skill).toContain('staged base-to-result diff with `git diff --cached "$BASE_OID"`');
+    expect(skill).toContain("A draft PR is read-only even when its findings would be mechanically");
+    expect(skill).toContain("After check polling completes, repeat the final `gh pr view` freshness read");
     expect(skill).toContain("branch-attached repair worktree through normal `git worktree remove`");
     expect(skill).toContain('gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash');
     expect(skill).not.toContain("--match-head-commit");
