@@ -4055,6 +4055,7 @@ export function ChatView({
                   chatId={chatId}
                   agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
                   fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
+                  composerInputRef={readOnly ? undefined : textareaRef}
                 />
                 {readOnly ? (
                   <div

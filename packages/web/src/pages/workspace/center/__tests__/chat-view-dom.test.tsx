@@ -1121,7 +1121,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("lets a later mention layer consume Escape while inline current output stays open", async () => {
+  it("collapses current output on composer focus before the mention layer consumes Escape", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
 
@@ -1135,6 +1135,10 @@ describe("ChatView", () => {
     await act(async () => textarea.focus());
     await flush();
     await waitForCondition(
+      () => container.querySelector("[data-current-agent-output]") === null,
+      "Expected composer focus to collapse current output",
+    );
+    await waitForCondition(
       () => container.querySelector('[role="listbox"][aria-label="Mention suggestions"]') !== null,
       "Expected mention suggestions to open after focus primed @",
     );
@@ -1145,7 +1149,7 @@ describe("ChatView", () => {
     await flush();
 
     expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
-    expect(container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    expect(container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(textarea);
 
     await act(async () => root.unmount());

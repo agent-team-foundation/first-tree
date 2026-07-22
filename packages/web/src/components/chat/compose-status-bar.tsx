@@ -93,12 +93,15 @@ export function ComposeStatusBar({
   chatId,
   agents,
   fallbackFocusRef,
+  composerInputRef,
 }: {
   chatId: string;
   /** Non-human agent participants, used for stable display-name lookup. */
   agents: ChatParticipantDetail[];
   /** Stable composer control that receives focus if the status surface vanishes. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
+  /** Editable composer input whose focus signals that monitoring is finished. */
+  composerInputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
@@ -139,6 +142,15 @@ export function ComposeStatusBar({
     activeChatIdRef.current = chatId;
     setExpanded(false);
   }, [chatId]);
+
+  useEffect(() => {
+    if (!composerInputRef) return;
+    const collapseForComposerFocus = (event: FocusEvent) => {
+      if (event.target === composerInputRef.current) setExpanded(false);
+    };
+    document.addEventListener("focusin", collapseForComposerFocus);
+    return () => document.removeEventListener("focusin", collapseForComposerFocus);
+  }, [composerInputRef]);
 
   useEffect(() => {
     if (attention.length === 0) return;
@@ -231,7 +243,13 @@ export function ComposeStatusBar({
               attention={attention}
               nameOf={nameOf}
               mounted={mounted}
-              onTimelineNavigate={() => setExpanded(false)}
+              onTimelineNavigate={() => {
+                // A pointer jump does not transfer focus to timeline evidence.
+                // Clear ownership before its focused button is unmounted so a
+                // later status removal cannot steal focus back to the composer.
+                focusWithinRef.current = false;
+                setExpanded(false);
+              }}
             />
           ) : null}
         </section>
