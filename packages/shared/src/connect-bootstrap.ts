@@ -15,15 +15,21 @@ function shellArg(value: string): string {
   return SAFE_SHELL_ARG_PATTERN.test(value) ? value : shellQuote(value);
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
+}
+
 function normalizeDownloadBaseUrl(value: string): string {
-  return value.replace(/\/+$/, "");
+  return stripTrailingSlashes(value);
 }
 
 function normalizeCommandServerUrl(value: string): string {
   try {
     return new URL(value).origin;
   } catch {
-    return value.replace(/\/+$/, "");
+    return stripTrailingSlashes(value);
   }
 }
 

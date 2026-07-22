@@ -53,6 +53,32 @@ describe("connect bootstrap commands", () => {
     ).toBe("first-tree login 'FT-X; echo injected'");
   });
 
+  it("normalizes repeated trailing slashes in linear time", () => {
+    const trailingSlashes = "/".repeat(10_000);
+    expect(
+      buildLoginCommand({
+        executable: "first-tree-dev",
+        tokenArg: "FT-CODE",
+        serverUrl: `local-server${trailingSlashes}`,
+        defaultServerUrl: "local-server",
+      }),
+    ).toBe("first-tree-dev login FT-CODE");
+    expect(
+      buildPortableBootstrapCommand({
+        installerUrl: "https://download.first-tree.ai/releases/staging/install.sh",
+        portableDownloadBaseUrl: `https://download.first-tree.ai/releases${trailingSlashes}`,
+        defaultPortableDownloadBaseUrl: "https://download.first-tree.ai/releases",
+        binName: "first-tree-staging",
+        token: "FT-CODE",
+        serverUrl: "https://dev.cloud.first-tree.ai",
+        defaultServerUrl: "https://dev.cloud.first-tree.ai",
+      }),
+    ).toBe(
+      "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+        "~/.local/bin/first-tree-staging login FT-CODE",
+    );
+  });
+
   it("materializes only a single server-authored placeholder", () => {
     const template = {
       command: `first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,

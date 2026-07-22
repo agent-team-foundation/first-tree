@@ -11,7 +11,11 @@ export type ServerConnectBootstrapCommand = {
 };
 
 function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+  let baseEnd = base.length;
+  while (baseEnd > 0 && base.charCodeAt(baseEnd - 1) === 47) baseEnd -= 1;
+  let pathStart = 0;
+  while (pathStart < path.length && path.charCodeAt(pathStart) === 47) pathStart += 1;
+  return `${base.slice(0, baseEnd)}/${path.slice(pathStart)}`;
 }
 
 /**

@@ -58,7 +58,7 @@ describe("GET /bootstrap/config — non-dev channel", () => {
   it("carries deployment mirror and public URL overrides into the preview template", async () => {
     const app = await createTestApp({
       channel: "staging",
-      connectBootstrap: { portableDownloadBaseUrl: "https://downloads.example.test/releases/$(id)" },
+      connectBootstrap: { portableDownloadBaseUrl: "https://downloads.example.test/releases/$(id)////" },
     });
     try {
       const res = await app.inject({
@@ -68,7 +68,7 @@ describe("GET /bootstrap/config — non-dev channel", () => {
       });
       expect(res.json().connectBootstrapCommandTemplate.command).toBe(
         "curl -fsSL 'https://downloads.example.test/releases/$(id)/staging/install.sh' | " +
-          "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases/$(id)' sh\n" +
+          "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases/$(id)////' sh\n" +
           `FIRST_TREE_SERVER_URL='https://staging.example.test' ~/.local/bin/first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
       );
     } finally {
