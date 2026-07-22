@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.0
+version: 0.3.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
@@ -67,8 +67,9 @@ from GitHub before reviewing.
 ## Detached snapshot and validator-first review
 
 Fetch the base and `refs/pull/<number>/head` without switching the main Context
-Tree checkout. Create a unique agent-owned detached worktree at the fetched PR
-head. Never use `gh pr checkout` in the main checkout or reuse an unknown
+Tree checkout. Create a unique agent-owned detached worktree at the exact
+recorded `REVIEWED_HEAD`, not an ambiguous `FETCH_HEAD` or a persistent local
+review ref. Never use `gh pr checkout` in the main checkout or reuse an unknown
 worktree.
 
 Before semantic reads, inspect only the changed path list needed to classify
@@ -85,8 +86,32 @@ workflow only when every repair gate below passes; otherwise stop semantic
 review and prepare `REQUEST_CHANGES`. Unreadable validator output or unavailable
 CLI is an execution failure and publishes no content verdict.
 
-After validation passes, read every changed normal/member file and only the
-surrounding context required by policy:
+After validation passes, complete two distinct reasoning passes on the same
+`REVIEWED_HEAD`. They are quality checks, not a required machine-formatted
+ledger.
+
+Use distinct Context Tree content perspectives across those passes instead of
+repeating one generic checklist:
+
+- **Decision steward:** challenge whether each claim belongs as durable current
+  truth, preserves the rationale a future decision-maker needs, routes
+  responsibility correctly and displaces obsolete truth under the generated
+  policy.
+- **Tree curator:** challenge edit-versus-add, structure, canonical placement,
+  scan density, duplication and relationship choices against the generated
+  policy so the tree keeps one findable home for each decision.
+- **Future agent:** ask whether normal content alone lets a future reader find,
+  understand and correctly apply the decision without source history,
+  archive/supporting material or tribal context.
+
+The Challenge pass then supplies a separate adversarial perspective. These are
+reasoning lenses for one Reviewer, not extra agents, outputs, votes or protocol
+state.
+
+### Evidence pass
+
+Read every changed normal/member file and only the surrounding context required
+by policy:
 
 - each changed file parent `NODE.md`;
 - changed or newly referenced `soft_links` targets;
@@ -94,10 +119,80 @@ surrounding context required by policy:
 - ownership-adjacent member content when ownership or review routing matters;
 - a linked source artifact only when claim accuracy cannot otherwise be judged.
 
+Expand cross-node/domain review only for an observable diff trigger: a changed
+domain `NODE.md`; an added, removed or changed `soft_links` or Markdown link;
+an added, deleted, moved or renamed node; or a changed `Cross-Domain` section or
+explicit cross-domain reference. Also expand when a mechanical reference search
+shows that another normal node links to a changed path. Identify incoming
+references to the old and new paths, then read only the affected outgoing
+targets from the base and head, parent, direct children, siblings, neighbouring
+normal nodes and ownership context needed to judge propagation. Do not
+recursively read every descendant: read a deeper descendant only when a path,
+link, explicit reference or changed domain authority makes it dependent on the
+change. Check whether a domain-level change leaves dependent truth stale or
+crosses another domain's authority. A leaf-local body change with none of these
+observable triggers needs no expansion; this is focused PR review, not a
+whole-tree audit. Before classifying that branch as `N/A`, mechanically search
+the old and new changed paths for incoming references. A no-match search is
+sufficient evidence; do not read unrelated domains merely because the tree is
+small.
+
 Bind every read visibly to the detached worktree. Normal content is current
 durable truth, member content supplies Who, and archive/supporting material is
-evidence rather than canonical truth. Each finding names a path, governing
-policy rule, future-agent impact and actionable correction.
+evidence rather than canonical truth. For each changed durable claim, establish
+its source support, content class, canonical placement and surviving rationale.
+An unread required path, unavailable source or unresolved placement leaves the
+pass incomplete; absence of evidence is not evidence that the change is safe.
+
+### Challenge pass
+
+After the Evidence pass, assume that approving the pull request would be wrong
+and try to disprove its safety. Challenge the complete head for:
+
+- contradiction with current normal truth or a `decisionLocksCode` node;
+- failure of either generated-policy content-admission test;
+- duplicated canonical truth or placement in the wrong node;
+- an unnecessary leaf or directory that should be an edit to existing truth;
+- incorrect normal/member/archive classification;
+- missing rationale or unsupported durable claims;
+- unauthorized ownership, locked-decision, top-level or governance changes;
+- missing or incorrect cross-domain relationships and `soft_links`;
+- stale dependent truth or an unacknowledged cross-domain authority impact; and
+- implementation detail, delivery history or actionable future work in normal
+  content.
+
+Each finding names a path, governing policy rule, future-agent impact and
+actionable correction. Both passes must complete on the final head before an
+approving outcome is possible.
+
+### Calibrated final checklist
+
+Before choosing an outcome, classify each applicable focus area as `PASS`,
+`N/A` or `FINDING`; classify a finding as `Blocking` or `Advisory`:
+
+- **Content admission and current truth:** durable, current, supported and
+  internally consistent, with enough surviving rationale.
+- **Canonical structure and class:** edit/add choice, placement, duplication,
+  density and normal/member/archive roles follow the generated policy.
+- **Future-agent utility and authority:** a future reader can find and apply the
+  decision without crossing responsibility, ownership or lock boundaries.
+- **Cross-node/domain impact:** when triggered, outgoing and incoming
+  relationships, affected descendants/neighbours and cross-domain authority
+  remain coherent; otherwise mark `N/A`.
+- **Final-head convergence:** validation and checks apply to this head, and any
+  repair removed its target without creating a new blocker.
+
+`Blocking` means a material policy violation, contradiction, invalid or stale
+canonical truth, required relationship or evidence gap, authority violation,
+or incomplete final-head convergence. `Advisory` means a useful clarity,
+density, wording or optional discoverability improvement that would not cause a
+future agent to act incorrectly. Only an unresolved `Blocking` finding prevents
+`APPROVE`; `N/A` and `Advisory` do not. Do not manufacture a finding merely to
+demonstrate adversarial review.
+
+The checklist is an internal completeness tool, not a required review-body
+template or machine ledger. Report material evidence and findings concisely
+instead of pasting the checklist.
 
 ## Repair with the local identity
 
@@ -127,10 +222,18 @@ credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
 base branch or retarget the PR. If a remote write result is unknown, fetch and
 inspect before retrying.
 
-After a successful repair push, fetch the latest PR state and repeat the full
-validator-first and semantic review. The synchronize webhook may also create
-another run; an occasional duplicate wake-up is harmless. Do not reuse findings
-or check conclusions without reviewing the resulting latest diff.
+After a successful repair push, fetch the latest PR state and restart the full
+validator-first review on the resulting head. Repeat both the Evidence and
+Challenge passes, re-read the required surrounding context, inspect the complete
+base-to-head diff and rerun checks. Do not reuse findings, reads or check
+conclusions from the predecessor head.
+
+Confirm that every repaired blocker is actually gone and that the repair did
+not introduce a new blocker, change the author's durable intent or cross an
+authority boundary. If a blocker survives or recurs, the repair creates a new
+blocker, or the evidence becomes ambiguous, stop repairing and choose a
+non-approving outcome. The synchronize webhook may also create another run; an
+occasional duplicate wake-up is harmless.
 
 ## Choose one App review outcome
 
@@ -139,9 +242,24 @@ Choose exactly one outcome from the latest reviewed state:
 - `REQUEST_CHANGES` for structural or semantic blockers that were not safely
   repaired;
 - `COMMENT` for draft PRs, supporting-only changes, protected/human-authority
-  decisions or useful non-blocking feedback;
-- `APPROVE` only for a ready, fully validated, semantically safe PR with
-  acceptable checks.
+  decisions or another explicitly non-approvable state without a repairable
+  blocker;
+- `APPROVE` only for a ready PR whose final head passed validation, both quality
+  passes and acceptable checks with no unresolved blocker.
+
+A ready, otherwise safe PR with only `Advisory` findings still receives
+`APPROVE`; include the advice concisely in the approval body.
+
+A proven unauthorized ownership, lock or governance change is a `Blocking`
+authority violation and therefore receives `REQUEST_CHANGES`. Use `COMMENT`
+with a human-decision request only when the available evidence cannot establish
+which authorized choice is correct, so no concrete violation can yet be
+asserted.
+
+Keep the review body concise but evidence-based: identify the inspected head,
+verification result, material context checked, challenge result, any repair and
+every unresolved blocker. Do not paste an internal checklist or manufacture an
+empty ledger merely to signal completion.
 
 Write the review body to a temporary file and submit only through:
 

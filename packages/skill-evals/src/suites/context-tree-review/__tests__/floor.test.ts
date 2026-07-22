@@ -19,6 +19,7 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "relationship-change",
       "draft",
       "archive-only",
       "authority",
@@ -28,6 +29,7 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "relationship-change",
       "draft",
       "archive-only",
       "authority",
@@ -37,6 +39,11 @@ describe("context-tree-review floor", () => {
   it("makes approval mandatory for the passing ready case", () => {
     const passing = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "passing");
     expect(passing?.expected.action).toBe("approve");
+  });
+
+  it("maps a proven authority violation to request changes", () => {
+    const authority = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "authority");
+    expect(authority?.expected.action).toBe("request-changes");
   });
 
   it("uses one trusted App-run publication path", () => {
@@ -73,6 +80,33 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("Never use `--admin`");
     expect(skill).toContain("App-authored PR review is the only GitHub verdict");
     expect(skill).toContain("do not copy the\nGitHub verdict into a second canonical comment/status/receipt");
+  });
+
+  it("requires two-pass final-head review and full repair re-review without a ledger protocol", () => {
+    const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
+
+    expect(skill).toContain("### Evidence pass");
+    expect(skill).toContain("### Challenge pass");
+    expect(skill).toContain("**Decision steward:**");
+    expect(skill).toContain("**Tree curator:**");
+    expect(skill).toContain("**Future agent:**");
+    expect(skill).toContain("not extra agents, outputs, votes or protocol\nstate");
+    expect(skill).toContain("### Calibrated final checklist");
+    expect(skill).toContain("`PASS`,\n`N/A` or `FINDING`");
+    expect(skill).toContain("Only an unresolved `Blocking` finding prevents\n`APPROVE`");
+    expect(skill).toContain("only `Advisory` findings still receives\n`APPROVE`");
+    expect(skill).toContain("observable diff trigger");
+    expect(skill).toMatch(/leaf-local body change with none of these\s+observable triggers/u);
+    expect(skill).toContain("Do not\nrecursively read every descendant");
+    expect(skill).toContain("do not read unrelated domains merely because the tree is\nsmall");
+    expect(skill).toContain("A proven unauthorized ownership, lock or governance change");
+    expect(skill).toMatch(/this is\s+focused PR review, not a\s+whole-tree audit/u);
+    expect(skill).toContain("Do not manufacture a finding merely to\ndemonstrate adversarial review");
+    expect(skill).toContain("Both passes must complete on the final head");
+    expect(skill).toContain("restart the full\nvalidator-first review on the resulting head");
+    expect(skill).toMatch(/repair did\s+not introduce a new blocker/u);
+    expect(skill).toContain("not a required machine-formatted\nledger");
+    expect(skill).not.toContain("reviewPacketV1");
   });
 
   it("keeps Context Tree review GitHub-only and fails closed for GitLab", () => {

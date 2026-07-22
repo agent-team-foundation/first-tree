@@ -62,12 +62,25 @@ GitHub review and repository gate.
 - Exercise validation and semantic failures. Confirm the Reviewer uses
   `first-tree tree review --run ... --event REQUEST_CHANGES|COMMENT --body-file ...`;
   the removed GitHub command, `--head`, and `--agent` are unavailable.
+- Exercise a domain `NODE.md`, changed `soft_links`/Markdown link or explicit
+  cross-domain reference, and node add/move/rename/delete change. Confirm the
+  Reviewer expands only to affected outgoing targets, incoming references,
+  direct children, mechanically dependent deeper descendants/neighbours and
+  ownership context. A leaf-local body change with none of those observable
+  triggers is `N/A` and does not become a whole-tree audit. Confirm an otherwise
+  ready PR with only `Advisory` findings is approved with the advice in the
+  approval body. A proven authority violation requests changes; a case whose
+  authorized choice cannot yet be established comments with a human-decision
+  request.
 - Exercise a repair on a same-repository branch. Confirm local git/`gh`
   credentials create and push decision-preserving changes, never force-push,
   amend, rebase, edit protected ownership/decision-lock material without clear
   authority, or use an App token. After push, confirm the agent fetches and
-  fully checks the latest resulting PR state. A synchronize-triggered duplicate
-  run is acceptable.
+  fully checks the latest resulting PR state. On that successor head, confirm it
+  reruns validation, the complete Evidence pass, the complete Challenge pass and
+  required checks instead of reusing predecessor reads or conclusions. Confirm
+  the original blocker is gone and the repair introduced no new blocker before
+  approval. A synchronize-triggered duplicate run is acceptable.
 - For a clean ready PR, wait for required checks and invoke `tree review` with
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
