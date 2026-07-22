@@ -109,7 +109,10 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
     retiredSourceSignals.add(sourceLease.signal);
     controller.abort(sourceLease.signal.reason);
   };
-  const forwardLifecycleAbort = (): void => controller.abort(lifecycle.signal.reason);
+  const forwardLifecycleAbort = (): void => {
+    retiredSourceSignals.add(sourceLease.signal);
+    controller.abort(lifecycle.signal.reason);
+  };
   sourceLease.signal.addEventListener("abort", forwardSourceAbort, { once: true });
   lifecycle.signal.addEventListener("abort", forwardLifecycleAbort, { once: true });
   if (sourceLease.signal.aborted) forwardSourceAbort();

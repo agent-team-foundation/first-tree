@@ -1,10 +1,12 @@
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStoreFixture } from "../../api/__tests__/scoped-store-fixture.js";
 import {
   AuthSessionCoordinator,
   CHAT_CONTENT_DATABASE_SPEC,
   ContentDatabaseRegistry,
+  type ContentOperation,
   ContentScopeBarrier,
   type ContentStoreRuntimeInstallation,
   captureContentStoreRuntime,
@@ -108,10 +110,57 @@ describe("content store runtime", () => {
     expect(captureContentStoreRuntime(leaseB)?.lease.organizationId).toBe("org-b");
   });
 
+  it("cannot reflect a raw barrier or reuse an operation retained across A to B replacement", async () => {
+    const fixture = await createStoreFixture({ label: "retained-a", organizationId: "org-a" });
+    runtimeDisposers.push(fixture.dispose);
+    const capturedA = captureContentStoreRuntime(fixture.lease);
+    if (!capturedA) throw new Error("Expected view A runtime");
+    let retainedOperation: ContentOperation | undefined;
+    let markEntered = (): void => undefined;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    let releaseCallback = (): void => undefined;
+    const callbackHeld = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+
+    const activeAOutcome = capturedA
+      .withShared(async (operation) => {
+        retainedOperation = operation;
+        expect(Reflect.ownKeys(operation)).toEqual([]);
+        expect(Reflect.get(operation, "barrier")).toBeUndefined();
+        expect(Reflect.get(operation, "token")).toBeUndefined();
+        markEntered();
+        await callbackHeld;
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    await entered;
+    const leaseB = createViewLease({
+      ...fixture.lease,
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+      signal: new AbortController().signal,
+    });
+    install({ barrier: fixture.barrier, lease: leaseB });
+    releaseCallback();
+
+    if (!retainedOperation) throw new Error("Expected a retained operation");
+    await expect(activeAOutcome).resolves.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(captureContentStoreRuntime(fixture.lease)).toBeNull();
+    expect(captureContentStoreRuntime(leaseB)).not.toBeNull();
+    await expect(retainedOperation.openDatabase(CHAT_CONTENT_DATABASE_SPEC)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+  });
+
   it.each([
     "pagehide",
     "freeze",
-  ] as const)("invalidates the installed runtime on %s and requires an explicit runtime reinstall", (eventName) => {
+  ] as const)("retires the installed source view on %s until a fresh view revision is reconciled", (eventName) => {
     const registry = new ContentDatabaseRegistry();
     const contentBarrier = barrier(registry);
     const sourceLease = view(eventName);
@@ -128,8 +177,27 @@ describe("content store runtime", () => {
     expect(captured.lease.signal.aborted).toBe(true);
     expect(captureContentStoreRuntime(sourceLease)).toBeNull();
     disposeRuntime();
-    install({ barrier: contentBarrier, lease: sourceLease });
-    expect(captureContentStoreRuntime(sourceLease)?.lease.signal.aborted).toBe(false);
+    expect(() => installContentStoreRuntime({ barrier: contentBarrier, lease: sourceLease })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+
+    const forgedRevisionOnOldSignal = createViewLease({
+      ...sourceLease,
+      orgRevision: `${sourceLease.orgRevision}-forged`,
+      signal: sourceLease.signal,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: forgedRevisionOnOldSignal }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+
+    const reconciledLease = createViewLease({
+      ...sourceLease,
+      orgRevision: `${sourceLease.orgRevision}-reconciled`,
+      signal: new AbortController().signal,
+    });
+    install({ barrier: contentBarrier, lease: reconciledLease });
+    expect(captureContentStoreRuntime(sourceLease)).toBeNull();
+    expect(captureContentStoreRuntime(reconciledLease)?.lease.signal.aborted).toBe(false);
     disposeHooks();
   });
 

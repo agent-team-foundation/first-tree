@@ -3,7 +3,7 @@ export {
   type ContentBarrierOptions,
   ContentDatabaseRegistry,
   type ContentDatabaseSpec,
-  ContentOperation,
+  type ContentOperation,
   ContentScopeBarrier,
   type PurgeAccountScopeOptions,
   type SessionLockManager,

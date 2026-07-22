@@ -9,6 +9,7 @@ import {
   CONTENT_SCOPE_LOCK_PREFIX,
   ContentDatabaseRegistry,
   type ContentDatabaseSpec,
+  type ContentOperation,
   ContentScopeBarrier,
   closeCoordinatorConnections,
   createAccountScopeKey,
@@ -798,5 +799,49 @@ describe("ContentScopeBarrier", () => {
       ).rejects.toMatchObject({ code: sessionErrorCodes.invalidState });
       operation.closeDatabase(database);
     });
+  });
+
+  it("keeps barrier authority runtime-private and revokes a retained operation when its callback settles", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    let retainedOperation: ContentOperation | undefined;
+    let retainedDatabase: IDBDatabase | undefined;
+
+    await barrier.withShared(fixture.lease, async (operation) => {
+      retainedOperation = operation;
+      expect(Reflect.ownKeys(operation)).toEqual([]);
+      expect(Reflect.get(operation, "barrier")).toBeUndefined();
+      expect(Reflect.get(operation, "token")).toBeUndefined();
+      expect(Reflect.get(operation, "#barrier")).toBeUndefined();
+      expect(Reflect.get(operation, "#token")).toBeUndefined();
+
+      retainedDatabase = await operation.openDatabase(CONTENT_SPEC);
+      await operation.runTransaction(retainedDatabase, "rows", "readwrite", (transaction) => {
+        transaction.objectStore("rows").put("account-a", "owner");
+      });
+    });
+
+    if (!retainedOperation || !retainedDatabase) throw new Error("Expected retained operation fixture");
+    const staleOperation = retainedOperation;
+    const staleDatabase = retainedDatabase;
+    expect(Reflect.ownKeys(staleOperation)).toEqual([]);
+    expect(Reflect.get(staleOperation, "barrier")).toBeUndefined();
+    expect(Reflect.get(staleOperation, "token")).toBeUndefined();
+    expect(() => staleOperation.assertOrganization("org-b")).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.admissionDenied }),
+    );
+    await expect(staleOperation.openDatabase(CONTENT_SPEC)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    await expect(
+      staleOperation.runTransaction(staleDatabase, "rows", "readwrite", (transaction) => {
+        transaction.objectStore("rows").put("account-b", "owner");
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    staleOperation.closeDatabase(staleDatabase);
   });
 });

@@ -374,31 +374,45 @@ export class ContentDatabaseRegistry {
   }
 }
 
-export class ContentOperation {
-  private readonly barrier: ContentScopeBarrier;
-  private readonly token: OperationToken;
+export interface ContentOperation {
+  readonly lease: ViewLease;
+  assertOrganization(organizationId: string): void;
+  physicalDatabaseName(spec: Pick<ContentDatabaseSpec, "logicalName" | "namespaceVersion">): string;
+  openDatabase(spec: ContentDatabaseSpec): Promise<IDBDatabase>;
+  runTransaction(
+    database: IDBDatabase,
+    stores: string | readonly string[],
+    mode: IDBTransactionMode,
+    start: (transaction: IDBTransaction) => void,
+  ): Promise<void>;
+  closeDatabase(database: IDBDatabase): void;
+}
+
+class ContentOperationCapability implements ContentOperation {
+  readonly #barrier: ContentScopeBarrier;
+  readonly #token: OperationToken;
 
   public constructor(barrier: ContentScopeBarrier, token: OperationToken) {
-    this.barrier = barrier;
-    this.token = token;
+    this.#barrier = barrier;
+    this.#token = token;
   }
 
   public get lease(): ViewLease {
-    return this.token.lease;
+    return this.#token.lease;
   }
 
   public assertOrganization(organizationId: string): void {
-    if (organizationId !== this.token.lease.organizationId) {
+    if (organizationId !== this.#token.lease.organizationId) {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Content operation targeted a different organization");
     }
   }
 
   public physicalDatabaseName(spec: Pick<ContentDatabaseSpec, "logicalName" | "namespaceVersion">): string {
-    return createScopedDatabaseName(spec.logicalName, spec.namespaceVersion, this.token.lease.activation.scopeKey);
+    return createScopedDatabaseName(spec.logicalName, spec.namespaceVersion, this.#token.lease.activation.scopeKey);
   }
 
   public openDatabase(spec: ContentDatabaseSpec): Promise<IDBDatabase> {
-    return this.barrier.openDatabase(this.token, spec);
+    return this.#barrier.openDatabase(this.#token, spec);
   }
 
   public runTransaction(
@@ -407,11 +421,11 @@ export class ContentOperation {
     mode: IDBTransactionMode,
     start: (transaction: IDBTransaction) => void,
   ): Promise<void> {
-    return this.barrier.runTransaction(this.token, database, stores, mode, start);
+    return this.#barrier.runTransaction(this.#token, database, stores, mode, start);
   }
 
   public closeDatabase(database: IDBDatabase): void {
-    this.barrier.closeDatabase(database);
+    this.#barrier.closeDatabase(database);
   }
 }
 
@@ -442,7 +456,7 @@ export class ContentScopeBarrier {
         await this.coordinator.admitView(lease);
         this.registry.assertGeneration(queuedLock.generation);
         const token = this.registry.createOperation(lease, queuedLock.generation);
-        const operation = new ContentOperation(this, token);
+        const operation = new ContentOperationCapability(this, token);
         try {
           const value = await this.registry.raceCancellation(token, Promise.resolve(callback(operation)));
           if (!this.registry.isCurrent(token)) throw staleOperation("Account-content operation became stale");
