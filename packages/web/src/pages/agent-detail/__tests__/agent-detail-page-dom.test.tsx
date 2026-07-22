@@ -1094,6 +1094,44 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
+  it("omits human display-name editing and keeps projection edits on the agent route", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValue(agent({ type: "human", managerId: "member-self", displayName: "Gandy" }));
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    await click(exactButtonByText(view.container, "Edit"));
+    await waitForText(document.body, "Edit profile");
+    expect(document.body.querySelector("#profile-display")).toBeNull();
+
+    const visibility = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
+    if (!visibility) throw new Error("Expected human visibility control");
+    await chooseSelectOption(visibility, "Private to you");
+    await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected agent projection update");
+    expect(agentMocks.updateAgent).toHaveBeenCalledWith("agent-1", { visibility: "private" });
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps non-human display-name edits on the agent route", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValue(agent({ displayName: "Vega" }));
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    await click(exactButtonByText(view.container, "Edit"));
+    await waitForText(document.body, "Edit profile");
+    const input = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!input) throw new Error("Expected profile display-name input");
+    await setValue(input, "Vega Updated");
+    await click(exactButtonByText(document.body, "Done"));
+
+    await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected agent identity update");
+    expect(agentMocks.updateAgent).toHaveBeenCalledWith("agent-1", { displayName: "Vega Updated" });
+
+    await act(async () => view.root.unmount());
+  });
+
   it("shows runtime-switch recovery state instead of ordinary lifecycle controls", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     const { RuntimeTab } = await import("../runtime-tab.js");

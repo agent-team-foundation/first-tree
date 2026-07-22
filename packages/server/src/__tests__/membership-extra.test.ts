@@ -40,6 +40,16 @@ describe("membership service edge coverage", () => {
       }),
       transaction: async (callback: (tx: unknown) => Promise<Record<string, unknown>>) => {
         return callback({
+          select: () => ({
+            from: () => ({
+              where: () =>
+                Object.assign(Promise.resolve([]), {
+                  for: () => ({ limit: async () => [{ id: "user-1", displayName: "Retry User" }] }),
+                  limit: async () => [],
+                  orderBy: async () => [],
+                }),
+            }),
+          }),
           insert: () => ({
             values: (value: Record<string, unknown>) => ({
               returning: async () => {
@@ -56,6 +66,9 @@ describe("membership service edge coverage", () => {
                 ];
               },
             }),
+          }),
+          update: () => ({
+            set: () => ({ where: async () => [] }),
           }),
         });
       },

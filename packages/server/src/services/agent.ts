@@ -1061,6 +1061,19 @@ export async function getNewChatDefaultCandidate(
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
 
+  if (data.displayName !== undefined) {
+    const [membership] = await db
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.agentId, agent.uuid))
+      .limit(1);
+    if (membership) {
+      throw new BadRequestError(
+        "Membership-backed human display names must be updated through the member or profile endpoint.",
+      );
+    }
+  }
+
   // `clientId` is one-shot via this generic PATCH entry: NULL → ID is allowed
   // (admin claiming an unbound agent for a known client). Once bound, direct
   // ID → null and ID → another ID updates are rejected; runtime moves must go

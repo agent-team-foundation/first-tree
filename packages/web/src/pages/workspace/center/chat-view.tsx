@@ -107,6 +107,7 @@ import {
 import {
   findBlockingRequest,
   findThreadableRequestId,
+  readMentions,
   readRequestPayload,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
@@ -119,7 +120,11 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../../../components/mention-highlight-overlay.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
-import { rehypeMentions } from "../../../components/rehype-mentions.js";
+import {
+  installTimelineMentionCopy,
+  type RenderedMentionParticipant,
+  rehypeMentions,
+} from "../../../components/rehype-mentions.js";
 import {
   resolveMentionContext,
   SlashCommandPopover,
@@ -546,7 +551,7 @@ type MessageRowProps = {
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
   /** Trial surface: render sender avatar/name as plain identity, without the
    *  AgentHovercard whose actions ("View profile" → /agents/:id, "New chat" →
    *  /?c=draft) would navigate out of the controlled trial conversation. */
@@ -558,7 +563,7 @@ const GitlabInstanceOriginContext = createContext<string | null>(null);
 type MessageBodyProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
 };
 
 type MessageMarkdownProps = {
@@ -608,6 +613,15 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
+  // Resolve a visible label only when this token's persisted mention ID still
+  // identifies the current owner of the canonical handle. System-level
+  // addressedAgentIds can include recipients unrelated to a particular token
+  // and therefore are not identity evidence. Handles can be released and
+  // reused after an agent is deleted; resolving history from the chat's
+  // current name map alone would then visibly reassign the old mention to a
+  // different person. Legacy rows without structured mentions degrade safely
+  // to their original `@handle` text.
+  const historicalMentionAgentIds = useMemo(() => new Set(readMentions(msg.metadata)), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
@@ -635,8 +649,13 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // original rendering. `selfAgentId` flips chips that target the viewer
   // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
   const messageRehypePlugins = useMemo(
-    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
-    [mentionParticipants, myAgentId],
+    () => [
+      rehypeMentions(mentionParticipants, {
+        selfAgentId: myAgentId,
+        allowedAgentIds: historicalMentionAgentIds,
+      }),
+    ],
+    [historicalMentionAgentIds, mentionParticipants, myAgentId],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -963,14 +982,19 @@ function messageBodyFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery):
   );
 }
 
-function mentionParticipantsEqual(a: readonly MentionParticipant[], b: readonly MentionParticipant[]): boolean {
+function mentionParticipantsEqual(
+  a: readonly RenderedMentionParticipant[],
+  b: readonly RenderedMentionParticipant[],
+): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const left = a[i];
     const right = b[i];
     if (!left || !right) return false;
-    if (left.agentId !== right.agentId || left.name !== right.name) return false;
+    if (left.agentId !== right.agentId || left.name !== right.name || left.displayName !== right.displayName) {
+      return false;
+    }
   }
   return true;
 }
@@ -1271,7 +1295,7 @@ type ChatTimelineProps = {
   chatId: string;
   /** Non-human agent participants — drives the inline offline notice. */
   agents: ChatParticipantDetail[];
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
   dockRequestId: string | undefined;
   gapAfterMessageId: string | null;
   firstNewItemIdx: number;
@@ -1759,6 +1783,15 @@ export function ChatView({
   // ResizeObserver-stabilised scrolling) and useReadTracker (as the
   // IntersectionObserver root).
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Non-editable selections dispatch `copy` at the focused node (often body or
+  // the composer), not at the message element that contains the selection.
+  // Listen on the owning document so ordinary and cross-message timeline copy
+  // always reaches the canonical-handle rewrite, then scope strictly back to
+  // this chat's scroll container through the selection Range.
+  useEffect(() => {
+    const ownerDocument = scrollContainerRef.current?.ownerDocument ?? document;
+    return installTimelineMentionCopy(ownerDocument, () => scrollContainerRef.current);
+  }, []);
   // Positioning context for the chat-summary floating card: the expanded
   // summary is portaled into the timeline's `relative` wrapper and laid out
   // `absolute; top:0` over the message area, so it never occupies stream space
@@ -3359,33 +3392,34 @@ export function ChatView({
    * runs its own unresolved-token guard on the agent path (the PR-393
    * anti-hallucination fix); on the human web path it's tolerated by the
    * `mentions.ts` regex excluding npm scoped names from token scans. */
-  // Shared participant projection: drives draftMentions resolution, the
-  // composer's mirror-overlay highlight, and the sent-message rehype
-  // plugin — keeping a single source of truth so the three paths can't
-  // drift on case-sensitivity or filtering.
+  // Composer-only participant projection: routing stays keyed by immutable
+  // `name`, and the mirror overlay must remain byte-for-byte aligned with the
+  // textarea. Sent-message rendering has a separate display-name projection
+  // below so presentation cannot leak back into routing.
   const mentionParticipants = useMemo<MentionParticipant[]>(
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
   );
-  // Rendered-message variant of the projection above: the rehype plugin
-  // resolves `@<name>` tokens against this list, and it MUST include the
-  // viewer themselves so chips that target them flip to the
-  // `.mention-chip.is-self` attention tone. `mentionCandidates` deliberately
-  // excludes self (the composer's `@` autocomplete should not suggest you
-  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
-  // that self-exclusive semantics), so we append the viewer here in a
-  // separate projection used only by rendered messages. Source the viewer's
-  // slug from the speaker-only `chatParticipantById` map — NOT from the
-  // org-identity fallback in `chatScopedAgentIdentity` — so a non-speaker
-  // watcher viewing the chat doesn't get their org-wide name pushed into
-  // the resolver, which would paint chips that the server would never
-  // actually route to them.
-  const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
-    if (!myAgentId) return mentionParticipants;
-    const selfParticipant = chatParticipantById.get(myAgentId);
-    if (!selfParticipant?.name) return mentionParticipants;
-    return [...mentionParticipants, { agentId: myAgentId, name: selfParticipant.name }];
-  }, [mentionParticipants, myAgentId, chatParticipantById]);
+  // Rendered-message projection: all chat speakers (including self) carry
+  // `displayName` for the visible chip while the immutable `name` remains the
+  // resolver key and copy target. Reading directly from chat detail preserves
+  // the membership disclosure boundary for private agents and excludes
+  // non-speaker watchers.
+  const renderMentionParticipants = useMemo<RenderedMentionParticipant[]>(
+    () =>
+      (chatDetail?.participants ?? []).flatMap((participant) =>
+        participant.name
+          ? [
+              {
+                agentId: participant.agentId,
+                name: participant.name,
+                displayName: participant.displayName,
+              },
+            ]
+          : [],
+      ),
+    [chatDetail?.participants],
+  );
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**

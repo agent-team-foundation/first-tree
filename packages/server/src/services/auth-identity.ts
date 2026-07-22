@@ -202,7 +202,7 @@ export async function unlinkExternalIdentity(
       .select({ passwordHash: users.passwordHash })
       .from(users)
       .where(eq(users.id, userId))
-      .for("update");
+      .for("no key update");
     if (!user) throw new Error("Cannot disconnect authentication provider for a missing user");
     const identities = await tx
       .select({

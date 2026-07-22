@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -46,20 +47,28 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderAccount(route = "/settings/account"): Promise<HTMLElement> {
+async function renderAccount(
+  route = "/settings/account",
+): Promise<{ container: HTMLElement; queryClient: QueryClient }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: Infinity } },
+  });
+  queryClient.setQueryData(["chat-detail", "chat-1"], { id: "chat-1", participants: [] });
   const { SettingsAccountPage } = await import("../account.js");
   await act(async () => {
     root?.render(
-      <MemoryRouter initialEntries={[route]}>
-        <SettingsAccountPage />
-      </MemoryRouter>,
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[route]}>
+          <SettingsAccountPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
   });
   await flush();
-  return container;
+  return { container, queryClient };
 }
 
 async function waitForText(container: ParentNode, text: string): Promise<void> {
@@ -128,7 +137,7 @@ afterEach(async () => {
 
 describe("Settings account", () => {
   it("separates identity from the editable profile and saves a normalized display name", async () => {
-    const container = await renderAccount();
+    const { container, queryClient } = await renderAccount();
     await waitForText(container, "gandy@example.com");
 
     expect(container.textContent).toContain("Gandy");
@@ -166,11 +175,12 @@ describe("Settings account", () => {
 
     expect(memberMocks.updateMyProfile).toHaveBeenCalledWith({ displayName: "Gandy New" });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
+    expect(queryClient.getQueryState(["chat-detail", "chat-1"])?.isInvalidated).toBe(true);
     expect(container.textContent).toContain("Saved");
   });
 
   it("shows callback errors and removes the transient query from browser history", async () => {
-    const container = await renderAccount("/settings/account?error=identity-conflict");
+    const { container } = await renderAccount("/settings/account?error=identity-conflict");
     await waitForText(container, "already connected to another First Tree user");
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
