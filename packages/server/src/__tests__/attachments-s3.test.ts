@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { GetObjectCommand, HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import {
   ATTACHMENT_FILENAME_HEADER,
@@ -20,6 +21,7 @@ import {
   AttachmentUploadConcurrencyError,
   acquireAttachmentUploadSlot,
   createAttachment,
+  createAttachmentFromStream,
   sweepOrphanAttachments,
 } from "../services/attachment.js";
 import { migrateLegacyAttachmentsToS3 } from "../services/attachment-migration.js";
@@ -255,6 +257,77 @@ describe("attachments S3 storage", () => {
     const res = await postAttachment(app, admin, Buffer.from("row 1001"));
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code?: string }).code).toBe(ATTACHMENT_QUOTA_EXCEEDED);
+  });
+
+  it("serializes concurrent uploads at the org quota line via the org row lock", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `grace-${crypto.randomUUID().slice(0, 6)}` });
+    // Seed usage one row below the count cap: exactly ONE of the concurrent
+    // uploads may win. The serialization happens on the organizations row
+    // lock in Postgres, not in the event loop, so app.inject concurrency is
+    // enough to exercise the TOCTOU barrier.
+    const rows = Array.from({ length: ORG_ATTACHMENT_MAX_COUNT - 1 }, (_, i) => ({
+      id: uuidv7(),
+      mimeType: "image/png",
+      filename: `seed-${i}.bin`,
+      sizeBytes: 1,
+      objectKey: `attachments/${admin.organizationId}/seed-${i}`,
+      orgId: admin.organizationId,
+      uploadedBy: admin.humanAgentUuid,
+    }));
+    await app.db.insert(attachments).values(rows);
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => postAttachment(app, admin, Buffer.from(`race-${i}`))),
+    );
+    const statuses = results.map((r) => r.statusCode).sort((a, b) => a - b);
+    expect(statuses).toEqual([201, 422, 422, 422, 422]);
+    for (const res of results) {
+      if (res.statusCode === 422) {
+        expect((res.json() as { code?: string }).code).toBe(ATTACHMENT_QUOTA_EXCEEDED);
+      }
+    }
+
+    const count = await app.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(attachments)
+      .where(eq(attachments.orgId, admin.organizationId));
+    expect(Number(count[0]?.count ?? 0)).toBe(ORG_ATTACHMENT_MAX_COUNT);
+  });
+
+  it("rejects an empty upload with 400 and leaves no DB row or S3 object", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `empty-${crypto.randomUUID().slice(0, 6)}` });
+
+    // Route level: an empty body is a 400 one way or another.
+    const res = await postAttachment(app, admin, Buffer.alloc(0));
+    expect(res.statusCode).toBe(400);
+
+    // Service level: an empty STREAM must also be rejected (lib-storage would
+    // otherwise complete a 0-byte multipart object), and the compensation
+    // delete must leave nothing behind in the bucket. A caller-supplied id
+    // makes the would-be object key deterministic. (The per-worker bucket is
+    // shared across tests, so a prefix listing cannot isolate this call.)
+    const store = app.attachmentStore;
+    if (!store) throw new Error("test app must have an attachment store");
+    const emptyId = crypto.randomUUID();
+    await expect(
+      createAttachmentFromStream(app.db, store, {
+        id: emptyId,
+        mimeType: "image/png",
+        filename: "empty.png",
+        stream: Readable.from([]),
+        uploadedBy: admin.humanAgentUuid,
+        orgId: admin.organizationId,
+      }),
+    ).rejects.toThrow("Attachment is empty");
+
+    const count = await app.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(attachments)
+      .where(eq(attachments.orgId, admin.organizationId));
+    expect(Number(count[0]?.count ?? 0)).toBe(0);
+    expect(await s3ObjectExists(`attachments/${admin.organizationId}/${emptyId}`)).toBe(false);
   });
 
   it("upload concurrency guard enforces per-uploader and global caps", () => {

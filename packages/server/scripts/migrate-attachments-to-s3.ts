@@ -19,8 +19,8 @@
  *   pnpm --filter @first-tree/server tsx scripts/migrate-attachments-to-s3.ts
  */
 
-import { sql } from "drizzle-orm";
-import { connectDatabase } from "../src/db/connection.js";
+import postgres from "postgres";
+import { connectDatabase, sslOptions } from "../src/db/connection.js";
 import {
   ATTACHMENT_S3_MIGRATION_BATCH_SIZE,
   migrateLegacyAttachmentsToS3,
@@ -57,11 +57,17 @@ async function main() {
   const db = connectDatabase(databaseUrl);
   const store = createAttachmentStore(s3Config);
 
-  const [lockRow] = await db.execute<{ locked: boolean }>(
-    sql`SELECT pg_try_advisory_lock(${MIGRATION_LOCK_KEY}) AS locked`,
-  );
+  // The advisory lock is SESSION-scoped, so it must live on a dedicated
+  // single-connection client. On the pooled `db` above, the lock, the batch
+  // work, and the unlock could each run on a different session, silently
+  // voiding the guard.
+  const lockClient = postgres(databaseUrl, { ...sslOptions(databaseUrl), max: 1 });
+  const [lockRow] = await lockClient<{ locked: boolean }[]>`
+    SELECT pg_try_advisory_lock(${MIGRATION_LOCK_KEY}) AS locked
+  `;
   if (!lockRow?.locked) {
     console.error("Another migrate-attachments-to-s3 run holds the advisory lock — aborting.");
+    await lockClient.end();
     await db.end();
     process.exit(1);
   }
@@ -79,7 +85,8 @@ async function main() {
       console.log("Failed rows kept their bytea — rerun this script to resume.");
     }
   } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`);
+    await lockClient`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`;
+    await lockClient.end();
     await db.end();
   }
 }
