@@ -27,6 +27,203 @@ function commandFromCodexEvent(event: unknown): string | null {
   return item.command;
 }
 
+function completedCommandObservation(event: unknown): { command: string; exitCode: number; output: string } | null {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return null;
+  const item = event.event.item;
+  if (
+    !isRecord(item) ||
+    item.type !== "command_execution" ||
+    typeof item.command !== "string" ||
+    typeof item.aggregated_output !== "string" ||
+    typeof item.exit_code !== "number"
+  ) {
+    return null;
+  }
+  return { command: item.command, exitCode: item.exit_code, output: item.aggregated_output };
+}
+
+type ExecutedInvocation = { args: string[]; executable: string };
+
+function commandSubstitutions(script: string): Array<{ end: number; inner: string; start: number }> {
+  const substitutions: Array<{ end: number; inner: string; start: number }> = [];
+  let escaped = false;
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < script.length - 1; index += 1) {
+    const character = script[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (character !== "$" || script[index + 1] !== "(") continue;
+
+    let depth = 1;
+    let innerEscaped = false;
+    let innerQuote: '"' | "'" | null = null;
+    let end = index + 2;
+    for (; end < script.length; end += 1) {
+      const innerCharacter = script[end] ?? "";
+      if (innerEscaped) {
+        innerEscaped = false;
+        continue;
+      }
+      if (innerCharacter === "\\" && innerQuote !== "'") {
+        innerEscaped = true;
+        continue;
+      }
+      if (innerQuote) {
+        if (innerCharacter === innerQuote) innerQuote = null;
+        continue;
+      }
+      if (innerCharacter === '"' || innerCharacter === "'") {
+        innerQuote = innerCharacter;
+        continue;
+      }
+      if (innerCharacter === "$" && script[end + 1] === "(") {
+        depth += 1;
+        end += 1;
+        continue;
+      }
+      if (innerCharacter !== ")") continue;
+      depth -= 1;
+      if (depth === 0) break;
+    }
+    if (depth !== 0) return [];
+    substitutions.push({ end, inner: script.slice(index + 2, end), start: index });
+    index = end;
+  }
+  return substitutions;
+}
+
+function invocationFromSegment(segment: string): ExecutedInvocation | null {
+  const words = shellWords(segment.trim());
+  let index = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index] ?? "")) index += 1;
+  const executable = words[index]?.split("/").at(-1);
+  if (executable !== "first-tree" && executable !== "gh") return null;
+  return { args: words.slice(index + 1), executable };
+}
+
+function invocationsFromScript(script: string): ExecutedInvocation[] {
+  const substitutions = commandSubstitutions(script);
+  if (script.includes("$(") && substitutions.length === 0) return [];
+  const nested = substitutions.flatMap((substitution) => invocationsFromScript(substitution.inner));
+  const masked = [...script];
+  for (const substitution of substitutions) {
+    for (let index = substitution.start; index <= substitution.end; index += 1) masked[index] = " ";
+  }
+  const direct = shellSegments(masked.join(""))
+    .map(invocationFromSegment)
+    .filter((invocation): invocation is ExecutedInvocation => invocation !== null);
+  return [...nested, ...direct];
+}
+
+function executedInvocations(command: string): ExecutedInvocation[] {
+  const words = shellWords(command);
+  const shell = words[0]?.split("/").at(-1);
+  if (shell === "bash" || shell === "sh" || shell === "zsh") {
+    const commandFlag = words.findIndex((word, index) => index > 0 && /^-[A-Za-z]*c[A-Za-z]*$/u.test(word));
+    if (commandFlag < 0 || !words[commandFlag + 1]) return [];
+    return invocationsFromScript(words[commandFlag + 1] ?? "");
+  }
+  return invocationsFromScript(command);
+}
+
+function exactApprovalInvocation(invocation: ExecutedInvocation, expectation: ReviewFixtureExpectation): boolean {
+  return (
+    invocation.executable === "first-tree" &&
+    invocation.args.length === 8 &&
+    invocation.args[0] === "tree" &&
+    invocation.args[1] === "review" &&
+    invocation.args[2] === "--run" &&
+    invocation.args[3] === expectation.runId &&
+    invocation.args[4] === "--event" &&
+    invocation.args[5] === "APPROVE" &&
+    invocation.args[6] === "--body-file" &&
+    Boolean(invocation.args[7])
+  );
+}
+
+function capturedReviewHeads(output: string): Set<string> {
+  const heads = new Set<string>();
+  for (const match of output.matchAll(/(?:"reviewedHead"\s*:\s*"|\bREVIEWED_HEAD=)([0-9a-z]+)"?/gu)) {
+    if (match[1]) heads.add(match[1]);
+  }
+  return heads;
+}
+
+function authoritativeApprovalObserved(
+  events: readonly unknown[],
+  expectation: ReviewFixtureExpectation,
+  reviewedHead: string,
+): boolean {
+  let approvalInvocations = 0;
+  const capturedHeads = new Set<string>();
+  for (const event of events) {
+    const observation = completedCommandObservation(event);
+    if (!observation || observation.exitCode !== 0) continue;
+    const count = executedInvocations(observation.command).filter((invocation) =>
+      exactApprovalInvocation(invocation, expectation),
+    ).length;
+    if (count === 0) continue;
+    approvalInvocations += count;
+    for (const head of capturedReviewHeads(observation.output)) capturedHeads.add(head);
+  }
+  return approvalInvocations === 1 && capturedHeads.size === 1 && capturedHeads.has(reviewedHead);
+}
+
+function authoritativeGithubCalls(
+  events: readonly unknown[],
+  expectation: ReviewFixtureExpectation,
+): { mergePuts: number; postMutationReads: number } {
+  const pullEndpoint = `repos/${expectation.repo}/pulls/${expectation.prNumber}`;
+  let mergePuts = 0;
+  let postMutationReads = 0;
+  for (const event of events) {
+    const observation = completedCommandObservation(event);
+    if (!observation) continue;
+    for (const invocation of executedInvocations(observation.command)) {
+      if (invocation.executable !== "gh") continue;
+      if (invocation.args[0] === "api") {
+        const methodIndex = invocation.args.indexOf("--method");
+        const method = methodIndex >= 0 ? invocation.args[methodIndex + 1] : "GET";
+        if (method === "PUT" && invocation.args.includes(`${pullEndpoint}/merge`)) {
+          mergePuts += 1;
+          continue;
+        }
+        if (mergePuts > 0 && method === "GET" && invocation.args.includes(pullEndpoint)) postMutationReads += 1;
+        continue;
+      }
+      if (
+        mergePuts > 0 &&
+        invocation.args[0] === "pr" &&
+        invocation.args[1] === "view" &&
+        invocation.args[2] === String(expectation.prNumber) &&
+        invocation.args.includes("--repo") &&
+        invocation.args.includes(expectation.repo)
+      ) {
+        postMutationReads += 1;
+      }
+    }
+  }
+  return { mergePuts, postMutationReads };
+}
+
 const ASSISTANT_TEXT_KEYS = ["content", "message", "output_text", "text"] as const;
 
 function assistantMessageRecord(record: Record<string, unknown>): boolean {
@@ -81,31 +278,35 @@ function mergeReportCorrect(evalCase: ContextTreeReviewEvalCase, response: strin
     /\b(?:successfully merged|merged successfully|has been merged|was merged|pull request merged|reviewed and merged|merged (?:the )?(?:pull request|pr)|merge succeeded|merge completed)\b/u.test(
       affirmativeMergeText,
     );
+  const uncertainty =
+    /\b(?:unknown|uncertain)\b/iu.test(normalized) ||
+    /\b(?:cannot|can't|could not|couldn't|unable to)\b.{0,80}\b(?:confirm|determine|verify|whether|if|outcome|result)\b/iu.test(
+      normalized,
+    );
+  const affirmativeOpenText = normalized
+    .replace(
+      /\b(?:cannot|can't|could not|couldn't|unable to)\s+(?:confirm|determine|verify)\s+(?:whether|if)\b[^.!?\n]{0,120}\bopen\b/gu,
+      "",
+    )
+    .replace(/\b(?:unknown|uncertain)\s+(?:whether|if)\b[^.!?\n]{0,120}\bopen\b/gu, "");
+  const claimsOpen =
+    /\b(?:pull request|pr)\b.{0,80}\b(?:is|remains?|still) open\b|\b(?:is|remains?|still) open\b.{0,80}\b(?:pull request|pr)\b/iu.test(
+      affirmativeOpenText,
+    );
   if (evalCase.expected.mergeOutcome === "merged" || evalCase.expected.mergeOutcome === "delivery-merged") {
-    return claimsMergeSuccess;
+    return claimsMergeSuccess && !claimsOpen && !uncertainty;
   }
   if (evalCase.expected.mergeOutcome === "delivery-unknown") {
     const humanVerificationAction =
-      /\b(?:please|manually|human|maintainer|owner|administrator)\b.{0,100}\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|merge status)\b/iu.test(
+      /\b(?:please|manually|human|maintainer|owner|administrator)\b.{0,100}\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:merge (?:state|status|outcome|result)|(?:pull request|pr) merge (?:state|status|outcome|result))\b/iu.test(
         response,
       ) ||
-      /\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|merge status)\b/iu.test(
+      /\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:merge (?:state|status|outcome|result)|(?:pull request|pr) merge (?:state|status|outcome|result))\b/iu.test(
         response,
       );
-    return (
-      /approv/iu.test(response) &&
-      /unknown|uncertain|could not (?:confirm|determine)|unable to (?:confirm|determine)/iu.test(response) &&
-      humanVerificationAction &&
-      !claimsMergeSuccess
-    );
+    return /approv/iu.test(response) && uncertainty && humanVerificationAction && !claimsMergeSuccess && !claimsOpen;
   }
-  return (
-    /approv/iu.test(response) &&
-    /\b(?:pull request|pr)\b.{0,80}\b(?:is|remains?|still) open\b|\b(?:is|remains?|still) open\b.{0,80}\b(?:pull request|pr)\b/iu.test(
-      response,
-    ) &&
-    !claimsMergeSuccess
-  );
+  return /approv/iu.test(response) && claimsOpen && !claimsMergeSuccess && !uncertainty;
 }
 
 function eventOrder(event: unknown, fallbackIndex: number): number {
@@ -1026,6 +1227,10 @@ export function deriveMetrics(
   const merge = mergeAttempts[0];
   const reviewResponse = reviewResponses[0];
   const response = finalResponse(events);
+  const authoritativeCalls = authoritativeGithubCalls(events, expectation);
+  const authoritativeBudgetMismatch =
+    authoritativeCalls.mergePuts !== mergeMutationAttemptCount ||
+    authoritativeCalls.postMutationReads !== mergeReconciliations.length;
   const mergeOutcomeObserved =
     merge === undefined
       ? "not-attempted"
@@ -1039,7 +1244,7 @@ export function deriveMetrics(
               ? "delivery-unknown"
               : merge.outcome;
   return {
-    blockedGithubAttempts,
+    blockedGithubAttempts: blockedGithubAttempts + (authoritativeBudgetMismatch ? 1 : 0),
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
     expectedHeadingObserved:
       evalCase.expected.firstHeading === undefined || firstHeading?.startsWith(evalCase.expected.firstHeading) === true,
@@ -1065,11 +1270,12 @@ export function deriveMetrics(
       reviewResponse.eventIndex === review.eventIndex + 1 &&
       merge.eventIndex > reviewResponse.eventIndex &&
       reviewResponse.reviewedHead === review.reviewedHead &&
-      merge.requestedHead === reviewResponse.reviewedHead,
+      merge.requestedHead === reviewResponse.reviewedHead &&
+      authoritativeApprovalObserved(events, expectation, reviewResponse.reviewedHead),
     mergeOutcomeObserved,
     mergeReconciliations,
     mergeReportCorrect: mergeReportCorrect(evalCase, response),
-    mergeRetryAttempted: mergeMutationAttemptCount > 1,
+    mergeRetryAttempted: mergeMutationAttemptCount > 1 || authoritativeCalls.mergePuts > 1,
     pullRequestMerged,
     reviewAfterFinalView:
       review === undefined

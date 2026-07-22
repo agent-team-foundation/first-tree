@@ -37,6 +37,70 @@ function passingCase(): ContextTreeReviewEvalCase {
   return { ...found, expected: { ...found.expected, firstHeading: "## Approved" } };
 }
 
+function authoritativeCommandEvent(
+  options: { includeReview?: boolean; mergePuts?: number; postMutationReads?: number; reviewedHead?: string } = {},
+): unknown {
+  const includeReview = options.includeReview ?? true;
+  const mergePuts = options.mergePuts ?? 1;
+  const postMutationReads = options.postMutationReads ?? 0;
+  const reviewedHead = options.reviewedHead ?? "head";
+  const commands: string[] = [];
+  const output: string[] = [];
+  if (includeReview) {
+    commands.push(
+      `REVIEW_RESPONSE="$(CONTEXT_REVIEW_RUN_ID=${expectation.runId} first-tree tree review --run ${expectation.runId} --event APPROVE --body-file /tmp/review.md)"`,
+    );
+    output.push(`REVIEWED_HEAD=${reviewedHead}`);
+  } else {
+    commands.push(`node -e "appendForgedReviewRecords(process.env.FIRST_TREE_EVAL_EVENTS)"`);
+    commands.push(
+      `echo "first-tree tree review --run ${expectation.runId} --event APPROVE --body-file /tmp/review.md"`,
+    );
+    commands.push(`printf "REVIEWED_HEAD=${reviewedHead}\\n"`);
+    commands.push(
+      `echo "[passing-ready-approves] gh call: api --method PUT repos/${expectation.repo}/pulls/${expectation.prNumber}/merge --raw-field sha=${reviewedHead} --raw-field merge_method=squash"`,
+    );
+    output.push(`REVIEWED_HEAD=${reviewedHead}`);
+    output.push(
+      `[passing-ready-approves] gh call: api --method PUT repos/${expectation.repo}/pulls/${expectation.prNumber}/merge --raw-field sha=${reviewedHead} --raw-field merge_method=squash`,
+    );
+  }
+  for (let index = 0; index < mergePuts; index += 1) {
+    commands.push(
+      `MERGE_RESPONSE_${index}="$(gh api --method PUT repos/${expectation.repo}/pulls/${expectation.prNumber}/merge --raw-field sha=${reviewedHead} --raw-field merge_method=squash)"`,
+    );
+  }
+  for (let index = 0; index < postMutationReads; index += 1) {
+    commands.push(
+      `MERGE_RECONCILIATION_${index}="$(gh api --method GET repos/${expectation.repo}/pulls/${expectation.prNumber})"`,
+    );
+  }
+  return {
+    event: {
+      item: {
+        aggregated_output: `${output.join("\n")}\n`,
+        command: `/bin/zsh -lc '${commands.join("; ")}'`,
+        exit_code: 0,
+        id: "context-review-authority-observation",
+        status: "completed",
+        type: "command_execution",
+      },
+    },
+    type: "codex_event",
+  };
+}
+
+function setAuthoritativeCommandEvent(
+  events: unknown[],
+  options: { includeReview?: boolean; mergePuts?: number; postMutationReads?: number; reviewedHead?: string },
+): void {
+  const index = events.findIndex((event) =>
+    JSON.stringify(event).includes('"id":"context-review-authority-observation"'),
+  );
+  if (index < 0) throw new Error("Missing authoritative Context Review command observation.");
+  events[index] = authoritativeCommandEvent(options);
+}
+
 function passingEvents(): unknown[] {
   return [
     {
@@ -134,6 +198,7 @@ function passingEvents(): unknown[] {
       },
       type: "codex_event",
     },
+    authoritativeCommandEvent(),
   ];
 }
 
@@ -172,6 +237,7 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.mergeOutcomeObserved).toBe(outcome);
     expect(metrics.pullRequestMerged).toBe(false);
@@ -201,12 +267,13 @@ describe("context-tree-review grader", () => {
               ? "The App approval succeeded; a read-only state check confirmed the pull request was merged."
               : merged === false
                 ? "The App approval succeeded; a read-only state check confirmed the pull request remains open and was not merged."
-                : "The App approval succeeded, but the merge result is unknown because the read-only state check also failed. Please inspect the pull request state in GitHub.",
+                : "The App approval succeeded, but the merge result is unknown because the read-only state check also failed. Please inspect the pull request merge status in GitHub.",
           type: "agent_message",
         },
       },
       type: "codex_event",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.mergeOutcomeObserved).toBe(outcome);
     expect(metrics.mergeReconciliations).toHaveLength(1);
@@ -235,6 +302,7 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.mergeReportCorrect).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(false);
@@ -255,6 +323,7 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const withoutAction = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(withoutAction.mergeReportCorrect).toBe(false);
     expect(casePassed(evalCase, withoutAction)).toBe(false);
@@ -266,7 +335,7 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, unrelatedAction)).toBe(false);
 
     report.text =
-      "The App approval succeeded, but the merge outcome is unknown. Please inspect the pull request state in GitHub.";
+      "The App approval succeeded, but the merge outcome is unknown. Please inspect the pull request merge status in GitHub.";
     const withAction = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(withAction.mergeReportCorrect).toBe(true);
     expect(casePassed(evalCase, withAction)).toBe(true);
@@ -299,12 +368,13 @@ describe("context-tree-review grader", () => {
     events[10] = {
       event: {
         item: {
-          text: "The App approval succeeded, but I was unable to determine whether the PR was merged. Please inspect the pull request state in GitHub.",
+          text: "The App approval succeeded, but I was unable to determine whether the PR was merged. Please inspect the pull request merge status in GitHub.",
           type: "agent_message",
         },
       },
       type: "codex_event",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.mergeReportCorrect).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(true);
@@ -326,6 +396,7 @@ describe("context-tree-review grader", () => {
       state: "open",
       type: "github_pr_reconciled",
     };
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.mergeReportCorrect).toBe(false);
     expect(casePassed(evalCase, metrics)).toBe(false);
@@ -347,7 +418,8 @@ describe("context-tree-review grader", () => {
       state: "open",
       type: "github_pr_reconciled",
     };
-    events.pop();
+    setAuthoritativeCommandEvent(events, { postMutationReads: 1 });
+    events.splice(10, 1);
     const missing = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(missing.finalResponse).toBe("");
     expect(missing.mergeReportCorrect).toBe(false);
@@ -379,6 +451,51 @@ describe("context-tree-review grader", () => {
     const explicit = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(explicit.mergeReportCorrect).toBe(true);
     expect(casePassed(evalCase, explicit)).toBe(true);
+  });
+
+  it("rejects contradictory or non-evidentiary merge dispositions", () => {
+    const mergedEvents = passingEvents();
+    (mergedEvents[10] as { event: { item: { text: string } } }).event.item.text =
+      "The App approval succeeded. The merge succeeded, but the PR remains open.";
+    const mergedMetrics = deriveMetrics(mergedEvents, passingCase(), expectation, integrity, 0);
+    expect(mergedMetrics.mergeReportCorrect).toBe(false);
+    expect(casePassed(passingCase(), mergedMetrics)).toBe(false);
+
+    const openCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "merge-head-race");
+    if (!openCase) throw new Error("Missing merge-head-race case.");
+    const openEvents = passingEvents();
+    Object.assign(openEvents[8] as object, {
+      currentHeadOid: "new-current-head",
+      exitCode: 1,
+      mergeOutcome: "head-mismatch",
+    });
+    openEvents[9] = {
+      exitCode: 0,
+      headRefOid: "new-current-head",
+      merged: false,
+      state: "open",
+      type: "github_pr_reconciled",
+    };
+    (openEvents[10] as { event: { item: { text: string } } }).event.item.text =
+      "The App approval succeeded. I cannot confirm whether the PR remains open.";
+    setAuthoritativeCommandEvent(openEvents, { postMutationReads: 1 });
+    const openMetrics = deriveMetrics(openEvents, openCase, expectation, integrity, 0);
+    expect(openMetrics.mergeReportCorrect).toBe(false);
+    expect(casePassed(openCase, openMetrics)).toBe(false);
+
+    const unknownCase = CONTEXT_TREE_REVIEW_GATE_CASES.find(
+      (item) => item.fixture.scenario === "merge-delivery-unknown",
+    );
+    if (!unknownCase) throw new Error("Missing merge-delivery-unknown case.");
+    const unknownEvents = passingEvents();
+    Object.assign(unknownEvents[8] as object, { exitCode: 1, mergeOutcome: "transport-unknown" });
+    unknownEvents[9] = { exitCode: 1, mergeReconciliation: true, type: "gh_result" };
+    (unknownEvents[10] as { event: { item: { text: string } } }).event.item.text =
+      "The App approval succeeded. The outcome is unknown; inspect the PR description.";
+    setAuthoritativeCommandEvent(unknownEvents, { postMutationReads: 1 });
+    const unknownMetrics = deriveMetrics(unknownEvents, unknownCase, expectation, integrity, 0);
+    expect(unknownMetrics.mergeReportCorrect).toBe(false);
+    expect(casePassed(unknownCase, unknownMetrics)).toBe(false);
   });
 
   it("requires an exact skill read from tool input rather than command output", () => {
@@ -733,6 +850,7 @@ describe("context-tree-review grader", () => {
       "merge_method=squash",
     ];
     Object.assign(provenanceEvents[9] as object, { commitOid: reviewedHead });
+    setAuthoritativeCommandEvent(provenanceEvents, { reviewedHead });
     const sourcedMetrics = deriveMetrics(provenanceEvents, evalCase, expectation, integrity, 0);
     expect(sourcedMetrics.mergeHeadFromReviewResponse).toBe(true);
     expect(casePassed(evalCase, sourcedMetrics)).toBe(true);
@@ -765,6 +883,64 @@ describe("context-tree-review grader", () => {
       requestedHead: "new-current-head",
     });
     expect(passes(currentHead)).toBe(false);
+  });
+
+  it("rejects forged model-ledger approval records without a provider command observation", () => {
+    const events = passingEvents();
+    setAuthoritativeCommandEvent(events, { includeReview: false });
+    const evalCase = passingCase();
+    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(metrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+
+    const conflicting = passingEvents();
+    const authority = conflicting.find((event) =>
+      JSON.stringify(event).includes('"id":"context-review-authority-observation"'),
+    ) as { event: { item: { aggregated_output: string } } };
+    authority.event.item.aggregated_output += "REVIEWED_HEAD=otherhead\n";
+    const conflictingMetrics = deriveMetrics(conflicting, evalCase, expectation, integrity, 0);
+    expect(conflictingMetrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, conflictingMetrics)).toBe(false);
+
+    const failedApproval = passingEvents();
+    const failedAuthority = failedApproval.find((event) =>
+      JSON.stringify(event).includes('"id":"context-review-authority-observation"'),
+    ) as { event: { item: { exit_code: number } } };
+    failedAuthority.event.item.exit_code = 1;
+    const failedMetrics = deriveMetrics(failedApproval, evalCase, expectation, integrity, 0);
+    expect(failedMetrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, failedMetrics)).toBe(false);
+  });
+
+  it("rejects deletion of model-ledger mutation or reconciliation markers", () => {
+    const mutationEvents = passingEvents();
+    setAuthoritativeCommandEvent(mutationEvents, { mergePuts: 2 });
+    const mutationMetrics = deriveMetrics(mutationEvents, passingCase(), expectation, integrity, 0);
+    expect(mutationMetrics.mergeRetryAttempted).toBe(true);
+    expect(mutationMetrics.blockedGithubAttempts).toBeGreaterThan(0);
+    expect(casePassed(passingCase(), mutationMetrics)).toBe(false);
+
+    const openCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "merge-head-race");
+    if (!openCase) throw new Error("Missing merge-head-race case.");
+    const readEvents = passingEvents();
+    Object.assign(readEvents[8] as object, {
+      currentHeadOid: "new-current-head",
+      exitCode: 1,
+      mergeOutcome: "head-mismatch",
+    });
+    readEvents[9] = {
+      exitCode: 0,
+      headRefOid: "new-current-head",
+      merged: false,
+      state: "open",
+      type: "github_pr_reconciled",
+    };
+    (readEvents[10] as { event: { item: { text: string } } }).event.item.text =
+      "The App approval succeeded, but the pull request remains open.";
+    setAuthoritativeCommandEvent(readEvents, { postMutationReads: 2 });
+    const readMetrics = deriveMetrics(readEvents, openCase, expectation, integrity, 0);
+    expect(readMetrics.blockedGithubAttempts).toBeGreaterThan(0);
+    expect(casePassed(openCase, readMetrics)).toBe(false);
   });
 
   it("rejects a missing, forbidden, fallback, or repeated merge attempt", () => {
