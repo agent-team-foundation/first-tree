@@ -14,6 +14,12 @@ export type CapturedAccountStoreRuntime = Readonly<{
   withShared<T>(callback: (operation: AccountContentOperation, lease: AccountLease) => T | PromiseLike<T>): Promise<T>;
 }>;
 
+export type CapturedAccountRuntimeFence = Readonly<{
+  sourceLease: AccountLease;
+  lease: AccountLease;
+  assertCurrent: () => void;
+}>;
+
 type InstalledAccountRuntime = {
   barrier: ContentScopeBarrier;
   sourceLease: AccountLease;
@@ -45,8 +51,12 @@ function sameRevision(left: AccountLease, right: AccountLease): boolean {
   return sameActivation(left.activation, right.activation) && left.accountRevision === right.accountRevision;
 }
 
-function retireSource(source: AccountLease): void {
+function retireRevision(source: AccountLease): void {
   retiredRevisionKeys.add(revisionKey(source));
+}
+
+function retireSource(source: AccountLease): void {
+  retireRevision(source);
   retiredSourceSignals.add(source.signal);
 }
 
@@ -133,7 +143,10 @@ export function installAccountStoreRuntime(input: AccountStoreRuntimeInstallatio
   };
   runtimeRecord = runtime;
 
-  if (previousSource && !sameAccountLease(previousSource, sourceLease)) retireSource(previousSource);
+  if (previousSource && !sameAccountLease(previousSource, sourceLease)) {
+    retireRevision(previousSource);
+    if (previousSource.signal !== sourceLease.signal) retiredSourceSignals.add(previousSource.signal);
+  }
   lastInstalledSource = sourceLease;
   if (dormantRuntime) {
     dormantRuntime.detachAbortSources();
@@ -148,6 +161,19 @@ export function installAccountStoreRuntime(input: AccountStoreRuntimeInstallatio
     installedRuntime = null;
     parkRuntime(runtime);
   };
+}
+
+/** Internal exact-runtime fence used by active identity requests. */
+export function captureAccountRuntimeFence(expectedLeaseValue: unknown): CapturedAccountRuntimeFence | null {
+  const expectedLease = validateAccountLease(expectedLeaseValue);
+  const current = installedRuntime;
+  if (!current || current.lease.signal.aborted || !sameAccountLease(current.sourceLease, expectedLease)) return null;
+  const assertCurrent = (): void => {
+    if (installedRuntime !== current || current.lease.signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account runtime is stale");
+    }
+  };
+  return Object.freeze({ sourceLease: current.sourceLease, lease: current.lease, assertCurrent });
 }
 
 export function captureAccountStoreRuntime(expectedLeaseValue: unknown): CapturedAccountStoreRuntime | null {

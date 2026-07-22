@@ -4,6 +4,7 @@ import {
   requestCandidateMe as fetchCandidateMe,
 } from "../../api/candidate-client.js";
 import { expectedAuthorityHeaders, readBoundedResponseText } from "../../api/server-authority.js";
+import { type CapturedAccountRuntimeFence, captureAccountRuntimeFence } from "./account-store-runtime.js";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "./candidate-tokens.js";
 import { claimVerifiedPurgeCompletion, type VerifiedPurgeCompletion } from "./content-barrier.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
@@ -132,7 +133,7 @@ type RefreshResponseState = {
 };
 
 type VerifiedActiveMeEvidence = Readonly<{
-  lease: AccountLease;
+  runtime: CapturedAccountRuntimeFence;
   membershipIds: readonly string[];
   defaultOrganizationId: string | null;
   lifecycleGeneration: number;
@@ -271,17 +272,17 @@ function requireVerifiedActiveMeEvidence(proofValue: unknown, leaseValue: unknow
   }
   const state = verifiedActiveMeProofs.get(proofValue as VerifiedActiveMeProof);
   const evidence = state?.evidence;
-  const lease = validateAccountLease(leaseValue);
+  const sourceLease = validateAccountLease(leaseValue);
   if (
     !state ||
     state.state !== "available" ||
     !evidence ||
-    !sameAccountLease(evidence.lease, lease) ||
-    evidence.lease.signal.aborted ||
+    !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
     evidence.lifecycleGeneration !== coordinatorLifecycleGeneration
   ) {
     throw new SessionError(sessionErrorCodes.staleOperation, "Verified account identity proof is stale");
   }
+  evidence.runtime.assertCurrent();
   assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
   return state;
 }
@@ -299,20 +300,18 @@ export function readVerifiedActiveMeProof(
 
 export function claimVerifiedActiveMeProof(proofValue: unknown, leaseValue: unknown): ClaimedVerifiedActiveMeProof {
   const state = requireVerifiedActiveMeEvidence(proofValue, leaseValue);
-  const lease = state.evidence.lease;
+  const runtime = state.evidence.runtime;
   state.state = "claimed";
   let settled = false;
   const assertCurrent = (): void => {
     const evidence = state.evidence;
-    if (
-      state.state !== "claimed" ||
-      !sameAccountLease(evidence.lease, lease) ||
-      evidence.lease.signal.aborted ||
-      evidence.lifecycleGeneration !== coordinatorLifecycleGeneration
-    ) {
+    if (state.state !== "claimed" || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Verified account identity claim is stale");
     }
-    assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
+    // A successful claim is the organization-navigation ordering point. A
+    // newer /me may start, but it cannot split a durable selected-head commit
+    // from this claim's synchronous publication.
+    runtime.assertCurrent();
   };
   return Object.freeze({
     membershipIds: state.evidence.membershipIds,
@@ -1010,15 +1009,21 @@ export class AuthSessionCoordinator {
    * runtime may drive organization reconciliation.
    */
   public async requestActiveMe(leaseValue: unknown): Promise<VerifiedActiveMeResult> {
-    const lease = validateAccountLease(leaseValue);
+    const sourceLease = validateAccountLease(leaseValue);
+    const runtime = captureAccountRuntimeFence(sourceLease);
+    if (!runtime) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity request runtime is stale");
+    }
+    const lease = runtime.lease;
     const signal = lease.signal;
     const lifecycleGeneration = coordinatorLifecycleGeneration;
-    const requestKey = activeMeRequestKey(lease);
+    const requestKey = activeMeRequestKey(sourceLease);
     const requestSequence = nextActiveMeSequence(requestKey);
     if (signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity request lifecycle is stale");
     }
     const captured = await this.captureVerifiedCredential(lease.activation, signal);
+    runtime.assertCurrent();
     assertActiveMeSequence(requestKey, requestSequence);
 
     const dispatch = await executeCoordinatorTransaction(
@@ -1031,6 +1036,7 @@ export class AuthSessionCoordinator {
         if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
           throw new SessionError(sessionErrorCodes.staleOperation, "Account identity dispatch lifecycle is stale");
         }
+        runtime.assertCurrent();
         assertActiveMeSequence(requestKey, requestSequence);
         const projection = activeProjection(snapshot, lease.activation);
         const current = matchingCredential(snapshot, projection.authority.session);
@@ -1067,11 +1073,13 @@ export class AuthSessionCoordinator {
       if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
         throw new SessionError(sessionErrorCodes.staleOperation, "Account identity response crossed a lifecycle fence");
       }
+      runtime.assertCurrent();
       assertActiveMeSequence(requestKey, requestSequence);
       await this.admitAccountLease(lease);
       if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
         throw new SessionError(sessionErrorCodes.staleOperation, "Account identity response crossed a lifecycle fence");
       }
+      runtime.assertCurrent();
       assertActiveMeSequence(requestKey, requestSequence);
     };
 
@@ -1102,7 +1110,7 @@ export class AuthSessionCoordinator {
     const proof = Object.freeze({}) as VerifiedActiveMeProof;
     verifiedActiveMeProofs.set(proof, {
       evidence: Object.freeze({
-        lease,
+        runtime,
         membershipIds: parsed.membershipIds,
         defaultOrganizationId: parsed.defaultOrganizationId,
         lifecycleGeneration,

@@ -31,15 +31,23 @@ function accountLease(fixture: StoreFixture, signal?: AbortSignal): AccountLease
   });
 }
 
-function controller(_fixture: StoreFixture, revisions: string[]) {
+function controller(_fixture: StoreFixture, revisions: string[], store = new AccountStateStore()) {
   let index = 0;
   return new SelectedOrganizationController({
-    store: new AccountStateStore(),
+    store,
     barrier: _fixture.barrier,
     locks: new ImmediateTestLocks(),
     createRevision: () => revisions[index++] ?? `revision-${index}`,
     now: () => index,
   });
+}
+
+function deferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return Object.freeze({ promise, resolve });
 }
 
 async function verifiedIdentity(
@@ -339,6 +347,71 @@ describe("SelectedOrganizationController", () => {
       kind: "committed",
       state: { kind: "selected", organizationId: "org-a", orgRevision: "revision-a" },
     });
+  });
+
+  it.each([
+    "before-commit",
+    "after-commit",
+  ] as const)("keeps the selected head coherent when a newer active me fails %s", async (boundary) => {
+    const fixture = await createStoreFixture({ label: `selection-proof-${boundary}`, organizationId: "org-a" });
+    currentFixture = fixture;
+    const store = new AccountStateStore();
+    const selected = controller(fixture, ["revision-a", "revision-b"], store);
+    const lease = accountLease(fixture);
+    await selected.reconcile({
+      lease,
+      identity: await verifiedIdentity(fixture, ["org-a", "org-b"], "org-a"),
+      reason: "initialize",
+    });
+    const initial = selectedViewPublication(selected.readCurrentPublication());
+    const oldRuntime = captureContentStoreRuntime(initial.viewLease);
+    if (!oldRuntime) throw new Error("Expected initial selected runtime");
+    const identity = await verifiedIdentity(fixture, ["org-a", "org-b"]);
+    const entered = deferred();
+    const release = deferred();
+    const originalExchange = store.compareExchangeAccountEntry.bind(store);
+    vi.spyOn(store, "compareExchangeAccountEntry").mockImplementationOnce(async (...args) => {
+      if (boundary === "before-commit") {
+        entered.resolve();
+        await release.promise;
+        return originalExchange(...args);
+      }
+      const result = await originalExchange(...args);
+      entered.resolve();
+      await release.promise;
+      return result;
+    });
+
+    const switching = selected.reconcile({
+      lease,
+      identity,
+      requestedOrganizationId: "org-b",
+      expectedState: initial.state,
+      reason: "switch",
+    });
+    await entered.promise;
+
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new TypeError("offline"));
+    await expect(fixture.coordinator.requestActiveMe(lease)).rejects.toMatchObject({
+      code: "admission_denied",
+    });
+    release.resolve();
+
+    await expect(switching).resolves.toEqual({ kind: "committed" });
+    const current = selectedViewPublication(selected.readCurrentPublication());
+    expect(current.state).toEqual({
+      kind: "selected",
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+    });
+    const locator = { kind: "selected-organization", key: "current", tabId: lease.ownerTabId } as const;
+    await expect(store.getAccountEntry(lease, locator)).resolves.toMatchObject({
+      value: { state: "selected", organizationId: "org-b", orgRevision: "revision-b" },
+    });
+    await expect(oldRuntime.withShared(() => "stale")).rejects.toMatchObject({ code: "stale_operation" });
+    const currentRuntime = captureContentStoreRuntime(current.viewLease);
+    if (!currentRuntime) throw new Error("Expected current selected runtime");
+    await expect(currentRuntime.withShared(() => "usable")).resolves.toBe("usable");
   });
 
   it("does not invoke caller-supplied callbacks that could retain an async publication", async () => {

@@ -162,4 +162,35 @@ describe("account store runtime", () => {
     install(contentBarrier, source);
     expect(captureAccountStoreRuntime(source)).not.toBeNull();
   });
+
+  it("preserves a signal reused by a replacement revision across ordinary unmount and remount", () => {
+    const contentBarrier = barrier();
+    const controller = new AbortController();
+    const first = lease("runtime-shared-signal", controller);
+    const second = createAccountLease({
+      ...first,
+      accountRevision: `${first.accountRevision}-second`,
+    });
+    const disposeFirst = install(contentBarrier, first);
+    const capturedFirst = captureAccountStoreRuntime(first);
+    if (!capturedFirst) throw new Error("Expected first account runtime");
+
+    const disposeSecond = install(contentBarrier, second);
+    expect(capturedFirst.lease.signal.aborted).toBe(true);
+    expect(controller.signal.aborted).toBe(false);
+    expect(() => installAccountStoreRuntime({ barrier: contentBarrier, lease: first })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+    disposeFirst();
+    expect(captureAccountStoreRuntime(second)).not.toBeNull();
+
+    disposeSecond();
+    install(contentBarrier, second);
+    expect(captureAccountStoreRuntime(second)?.lease.signal.aborted).toBe(false);
+    controller.abort();
+    expect(captureAccountStoreRuntime(second)).toBeNull();
+    expect(() => installAccountStoreRuntime({ barrier: contentBarrier, lease: second })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+  });
 });

@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
-import type { VerifiedCandidateProof } from "../session/coordinator.js";
+import { claimVerifiedActiveMeProof, type VerifiedCandidateProof } from "../session/coordinator.js";
 import {
   type AcquisitionSessionAttempt,
   type ActivationCertificate,
@@ -19,6 +19,7 @@ import {
   createManagementDeliveryPermit,
   createSessionAttempt,
   createViewLease,
+  installAccountStoreRuntime,
   readVerifiedActiveMeProof,
   type SessionLockManager,
   type StorageArea,
@@ -1276,6 +1277,8 @@ describe("AuthSessionCoordinator", () => {
       documentId: "document-active-me",
       signal: controller.signal,
     });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
 
     let resolveFirst = (_response: Response): void => undefined;
     const firstResponse = new Promise<Response>((resolve) => {
@@ -1321,6 +1324,91 @@ describe("AuthSessionCoordinator", () => {
     expect(() => readVerifiedActiveMeProof(second.proof, lease)).toThrowError(
       expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
     );
+    disposeRuntime();
+  });
+
+  it("drops an active me response when its exact account runtime is replaced", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("active-me-replaced", "generation-active-me-replaced");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me-replaced");
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const firstController = new AbortController();
+    const firstLease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me-first",
+      ownerTabId: "owner-tab-active-me-replaced",
+      documentId: "document-active-me-replaced",
+      signal: firstController.signal,
+    });
+    const disposeFirst = installAccountStoreRuntime({ barrier, lease: firstLease });
+
+    let resolveFirst = (_response: Response): void => undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          user: { id: certificate.accountId },
+          defaultOrganizationId: "org-current",
+          memberships: [{ organizationId: "org-current" }],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = coordinator.requestActiveMe(firstLease);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const firstDispatchedSignal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal | undefined;
+    expect(firstDispatchedSignal).toBeDefined();
+    expect(firstDispatchedSignal).not.toBe(firstController.signal);
+
+    const secondController = new AbortController();
+    const secondLease = createAccountLease({
+      ...firstLease,
+      accountRevision: "account-revision-active-me-second",
+      signal: secondController.signal,
+    });
+    const disposeSecond = installAccountStoreRuntime({ barrier, lease: secondLease });
+    expect(firstController.signal.aborted).toBe(false);
+    expect(firstDispatchedSignal?.aborted).toBe(true);
+
+    const second = await coordinator.requestActiveMe(secondLease);
+    expect(readVerifiedActiveMeProof(second.proof, secondLease)).toEqual({
+      membershipIds: ["org-current"],
+      defaultOrganizationId: "org-current",
+    });
+
+    resolveFirst(
+      jsonResponse({
+        user: { id: certificate.accountId },
+        defaultOrganizationId: "org-stale",
+        memberships: [{ organizationId: "org-stale" }],
+      }),
+    );
+    await expect(first).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+
+    const thirdController = new AbortController();
+    const thirdLease = createAccountLease({
+      ...secondLease,
+      accountRevision: "account-revision-active-me-third",
+      signal: thirdController.signal,
+    });
+    const disposeThird = installAccountStoreRuntime({ barrier, lease: thirdLease });
+    expect(() => readVerifiedActiveMeProof(second.proof, secondLease)).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+    expect(() => claimVerifiedActiveMeProof(second.proof, secondLease)).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+
+    thirdController.abort();
+    disposeThird();
+    disposeSecond();
+    disposeFirst();
   });
 
   it("lets logout retire a refreshed session but ignores an old-revision owned 401", async () => {
