@@ -140,7 +140,7 @@ successor-head validation and complete re-review. A separate hook supplies the
 push-denied case. The deterministic GitHub shim still permits only PR state
 reads, identity lookup, and one body-file review submission, so no external
 GitHub side effect is possible. Cases require validator-first ordering, a
-fresh unchanged head before mutation, repair verification and a complete
+fresh unchanged PR and remote source head before mutation, repair verification and a complete
 base-to-result diff before commit/push, safe repair before escalation,
 protected-only mixed handoff, exact successor-head binding, current-head check
 evidence before the final freshness read, ready approval, draft deferral,

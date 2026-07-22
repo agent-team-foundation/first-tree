@@ -180,9 +180,15 @@ function gitInvocation(
   segment: string,
 ): { args: string[]; command: string; cwd: string | null; invalidGlobalOption: boolean } | null {
   const words = shellWords(segment);
-  if (words[0] === "command") words.shift();
-  if (words[0]?.split("/").at(-1) !== "git") return null;
-  let index = 1;
+  let executableIndex = 0;
+  if (words[executableIndex] === "command") executableIndex += 1;
+  if (words[executableIndex] === "env") {
+    executableIndex += 1;
+    while (["--", "-i", "--ignore-environment"].includes(words[executableIndex] ?? "")) executableIndex += 1;
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[executableIndex] ?? "")) executableIndex += 1;
+  if (words[executableIndex]?.split("/").at(-1) !== "git") return null;
+  let index = executableIndex + 1;
   let cwd: string | null = null;
   let invalidGlobalOption = false;
   while (words[index]?.startsWith("-")) {
@@ -854,6 +860,39 @@ function mainTreeReadAttempted(event: unknown): boolean {
   return command !== null && /\bfirst-tree(?:-staging)?\s+tree\s+tree\b/iu.test(command);
 }
 
+function observedSourceRefHead(event: unknown, expectation: ReviewFixtureExpectation): string | null {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return null;
+  const item = event.event.item;
+  if (
+    !isRecord(item) ||
+    item.type !== "command_execution" ||
+    item.status !== "completed" ||
+    item.exit_code !== 0 ||
+    typeof item.command !== "string" ||
+    typeof item.aggregated_output !== "string"
+  )
+    return null;
+  const structure = shellStructure(item.command);
+  if (structure.segments.length !== 1) return null;
+  const invocation = gitInvocation(structure.segments[0] ?? "");
+  if (
+    invocation?.command !== "ls-remote" ||
+    invocation.invalidGlobalOption ||
+    !["context-tree", "./context-tree", resolve(expectation.workspacePath, "context-tree")].includes(
+      invocation.cwd ?? "",
+    ) ||
+    invocation.args.length !== 3 ||
+    invocation.args[0] !== "--heads" ||
+    invocation.args[1] !== "origin" ||
+    invocation.args[2] !== expectation.sourceBranch
+  )
+    return null;
+  const match = item.aggregated_output
+    .trim()
+    .match(new RegExp(`^(\\S+)\\s+refs/heads/${expectation.sourceBranch}$`, "u"));
+  return match?.[1] ?? null;
+}
+
 function targetsTreePath(segment: string): boolean {
   return /(?:^|[\s"'=])(?:\.?\/?context-tree|(?:\$PWD\/)?\.review-worktrees\/42)(?:\/|[\s"'$])/u.test(segment);
 }
@@ -1155,12 +1194,15 @@ export function deriveMetrics(
   const treeContentReads: Array<{ order: number; paths: readonly string[] }> = [];
   const gitSemanticReadOrders: number[] = [];
   const reviewDiffReadOrders: number[] = [];
+  const sourceRefReads: Array<{ headOid: string; order: number }> = [];
 
   events.forEach((event, index) => {
     if (skillRead(event, expectation)) skillFileReadObserved = true;
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     const order = eventOrder(event, index);
+    const sourceRefHead = observedSourceRefHead(event, expectation);
+    if (sourceRefHead !== null) sourceRefReads.push({ headOid: sourceRefHead, order });
     const mutation = mutationObservation(event, expectation);
     authorizedRepairObserved ||= mutation.authorizedRepair;
     repairCommitObserved ||= mutation.repairCommit;
@@ -1186,19 +1228,19 @@ export function deriveMetrics(
     const contentPaths = treeContentReadPaths(event, expectation);
     if (contentPaths.length > 0) treeContentReads.push({ order, paths: contentPaths });
     const command = commandFromCodexEvent(event);
-    if (
-      command !== null &&
-      isRecord(event) &&
-      isRecord(event.event) &&
-      isRecord(event.event.item) &&
-      event.event.item.status === "completed" &&
-      event.event.item.exit_code === 0 &&
-      shellSegments(command).some((segment) => {
+    if (command !== null && isRecord(event) && isRecord(event.event) && isRecord(event.event.item)) {
+      const item = event.event.item;
+      const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
+      const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
+      const structure = shellStructure(command);
+      const execution = shellExecution(command, exitCode, output);
+      for (const [segmentIndex, segment] of structure.segments.entries()) {
+        if (!execution?.successful.has(segmentIndex)) continue;
         const cwd = gitWorkingDirectory(segment);
-        return cwd !== null && isReviewWorktreeOperand(cwd, expectation) && gitFullContentDiff(segment, expectation);
-      })
-    ) {
-      reviewDiffReadOrders.push(order);
+        if (cwd !== null && isReviewWorktreeOperand(cwd, expectation) && gitFullContentDiff(segment, expectation)) {
+          reviewDiffReadOrders.push(order + (segmentIndex + 1) / 1_000);
+        }
+      }
     }
     if (gitSemanticReadAttempted(event)) gitSemanticReadOrders.push(order);
     if (semanticReadAttempted(event, expectation) && firstSemanticReadOrder < 0) firstSemanticReadOrder = order;
@@ -1377,6 +1419,7 @@ export function deriveMetrics(
     finalView.order > requiredFreshnessOrder;
   const repairVerifyPassed = verifyEvents.some((item) => item.kind === "repair" && item.exitCode === 0);
   const firstRepairEditOrder = repairEditOrders.toSorted((left, right) => left - right)[0];
+  const lastRepairEditOrder = repairEditOrders.toSorted((left, right) => left - right).at(-1);
   const firstRepairCommitOrder = repairCommitOrders.toSorted((left, right) => left - right)[0];
   const firstRepairPushOrder = repairPushOrders.toSorted((left, right) => left - right)[0];
   const preRepairView =
@@ -1394,13 +1437,22 @@ export function deriveMetrics(
       preRepairView.state === expectation.expectedFinalState &&
       !preRepairView.isDraft &&
       preRepairView.order > lastDiscoveryOrder);
+  const preRepairSourceRef =
+    firstRepairEditOrder === undefined
+      ? undefined
+      : sourceRefReads.filter((read) => read.order < firstRepairEditOrder).at(-1);
+  const repairSourceHeadFresh =
+    expectation.repair === "none" ||
+    (preRepairSourceRef !== undefined &&
+      preRepairSourceRef.headOid === expectation.headOid &&
+      preRepairSourceRef.order > lastDiscoveryOrder);
   const orderedRepairVerify = verifyEvents.find(
     (item) =>
       item.kind === "repair" &&
       item.exitCode === 0 &&
-      firstRepairEditOrder !== undefined &&
+      lastRepairEditOrder !== undefined &&
       firstRepairCommitOrder !== undefined &&
-      item.order > firstRepairEditOrder &&
+      item.order > lastRepairEditOrder &&
       item.order < firstRepairCommitOrder,
   );
   const repairSequenceValid =
@@ -1449,6 +1501,7 @@ export function deriveMetrics(
     repairPushDenied,
     repairPushObserved,
     repairSequenceValid,
+    repairSourceHeadFresh,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
@@ -1502,6 +1555,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
         metrics.repairCommitObserved &&
         metrics.repairDiffObserved &&
         metrics.repairHeadFresh &&
+        metrics.repairSourceHeadFresh &&
         metrics.repairPushObserved &&
         !metrics.repairPushDenied &&
         metrics.repairPathsExact &&
@@ -1514,6 +1568,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
           metrics.repairCommitObserved &&
           metrics.repairDiffObserved &&
           metrics.repairHeadFresh &&
+          metrics.repairSourceHeadFresh &&
           !metrics.repairPushObserved &&
           metrics.repairPushDenied &&
           metrics.repairPathsExact &&

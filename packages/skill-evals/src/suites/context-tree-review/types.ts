@@ -129,6 +129,7 @@ export type EvalMetrics = {
   repairPushDenied: boolean;
   repairPushObserved: boolean;
   repairSequenceValid: boolean;
+  repairSourceHeadFresh: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

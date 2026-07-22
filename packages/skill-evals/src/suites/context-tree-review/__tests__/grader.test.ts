@@ -231,6 +231,18 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
     state: "OPEN",
     type: "github_pr_viewed",
   });
+  events.push({
+    event: {
+      item: {
+        aggregated_output: "head\trefs/heads/review-change\n",
+        command: "git -C context-tree ls-remote --heads origin review-change",
+        exit_code: 0,
+        status: "completed",
+        type: "command_execution",
+      },
+    },
+    type: "codex_event",
+  });
   events.push(
     {
       event: {
@@ -400,6 +412,7 @@ describe("context-tree-review grader", () => {
       repairPathsExact: true,
       repairPushObserved: true,
       repairSequenceValid: true,
+      repairSourceHeadFresh: true,
       successorSemanticReviewComplete: true,
       successorVerifyPassed: true,
       unexpectedMutationAttempted: false,
@@ -446,6 +459,7 @@ describe("context-tree-review grader", () => {
   it.each([
     "git -C .review-worktrees/42 diff --cached",
     "git -C .review-worktrees/42 diff wrong...HEAD",
+    "false && git -C .review-worktrees/42 diff base...HEAD || true",
   ])("does not accept an unbound successor diff as complete semantic review: %s", (command) => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
@@ -506,6 +520,7 @@ describe("context-tree-review grader", () => {
       repairPushDenied: true,
       repairPushObserved: false,
       repairSequenceValid: true,
+      repairSourceHeadFresh: true,
       successorVerifyPassed: false,
       unexpectedMutationAttempted: false,
     });
@@ -514,6 +529,8 @@ describe("context-tree-review grader", () => {
 
   it.each([
     "commit before verify",
+    "edit after verify",
+    "edit after diff",
     "missing complete diff",
     "push before commit",
   ])("rejects an invalid repair sequence: %s", (variant) => {
@@ -531,8 +548,21 @@ describe("context-tree-review grader", () => {
     const verifyIndex = events.findIndex(
       (event) => (event as { reviewVerifyKind?: unknown }).reviewVerifyKind === "repair",
     );
+    const laterEdit = {
+      event: {
+        item: {
+          changes: [{ kind: "update", path: ".repair-worktrees/42/system/review-contract.md" }],
+          type: "file_change",
+        },
+      },
+      type: "codex_event",
+    };
     if (variant === "commit before verify") {
       [events[commitIndex], events[verifyIndex]] = [events[verifyIndex], events[commitIndex]];
+    } else if (variant === "edit after verify") {
+      events.splice(verifyIndex + 1, 0, laterEdit);
+    } else if (variant === "edit after diff") {
+      events.splice(diffIndex + 1, 0, laterEdit);
     } else if (variant === "missing complete diff") {
       events.splice(diffIndex, 1);
     } else {
@@ -570,6 +600,33 @@ describe("context-tree-review grader", () => {
     Object.assign(moved[preRepairViewIndex] as object, { headRefOid: "concurrent-head" });
     const movedMetrics = deriveMetrics(moved, evalCase, expected, repairIntegrity("success"), 0);
     expect(movedMetrics.repairHeadFresh).toBe(false);
+    expect(casePassed(evalCase, movedMetrics)).toBe(false);
+  });
+
+  it("requires a fresh matching remote source head after finding discovery and before repair", () => {
+    const evalCase = repairCase("semantic-failure");
+    const expected = repairExpectation(evalCase);
+    const events = repairEvents(evalCase);
+    const sourceReadIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes("ls-remote --heads"),
+    );
+    const missingMetrics = deriveMetrics(
+      events.toSpliced(sourceReadIndex, 1),
+      evalCase,
+      expected,
+      repairIntegrity("success"),
+      0,
+    );
+    expect(missingMetrics.repairSourceHeadFresh).toBe(false);
+    expect(casePassed(evalCase, missingMetrics)).toBe(false);
+
+    const moved = repairEvents(evalCase);
+    const sourceRead = moved[sourceReadIndex] as { event: { item: { aggregated_output: string } } };
+    sourceRead.event.item.aggregated_output = "concurrent-head\trefs/heads/review-change\n";
+    const movedMetrics = deriveMetrics(moved, evalCase, expected, repairIntegrity("success"), 0);
+    expect(movedMetrics.repairSourceHeadFresh).toBe(false);
     expect(casePassed(evalCase, movedMetrics)).toBe(false);
   });
 
@@ -726,6 +783,35 @@ describe("context-tree-review grader", () => {
         event: {
           item: {
             command: "command git -C .repair-worktrees/42 commit --amend --no-edit",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "env-prefixed amend",
+      event: {
+        event: {
+          item: {
+            command: "env git -C .repair-worktrees/42 commit --amend --no-edit",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "assignment-prefixed force push",
+      event: {
+        event: {
+          item: {
+            command:
+              "GIT_CONFIG_NOSYSTEM=1 git -C .repair-worktrees/42 push --force origin HEAD:refs/heads/review-change",
             exit_code: 0,
             status: "completed",
             type: "command_execution",
