@@ -153,7 +153,10 @@ describe("context-tree-review fixture", () => {
           target,
           original
             .replace("---\n", '---\ntitle: "Review Contract"\n')
-            .replace("The GitHub App publishes", "The GitHub App must not publish"),
+            .replace(
+              "A Context Tree approval applies only to the exact reviewed head.",
+              "A Context Tree approval applies to any later head.",
+            ),
           "utf8",
         );
       }

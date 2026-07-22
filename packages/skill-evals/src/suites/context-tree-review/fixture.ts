@@ -56,7 +56,7 @@ function changedBodies(
     return [
       {
         path: "system/review-contract.md",
-        content: `---\nowners: [eval-owner]\n---\n\n# Review Contract\n\n## Decision\n\nThe GitHub App publishes Context Tree review outcomes.\n`,
+        content: `---\nowners: [eval-owner]\n---\n\n# Review Contract\n\n## Decision\n\nA Context Tree approval applies only to the exact reviewed head.\n\n## Rationale\n\nDismissing stale approvals after a push prevents an earlier verdict from authorizing unreviewed content.\n\n## Constraints\n\nA newer head requires a complete validator-first review before merge.\n`,
       },
     ];
   }

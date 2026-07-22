@@ -683,6 +683,25 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(true);
   });
 
+  it("allows fetching the bound base separately before the pull ref", () => {
+    const events = passingEvents();
+    events.splice(3, 0, {
+      event: {
+        item: {
+          command: "git -C context-tree fetch origin main",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, passingCase(), expectation, integrity, 0);
+    expect(metrics.semanticReadBeforeVerify).toBe(false);
+    expect(metrics.unexpectedMutationAttempted).toBe(false);
+    expect(casePassed(passingCase(), metrics)).toBe(true);
+  });
+
   it("requires current-head checks and a freshness view after final review evidence", () => {
     const missingChecks = passingEvents().filter(
       (event) => (event as { type?: unknown }).type !== "github_pr_checks_viewed",

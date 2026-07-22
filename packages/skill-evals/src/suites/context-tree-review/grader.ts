@@ -352,7 +352,16 @@ function readOnlyGitFetch(segment: string, expectation: ReviewFixtureExpectation
     ...reviewRefNames(expectation).map((destination) => `${pullRef}:${destination}`),
   ]);
   const refs = invocation.args.slice(1);
-  return refs.every((arg) => allowed.has(arg)) && refs.some((arg) => arg === pullRef || arg.startsWith(`${pullRef}:`));
+  const baseRefs = new Set([
+    "main",
+    "refs/heads/main",
+    "main:refs/remotes/origin/main",
+    "refs/heads/main:refs/remotes/origin/main",
+  ]);
+  return (
+    refs.every((arg) => allowed.has(arg)) &&
+    (refs.some((arg) => arg === pullRef || arg.startsWith(`${pullRef}:`)) || refs.every((arg) => baseRefs.has(arg)))
+  );
 }
 
 function readOnlyGitStatus(segment: string): boolean {
