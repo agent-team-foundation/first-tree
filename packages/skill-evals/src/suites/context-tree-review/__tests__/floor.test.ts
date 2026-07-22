@@ -66,7 +66,7 @@ describe("context-tree-review floor", () => {
     expect(cloud).not.toContain("gh pr review");
   });
 
-  it("pins local repair, App verdict, and repository-gated local merge", () => {
+  it("pins local repair, App verdict, and response-head local merge", () => {
     const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
 
     expect(skill).toContain("first-tree org context-tree review-config --json");
@@ -74,7 +74,12 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("same-repository, non-fork PR");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
-    expect(skill).toContain('gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash');
+    expect(skill).toContain("`data.reviewedHead` is the only merge authority");
+    expect(skill).toMatch(/gh api \\\s+--method PUT/u);
+    expect(skill).toContain('"sha=$REVIEWED_HEAD"');
+    expect(skill).toContain("merge_method=squash");
+    expect(skill).toContain("exactly one merge `PUT`");
+    expect(skill).not.toContain('gh pr merge "$PR_NUMBER"');
     expect(skill).not.toContain("--match-head-commit");
     expect(skill).not.toContain("parse-repair-scope");
     expect(skill).toContain("Never use `--admin`");

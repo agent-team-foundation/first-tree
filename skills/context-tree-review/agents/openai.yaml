@@ -1,4 +1,4 @@
 interface:
   display_name: "Context Tree Review"
   short_description: "Review a GitHub Context Tree PR safely"
-  default_prompt: "Use $context-tree-review to inspect the latest live state for this trusted GitHub App Context Reviewer run, make any appropriate repair with the local identity, publish the verdict through the App, and squash-merge through local gh only after approval; GitLab MRs use ordinary GitLab review."
+  default_prompt: "Use $context-tree-review to inspect the latest live state for this trusted GitHub App Context Reviewer run, make any appropriate repair with the local identity, publish the verdict through the App, and make one response-head REST squash-merge CAS plus at most one read-only reconciliation through local gh after approval; GitLab MRs use ordinary GitLab review."
