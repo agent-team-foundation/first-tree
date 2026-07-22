@@ -33,9 +33,8 @@ export async function runContextTreeReviewCase(
     recordedModelVerifyHead: fixture.expectation.headOid,
     recordedModelVerifyPath: fixture.verifyResultPath,
     reviewFixturePath: fixture.fixturePath,
-    reviewStatePath: fixture.reviewStatePath,
   });
-  createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath, reviewStatePath: fixture.reviewStatePath });
+  createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
   writeShellPathBootstrap(modelPaths, {
     FIRST_TREE_AGENT_ID: fixture.expectation.reviewerAgentUuid,
     FIRST_TREE_CHAT_ID: fixture.expectation.chatId,

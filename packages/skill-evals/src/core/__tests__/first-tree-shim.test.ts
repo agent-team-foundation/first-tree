@@ -18,6 +18,45 @@ import { createRunPaths } from "../paths.js";
 import { createFirstTreeShim } from "../shims/first-tree.js";
 import { createGhShim } from "../shims/gh.js";
 
+function setupResponseHeadScenario(packageRoot: string, caseId: string) {
+  const paths = createRunPaths({ caseId, packageRoot, startedAt: "2026-07-22T00:00:00.000Z" });
+  const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
+  const bodyPath = join(paths.workspacePath, "review.md");
+  const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
+  const inspectedHead = "a".repeat(40);
+  const fixture = {
+    chatId: "review-chat",
+    mergeCurrentHeadOid: null,
+    mergeOutcome: "success",
+    prNumber: 42,
+    repo: "owner/context-tree",
+    reviewHeadMode: "random-response",
+    reviewerAgentUuid: "reviewer-agent",
+    runId: "01900000-0000-7000-8000-000000000042",
+    runtimeSessionToken: "runtime-session-token",
+    views: [{ headRefOid: inspectedHead }],
+  };
+  writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
+  writeFileSync(bodyPath, "## Approved\n", "utf8");
+  writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
+  createFirstTreeShim(paths, { reviewFixturePath: fixturePath });
+  createGhShim(paths, { reviewFixturePath: fixturePath });
+  return {
+    bodyPath,
+    env: {
+      ...process.env,
+      FIRST_TREE_AGENT_ID: fixture.reviewerAgentUuid,
+      FIRST_TREE_CHAT_ID: fixture.chatId,
+      FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+      FIRST_TREE_EVAL_PHASE: "model",
+      FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+    },
+    fixture,
+    inspectedHead,
+    paths,
+  };
+}
+
 describe("first-tree eval shim", () => {
   it("requires trusted runtime authority for Context Review submission fixtures", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-review-"));
@@ -30,7 +69,6 @@ describe("first-tree eval shim", () => {
         startedAt: "2026-07-21T00:00:00.000Z",
       });
       const fixturePath = join(paths.workspacePath, ".first-tree-eval", "review-fixture.json");
-      const reviewStatePath = join(paths.runRoot, "review-state.json");
       const bodyPath = join(paths.workspacePath, "review.md");
       const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
       const fixture = {
@@ -44,12 +82,10 @@ describe("first-tree eval shim", () => {
       };
       const submissionHeadOid = "a".repeat(40);
       writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
-      writeFileSync(reviewStatePath, `${JSON.stringify({ views: 0 })}\n`, "utf8");
       writeFileSync(bodyPath, "## Approved\n", "utf8");
       writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
       createFirstTreeShim(paths, {
         reviewFixturePath: fixturePath,
-        reviewStatePath,
       });
       const argv = ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath];
       const baseEnv = {
@@ -79,10 +115,6 @@ describe("first-tree eval shim", () => {
       expect(JSON.parse(trusted.stdout)).toMatchObject({
         data: { action: "APPROVE", reviewedHead: submissionHeadOid },
         ok: true,
-      });
-      expect(JSON.parse(readFileSync(reviewStatePath, "utf8"))).toEqual({
-        approvedHead: submissionHeadOid,
-        views: 0,
       });
       expect(readEvents(paths.eventsPath)).toEqual(
         expect.arrayContaining([
@@ -138,60 +170,11 @@ describe("first-tree eval shim", () => {
     }
   });
 
-  it("shares only the App response head through private state with the merge shim", () => {
+  it("authorizes only the exact head from the successful App response", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-response-head-integration-"));
     try {
       const packageRoot = join(repoRoot, "packages", "skill-evals");
       mkdirSync(packageRoot, { recursive: true });
-      const paths = createRunPaths({
-        caseId: "context-review-response-head-integration",
-        packageRoot,
-        startedAt: "2026-07-22T00:00:00.000Z",
-      });
-      const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
-      const reviewStatePath = join(paths.runRoot, "shim-state", "context-review-state.json");
-      const bodyPath = join(paths.workspacePath, "review.md");
-      const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
-      const inspectedHead = "a".repeat(40);
-      const approvedHead = "b".repeat(40);
-      const fixture = {
-        chatId: "review-chat",
-        mergeCurrentHeadOid: null,
-        mergeOutcome: "success",
-        prNumber: 42,
-        repo: "owner/context-tree",
-        reviewHeadMode: "random-response",
-        reviewerAgentUuid: "reviewer-agent",
-        runId: "01900000-0000-7000-8000-000000000042",
-        runtimeSessionToken: "runtime-session-token",
-        views: [{ headRefOid: inspectedHead }],
-      };
-      mkdirSync(join(paths.runRoot, "shim-state"), { recursive: true });
-      writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
-      writeFileSync(reviewStatePath, `${JSON.stringify({ approvedHead })}\n`, "utf8");
-      writeFileSync(bodyPath, "## Approved\n", "utf8");
-      writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
-      createFirstTreeShim(paths, { reviewFixturePath: fixturePath, reviewStatePath });
-      createGhShim(paths, { reviewFixturePath: fixturePath, reviewStatePath });
-      const env = {
-        ...process.env,
-        FIRST_TREE_AGENT_ID: fixture.reviewerAgentUuid,
-        FIRST_TREE_CHAT_ID: fixture.chatId,
-        FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
-        FIRST_TREE_EVAL_PHASE: "model",
-        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
-      };
-      const review = spawnSync(
-        join(paths.binDir, "first-tree"),
-        ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(review.status).toBe(0);
-      const reviewedHead = JSON.parse(review.stdout).data.reviewedHead as string;
-      expect(reviewedHead).toMatch(/^[0-9a-f]{40}$/u);
-      expect(reviewedHead).toBe(approvedHead);
-      expect(reviewedHead).not.toBe(inspectedHead);
-
       const mergeArgs = (head: string) => [
         "api",
         "--method",
@@ -202,29 +185,73 @@ describe("first-tree eval shim", () => {
         "--raw-field",
         "merge_method=squash",
       ];
-      const substituted = spawnSync(join(paths.binDir, "gh"), mergeArgs(inspectedHead), {
-        cwd: paths.workspacePath,
+      const substituted = setupResponseHeadScenario(packageRoot, "context-review-substituted-head");
+      const substitutedSources = [
+        readFileSync(join(substituted.paths.binDir, "first-tree"), "utf8"),
+        readFileSync(join(substituted.paths.binDir, "gh"), "utf8"),
+      ];
+      for (const source of substitutedSources) {
+        expect(source).not.toContain("REVIEW_STATE_PATH");
+        expect(source).not.toContain("context-review-state.json");
+      }
+      expect(existsSync(join(substituted.paths.runRoot, "shim-state", "context-review-state.json"))).toBe(false);
+      const substitutedReview = spawnSync(
+        join(substituted.paths.binDir, "first-tree"),
+        [
+          "tree",
+          "review",
+          "--run",
+          substituted.fixture.runId,
+          "--event",
+          "APPROVE",
+          "--body-file",
+          substituted.bodyPath,
+        ],
+        { cwd: substituted.paths.workspacePath, encoding: "utf8", env: substituted.env },
+      );
+      expect(substitutedReview.status).toBe(0);
+      const substitutedReviewedHead = JSON.parse(substitutedReview.stdout).data.reviewedHead as string;
+      expect(substitutedReviewedHead).not.toBe(substituted.inspectedHead);
+      for (const source of substitutedSources) expect(source).not.toContain(substitutedReviewedHead);
+      const substitutedAttempt = spawnSync(join(substituted.paths.binDir, "gh"), mergeArgs(substituted.inspectedHead), {
+        cwd: substituted.paths.workspacePath,
         encoding: "utf8",
-        env,
+        env: substituted.env,
       });
-      expect(substituted.status).toBe(2);
+      expect(substitutedAttempt.status).toBe(2);
 
-      const exact = spawnSync(join(paths.binDir, "gh"), mergeArgs(reviewedHead), {
-        cwd: paths.workspacePath,
+      const exact = setupResponseHeadScenario(packageRoot, "context-review-exact-response-head");
+      const review = spawnSync(
+        join(exact.paths.binDir, "first-tree"),
+        ["tree", "review", "--run", exact.fixture.runId, "--event", "APPROVE", "--body-file", exact.bodyPath],
+        { cwd: exact.paths.workspacePath, encoding: "utf8", env: exact.env },
+      );
+      expect(review.status).toBe(0);
+      const reviewedHead = JSON.parse(review.stdout).data.reviewedHead as string;
+      expect(reviewedHead).toMatch(/^[0-9a-f]{40}$/u);
+      expect(reviewedHead).not.toBe(exact.inspectedHead);
+      const exactSources = [
+        readFileSync(join(exact.paths.binDir, "first-tree"), "utf8"),
+        readFileSync(join(exact.paths.binDir, "gh"), "utf8"),
+      ];
+      for (const source of exactSources) expect(source).not.toContain(reviewedHead);
+      expect(existsSync(join(exact.paths.runRoot, "shim-state", "context-review-state.json"))).toBe(false);
+      const exactMerge = spawnSync(join(exact.paths.binDir, "gh"), mergeArgs(reviewedHead), {
+        cwd: exact.paths.workspacePath,
         encoding: "utf8",
-        env,
+        env: exact.env,
       });
-      expect(exact.status).toBe(0);
-      expect(readEvents(paths.eventsPath)).toEqual(
+      expect(exactMerge.status).toBe(0);
+      expect(readEvents(exact.paths.eventsPath)).toEqual(
         expect.arrayContaining([expect.objectContaining({ commitOid: reviewedHead, type: "github_pr_merged" })]),
       );
-      expect(readEvents(paths.eventsPath)).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ commitOid: inspectedHead, type: "github_pr_merged" })]),
+      expect(readEvents(exact.paths.eventsPath)).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ commitOid: exact.inspectedHead, type: "github_pr_merged" })]),
       );
     } finally {
       rmSync(repoRoot, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 
   it("handles tree tree help without spawning the real CLI", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-test-"));

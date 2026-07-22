@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -12,7 +11,6 @@ export type ReviewFixture = {
   fixturePath: string;
   originPath: string;
   originRefs: string;
-  reviewStatePath: string;
   reviewWorktreePath: string;
   treeConfig: string;
   treePath: string;
@@ -183,9 +181,6 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   const runtimeSessionTokenFile = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
   writeText(runtimeSessionTokenFile, `${runtimeSessionToken}\n`);
   const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
-  const reviewStatePath = join(paths.runRoot, "shim-state", "context-review-state.json");
-  const approvedHead =
-    evalCase.fixture.scenario === "merge-response-provenance" ? randomBytes(20).toString("hex") : secondView.headRefOid;
   const repo = "owner/context-tree";
   const prNumber = 42;
   const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
@@ -193,7 +188,6 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     fixturePath,
     `${JSON.stringify({ chatId, mergeCurrentHeadOid, mergeOutcome, prNumber, repo, reviewHeadMode: evalCase.fixture.scenario === "merge-response-provenance" ? "random-response" : "current-view", reviewerAgentUuid, reviewerLogin, reviewWorktreePath, runId, runtimeSessionToken, views: [view, secondView] }, null, 2)}\n`,
   );
-  writeText(reviewStatePath, `${JSON.stringify({ approvedHead })}\n`);
   const originRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], originPath).stdout;
   const treeConfig = runCommand("git", ["config", "--local", "--list"], treePath).stdout;
   const treeRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], treePath).stdout;
@@ -218,7 +212,6 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     fixturePath,
     originPath,
     originRefs,
-    reviewStatePath,
     reviewWorktreePath,
     treeConfig,
     treePath,

@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -96,23 +96,9 @@ describe("context-tree-review fixture", () => {
       expect(reviewFixture.reviewHeadMode).toBe(
         scenario === "merge-response-provenance" ? "random-response" : "current-view",
       );
-      expect(fixture.reviewStatePath).toBe(join(paths.runRoot, "shim-state", "context-review-state.json"));
-      expect(fixture.reviewStatePath.startsWith(paths.workspacePath)).toBe(false);
-      for (const advertisedRoot of [
-        join(paths.runRoot, "provider-home"),
-        join(paths.runRoot, "provider-tmp"),
-        join(paths.runRoot, "provider-xdg-cache"),
-        join(paths.runRoot, "provider-xdg-config"),
-      ]) {
-        expect(fixture.reviewStatePath.startsWith(advertisedRoot)).toBe(false);
-      }
-      const reviewState = JSON.parse(readFileSync(fixture.reviewStatePath, "utf8")) as { approvedHead: string };
-      expect(reviewState.approvedHead).toMatch(/^[0-9a-f]{40}$/u);
-      if (scenario === "merge-response-provenance") {
-        expect(reviewState.approvedHead).not.toBe(fixture.expectation.expectedFinalHeadOid);
-      } else {
-        expect(reviewState.approvedHead).toBe(fixture.expectation.expectedFinalHeadOid);
-      }
+      expect(fixture).not.toHaveProperty("reviewStatePath");
+      expect(existsSync(join(paths.runRoot, "shim-state", "context-review-state.json"))).toBe(false);
+      expect(existsSync(join(paths.runRoot, "provider-tmp", "context-review-state.json"))).toBe(false);
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }

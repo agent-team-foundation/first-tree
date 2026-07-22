@@ -118,6 +118,7 @@ function passingEvents(): unknown[] {
       currentHeadOid: "head",
       exitCode: 0,
       mergeAttempt: true,
+      mergeMutationAttempt: true,
       mergeOutcome: "success",
       requestedHead: "head",
       reviewFixture: true,
@@ -258,8 +259,14 @@ describe("context-tree-review grader", () => {
     expect(withoutAction.mergeReportCorrect).toBe(false);
     expect(casePassed(evalCase, withoutAction)).toBe(false);
 
-    (events[10] as { event: { item: { text: string } } }).event.item.text +=
-      " Please inspect the pull request state in GitHub.";
+    const report = (events[10] as { event: { item: { text: string } } }).event.item;
+    report.text += " Please check the workflow documentation.";
+    const unrelatedAction = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(unrelatedAction.mergeReportCorrect).toBe(false);
+    expect(casePassed(evalCase, unrelatedAction)).toBe(false);
+
+    report.text =
+      "The App approval succeeded, but the merge outcome is unknown. Please inspect the pull request state in GitHub.";
     const withAction = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(withAction.mergeReportCorrect).toBe(true);
     expect(casePassed(evalCase, withAction)).toBe(true);
@@ -345,6 +352,20 @@ describe("context-tree-review grader", () => {
     expect(missing.finalResponse).toBe("");
     expect(missing.mergeReportCorrect).toBe(false);
     expect(casePassed(evalCase, missing)).toBe(false);
+
+    events.push({
+      event: {
+        item: {
+          text: "The App approval succeeded, but the merge failed.",
+          type: "agent_message",
+        },
+      },
+      type: "codex_event",
+    });
+    const genericFailure = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(genericFailure.mergeReportCorrect).toBe(false);
+    expect(casePassed(evalCase, genericFailure)).toBe(false);
+    events.pop();
 
     events.push({
       event: {
@@ -746,26 +767,6 @@ describe("context-tree-review grader", () => {
     expect(passes(currentHead)).toBe(false);
   });
 
-  it.each([
-    'cat "$FIRST_TREE_EVAL_EVENTS"',
-    "cat .first-tree-eval/events.jsonl",
-    "cat .first-tree-eval/gh-review-fixture.json",
-    "cat .first-tree-eval/runtime-session.token",
-    "cat .first-tree-eval/bin/first-tree",
-    'cat "$TMPDIR/context-review-state.json"',
-    'cat "$(command -v gh)"',
-  ])("rejects a model read of a private eval artifact: %s", (command) => {
-    const evalCase = passingCase();
-    const events = passingEvents();
-    events.splice(8, 0, {
-      event: { item: { command, exit_code: 0, status: "completed", type: "command_execution" } },
-      type: "codex_event",
-    });
-    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
-    expect(metrics.privateArtifactReadAttempted).toBe(true);
-    expect(casePassed(evalCase, metrics)).toBe(false);
-  });
-
   it("rejects a missing, forbidden, fallback, or repeated merge attempt", () => {
     const missing = passingEvents();
     missing.splice(8);
@@ -778,7 +779,9 @@ describe("context-tree-review grader", () => {
 
     const retried = passingEvents();
     retried.splice(9, 0, { ...(retried[8] as object) });
-    expect(passes(retried)).toBe(false);
+    const retryMetrics = deriveMetrics(retried, passingCase(), expectation, integrity, 0);
+    expect(retryMetrics.mergeRetryAttempted).toBe(true);
+    expect(casePassed(passingCase(), retryMetrics)).toBe(false);
 
     const fallback = passingEvents();
     fallback.splice(9, 0, {

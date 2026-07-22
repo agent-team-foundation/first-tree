@@ -18,7 +18,6 @@ function createShim(
   ghPath: string;
   eventsPath: string;
   reviewFixturePath?: string;
-  reviewStatePath?: string;
   workspacePath: string;
 } {
   const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-test-"));
@@ -26,17 +25,14 @@ function createShim(
   mkdirSync(packageRoot, { recursive: true });
   const paths = createRunPaths({ caseId, packageRoot, startedAt: "2026-06-30T00:00:00.000Z" });
   const reviewFixturePath = reviewFixture ? join(paths.workspacePath, "review-fixture.json") : undefined;
-  const reviewStatePath = reviewFixture ? join(paths.runRoot, "review-state.json") : undefined;
   if (reviewFixturePath)
     writeFileSync(reviewFixturePath, JSON.stringify({ runId: TEST_RUN_ID, ...reviewFixture }), "utf8");
-  if (reviewStatePath) writeFileSync(reviewStatePath, JSON.stringify({ views: 0 }), "utf8");
-  createGhShim(paths, { reviewFixturePath, reviewStatePath });
+  createGhShim(paths, { reviewFixturePath });
   return {
     repoRoot,
     ghPath: join(paths.binDir, "gh"),
     eventsPath: paths.eventsPath,
     reviewFixturePath,
-    reviewStatePath,
     workspacePath: paths.workspacePath,
   };
 }
@@ -65,12 +61,7 @@ function mergeArgs(head: string): string[] {
 
 const reconcileArgs = ["api", "--method", "GET", "repos/owner/context-tree/pulls/42"];
 
-function seedApprovedHead(reviewStatePath: string, approvedHead = "a".repeat(40)): void {
-  writeFileSync(reviewStatePath, JSON.stringify({ approvedHead }), "utf8");
-}
-
-function markApproved(reviewStatePath: string, eventsPath: string, approvedHead = "a".repeat(40)): void {
-  seedApprovedHead(reviewStatePath, approvedHead);
+function markApproved(eventsPath: string, approvedHead = "a".repeat(40)): void {
   const response = {
     data: { action: "APPROVE", reviewedHead: approvedHead },
     ok: true,
@@ -106,8 +97,7 @@ describe("gh eval shim", () => {
       views: [],
     });
     try {
-      if (!shim.reviewStatePath) throw new Error("review state path missing");
-      markApproved(shim.reviewStatePath, shim.eventsPath);
+      markApproved(shim.eventsPath);
       const accepted = spawnSync(shim.ghPath, mergeArgs(head), {
         cwd: shim.workspacePath,
         encoding: "utf8",
@@ -136,8 +126,7 @@ describe("gh eval shim", () => {
     const caseId = `context-review-invalid-${label.replaceAll(" ", "-")}`;
     const shim = createShim(caseId, { prNumber: 42, repo: "owner/context-tree", views: [] });
     try {
-      if (!shim.reviewStatePath) throw new Error("review state path missing");
-      markApproved(shim.reviewStatePath, shim.eventsPath);
+      markApproved(shim.eventsPath);
       const rejected = spawnSync(shim.ghPath, invalidArgs(head), {
         cwd: shim.workspacePath,
         encoding: "utf8",
@@ -148,6 +137,31 @@ describe("gh eval shim", () => {
       expect(readEvents(shim.eventsPath)).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ mergeAttempt: true })]),
       );
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("consumes the merge budget when a malformed target PUT is rejected", () => {
+    const head = "a".repeat(40);
+    const caseId = "context-review-malformed-then-exact";
+    const shim = createShim(caseId, { prNumber: 42, repo: "owner/context-tree", views: [] });
+    try {
+      markApproved(shim.eventsPath, head);
+      const options = {
+        cwd: shim.workspacePath,
+        encoding: "utf8" as const,
+        env: mergeEnv(caseId, shim.eventsPath),
+      };
+      const malformed = mergeArgs(head).map((arg) => (arg === "merge_method=squash" ? "merge_method=merge" : arg));
+      expect(spawnSync(shim.ghPath, malformed, options).status).toBe(2);
+      expect(spawnSync(shim.ghPath, mergeArgs(head), options).status).toBe(2);
+
+      const events = readEvents(shim.eventsPath);
+      expect(events.filter((event) => (event as { mergeMutationAttempt?: boolean }).mergeMutationAttempt)).toHaveLength(
+        2,
+      );
+      expect(events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "github_pr_merged" })]));
     } finally {
       rmSync(shim.repoRoot, { force: true, recursive: true });
     }
@@ -183,8 +197,6 @@ describe("gh eval shim", () => {
       views: [],
     });
     try {
-      if (!shim.reviewStatePath) throw new Error("review state path missing");
-      seedApprovedHead(shim.reviewStatePath, head);
       const result = spawnSync(shim.ghPath, mergeArgs(head), {
         cwd: shim.workspacePath,
         encoding: "utf8",
@@ -205,8 +217,7 @@ describe("gh eval shim", () => {
     const caseId = "context-review-repeat-merge";
     const shim = createShim(caseId, { prNumber: 42, repo: "owner/context-tree", views: [] });
     try {
-      if (!shim.reviewStatePath) throw new Error("review state path missing");
-      markApproved(shim.reviewStatePath, shim.eventsPath);
+      markApproved(shim.eventsPath);
       const args = mergeArgs(head);
       const options = {
         cwd: shim.workspacePath,
@@ -239,8 +250,7 @@ describe("gh eval shim", () => {
       views: [],
     });
     try {
-      if (!shim.reviewStatePath) throw new Error("review state path missing");
-      markApproved(shim.reviewStatePath, shim.eventsPath, approvedHead);
+      markApproved(shim.eventsPath, approvedHead);
       const result = spawnSync(shim.ghPath, mergeArgs(approvedHead), {
         cwd: shim.workspacePath,
         encoding: "utf8",
@@ -267,6 +277,45 @@ describe("gh eval shim", () => {
         expect(events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "github_pr_merged" })]));
       }
       expect(events.filter((event) => (event as { mergeAttempt?: boolean }).mergeAttempt === true)).toHaveLength(1);
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("consumes the reconciliation budget when gh pr view follows a merge attempt", () => {
+    const approvedHead = "a".repeat(40);
+    const caseId = "context-review-pr-view-then-reconcile";
+    const shim = createShim(caseId, {
+      mergeCurrentHeadOid: "b".repeat(40),
+      mergeOutcome: "head-mismatch",
+      prNumber: 42,
+      repo: "owner/context-tree",
+      views: [],
+    });
+    try {
+      markApproved(shim.eventsPath, approvedHead);
+      const options = {
+        cwd: shim.workspacePath,
+        encoding: "utf8" as const,
+        env: mergeEnv(caseId, shim.eventsPath),
+      };
+      expect(spawnSync(shim.ghPath, mergeArgs(approvedHead), options).status).toBe(1);
+      expect(
+        spawnSync(
+          shim.ghPath,
+          ["pr", "view", "42", "--repo", "owner/context-tree", "--json", "headRefOid,state"],
+          options,
+        ).status,
+      ).toBe(2);
+      expect(spawnSync(shim.ghPath, reconcileArgs, options).status).toBe(2);
+
+      const events = readEvents(shim.eventsPath);
+      expect(
+        events.filter(
+          (event) => (event as { mergeReconciliationAttempt?: boolean }).mergeReconciliationAttempt === true,
+        ),
+      ).toHaveLength(2);
+      expect(events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "github_pr_reconciled" })]));
     } finally {
       rmSync(shim.repoRoot, { force: true, recursive: true });
     }

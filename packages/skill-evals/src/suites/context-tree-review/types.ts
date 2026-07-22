@@ -144,7 +144,6 @@ export type EvalMetrics = {
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
-  privateArtifactReadAttempted: boolean;
   mergeAfterApproval: boolean;
   mergeAttempts: readonly MergeEvent[];
   mergeContractExact: boolean;

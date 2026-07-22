@@ -19,7 +19,6 @@ export function createFirstTreeShim(
     recordedModelVerifyPath?: string;
     auditFixturePath?: string;
     reviewFixturePath?: string;
-    reviewStatePath?: string;
     seedPreflight?: {
       branch: string;
       outcome: "bound" | "needs-admin" | "unbound";
@@ -34,6 +33,7 @@ export function createFirstTreeShim(
   const shimPath = join(paths.binDir, "first-tree");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -57,7 +57,6 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
-const REVIEW_STATE_PATH = ${JSON.stringify(options.reviewStatePath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
 const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
@@ -500,19 +499,14 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
 if (
   argv[0] === "tree" &&
   argv[1] === "review" &&
-  REVIEW_FIXTURE_PATH &&
-  REVIEW_STATE_PATH
+  REVIEW_FIXTURE_PATH
 ) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
   const finalView = fixture.views.at(-1);
-  let state = {};
-  try {
-    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
-  } catch {}
   const commitOid =
     fixture.reviewHeadMode === "random-response"
-      ? state.approvedHead
+      ? randomBytes(20).toString("hex")
       : finalView && typeof finalView.headRefOid === "string"
         ? finalView.headRefOid
         : null;
@@ -566,9 +560,6 @@ if (
     reviewedHead: commitOid,
     runId,
   });
-  if (action === "approve" && state.approvedHead !== commitOid) {
-    writeFileSync(REVIEW_STATE_PATH, JSON.stringify({ ...state, approvedHead: commitOid }), "utf8");
-  }
   finish(
     argv,
     phase,

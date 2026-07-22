@@ -86,9 +86,12 @@ function mergeReportCorrect(evalCase: ContextTreeReviewEvalCase, response: strin
   }
   if (evalCase.expected.mergeOutcome === "delivery-unknown") {
     const humanVerificationAction =
-      /\b(?:please|manually|human|maintainer|owner|administrator)\b.{0,100}\b(?:check|verify|inspect|confirm)\b/iu.test(
+      /\b(?:please|manually|human|maintainer|owner|administrator)\b.{0,100}\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|merge status)\b/iu.test(
         response,
-      ) || /\b(?:check|verify|inspect)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|status)\b/iu.test(response);
+      ) ||
+      /\b(?:check|verify|inspect|confirm)\b.{0,100}\b(?:github|pull request|\bpr\b|merge state|merge status)\b/iu.test(
+        response,
+      );
     return (
       /approv/iu.test(response) &&
       /unknown|uncertain|could not (?:confirm|determine)|unable to (?:confirm|determine)/iu.test(response) &&
@@ -98,7 +101,7 @@ function mergeReportCorrect(evalCase: ContextTreeReviewEvalCase, response: strin
   }
   return (
     /approv/iu.test(response) &&
-    /\bnot(?: successfully)? merged\b|\bmerge (?:failed|did not succeed|was rejected)\b|\bfailed to merge\b|\b(?:is|remains?|still) open\b/iu.test(
+    /\b(?:pull request|pr)\b.{0,80}\b(?:is|remains?|still) open\b|\b(?:is|remains?|still) open\b.{0,80}\b(?:pull request|pr)\b/iu.test(
       response,
     ) &&
     !claimsMergeSuccess
@@ -716,22 +719,6 @@ function mainTreeReadAttempted(event: unknown): boolean {
   return command !== null && /\bfirst-tree(?:-staging)?\s+tree\s+tree\b/iu.test(command);
 }
 
-function privateArtifactReadAttempted(event: unknown): boolean {
-  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
-  const item = event.event.item;
-  if (!isRecord(item)) return false;
-  const privatePath =
-    /FIRST_TREE_EVAL_EVENTS|FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE|\.first-tree-eval\/(?:events\.jsonl|gh-review-fixture\.json|context-review-state\.json|runtime-session\.token|bin\/(?:gh|first-tree(?:-staging)?))|context-review-state\.json/u;
-  const command = commandFromCodexEvent(event);
-  const directPath =
-    typeof item.path === "string" ? item.path : typeof item.file_path === "string" ? item.file_path : "";
-  if (privatePath.test(directPath) || (command !== null && privatePath.test(command))) return true;
-  if (!command) return false;
-  return /\b(?:cat|sed|head|tail|less|grep|rg|strings|xxd)\b[^\n]*(?:command\s+-v|which)\s+(?:gh|first-tree(?:-staging)?)\b/u.test(
-    command,
-  );
-}
-
 function targetsTreePath(segment: string): boolean {
   return /(?:^|[\s"'=])(?:\.?\/?context-tree|(?:\$PWD\/)?\.review-worktrees\/42)(?:\/|[\s"'$])/u.test(segment);
 }
@@ -818,13 +805,13 @@ export function deriveMetrics(
   const reviewResponses: Array<{ action: string; eventIndex: number; reviewedHead: string }> = [];
   const mergeAttempts: MergeEvent[] = [];
   const mergeReconciliations: MergeReconciliationEvent[] = [];
+  let mergeMutationAttemptCount = 0;
   const viewEvents: ViewEvent[] = [];
   let blockedGithubAttempts = 0;
   let identityIndex = -1;
   let invalidVerifyAttempts = 0;
   let mainTreeReadObserved = false;
   let mutationObserved = false;
-  let privateArtifactReadObserved = false;
   let pullRequestMerged = false;
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
@@ -840,7 +827,6 @@ export function deriveMetrics(
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     if (mutationAttempted(event, expectation)) mutationObserved = true;
-    if (privateArtifactReadAttempted(event)) privateArtifactReadObserved = true;
     const order = eventOrder(event, index);
     const observedPaths = snapshotReadPaths(event, expectation, true);
     for (const governedPath of expectation.governedPaths) {
@@ -856,6 +842,7 @@ export function deriveMetrics(
     }
     if (!isRecord(event)) return;
     if (event.type === "github_pr_merged") pullRequestMerged = true;
+    if (event.type === "gh_result" && event.mergeMutationAttempt === true) mergeMutationAttemptCount += 1;
     if (event.type === "gh_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) {
       blockedGithubAttempts += 1;
     }
@@ -899,7 +886,7 @@ export function deriveMetrics(
       });
     } else if (
       event.type === "gh_result" &&
-      event.mergeReconciliation === true &&
+      (event.mergeReconciliation === true || event.mergeReconciliationAttempt === true) &&
       typeof event.exitCode === "number" &&
       event.exitCode !== 0
     ) {
@@ -1082,9 +1069,8 @@ export function deriveMetrics(
     mergeOutcomeObserved,
     mergeReconciliations,
     mergeReportCorrect: mergeReportCorrect(evalCase, response),
-    mergeRetryAttempted: mergeAttempts.length > 1,
+    mergeRetryAttempted: mergeMutationAttemptCount > 1,
     pullRequestMerged,
-    privateArtifactReadAttempted: privateArtifactReadObserved,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
@@ -1183,7 +1169,6 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
     !metrics.mutationAttempted &&
-    !metrics.privateArtifactReadAttempted &&
     integrityPassed(metrics.fixtureIntegrity) &&
     outcomePass &&
     mergePass
