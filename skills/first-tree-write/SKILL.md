@@ -124,9 +124,9 @@ resolves the Server current Reviewer when the pull request event arrives.
    published branch.
 7. **Prepare the PR/MR.** Detect the Context Tree forge from its own `origin`,
    never the source artifact. One source artifact maps to one tree PR/MR. Keep
-   delivery history out of node bodies. An Audit-originated GitHub PR must be
-   created as draft and left draft for independent `context-tree-review`. An
-   Audit-originated GitLab MR stays draft for ordinary independent review;
+   delivery history out of node bodies. Audit-originated tree PRs/MRs must be created as draft and left draft.
+   A GitHub PR uses independent `context-tree-review`. An Audit-originated
+   GitLab MR stays draft for ordinary independent review;
    never claim an automated verdict or merge. After creating, resolving or
    reusing any GitLab MR, run `first-tree gitlab follow <mr-url>` in the task Chat. A
    returned pending or active state is success; failure does not invalidate the

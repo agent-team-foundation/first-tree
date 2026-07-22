@@ -24,10 +24,10 @@ has no behavior.
 
 ## Authority gate
 
-Before any Reviewer configuration lookup, treat a GitLab URL, Merge Request
-identifier or bound GitLab upstream as a terminal provider mismatch, not review
-authority. Route it to ordinary independent GitLab review. A local mirror
-cannot override this exclusion.
+Before any Reviewer configuration lookup, reject provider mismatches.
+A GitLab URL, Merge Request identifier, or bound GitLab upstream is not review
+authority. Route it to ordinary independent GitLab review.
+A local mirror cannot override this exclusion.
 
 Publication and mutation require a server-authored Context Reviewer wake-up
 that names the repository, pull request and Context Review run id and instructs
