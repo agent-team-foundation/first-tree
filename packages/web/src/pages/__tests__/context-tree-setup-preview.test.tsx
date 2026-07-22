@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { CONNECT_BOOTSTRAP_CODE_PLACEHOLDER, type ConnectBootstrapCommandTemplate } from "@first-tree/shared";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
@@ -15,6 +16,12 @@ import {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const roots: Root[] = [];
+const bootstrapCommandTemplate: ConnectBootstrapCommandTemplate = {
+  command:
+    "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+    `~/.local/bin/first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
+  codePlaceholder: CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+};
 
 function LocationProbe() {
   const location = useLocation();
@@ -38,7 +45,10 @@ async function renderPreview(entry: string): Promise<HTMLElement> {
     root.render(
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
-          <Route path="/preview/context-tree-setup" element={<ContextTreeSetupPreviewPage />} />
+          <Route
+            path="/preview/context-tree-setup"
+            element={<ContextTreeSetupPreviewPage bootstrapCommandTemplate={bootstrapCommandTemplate} />}
+          />
         </Routes>
         <LocationProbe />
       </MemoryRouter>,
@@ -101,18 +111,20 @@ describe("Context Tree setup preview model", () => {
   });
 
   it("uses a strict preview fixture grammar and the exact two-line staging bootstrap", () => {
-    const command = setupPreviewBootstrapCommand(setupPreviewCode("admin"));
+    const command = setupPreviewBootstrapCommand(setupPreviewCode("admin"), bootstrapCommandTemplate);
     expect(command.split("\n")).toEqual([
       "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh",
       "~/.local/bin/first-tree-staging login FT-PREVIEW-STAGING-ADMIN",
     ]);
-    expect(() => setupPreviewBootstrapCommand("FT-X; echo injected")).toThrow(TypeError);
-    expect(() => setupPreviewBootstrapCommand("FT-PREVIEW-STAGING-ADMIN\nwhoami")).toThrow(TypeError);
+    expect(() => setupPreviewBootstrapCommand("FT-X; echo injected", bootstrapCommandTemplate)).toThrow(TypeError);
+    expect(() => setupPreviewBootstrapCommand("FT-PREVIEW-STAGING-ADMIN\nwhoami", bootstrapCommandTemplate)).toThrow(
+      TypeError,
+    );
   });
 
   it("keeps Admin and Member prompts inside their authority boundaries", () => {
-    const admin = contextTreeSetupPreviewModel("admin").prompt;
-    const member = contextTreeSetupPreviewModel("member").prompt;
+    const admin = contextTreeSetupPreviewModel("admin", bootstrapCommandTemplate).prompt;
+    const member = contextTreeSetupPreviewModel("member", bootstrapCommandTemplate).prompt;
 
     expect(admin).toContain("set up Context Tree for Gandy's team");
     const adminSequence = [
@@ -283,9 +295,11 @@ describe("Context Tree setup preview handoff", () => {
 
     await clickButton(container, "Copy connection prompt");
 
-    expect(container.textContent).toContain("Copy failed. The terminal fallback is open for manual copy.");
-    const fallback = container.querySelector('[data-testid="terminal-bootstrap-command"]');
-    expect(fallback?.textContent?.split("\n")).toHaveLength(2);
+    expect(container.textContent).toContain("Copy failed. The full prompt is open below for manual copy.");
+    const fallback = container.querySelector('[data-testid="manual-copy-prompt"]');
+    const primaryPrompt = container.querySelector('[data-testid="setup-prompt"]');
+    expect(fallback?.textContent).toBe(primaryPrompt?.textContent);
+    expect(container.querySelector('[data-testid="terminal-bootstrap-command"]')).toBeNull();
     expect(document.activeElement).toBe(fallback);
   });
 

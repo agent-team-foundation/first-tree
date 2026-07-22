@@ -1,8 +1,9 @@
+import { type ConnectBootstrapCommandTemplate, materializeConnectBootstrapCommand } from "@first-tree/shared";
+
 export const CONTEXT_TREE_SETUP_PREVIEW_ROLES = ["admin", "member"] as const;
 
 export type ContextTreeSetupPreviewRole = (typeof CONTEXT_TREE_SETUP_PREVIEW_ROLES)[number];
 
-const INSTALL_COMMAND = "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh";
 const FIXTURE_CODE_PATTERN = /^FT-PREVIEW-STAGING-(?:(?:ADMIN|MEMBER)|[A-Z0-9]+-(?:ADMIN|MEMBER))$/;
 
 export type ContextTreeSetupPreviewQuery = {
@@ -59,15 +60,19 @@ export function setupPreviewCode(role: ContextTreeSetupPreviewRole, version = 0)
   return `FT-PREVIEW-STAGING-${version.toString(36).toUpperCase()}-${suffix}`;
 }
 
-export function setupPreviewBootstrapCommand(code: string): string {
+export function setupPreviewBootstrapCommand(code: string, template: ConnectBootstrapCommandTemplate): string {
   if (!FIXTURE_CODE_PATTERN.test(code)) {
     throw new TypeError("A valid staging preview fixture code is required");
   }
-  return `${INSTALL_COMMAND}\n~/.local/bin/first-tree-staging login ${code}`;
+  return materializeConnectBootstrapCommand(template, code);
 }
 
-export function setupPreviewPrompt(role: ContextTreeSetupPreviewRole, code: string): string {
-  const command = setupPreviewBootstrapCommand(code);
+export function setupPreviewPrompt(
+  role: ContextTreeSetupPreviewRole,
+  code: string,
+  template: ConnectBootstrapCommandTemplate,
+): string {
+  const command = setupPreviewBootstrapCommand(code, template);
   const fixtureNotice = "Preview note: this fixture code does not authenticate.";
 
   if (role === "admin") {
@@ -101,13 +106,14 @@ Verify an exact read of the Team's shared Context Tree and report the snapshot r
 
 export function contextTreeSetupPreviewModel(
   role: ContextTreeSetupPreviewRole,
+  template: ConnectBootstrapCommandTemplate,
   version = 0,
 ): ContextTreeSetupPreviewModel {
   const code = setupPreviewCode(role, version);
   return {
     code,
-    command: setupPreviewBootstrapCommand(code),
-    prompt: setupPreviewPrompt(role, code),
+    command: setupPreviewBootstrapCommand(code, template),
+    prompt: setupPreviewPrompt(role, code, template),
   };
 }
 

@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { lazy, type ReactNode, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteTracker } from "./analytics.js";
 import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
+import { Button } from "./components/ui/button.js";
 import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
-import { useServerChannelState } from "./hooks/use-server-channel.js";
+import { useContextTreeSetupPreviewBootstrapState, useServerChannelState } from "./hooks/use-server-channel.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { RepositoriesTab } from "./pages/agent-detail/repositories-tab.js";
@@ -187,16 +188,7 @@ export function App() {
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
-              <Route
-                path="/preview/context-tree-setup"
-                element={
-                  <StagingPreviewGate>
-                    <Suspense fallback={null}>
-                      <ContextTreeSetupPreviewPage />
-                    </Suspense>
-                  </StagingPreviewGate>
-                }
-              />
+              <Route path="/preview/context-tree-setup" element={<ContextTreeSetupPreviewRoute />} />
               {ContextPreviewPage ? (
                 <Route
                   path="/preview/context"
@@ -502,11 +494,33 @@ function AdminRedirect() {
   return <Navigate to={`/team${location.hash}`} replace />;
 }
 
-function StagingPreviewGate({ children }: { children: ReactNode }) {
-  const { channel, settled } = useServerChannelState();
+function ContextTreeSetupPreviewRoute() {
+  const { channel, commandTemplate, settled } = useContextTreeSetupPreviewBootstrapState();
   if (!settled) return null;
   if (!import.meta.env.DEV && channel !== "staging") return <Navigate to="/" replace />;
-  return children;
+  if (!commandTemplate) return <ContextTreeSetupPreviewUnavailable />;
+  return (
+    <Suspense fallback={null}>
+      <ContextTreeSetupPreviewPage bootstrapCommandTemplate={commandTemplate} />
+    </Suspense>
+  );
+}
+
+function ContextTreeSetupPreviewUnavailable() {
+  return (
+    <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+      <section className="w-full max-w-lg rounded-[var(--radius-panel)] border border-border bg-card p-6 text-center sm:p-8">
+        <p className="text-label font-semibold uppercase tracking-wide text-fg-3">Context Tree setup preview</p>
+        <h1 className="mt-2 text-title font-semibold">Preview unavailable</h1>
+        <p className="mx-auto mt-3 max-w-md text-body text-fg-2">
+          This deployment has not published its setup command yet. Reload after the staging update completes.
+        </p>
+        <Button type="button" className="mt-5" onClick={() => window.location.reload()}>
+          Reload preview
+        </Button>
+      </section>
+    </main>
+  );
 }
 
 function LegacyUserSettingsRedirect() {

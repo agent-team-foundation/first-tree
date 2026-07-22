@@ -26,6 +26,7 @@ import {
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
+import { buildServerConnectBootstrapCommand } from "../services/connect-bootstrap-command.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../services/github-user-token.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
@@ -54,67 +55,6 @@ import { clientCommandVersionHint } from "./client-command-version.js";
 const onboardingTreeSetupStatusQuerySchema = z.object({
   organizationId: z.string().optional(),
 });
-
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function shellArg(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : shellQuote(value);
-}
-
-function normalizeDownloadBaseUrl(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
-function normalizeCommandServerUrl(value: string): string {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return value.replace(/\/+$/, "");
-  }
-}
-
-function buildLoginCommand(options: {
-  executable: string;
-  tokenArg: string;
-  serverUrl: string;
-  defaultServerUrl: string;
-}): string {
-  const serverUrl = normalizeCommandServerUrl(options.serverUrl);
-  const prefix = serverUrl === options.defaultServerUrl ? "" : `FIRST_TREE_SERVER_URL=${shellQuote(serverUrl)} `;
-  return `${prefix}${options.executable} login ${options.tokenArg}`;
-}
-
-function buildPortableBootstrapCommand(options: {
-  installerUrl: string;
-  portableDownloadBaseUrl: string;
-  defaultPortableDownloadBaseUrl: string;
-  binName: string;
-  token: string;
-  serverUrl: string;
-  defaultServerUrl: string;
-}): string {
-  const isCustomDownloadBase =
-    normalizeDownloadBaseUrl(options.portableDownloadBaseUrl) !==
-    normalizeDownloadBaseUrl(options.defaultPortableDownloadBaseUrl);
-  const installerUrl = isCustomDownloadBase ? shellQuote(options.installerUrl) : options.installerUrl;
-  const installerEnv = isCustomDownloadBase
-    ? `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} `
-    : "";
-  const loginCommand = buildLoginCommand({
-    executable: `~/.local/bin/${options.binName}`,
-    tokenArg: shellArg(options.token),
-    serverUrl: options.serverUrl,
-    defaultServerUrl: options.defaultServerUrl,
-  });
-
-  return [`curl -fsSL ${installerUrl} | ${installerEnv}sh`, loginCommand].join("\n");
-}
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -571,47 +511,11 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
     // Web surfaces render the server-provided command directly. Dev is
     // source-only; hosted channels always use their public shell installer.
-    const ch = getChannelConfig(app.config.channel);
-    const command = buildLoginCommand({
-      executable: ch.binName,
-      tokenArg: shellArg(token),
-      serverUrl: issuer,
-      defaultServerUrl: ch.defaultServerUrl,
-    });
-    if (app.config.channel === "dev") {
-      return {
-        token,
-        expiresIn,
-        command,
-        bootstrapCommand: command,
-        installerUrl: null,
-        binName: ch.binName,
-      };
-    }
-
-    const installerPath = ch.portable.publicInstallerPath;
-    const defaultPortableDownloadBaseUrl = ch.portable.downloadBaseUrl;
-    if (installerPath === null || defaultPortableDownloadBaseUrl === null) {
-      throw new Error(`Portable installer metadata is missing for the ${app.config.channel} channel`);
-    }
-    const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
-    const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
-    const bootstrapCommand = buildPortableBootstrapCommand({
-      installerUrl,
-      portableDownloadBaseUrl,
-      defaultPortableDownloadBaseUrl,
-      binName: ch.binName,
-      token,
-      serverUrl: issuer,
-      defaultServerUrl: ch.defaultServerUrl,
-    });
+    const bootstrap = buildServerConnectBootstrapCommand({ app, request, token });
     return {
       token,
       expiresIn,
-      command,
-      bootstrapCommand,
-      installerUrl,
-      binName: ch.binName,
+      ...bootstrap,
     };
   });
 

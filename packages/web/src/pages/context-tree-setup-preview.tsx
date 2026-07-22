@@ -1,3 +1,4 @@
+import type { ConnectBootstrapCommandTemplate } from "@first-tree/shared";
 import {
   Bot,
   Check,
@@ -46,7 +47,11 @@ const HANDOFF_COPY = {
   },
 } as const;
 
-export function ContextTreeSetupPreviewPage() {
+export function ContextTreeSetupPreviewPage({
+  bootstrapCommandTemplate,
+}: {
+  bootstrapCommandTemplate: ConnectBootstrapCommandTemplate;
+}) {
   const location = useLocation();
   const navigate = useNavigate();
   const query = useMemo(() => normalizeContextTreeSetupPreviewQuery(location.search), [location.search]);
@@ -97,6 +102,7 @@ export function ContextTreeSetupPreviewPage() {
         role={query.role}
         version={fixtureStates[query.role].version}
         expired={fixtureStates[query.role].expired}
+        bootstrapCommandTemplate={bootstrapCommandTemplate}
         onRegenerate={regenerate}
       />
     </div>
@@ -192,36 +198,43 @@ function HandoffPage({
   role,
   version,
   expired,
+  bootstrapCommandTemplate,
   onRegenerate,
 }: {
   role: ContextTreeSetupPreviewRole;
   version: number;
   expired: boolean;
+  bootstrapCommandTemplate: ConnectBootstrapCommandTemplate;
   onRegenerate: () => void;
 }) {
   const copy = HANDOFF_COPY[role];
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const focusAfterRegenerationRef = useRef(false);
-  const terminalRef = useRef<HTMLPreElement>(null);
+  const manualPromptRef = useRef<HTMLPreElement>(null);
   const { status: copyStatus, copy: copyPrompt, reset: resetCopy } = useCopyFeedback();
   const [showCommand, setShowCommand] = useState(false);
+  const [showManualPrompt, setShowManualPrompt] = useState(false);
   const [showMemberHelp, setShowMemberHelp] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Preview fixture · simulated expiry 9:42");
-  const model = useMemo(() => contextTreeSetupPreviewModel(role, version), [role, version]);
+  const model = useMemo(
+    () => contextTreeSetupPreviewModel(role, bootstrapCommandTemplate, version),
+    [bootstrapCommandTemplate, role, version],
+  );
 
   useEffect(() => {
     if (copyStatus === "copied") {
       setStatusMessage("Preview prompt copied · fixture login will not complete");
+      setShowManualPrompt(false);
     }
     if (copyStatus === "failed") {
-      setStatusMessage("Copy failed. The terminal fallback is open for manual copy.");
-      setShowCommand(true);
+      setStatusMessage("Copy failed. The full prompt is open below for manual copy.");
+      setShowManualPrompt(true);
     }
   }, [copyStatus]);
 
   useEffect(() => {
-    if (copyStatus === "failed" && showCommand) terminalRef.current?.focus();
-  }, [copyStatus, showCommand]);
+    if (copyStatus === "failed" && showManualPrompt) manualPromptRef.current?.focus();
+  }, [copyStatus, showManualPrompt]);
 
   useEffect(() => {
     if (!focusAfterRegenerationRef.current || expired) return;
@@ -231,6 +244,7 @@ function HandoffPage({
 
   const regenerate = (): void => {
     setStatusMessage("New preview fixture generated · simulated expiry 9:42");
+    setShowManualPrompt(false);
     resetCopy();
     focusAfterRegenerationRef.current = true;
     onRegenerate();
@@ -296,6 +310,20 @@ function HandoffPage({
             </span>
           </div>
 
+          {showManualPrompt ? (
+            <div className="mt-4 rounded-[var(--radius-panel)] border border-error/40 bg-bg-sunken p-4 sm:p-5">
+              <p className="mb-3 text-label font-semibold text-foreground">Select and copy the full prompt manually</p>
+              <pre
+                ref={manualPromptRef}
+                data-testid="manual-copy-prompt"
+                tabIndex={-1}
+                className="mono max-h-80 overflow-auto whitespace-pre-wrap text-label text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <code>{model.prompt}</code>
+              </pre>
+            </div>
+          ) : null}
+
           <ul
             className="mt-5 flex list-none flex-wrap gap-x-5 gap-y-2 text-label text-fg-3"
             aria-label="Bootstrap results"
@@ -336,7 +364,6 @@ function HandoffPage({
           </Button>
           {showCommand ? (
             <pre
-              ref={terminalRef}
               id={`${role}-terminal-command`}
               data-testid="terminal-bootstrap-command"
               tabIndex={-1}
