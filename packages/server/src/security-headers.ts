@@ -126,9 +126,11 @@ export function registerSecurityHeaders(app: FastifyInstance, config: Config): v
   const headers = buildSecurityHeaders(config);
   app.addHook("onSend", (_request, reply, _payload, done) => {
     for (const [name, value] of Object.entries(headers)) {
-      // Routes may set their own X-Content-Type-Options (attachment downloads
-      // have done so since before this hook existed); same value, so leave
-      // theirs in place.
+      // General rule: a route's own value always wins over the app-wide
+      // default (route-level escape hatch). In practice the only route
+      // setting any of these today is attachment downloads, which have set
+      // X-Content-Type-Options: nosniff — the same value — since before this
+      // hook existed.
       if (reply.hasHeader(name)) continue;
       reply.header(name, value);
     }
