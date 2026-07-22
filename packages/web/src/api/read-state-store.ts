@@ -1,163 +1,175 @@
 /**
- * Per-browser, per-chat snapshot taken when the user leaves a chat,
- * used to restore scroll position and to mark the old/new boundary
- * on return.
- *
- * The two persisted ids serve distinct roles:
- *
- *  - `bottomVisibleMessageId` — the message that sat at the bottom
- *    edge of the viewport at leave time. On return, the UI scrolls
- *    this message back to the viewport bottom so the user resumes
- *    at the same visual position.
- *
- *  - `latestKnownMessageId` — the chat tip (chronologically latest
- *    message in the chat) at leave time. On return, any message
- *    strictly newer than this is "new since you were last here":
- *    counted by the pill and divided from prior content by the
- *    "New Messages" divider.
- *
- * The two are equal when the user left the chat at the bottom. They
- * diverge when the user scrolled up before leaving — `bottomVisible`
- * trails behind `latestKnown`. The bug that drove this distinction:
- * if `latestKnown` were instead the user's session high watermark,
- * a mid-scroll leave + return would falsely surface the messages
- * between the high water and the chat tip as "new" — but they were
- * already there before the user left.
- *
- * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2),
- * revised through PR 286 manual sign-off. See issue first-tree-all
- * 120.
+ * Per-chat resume state. Physical persistence is account+server scoped and
+ * row keys include the exact selected organization.
  */
 
-const DB_NAME = "first-tree-chat-cache";
-const DB_VERSION = 2;
-const MESSAGES_STORE = "messages";
-const MESSAGES_INDEX = "by_chat_created";
-const READ_STATE_STORE = "read-state";
+import {
+  CHAT_CONTENT_DATABASE_SPEC,
+  type ContentOperation,
+  captureContentStoreRuntime,
+  type ViewLease,
+} from "../auth/session/index.js";
+
+const STORE = "read-state";
 
 export type ReadState = {
   chatId: string;
-  /**
-   * The message that was at (or nearest to) the bottom edge of the
-   * viewport at the moment the user left this chat. Drives the
-   * `scrollToMessageImmediate` anchor on return.
-   */
   bottomVisibleMessageId: string;
-  /**
-   * The chat tip — the chronologically latest message present in
-   * the chat at the moment the user left. Distinct from
-   * `bottomVisibleMessageId` whenever the user scrolled up before
-   * leaving (bottom-visible trails behind the tip).
-   *
-   * On return, anything strictly newer than this id is "new since
-   * your last visit": counted by the pill and divided from prior
-   * content by the "New Messages" divider. Anything ≤ this id was
-   * already in the chat when the user left, even if they hadn't
-   * scrolled to it — so it does not count as new.
-   *
-   * Optional only for backward compatibility with rows written
-   * before this field existed.
-   */
   latestKnownMessageId?: string;
-  /** Wall-clock when the snapshot was taken. Used for diagnostics. */
   updatedAt: number;
 };
 
-let dbPromise: Promise<IDBDatabase | null> | null = null;
+type StoredReadState = ReadState & {
+  organizationId: string;
+};
 
-function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") {
-      resolve(null);
-      return;
-    }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
-        const store = db.createObjectStore(MESSAGES_STORE, { keyPath: ["chatId", "messageId"] });
-        store.createIndex(MESSAGES_INDEX, ["chatId", "createdAt"], { unique: false });
-      }
-      if (!db.objectStoreNames.contains(READ_STATE_STORE)) {
-        db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => resolve(null);
-    req.onblocked = () => resolve(null);
-  });
-  return dbPromise;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Read the scroll-position snapshot for `chatId`. Returns `null` on
- * cache miss, on IndexedDB unavailability, or on any read error —
- * never throws.
- */
-export async function getReadState(chatId: string): Promise<ReadState | null> {
-  const db = await openDb();
-  if (!db) return null;
-  return new Promise((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readonly");
-    const store = tx.objectStore(READ_STATE_STORE);
-    const req = store.get(chatId);
-    req.onsuccess = () => {
-      const row = req.result as ReadState | undefined;
-      resolve(row ?? null);
-    };
-    req.onerror = () => resolve(null);
-    tx.onabort = () => resolve(null);
-  });
+function readStoredReadState(value: unknown, organizationId: string, chatId: string): ReadState | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.organizationId !== organizationId ||
+    value.chatId !== chatId ||
+    typeof value.bottomVisibleMessageId !== "string" ||
+    (value.latestKnownMessageId !== undefined && typeof value.latestKnownMessageId !== "string") ||
+    typeof value.updatedAt !== "number" ||
+    !Number.isFinite(value.updatedAt)
+  ) {
+    return null;
+  }
+  return {
+    chatId,
+    bottomVisibleMessageId: value.bottomVisibleMessageId,
+    ...(value.latestKnownMessageId === undefined ? {} : { latestKnownMessageId: value.latestKnownMessageId }),
+    updatedAt: value.updatedAt,
+  };
 }
 
-/**
- * Upsert the snapshot for `chatId`. Captures both the visual
- * position (`bottomVisibleMessageId`) and the freshness marker
- * (`latestKnownMessageId`, the chat tip at the moment of this
- * snapshot).
- *
- * Fire-and-forget at call sites: the write is best-effort, must
- * never delay rendering, and silently no-ops if IndexedDB is
- * unavailable.
- */
-export async function setReadState(
+async function withChatDatabase<T>(
+  operation: ContentOperation,
+  callback: (database: IDBDatabase) => Promise<T>,
+): Promise<T> {
+  const database = await operation.openDatabase(CHAT_CONTENT_DATABASE_SPEC);
+  try {
+    return await callback(database);
+  } finally {
+    operation.closeDatabase(database);
+  }
+}
+
+export function getReadState(lease: ViewLease, chatId: string): Promise<ReadState | null>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function getReadState(chatId: string): Promise<ReadState | null>;
+export async function getReadState(
+  leaseOrChatId: ViewLease | string,
+  capturedChatId?: string,
+): Promise<ReadState | null> {
+  if (typeof leaseOrChatId === "string" || capturedChatId === undefined) return null;
+  const chatId = capturedChatId;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return null;
+  }
+  if (!runtime) return null;
+
+  try {
+    return await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      return withChatDatabase(operation, async (database) => {
+        let result: ReadState | null = null;
+        await operation.runTransaction(database, STORE, "readonly", (transaction) => {
+          const request = transaction.objectStore(STORE).get([lease.organizationId, chatId]);
+          request.onsuccess = () => {
+            result = readStoredReadState(request.result, lease.organizationId, chatId);
+          };
+        });
+        return result;
+      });
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function setReadState(
+  lease: ViewLease,
   chatId: string,
   bottomVisibleMessageId: string,
   latestKnownMessageId: string,
+): Promise<void>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function setReadState(
+  chatId: string,
+  bottomVisibleMessageId: string,
+  latestKnownMessageId: string,
+): Promise<void>;
+export async function setReadState(
+  leaseOrChatId: ViewLease | string,
+  chatIdOrBottomVisibleMessageId: string,
+  bottomVisibleOrLatestKnownMessageId: string,
+  capturedLatestKnownMessageId?: string,
 ): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readwrite");
-    const store = tx.objectStore(READ_STATE_STORE);
-    const entry: ReadState = {
-      chatId,
-      bottomVisibleMessageId,
-      latestKnownMessageId,
-      updatedAt: Date.now(),
-    };
-    store.put(entry);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
-  });
+  if (typeof leaseOrChatId === "string" || capturedLatestKnownMessageId === undefined) return;
+  const chatId = chatIdOrBottomVisibleMessageId;
+  const bottomVisibleMessageId = bottomVisibleOrLatestKnownMessageId;
+  const latestKnownMessageId = capturedLatestKnownMessageId;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return;
+  }
+  if (!runtime) return;
+
+  try {
+    await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      await withChatDatabase(operation, async (database) => {
+        await operation.runTransaction(database, STORE, "readwrite", (transaction) => {
+          const row: StoredReadState = {
+            organizationId: lease.organizationId,
+            chatId,
+            bottomVisibleMessageId,
+            latestKnownMessageId,
+            updatedAt: Date.now(),
+          };
+          transaction.objectStore(STORE).put(row);
+        });
+      });
+    });
+  } catch {
+    // Best-effort scroll state. A stale view is intentionally a no-op.
+  }
 }
 
-/**
- * Remove the scroll-position snapshot for `chatId`. Intended for
- * diagnostic / debug use today; the production UI never calls this.
- * Resolves silently on IndexedDB unavailability.
- */
-export async function clearReadState(chatId: string): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readwrite");
-    const store = tx.objectStore(READ_STATE_STORE);
-    store.delete(chatId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
-  });
+export function clearReadState(lease: ViewLease, chatId: string): Promise<void>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function clearReadState(chatId: string): Promise<void>;
+export async function clearReadState(leaseOrChatId: ViewLease | string, capturedChatId?: string): Promise<void> {
+  if (typeof leaseOrChatId === "string" || capturedChatId === undefined) return;
+  const chatId = capturedChatId;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return;
+  }
+  if (!runtime) return;
+
+  try {
+    await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      await withChatDatabase(operation, async (database) => {
+        await operation.runTransaction(database, STORE, "readwrite", (transaction) => {
+          transaction.objectStore(STORE).delete([lease.organizationId, chatId]);
+        });
+      });
+    });
+  } catch {
+    // Diagnostic removal remains best effort within the captured view.
+  }
 }

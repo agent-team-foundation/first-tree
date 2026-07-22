@@ -276,16 +276,22 @@ export function createViewLease(input: ViewLeaseInput): ViewLease {
 
 export function validateViewLease(value: unknown): ViewLease {
   if (!isRecord(value)) throw new SessionError(sessionErrorCodes.invalidState, "View lease is malformed");
-  if (!isAbortSignal(value.signal)) {
+  const activation = value.activation;
+  const organizationId = value.organizationId;
+  const orgRevision = value.orgRevision;
+  const ownerTabId = value.ownerTabId;
+  const documentId = value.documentId;
+  const signal = value.signal;
+  if (!isAbortSignal(signal)) {
     throw new SessionError(sessionErrorCodes.invalidState, "View lease requires an AbortSignal");
   }
   return createViewLease({
-    activation: value.activation,
-    organizationId: requireOpaqueId(value.organizationId, "Organization id"),
-    orgRevision: requireOpaqueId(value.orgRevision, "Organization revision"),
-    ownerTabId: requireOpaqueId(value.ownerTabId, "Owner tab id"),
-    documentId: requireOpaqueId(value.documentId, "Document id"),
-    signal: value.signal,
+    activation,
+    organizationId: requireOpaqueId(organizationId, "Organization id"),
+    orgRevision: requireOpaqueId(orgRevision, "Organization revision"),
+    ownerTabId: requireOpaqueId(ownerTabId, "Owner tab id"),
+    documentId: requireOpaqueId(documentId, "Document id"),
+    signal,
   });
 }
 

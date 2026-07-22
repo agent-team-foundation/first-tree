@@ -1,170 +1,220 @@
 /**
- * Per-browser cache of chat messages keyed by `[chatId, messageId]`.
+ * Server-wins hot cache for finalized chat messages.
  *
- * First Tree's chat history is the **outcome stream** — only finalised messages are
- * persisted; transient `session_events` / `session_outputs` are not cached
- * here (they are session-lifecycle scoped on the server per
- * `agent-hub/client-runtime.md`, and come from a separate query in the UI).
- *
- * Lifecycle:
- *  - On chat open, the UI hydrates instantly from this cache so users see
- *    messages without a spinner-then-content flash.
- *  - The 5-second polling fetch writes through to this cache (idempotent
- *    upsert by composite key), so the cache grows over time and survives
- *    page reloads.
- *
- * Out of scope for v1:
- *  - Eviction (LRU / time-based). Storage grows unbounded; revisit when
- *    real-data sizes warrant it.
- *  - Cursor-based pagination of older history (a separate milestone).
- *
- * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M1) — see
- * issue first-tree-all 119 under parent first-tree-all 118.
+ * Persistence is admitted only through the document's captured authenticated
+ * view. The physical database is account+server scoped, while every row and
+ * index key is also organization scoped. A missing, retired, or stale view is
+ * a cache miss/no-op; it never falls back to origin-global persistence.
  */
 
+import { messageSchema } from "@first-tree/shared";
+import {
+  CHAT_CONTENT_DATABASE_SPEC,
+  type ContentOperation,
+  captureContentStoreRuntime,
+  type ViewLease,
+} from "../auth/session/index.js";
 import type { MessageWithDelivery } from "./chats.js";
 
-const DB_NAME = "first-tree-chat-cache";
-// Schema version is shared with read-state-store.ts (M2). Both modules
-// open the same DB; whichever opens first triggers any pending upgrade.
-// Each module's onupgradeneeded must defensively create-if-not-exists
-// every store, so the schema lands the same regardless of call order.
-const DB_VERSION = 2;
 const STORE = "messages";
-const INDEX_BY_CHAT_CREATED = "by_chat_created";
-const READ_STATE_STORE = "read-state";
+const INDEX_BY_ORG_CHAT_CREATED = "by_org_chat_created";
 
 type StoredMessage = {
-  // Composite key columns first so the keyPath is `[chatId, messageId]`.
+  organizationId: string;
   chatId: string;
   messageId: string;
-  // The full server-side message payload, including transient delivery
-  // status if present at cache-write time.
   payload: MessageWithDelivery;
-  // Mirrors `payload.createdAt` lifted to a top-level field so the
-  // `[chatId, createdAt]` index can range-scan without deserialising the
-  // payload.
   createdAt: string;
-  // When this row was last upserted; useful for future LRU eviction.
   cachedAt: number;
 };
 
-let dbPromise: Promise<IDBDatabase | null> | null = null;
+const DELIVERY_STATUSES = new Set(["sent", "pending", "delivered", "acked"]);
 
-function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") {
-      resolve(null);
-      return;
-    }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: ["chatId", "messageId"] });
-        store.createIndex(INDEX_BY_CHAT_CREATED, ["chatId", "createdAt"], { unique: false });
-      }
-      // Mirror the read-state store creation so this module's upgrade
-      // handler is self-sufficient regardless of which module triggers
-      // the v1 → v2 transition.
-      if (!db.objectStoreNames.contains(READ_STATE_STORE)) {
-        db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => resolve(null);
-    req.onblocked = () => resolve(null);
-  });
-  return dbPromise;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Read all cached messages for `chatId`, ordered ascending by `createdAt`
- * (oldest first, matching the timeline render order). Returns an empty
- * array on cache miss or if IndexedDB is unavailable — never throws.
- */
-export async function getCachedMessages(chatId: string): Promise<MessageWithDelivery[]> {
-  const db = await openDb();
-  if (!db) return [];
-  return new Promise((resolve) => {
-    const tx = db.transaction(STORE, "readonly");
-    const store = tx.objectStore(STORE);
-    const index = store.index(INDEX_BY_CHAT_CREATED);
-    // Range over the composite index from [chatId, ""] to [chatId, "￿"]
-    // so we get exactly this chat's rows in createdAt order.
-    const range = IDBKeyRange.bound([chatId, ""], [chatId, "￿"]);
-    const out: MessageWithDelivery[] = [];
-    const req = index.openCursor(range);
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (!cursor) return;
-      const row = cursor.value as StoredMessage;
-      out.push(row.payload);
-      cursor.continue();
-    };
-    tx.oncomplete = () => resolve(out);
-    tx.onerror = () => resolve(out);
-    tx.onabort = () => resolve(out);
-  });
+function isMessageWithDelivery(value: unknown): value is MessageWithDelivery {
+  if (!messageSchema.safeParse(value).success) return false;
+  const deliveryStatus = (value as { deliveryStatus?: unknown }).deliveryStatus;
+  return deliveryStatus === undefined || (typeof deliveryStatus === "string" && DELIVERY_STATUSES.has(deliveryStatus));
 }
 
-/**
- * Upsert each message into the cache, keyed by `[chatId, messageId]`.
- * Idempotent — repeated writes of the same id overwrite. Messages from a
- * different chat than `chatId` are silently skipped (defensive; should
- * not happen with the current API).
- *
- * Returns silently on IndexedDB unavailability so write-through can be
- * fire-and-forget (`void cacheMessages(...)`) at the call site.
- */
-export async function cacheMessages(chatId: string, messages: readonly MessageWithDelivery[]): Promise<void> {
-  if (messages.length === 0) return;
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    const tx = db.transaction(STORE, "readwrite");
-    const store = tx.objectStore(STORE);
-    const now = Date.now();
-    for (const m of messages) {
-      if (m.chatId !== chatId) continue;
-      const entry: StoredMessage = {
-        chatId: m.chatId,
-        messageId: m.id,
-        payload: m,
-        createdAt: m.createdAt,
-        cachedAt: now,
-      };
-      store.put(entry);
-    }
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
-  });
+function readStoredMessage(value: unknown, organizationId: string, chatId: string): MessageWithDelivery | null {
+  if (!isRecord(value)) return null;
+  const { cachedAt, createdAt, messageId, organizationId: storedOrganizationId, payload, chatId: storedChatId } = value;
+  if (
+    storedOrganizationId !== organizationId ||
+    storedChatId !== chatId ||
+    typeof messageId !== "string" ||
+    typeof createdAt !== "string" ||
+    typeof cachedAt !== "number" ||
+    !Number.isFinite(cachedAt) ||
+    !isMessageWithDelivery(payload) ||
+    payload.id !== messageId ||
+    payload.chatId !== chatId ||
+    payload.createdAt !== createdAt
+  ) {
+    return null;
+  }
+  return payload;
 }
 
-/**
- * Remove every cached message for `chatId`. Intended for diagnostic /
- * debug use today (e.g. clearing a corrupt cache); not wired into the
- * UI. Resolves silently on IndexedDB unavailability.
- */
-export async function clearChatCache(chatId: string): Promise<void> {
-  const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    const tx = db.transaction(STORE, "readwrite");
-    const store = tx.objectStore(STORE);
-    const index = store.index(INDEX_BY_CHAT_CREATED);
-    const range = IDBKeyRange.bound([chatId, ""], [chatId, "￿"]);
-    const req = index.openCursor(range);
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (!cursor) return;
-      cursor.delete();
-      cursor.continue();
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
-  });
+function snapshotMessages(messages: readonly MessageWithDelivery[]): readonly MessageWithDelivery[] | null {
+  if (typeof structuredClone !== "function") return null;
+  let cloned: unknown;
+  try {
+    cloned = structuredClone(messages);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(cloned)) return null;
+  const output = cloned.filter(isMessageWithDelivery);
+  return Object.freeze(output);
+}
+
+async function withChatDatabase<T>(
+  operation: ContentOperation,
+  callback: (database: IDBDatabase) => Promise<T>,
+): Promise<T> {
+  const database = await operation.openDatabase(CHAT_CONTENT_DATABASE_SPEC);
+  try {
+    return await callback(database);
+  } finally {
+    operation.closeDatabase(database);
+  }
+}
+
+/** Returns the current org's cached timeline in server creation order. */
+export function getCachedMessages(lease: ViewLease, chatId: string): Promise<MessageWithDelivery[]>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function getCachedMessages(chatId: string): Promise<MessageWithDelivery[]>;
+export async function getCachedMessages(
+  leaseOrChatId: ViewLease | string,
+  capturedChatId?: string,
+): Promise<MessageWithDelivery[]> {
+  if (typeof leaseOrChatId === "string" || capturedChatId === undefined) return [];
+  const chatId = capturedChatId;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return [];
+  }
+  if (!runtime) return [];
+
+  try {
+    return await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      return withChatDatabase(operation, async (database) => {
+        const output: MessageWithDelivery[] = [];
+        await operation.runTransaction(database, STORE, "readonly", (transaction) => {
+          const index = transaction.objectStore(STORE).index(INDEX_BY_ORG_CHAT_CREATED);
+          const range = IDBKeyRange.bound([lease.organizationId, chatId, ""], [lease.organizationId, chatId, "\uffff"]);
+          const request = index.openCursor(range);
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            const message = readStoredMessage(cursor.value, lease.organizationId, chatId);
+            if (message) output.push(message);
+            cursor.continue();
+          };
+        });
+        return output;
+      });
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Idempotently warms the current account/server/org message cache. */
+export function cacheMessages(
+  lease: ViewLease,
+  chatId: string,
+  messages: readonly MessageWithDelivery[],
+): Promise<void>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function cacheMessages(chatId: string, messages: readonly MessageWithDelivery[]): Promise<void>;
+export async function cacheMessages(
+  leaseOrChatId: ViewLease | string,
+  chatIdOrMessages: string | readonly MessageWithDelivery[],
+  capturedMessages?: readonly MessageWithDelivery[],
+): Promise<void> {
+  if (typeof leaseOrChatId === "string" || typeof chatIdOrMessages !== "string" || !capturedMessages) return;
+  const chatId = chatIdOrMessages;
+  const messages = snapshotMessages(capturedMessages);
+  if (!messages || messages.length === 0) return;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return;
+  }
+  if (!runtime) return;
+
+  try {
+    await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      await withChatDatabase(operation, async (database) => {
+        await operation.runTransaction(database, STORE, "readwrite", (transaction) => {
+          const store = transaction.objectStore(STORE);
+          const cachedAt = Date.now();
+          for (const message of messages) {
+            if (message.chatId !== chatId) continue;
+            const row: StoredMessage = {
+              organizationId: lease.organizationId,
+              chatId,
+              messageId: message.id,
+              payload: message,
+              createdAt: message.createdAt,
+              cachedAt,
+            };
+            store.put(row);
+          }
+        });
+      });
+    });
+  } catch {
+    // This is a recoverable server-backed hot cache. Stale/unavailable writes
+    // are deliberately discarded rather than escaping the captured view.
+  }
+}
+
+/** Removes one chat only from the current account/server/org cache. */
+export function clearChatCache(lease: ViewLease, chatId: string): Promise<void>;
+/** @deprecated AuthContext integration must pass an explicit captured ViewLease. */
+export function clearChatCache(chatId: string): Promise<void>;
+export async function clearChatCache(leaseOrChatId: ViewLease | string, capturedChatId?: string): Promise<void> {
+  if (typeof leaseOrChatId === "string" || capturedChatId === undefined) return;
+  const chatId = capturedChatId;
+  let runtime: ReturnType<typeof captureContentStoreRuntime>;
+  try {
+    runtime = captureContentStoreRuntime(leaseOrChatId);
+  } catch {
+    return;
+  }
+  if (!runtime) return;
+
+  try {
+    await runtime.withShared(async (operation, lease) => {
+      operation.assertOrganization(lease.organizationId);
+      await withChatDatabase(operation, async (database) => {
+        await operation.runTransaction(database, STORE, "readwrite", (transaction) => {
+          const index = transaction.objectStore(STORE).index(INDEX_BY_ORG_CHAT_CREATED);
+          const range = IDBKeyRange.bound([lease.organizationId, chatId, ""], [lease.organizationId, chatId, "\uffff"]);
+          const request = index.openCursor(range);
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) return;
+            cursor.delete();
+            cursor.continue();
+          };
+        });
+      });
+    });
+  } catch {
+    // Best-effort diagnostic cache removal; account retirement performs the
+    // authoritative whole-scope deletion through the exclusive barrier.
+  }
 }

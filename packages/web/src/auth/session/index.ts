@@ -11,6 +11,14 @@ export {
   type SessionLockOptions,
 } from "./content-barrier.js";
 export {
+  type CapturedContentStoreRuntime,
+  CHAT_CONTENT_DATABASE_SPEC,
+  type ContentStoreRuntimeInstallation,
+  captureContentStoreRuntime,
+  IMAGE_CONTENT_DATABASE_SPEC,
+  installContentStoreRuntime,
+} from "./content-store-runtime.js";
+export {
   type ActiveDispatch,
   type ActiveDispatchAdmission,
   type ActiveDispatchToken,

@@ -1,263 +1,314 @@
 import "fake-indexeddb/auto";
-import { IDBFactory } from "fake-indexeddb";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  CHAT_CONTENT_DATABASE_SPEC,
+  closeCoordinatorConnections,
+  createScopedDatabaseName,
+  IMAGE_CONTENT_DATABASE_SPEC,
+  type SessionLockManager,
+  type SessionLockOptions,
+} from "../../auth/session/index.js";
+import { getImage, putImage } from "../image-store.js";
+import { clearReadState, getReadState, setReadState } from "../read-state-store.js";
+import {
+  createStoreFixture,
+  putRawStoreRow,
+  replaceOrganization,
+  replaceStoreFixture,
+  type StoreFixture,
+} from "./scoped-store-fixture.js";
 
-type Callback = () => void;
+let currentFixture: StoreFixture | null = null;
 
-type RequestStub<T> = {
-  result: T | undefined;
-  onsuccess: Callback | null;
-  onerror: Callback | null;
-};
+class PausedSharedLock implements SessionLockManager {
+  public readonly entered: Promise<void>;
+  public releaseError: unknown;
+  private markEntered: () => void = () => undefined;
+  private releasePaused: (() => Promise<void>) | null = null;
+  private pauseNextShared = true;
 
-type TransactionStub = {
-  error: Error | null;
-  oncomplete: Callback | null;
-  onerror: Callback | null;
-  onabort: Callback | null;
-  objectStore: () => StoreStub;
-};
-
-type StoreStub = {
-  put: (entry: unknown) => void;
-  get: (key: unknown) => RequestStub<unknown>;
-  delete: (key: unknown) => void;
-};
-
-type OpenRequestStub = {
-  result: DatabaseStub;
-  onupgradeneeded: Callback | null;
-  onsuccess: Callback | null;
-  onerror: Callback | null;
-  onblocked: Callback | null;
-};
-
-type DatabaseStub = {
-  transaction: (storeName: string, mode: IDBTransactionMode) => TransactionStub;
-  objectStoreNames: { contains: (name: string) => boolean };
-  createObjectStore: (name: string, options?: IDBObjectStoreParameters) => StoreStub;
-};
-
-async function loadImageStore() {
-  vi.resetModules();
-  globalThis.indexedDB = new IDBFactory();
-  return import("../image-store.js");
-}
-
-async function loadReadStateStore() {
-  vi.resetModules();
-  globalThis.indexedDB = new IDBFactory();
-  return import("../read-state-store.js");
-}
-
-function installControllableIndexedDb(): {
-  request: OpenRequestStub;
-  getRequests: RequestStub<unknown>[];
-  transactions: TransactionStub[];
-} {
-  const getRequests: RequestStub<unknown>[] = [];
-  const transactions: TransactionStub[] = [];
-  const store: StoreStub = {
-    put: () => undefined,
-    get: () => {
-      const request: RequestStub<unknown> = { result: undefined, onsuccess: null, onerror: null };
-      getRequests.push(request);
-      return request;
-    },
-    delete: () => undefined,
-  };
-  const db: DatabaseStub = {
-    transaction: () => {
-      const tx: TransactionStub = {
-        error: null,
-        oncomplete: null,
-        onerror: null,
-        onabort: null,
-        objectStore: () => store,
-      };
-      transactions.push(tx);
-      return tx;
-    },
-    objectStoreNames: { contains: () => true },
-    createObjectStore: () => store,
-  };
-  const request: OpenRequestStub = {
-    result: db,
-    onupgradeneeded: null,
-    onsuccess: null,
-    onerror: null,
-    onblocked: null,
-  };
-  Object.defineProperty(globalThis, "indexedDB", {
-    configurable: true,
-    value: { open: () => request },
-  });
-  return { request, getRequests, transactions };
-}
-
-async function settleOpen(request: OpenRequestStub): Promise<void> {
-  request.onsuccess?.();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-async function waitForTransaction(transactions: TransactionStub[], count: number): Promise<TransactionStub> {
-  for (let i = 0; i < 5 && transactions.length < count; i += 1) {
-    await Promise.resolve();
+  public constructor() {
+    this.entered = new Promise((resolve) => {
+      this.markEntered = resolve;
+    });
   }
-  const tx = transactions[count - 1];
-  if (!tx) throw new Error(`Missing transaction ${count}`);
-  return tx;
+
+  public request<T>(_name: string, options: SessionLockOptions, callback: () => T | PromiseLike<T>): Promise<T> {
+    if (options.mode !== "shared" || !this.pauseNextShared) return Promise.resolve().then(callback);
+    this.pauseNextShared = false;
+    this.markEntered();
+    return new Promise<T>((resolve, reject) => {
+      const abort = (): void => reject(new DOMException("Lock cancelled", "AbortError"));
+      options.signal?.addEventListener("abort", abort, { once: true });
+      this.releasePaused = async () => {
+        options.signal?.removeEventListener("abort", abort);
+        try {
+          resolve(await callback());
+        } catch (error) {
+          this.releaseError = error;
+          reject(error);
+        }
+      };
+    });
+  }
+
+  public async release(): Promise<void> {
+    await this.releasePaused?.();
+  }
 }
 
-describe("image-store", () => {
-  beforeEach(() => {
-    globalThis.indexedDB = new IDBFactory();
+afterEach(() => {
+  currentFixture?.dispose();
+  currentFixture = null;
+  closeCoordinatorConnections();
+});
+
+describe("scoped image store", () => {
+  it("preserves the image cache contract for an explicit authenticated view", async () => {
+    currentFixture = await createStoreFixture({ label: "image", organizationId: "org-a" });
+    await expect(
+      putImage(currentFixture.lease, { imageId: "img-1", base64: "abc123", mimeType: "image/png" }),
+    ).resolves.toBeUndefined();
+    await expect(getImage(currentFixture.lease, "img-1")).resolves.toEqual({
+      base64: "abc123",
+      mimeType: "image/png",
+    });
+    await expect(getImage(currentFixture.lease, "missing")).resolves.toBeNull();
   });
 
-  it("stores and retrieves image bytes by id", async () => {
-    const { getImage, putImage } = await loadImageStore();
+  it("returns a cache miss for a malformed persisted image row", async () => {
+    currentFixture = await createStoreFixture({ label: "corrupt-image", organizationId: "org-a" });
+    const { activation, factory, lease } = currentFixture;
+    await putImage(lease, { imageId: "seed", base64: "valid", mimeType: "image/png" });
+    const databaseName = createScopedDatabaseName(
+      IMAGE_CONTENT_DATABASE_SPEC.logicalName,
+      IMAGE_CONTENT_DATABASE_SPEC.namespaceVersion,
+      activation.scopeKey,
+    );
+    await putRawStoreRow(factory, databaseName, "images", {
+      organizationId: "org-a",
+      imageId: "corrupt",
+      base64: 42,
+      mimeType: "image/png",
+      createdAt: Date.now(),
+    });
 
-    await expect(putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" })).resolves.toBeUndefined();
-    await expect(getImage("img-1")).resolves.toEqual({ base64: "abc123", mimeType: "image/png" });
-    await expect(getImage("missing")).resolves.toBeNull();
+    await expect(getImage(lease, "corrupt")).resolves.toBeNull();
   });
 
-  it("rejects writes and returns null when IndexedDB is unavailable", async () => {
-    vi.resetModules();
-    delete (globalThis as { indexedDB?: unknown }).indexedDB;
-    const { getImage, putImage } = await import("../image-store.js");
-
+  it("fails closed for legacy calls without a captured view", async () => {
     await expect(putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" })).rejects.toThrow(
       "Image storage unavailable",
     );
     await expect(getImage("img-1")).resolves.toBeNull();
   });
 
-  it("rejects writes when the database open is blocked", async () => {
-    vi.resetModules();
-    const { request } = installControllableIndexedDb();
-    const { putImage } = await import("../image-store.js");
+  it("does not expose an image to another organization or a stale lease", async () => {
+    const orgA = await createStoreFixture({ label: "image-org-a", accountId: "account", organizationId: "org-a" });
+    currentFixture = orgA;
+    await putImage(orgA.lease, { imageId: "img-1", base64: "secret-a", mimeType: "image/png" });
 
-    const write = putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" });
-    request.onblocked?.();
-
-    await expect(write).rejects.toThrow("Image storage unavailable");
+    const orgB = replaceOrganization(orgA, {
+      label: "image-org-b",
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+    });
+    currentFixture = orgB;
+    await expect(getImage(orgB.lease, "img-1")).resolves.toBeNull();
+    await expect(getImage(orgA.lease, "img-1")).resolves.toBeNull();
+    await putImage(orgB.lease, { imageId: "img-1", base64: "secret-b", mimeType: "image/jpeg" });
+    await expect(getImage(orgB.lease, "img-1")).resolves.toEqual({
+      base64: "secret-b",
+      mimeType: "image/jpeg",
+    });
   });
 
-  it("rejects writes on transaction error and abort", async () => {
-    vi.resetModules();
-    const firstDb = installControllableIndexedDb();
-    const { putImage } = await import("../image-store.js");
+  it("purges departing-account bytes before an account switch", async () => {
+    const accountA = await createStoreFixture({ label: "image-a", accountId: "account-a", organizationId: "org" });
+    currentFixture = accountA;
+    await putImage(accountA.lease, { imageId: "img", base64: "secret-a", mimeType: "image/png" });
 
-    const erroredWrite = putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" });
-    await settleOpen(firstDb.request);
-    const erroredTx = await waitForTransaction(firstDb.transactions, 1);
-    erroredTx.error = new Error("quota exceeded");
-    erroredTx.onerror?.();
-    await expect(erroredWrite).rejects.toThrow("quota exceeded");
-
-    vi.resetModules();
-    const secondDb = installControllableIndexedDb();
-    const { putImage: putImageAgain } = await import("../image-store.js");
-    const abortedWrite = putImageAgain({ imageId: "img-2", base64: "def456", mimeType: "image/jpeg" });
-    await settleOpen(secondDb.request);
-    const abortedTx = await waitForTransaction(secondDb.transactions, 1);
-    abortedTx.onabort?.();
-    await expect(abortedWrite).rejects.toThrow("Image storage write aborted");
+    const accountB = await replaceStoreFixture(accountA, {
+      label: "image-b",
+      accountId: "account-b",
+      organizationId: "org",
+    });
+    currentFixture = accountB;
+    await expect(getImage(accountB.lease, "img")).resolves.toBeNull();
+    await expect(getImage(accountA.lease, "img")).resolves.toBeNull();
   });
 
-  it("returns null when image reads fail", async () => {
-    vi.resetModules();
-    const db = installControllableIndexedDb();
-    const { getImage } = await import("../image-store.js");
+  it("deletes image and read-state databases before same-account relogin", async () => {
+    const first = await createStoreFixture({ label: "same-a", accountId: "same-account", organizationId: "org" });
+    currentFixture = first;
+    await putImage(first.lease, { imageId: "img", base64: "secret", mimeType: "image/png" });
+    await setReadState(first.lease, "chat", "bottom", "latest");
 
-    const read = getImage("img-1");
-    await settleOpen(db.request);
-    const req = db.getRequests[0];
-    if (!req) throw new Error("Missing get request");
-    req.onerror?.();
+    const relogin = await replaceStoreFixture(first, {
+      label: "same-a-relogin",
+      accountId: "same-account",
+      organizationId: "org",
+    });
+    currentFixture = relogin;
+    await expect(getImage(relogin.lease, "img")).resolves.toBeNull();
+    await expect(getReadState(relogin.lease, "chat")).resolves.toBeNull();
+  });
 
-    await expect(read).resolves.toBeNull();
+  it("does not let a queued stale image write run after another organization installs", async () => {
+    const locks = new PausedSharedLock();
+    const orgA = await createStoreFixture({ label: "late-image-a", organizationId: "org-a" }, locks);
+    currentFixture = orgA;
+    const lateWriteOutcome = putImage(orgA.lease, {
+      imageId: "late-image",
+      base64: "secret-a",
+      mimeType: "image/png",
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await locks.entered;
+
+    const orgB = replaceOrganization(orgA, {
+      label: "late-image-b",
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+    });
+    currentFixture = orgB;
+    await locks.release();
+    const lateWriteError = await lateWriteOutcome;
+
+    expect(locks.releaseError).toMatchObject({ code: "stale_operation" });
+    expect(lateWriteError).toMatchObject({ cause: { code: "stale_operation" } });
+    await expect(getImage(orgB.lease, "late-image")).resolves.toBeNull();
+    const orgAReturn = replaceOrganization(orgB, {
+      label: "late-image-a-return",
+      organizationId: "org-a",
+      orgRevision: "revision-a-return",
+    });
+    currentFixture = orgAReturn;
+    await expect(getImage(orgAReturn.lease, "late-image")).resolves.toBeNull();
+  });
+
+  it("persists image primitives captured before the first await", async () => {
+    const locks = new PausedSharedLock();
+    currentFixture = await createStoreFixture({ label: "snapshot-image", organizationId: "org-a" }, locks);
+    const params = { imageId: "original", base64: "before", mimeType: "image/png" };
+    const write = putImage(currentFixture.lease, params);
+    await locks.entered;
+
+    params.imageId = "mutated";
+    params.base64 = "after";
+    params.mimeType = "image/jpeg";
+    await locks.release();
+    await write;
+
+    await expect(getImage(currentFixture.lease, "original")).resolves.toEqual({
+      base64: "before",
+      mimeType: "image/png",
+    });
+    await expect(getImage(currentFixture.lease, "mutated")).resolves.toBeNull();
   });
 });
 
-describe("read-state-store", () => {
-  beforeEach(() => {
-    globalThis.indexedDB = new IDBFactory();
-  });
+describe("scoped read-state store", () => {
+  it("sets, gets, overwrites, and clears within one explicit view", async () => {
+    currentFixture = await createStoreFixture({ label: "read", organizationId: "org-a" });
+    const { lease } = currentFixture;
+    await expect(getReadState(lease, "chat-1")).resolves.toBeNull();
 
-  it("sets, gets, overwrites, and clears a chat read state", async () => {
-    const { clearReadState, getReadState, setReadState } = await loadReadStateStore();
-
-    await expect(getReadState("chat-1")).resolves.toBeNull();
-    await setReadState("chat-1", "msg-1", "msg-3");
-    await expect(getReadState("chat-1")).resolves.toMatchObject({
+    await setReadState(lease, "chat-1", "msg-1", "msg-3");
+    await expect(getReadState(lease, "chat-1")).resolves.toMatchObject({
       chatId: "chat-1",
       bottomVisibleMessageId: "msg-1",
       latestKnownMessageId: "msg-3",
     });
 
-    await setReadState("chat-1", "msg-4", "msg-5");
-    await expect(getReadState("chat-1")).resolves.toMatchObject({
-      chatId: "chat-1",
+    await setReadState(lease, "chat-1", "msg-4", "msg-5");
+    await expect(getReadState(lease, "chat-1")).resolves.toMatchObject({
       bottomVisibleMessageId: "msg-4",
       latestKnownMessageId: "msg-5",
     });
-
-    await clearReadState("chat-1");
-    await expect(getReadState("chat-1")).resolves.toBeNull();
+    await clearReadState(lease, "chat-1");
+    await expect(getReadState(lease, "chat-1")).resolves.toBeNull();
   });
 
-  it("silently no-ops when IndexedDB is unavailable", async () => {
-    vi.resetModules();
-    delete (globalThis as { indexedDB?: unknown }).indexedDB;
-    const { clearReadState, getReadState, setReadState } = await import("../read-state-store.js");
-
+  it("silently fails closed without an explicit captured view", async () => {
     await expect(setReadState("chat-1", "msg-1", "msg-2")).resolves.toBeUndefined();
     await expect(clearReadState("chat-1")).resolves.toBeUndefined();
     await expect(getReadState("chat-1")).resolves.toBeNull();
   });
 
-  it("silently no-ops when the database open is blocked", async () => {
-    vi.resetModules();
-    const { request } = installControllableIndexedDb();
-    const { setReadState } = await import("../read-state-store.js");
+  it("returns a cache miss for malformed persisted read state", async () => {
+    currentFixture = await createStoreFixture({ label: "corrupt-read", organizationId: "org-a" });
+    const { activation, factory, lease } = currentFixture;
+    await setReadState(lease, "chat", "bottom", "latest");
+    const databaseName = createScopedDatabaseName(
+      CHAT_CONTENT_DATABASE_SPEC.logicalName,
+      CHAT_CONTENT_DATABASE_SPEC.namespaceVersion,
+      activation.scopeKey,
+    );
+    await putRawStoreRow(factory, databaseName, "read-state", {
+      organizationId: "org-a",
+      chatId: "corrupt",
+      bottomVisibleMessageId: 42,
+      latestKnownMessageId: "latest",
+      updatedAt: Date.now(),
+    });
 
-    const write = setReadState("chat-1", "msg-1", "msg-2");
-    request.onblocked?.();
-
-    await expect(write).resolves.toBeUndefined();
+    await expect(getReadState(lease, "corrupt")).resolves.toBeNull();
   });
 
-  it("returns null when read-state reads fail", async () => {
-    vi.resetModules();
-    const db = installControllableIndexedDb();
-    const { getReadState } = await import("../read-state-store.js");
+  it("rejects old-org state and preserves each organization's independent row", async () => {
+    const orgA = await createStoreFixture({ label: "read-a", accountId: "account", organizationId: "org-a" });
+    currentFixture = orgA;
+    await setReadState(orgA.lease, "chat", "a-bottom", "a-latest");
 
-    const read = getReadState("chat-1");
-    await settleOpen(db.request);
-    const req = db.getRequests[0];
-    if (!req) throw new Error("Missing read-state get request");
-    req.onerror?.();
+    const orgB = replaceOrganization(orgA, {
+      label: "read-b",
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+    });
+    currentFixture = orgB;
+    await expect(getReadState(orgB.lease, "chat")).resolves.toBeNull();
+    await expect(getReadState(orgA.lease, "chat")).resolves.toBeNull();
+    await setReadState(orgB.lease, "chat", "b-bottom", "b-latest");
 
-    await expect(read).resolves.toBeNull();
+    const orgAReturn = replaceOrganization(orgB, {
+      label: "read-a-return",
+      organizationId: "org-a",
+      orgRevision: "revision-a-return",
+    });
+    currentFixture = orgAReturn;
+    await expect(getReadState(orgAReturn.lease, "chat")).resolves.toMatchObject({
+      bottomVisibleMessageId: "a-bottom",
+      latestKnownMessageId: "a-latest",
+    });
   });
 
-  it("resolves read-state writes on transaction error and abort", async () => {
-    vi.resetModules();
-    const db = installControllableIndexedDb();
-    const { clearReadState, setReadState } = await import("../read-state-store.js");
+  it("turns a queued stale read-state write into a settled no-op after an organization switch", async () => {
+    const locks = new PausedSharedLock();
+    const orgA = await createStoreFixture({ label: "late-read-a", organizationId: "org-a" }, locks);
+    currentFixture = orgA;
+    const lateWrite = setReadState(orgA.lease, "chat", "a-bottom", "a-latest");
+    await locks.entered;
 
-    const write = setReadState("chat-1", "msg-1", "msg-2");
-    await settleOpen(db.request);
-    const writeTx = await waitForTransaction(db.transactions, 1);
-    writeTx.onerror?.();
-    await expect(write).resolves.toBeUndefined();
+    const orgB = replaceOrganization(orgA, {
+      label: "late-read-b",
+      organizationId: "org-b",
+      orgRevision: "revision-b",
+    });
+    currentFixture = orgB;
+    await locks.release();
+    await expect(lateWrite).resolves.toBeUndefined();
 
-    const clear = clearReadState("chat-1");
-    const clearTx = await waitForTransaction(db.transactions, 2);
-    clearTx.onabort?.();
-    await expect(clear).resolves.toBeUndefined();
+    expect(locks.releaseError).toMatchObject({ code: "stale_operation" });
+    await expect(getReadState(orgB.lease, "chat")).resolves.toBeNull();
+    const orgAReturn = replaceOrganization(orgB, {
+      label: "late-read-a-return",
+      organizationId: "org-a",
+      orgRevision: "revision-a-return",
+    });
+    currentFixture = orgAReturn;
+    await expect(getReadState(orgAReturn.lease, "chat")).resolves.toBeNull();
   });
 });
