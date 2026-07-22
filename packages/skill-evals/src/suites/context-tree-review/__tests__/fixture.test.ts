@@ -42,6 +42,11 @@ describe("context-tree-review fixture", () => {
         );
       }
       expect(agents).toContain("loads `context-tree-review` exclusively");
+      expect(fixture.expectation.chatId).toBe("review-eval-chat");
+      expect(fixture.expectation.reviewerAgentUuid).toBe("reviewer-eval-agent");
+      expect(readFileSync(fixture.expectation.runtimeSessionTokenFile, "utf8").trim()).toBe(
+        fixture.expectation.runtimeSessionToken,
+      );
       expect(inspectFixtureIntegrity(fixture)).toEqual({
         mainHeadUnchanged: true,
         mainWorktreeClean: true,

@@ -837,12 +837,6 @@ export function deriveMetrics(
     verifyExitCodes[0] !== 0 &&
     [...treeContentReadOrders, ...gitSemanticReadOrders].some((order) => order > firstVerifyOrder);
   const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
-  const submissionRaceContained =
-    review !== undefined &&
-    review.commitOid === expectation.headOid &&
-    review.currentHeadOid === expectation.submissionHeadOid &&
-    review.currentHeadOid !== review.commitOid;
-
   return {
     blockedGithubAttempts,
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
@@ -868,7 +862,6 @@ export function deriveMetrics(
     semanticReadAfterVerify,
     semanticReadAfterFailedVerify,
     semanticReadBeforeVerify,
-    submissionRaceContained,
     targetMatches,
     verifyExitCodes,
     verifyFirst: firstVerifyIndex >= 0 && (firstReviewIndex < 0 || firstReviewIndex > firstVerifyIndex),
@@ -892,7 +885,6 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
         metrics.bodyHintsObserved &&
         metrics.expectedHeadingObserved &&
         metrics.reviewAfterFinalView;
-  const raceBehaviorPass = metrics.submissionRaceContained === (evalCase.fixture.scenario === "submission-race");
   return (
     metrics.runnerExitCode === 0 &&
     metrics.skillFileReadObserved &&
@@ -905,7 +897,6 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     !metrics.semanticReadAfterFailedVerify &&
     (!evalCase.expected.verifyMustPass ||
       evalCase.fixture.scenario === "archive-only" ||
-      evalCase.fixture.scenario === "stale-head" ||
       metrics.semanticReadAfterVerify) &&
     verifyStatus &&
     metrics.finalViewFresh &&
@@ -913,7 +904,6 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.blockedGithubAttempts === 0 &&
     !metrics.mutationAttempted &&
     integrityPassed(metrics.fixtureIntegrity) &&
-    raceBehaviorPass &&
     outcomePass
   );
 }

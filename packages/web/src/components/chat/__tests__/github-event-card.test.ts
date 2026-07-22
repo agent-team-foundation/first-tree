@@ -121,7 +121,7 @@ describe("isGithubSystemSenderMetadata", () => {
  * future change cannot weaken it back to a metadata-only check without
  * lighting up red — the metadata field alone is forgeable (per the
  * external code review on this PR), so each test exercises one required
- * property of the card or managed-Review trust branch.
+ * property of the card or Context Reviewer run trust branch.
  */
 const trustedMsg = {
   source: "github",
@@ -130,23 +130,20 @@ const trustedMsg = {
   metadata: { systemSender: "github" },
 };
 
-const trustedManagedReviewMsg = {
+const trustedContextReviewMsg = {
   source: "github",
   format: "markdown",
-  content: "GitHub reported meaningful follow-up activity for this managed Agent Review task.",
+  content: "Review this Context Tree pull request head.",
   metadata: {
     source: "github",
-    systemSender: "github",
-    contextReviewManagedEventV1: {
-      schemaVersion: 1,
-      eventType: "issue_comment",
-      action: "edited",
-      triggerEvent: "issue_comment.edited",
-      repository: "owner/repo",
-      pullRequest: 42,
-      senderLogin: "octocat",
-      commentId: "5015744884",
-    },
+    contextTreeReviewer: true,
+    contextReviewRunId: "run-42",
+    contextReviewRepository: "owner/repo",
+    contextReviewPrNumber: 42,
+    contextReviewOrganizationId: "org-1",
+    contextReviewReviewerAgentUuid: "reviewer-1",
+    contextReviewReviewerManagerHumanAgentId: "human-1",
+    contextReviewSubmission: { state: "pending" },
   },
 };
 
@@ -155,8 +152,57 @@ describe("isTrustedGithubDispatcherMessage", () => {
     expect(isTrustedGithubDispatcherMessage(trustedMsg)).toBe(true);
   });
 
-  it("accepts server-authored managed Context Review Markdown", () => {
-    expect(isTrustedGithubDispatcherMessage(trustedManagedReviewMsg)).toBe(true);
+  it("accepts server-authored Context Reviewer run Markdown", () => {
+    expect(isTrustedGithubDispatcherMessage(trustedContextReviewMsg)).toBe(true);
+  });
+
+  it.each([
+    { state: "pending" },
+    {
+      state: "submitting",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      claimedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "unknown",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "COMMENT",
+      failedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "failed",
+      payloadHash: "hash",
+      code: "CONTEXT_REVIEW_GITHUB_REJECTED",
+      failedAt: "2026-07-21T00:00:00.000Z",
+    },
+    {
+      state: "submitted",
+      payloadHash: "hash",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      reviewId: 42,
+      reviewUrl: "https://github.com/owner/repo/pull/42#pullrequestreview-42",
+      appActor: "first-tree[bot]",
+      submittedAt: "2026-07-21T00:00:00.000Z",
+      reviewerAgentUuid: "reviewer-1",
+      reviewerManagerHumanAgentId: "human-1",
+      reviewerClientId: "client-1",
+      reviewerManagerGithubLogin: null,
+    },
+  ])("keeps Context Reviewer Markdown trusted after publication enters $state", (contextReviewSubmission) => {
+    expect(
+      isTrustedGithubDispatcherMessage({
+        ...trustedContextReviewMsg,
+        metadata: { ...trustedContextReviewMsg.metadata, contextReviewSubmission },
+      }),
+    ).toBe(true);
   });
 
   it("rejects when source is not 'github' (agent CLI / web / api send)", () => {
@@ -182,26 +228,23 @@ describe("isTrustedGithubDispatcherMessage", () => {
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: null })).toBe(false);
   });
 
-  it("rejects managed Review Markdown unless its complete versioned envelope is valid", () => {
+  it("rejects Context Reviewer Markdown unless its complete run envelope is valid", () => {
     expect(
       isTrustedGithubDispatcherMessage({
-        ...trustedManagedReviewMsg,
-        metadata: { systemSender: "github" },
+        ...trustedContextReviewMsg,
+        metadata: { source: "github", contextTreeReviewer: true },
       }),
     ).toBe(false);
     expect(
       isTrustedGithubDispatcherMessage({
-        ...trustedManagedReviewMsg,
+        ...trustedContextReviewMsg,
         metadata: {
-          ...trustedManagedReviewMsg.metadata,
-          contextReviewManagedEventV1: {
-            ...trustedManagedReviewMsg.metadata.contextReviewManagedEventV1,
-            commentId: "copied-marker",
-          },
+          ...trustedContextReviewMsg.metadata,
+          contextReviewRepository: "not-a-repository",
         },
       }),
     ).toBe(false);
-    expect(isTrustedGithubDispatcherMessage({ ...trustedManagedReviewMsg, source: "api" })).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedContextReviewMsg, source: "api" })).toBe(false);
   });
 });
 

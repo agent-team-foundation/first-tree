@@ -575,6 +575,7 @@ describe("tree verify strict content policy", () => {
       "tree",
       "read",
       "write",
+      "review",
       "seed",
       "init",
     ]);

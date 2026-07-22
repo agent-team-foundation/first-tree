@@ -43,8 +43,12 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/gu, "'\\''")}'`;
 }
 
-export function writeShellPathBootstrap(paths: RunPaths): void {
-  const bootstrap = `export PATH=${shellSingleQuote(paths.binDir)}:\${PATH:-}\n`;
+export function writeShellPathBootstrap(paths: RunPaths, environment: Readonly<Record<string, string>> = {}): void {
+  const environmentExports = Object.entries(environment)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => `export ${name}=${shellSingleQuote(value)}\n`)
+    .join("");
+  const bootstrap = `export PATH=${shellSingleQuote(paths.binDir)}:\${PATH:-}\n${environmentExports}`;
   writeFileSync(join(paths.shellEnvDir, ".zshenv"), bootstrap, "utf8");
   writeFileSync(join(paths.shellEnvDir, ".zprofile"), bootstrap, "utf8");
   writeFileSync(join(paths.shellEnvDir, ".bash_profile"), bootstrap, "utf8");

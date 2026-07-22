@@ -6,6 +6,7 @@ import type { ContextTreeReviewEvalCase, ReviewFixtureExpectation, ReviewFixture
 
 const expectation: ReviewFixtureExpectation = {
   baseOid: "base",
+  chatId: "review-chat",
   expectedFinalDraft: false,
   expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
@@ -13,7 +14,10 @@ const expectation: ReviewFixtureExpectation = {
   headOid: "head",
   prNumber: 42,
   repo: "owner/context-tree",
+  reviewerAgentUuid: "reviewer-agent",
   runId: "019review-run",
+  runtimeSessionToken: "runtime-session-token",
+  runtimeSessionTokenFile: "/workspace/.first-tree-eval/runtime-session.token",
   submissionHeadOid: "head",
   workspacePath: "/workspace",
 };
@@ -364,25 +368,6 @@ describe("context-tree-review grader", () => {
       type: "codex_event",
     });
     expect(passes(detachedEvents)).toBe(false);
-  });
-
-  it("accepts a submission race only when the review remains bound to the inspected head", () => {
-    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "submission-race");
-    if (!evalCase) throw new Error("Missing submission-race case.");
-    const events = passingEvents();
-    Object.assign(events.at(-1) as object, { currentHeadOid: "new-head" });
-    const metrics = deriveMetrics(events, evalCase, { ...expectation, submissionHeadOid: "new-head" }, integrity, 0);
-    expect(casePassed(evalCase, metrics)).toBe(true);
-
-    Object.assign(events.at(-1) as object, { commitOid: "new-head" });
-    const wrongCommitMetrics = deriveMetrics(
-      events,
-      evalCase,
-      { ...expectation, submissionHeadOid: "new-head" },
-      integrity,
-      0,
-    );
-    expect(casePassed(evalCase, wrongCommitMetrics)).toBe(false);
   });
 
   it("allows cleanup of a temporary review body outside the tree", () => {

@@ -639,12 +639,11 @@ function githubRulesetPayloadObserved(events: readonly unknown[], trace: string)
     /"~DEFAULT_BRANCH"/u.test(trace) &&
     /"non_fast_forward"/u.test(trace) &&
     /"pull_request"/u.test(trace) &&
-    /"required_approving_review_count"\s*:\s*0/u.test(trace) &&
+    /"required_approving_review_count"\s*:\s*1/u.test(trace) &&
     /"require_code_owner_review"\s*:\s*false/u.test(trace) &&
-    /"dismiss_stale_reviews_on_push"\s*:\s*false/u.test(trace) &&
+    /"dismiss_stale_reviews_on_push"\s*:\s*true/u.test(trace) &&
     /"require_last_push_approval"\s*:\s*false/u.test(trace) &&
     /"required_review_thread_resolution"\s*:\s*false/u.test(trace) &&
-    !/"required_approving_review_count"\s*:\s*(?:[1-9]|10)\b/u.test(trace) &&
     !/"require_code_owner_review"\s*:\s*true/u.test(trace) &&
     !/"require_last_push_approval"\s*:\s*true/u.test(trace) &&
     !/"required_review_thread_resolution"\s*:\s*true/u.test(trace) &&
@@ -679,7 +678,8 @@ function githubGovernanceRecoveryObserved(events: readonly unknown[], text: stri
     ) &&
     /pull requests?|branch rules?|ruleset/iu.test(text) &&
     /force pushes?|non-fast-forward/iu.test(text) &&
-    /zero approving|0 approving|no approving|no GitHub approvals?/iu.test(text)
+    /at least one (?:current )?approval|1 approving/iu.test(text) &&
+    /dismiss stale approvals?/iu.test(text)
   );
 }
 

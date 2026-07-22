@@ -5,6 +5,7 @@ import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
+import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import * as orgSettingsService from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, seedClient, useTestApp } from "./helpers.js";
@@ -52,6 +53,19 @@ describe("agent context tree info route", () => {
       managerId: sideMemberId,
       organizationId: sideOrgId,
       clientId: sideClientId,
+    });
+    const installationId = Number.parseInt(crypto.randomUUID().replaceAll("-", "").slice(0, 10), 16);
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "Organization",
+        accountLogin: "example",
+        accountGithubId: installationId + 1,
+        permissions: { metadata: "read", pull_requests: "write" },
+        events: ["pull_request"],
+        suspendedAt: null,
+      },
+      hubOrganizationId: sideOrgId,
     });
 
     await orgSettingsService.putOrgSetting(

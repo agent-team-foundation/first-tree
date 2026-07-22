@@ -4057,7 +4057,7 @@ describe("first-tree-seed grader", () => {
             event: {
               message: {
                 content:
-                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews in the branch ruleset.",
+                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require at least one current approval and dismiss stale approvals on push in the branch ruleset.",
                 role: "assistant",
                 type: "message",
               },
@@ -4333,7 +4333,7 @@ describe("first-tree-seed grader", () => {
     });
     const completeRecovery = baseMetrics({
       finalResponse:
-        "tree init completed for context-tree. Branch-rule setup failed; manually require pull requests, block force pushes, and require zero approving reviews.",
+        "tree init completed for context-tree. Branch-rule setup failed; manually require pull requests, block force pushes, and require at least one current approval and dismiss stale approvals on push.",
       githubGovernanceRecoveryObserved: true,
       sourceEvidenceReadObserved: false,
       sourceWorktreeAccessObserved: false,
@@ -4373,7 +4373,7 @@ describe("first-tree-seed grader", () => {
             event: {
               message: {
                 content:
-                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews in the branch ruleset.",
+                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require at least one current approval and dismiss stale approvals on push in the branch ruleset.",
                 role: "assistant",
                 type: "message",
               },
@@ -4412,7 +4412,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'gh api "repos/$repo/rulesets/$ruleset_id" --method PUT --input ruleset.json && echo "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews."',
+                'gh api "repos/$repo/rulesets/$ruleset_id" --method PUT --input ruleset.json && echo "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require at least one current approval and dismiss stale approvals on push."',
               type: "command_execution",
             },
             type: "codex_event",

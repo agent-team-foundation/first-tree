@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree Write"
-  short_description: "Source-driven Context Tree write and Agent Review guide"
+  short_description: "Source-driven Context Tree write and App review handoff"
   default_prompt: "Use $first-tree-write to reflect this source artifact into the Context Tree."

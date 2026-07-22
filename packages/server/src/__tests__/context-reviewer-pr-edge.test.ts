@@ -13,20 +13,22 @@ describe("Context Reviewer PR internals", () => {
 
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "opened")).toBe(true);
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "closed")).toBe(false);
-    expect(isContextReviewerCandidateEvent("pull_request", "reopened", { action: "reopened" })).toBe(true);
+    expect(isContextReviewerCandidateEvent("pull_request", "reopened")).toBe(true);
     expect(
       isContextReviewerCandidateEvent("pull_request", "edited", {
         action: "edited",
         changes: { body: { from: "old" } },
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isContextReviewerCandidateEvent("pull_request", "edited", {
         action: "edited",
         changes: { title: { from: "old" } },
       }),
     ).toBe(false);
-    expect(isContextReviewerCandidateEvent("issue_comment", "edited", { action: "edited" })).toBe(true);
+    expect(isContextReviewerCandidateEvent("issue_comment", "created")).toBe(true);
+    expect(isContextReviewerCandidateEvent("issue_comment", "edited")).toBe(false);
+    expect(isContextReviewerCandidateEvent("pull_request_review_comment", "edited")).toBe(true);
   });
 
   it("fails clearly when the prompt template is missing from every runtime layout", async () => {

@@ -86,10 +86,13 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("only after `tree init` succeeds");
     expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
     expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
-    expect(skillMarkdown).toContain("GitHub owns only the repository-shape guard here");
-    expect(skillMarkdown).toMatch(/Context Review owns\s+the review verdict/);
-    expect(skillMarkdown).toContain("must not create a root `CODEOWNERS` mapping");
-    expect(skillMarkdown).toMatch(/Keep this rule independent of the\s+organization's current Context Review workflow/);
+    expect(skillMarkdown).toContain("GitHub owns the repository merge gate here");
+    expect(skillMarkdown).toMatch(/current diff requires at\s+least one approval/);
+    expect(skillMarkdown).toMatch(/do not bind it to a\s+specific GitHub App or Code Owner/);
+    expect(skillMarkdown).toContain("do not create a root `CODEOWNERS`");
+    expect(skillMarkdown).toMatch(
+      /Keep this rule independent of the\s+organization's current Context\s+Review workflow/,
+    );
     expect(skillMarkdown).toContain("includes_parents=false&per_page=100");
     expect(skillMarkdown).toContain('(.source_type == null or .source_type == "Repository")');
     expect(skillMarkdown).toContain("Do not\nlook up inherited organization rulesets");
@@ -97,18 +100,21 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain('"include": ["~DEFAULT_BRANCH"]');
     expect(skillMarkdown).toContain('"type": "non_fast_forward"');
     expect(skillMarkdown).toContain('"type": "pull_request"');
-    expect(skillMarkdown).toContain('"required_approving_review_count": 0');
+    expect(skillMarkdown).toContain('"required_approving_review_count": 1');
     expect(skillMarkdown).toContain('"require_code_owner_review": false');
-    expect(skillMarkdown).toContain('"dismiss_stale_reviews_on_push": false');
+    expect(skillMarkdown).toContain('"dismiss_stale_reviews_on_push": true');
     expect(skillMarkdown).toContain('"require_last_push_approval": false');
     expect(skillMarkdown).toContain('"required_review_thread_resolution": false');
+    expect(skillMarkdown).toContain("single GitHub user cannot self-merge while the App\nReviewer is unavailable");
+    expect(skillMarkdown).toContain("Do not compensate by broadening App permissions");
     expect(skillMarkdown).toMatch(/automatic GitHub branch-rule\s+setup failed/);
     expect(skillMarkdown).toMatch(
-      /require pull requests, block force pushes, and\s+require zero approving or Code Owner reviews/,
+      /require pull requests, require at least one\s+current approval, dismiss stale approvals on push/,
     );
     expect(skillMarkdown).toContain("newly created GitHub Context Repo (validate workflows, CODEOWNERS ownership,");
-    expect(skillMarkdown).not.toContain('"required_approving_review_count": 1');
     expect(skillMarkdown).not.toContain('"require_code_owner_review": true');
+    expect(skillMarkdown).not.toMatch(/must not[^.]*require a GitHub approving review/i);
+    expect(skillMarkdown).not.toContain('"required_approving_review_count": 0');
     expect(skillMarkdown).not.toContain("printf '* %s\\n' \"$code_owner_ref\"");
     expect(skillMarkdown).not.toContain("contents/.github/CODEOWNERS");
     expect(skillMarkdown).not.toContain("codeowners/errors");

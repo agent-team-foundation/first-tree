@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import {
-  CONTEXT_REVIEW_MANAGED_MARKER,
+  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
   type ContextReviewEvent,
+  type ContextReviewSubmissionState,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
+  contextReviewSubmissionStateSchema,
   contextReviewSubmitRequestSchema,
 } from "@first-tree/shared";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
@@ -30,41 +32,7 @@ import {
 } from "./github-app.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
 
-type SubmissionState =
-  | { state: "pending" }
-  | {
-      state: "submitting";
-      payloadHash: string;
-      attemptId: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      claimedAt: string;
-      reviewerClientId: string;
-    }
-  | {
-      state: "unknown";
-      payloadHash: string;
-      attemptId: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      failedAt: string;
-      reviewerClientId: string;
-    }
-  | {
-      state: "submitted";
-      payloadHash: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      reviewId: number;
-      reviewUrl: string;
-      appActor: string;
-      submittedAt: string;
-      reviewerAgentUuid: string;
-      reviewerManagerHumanAgentId: string;
-      reviewerClientId: string;
-      reviewerManagerGithubLogin: string | null;
-    }
-  | { state: "failed"; payloadHash: string; code: string; failedAt: string };
+type SubmissionState = ContextReviewSubmissionState;
 
 type RunFacts = {
   messageId: string;
@@ -76,9 +44,10 @@ type RunFacts = {
   reviewerAgentUuid: string;
   reviewerManagerHumanAgentId: string;
   reviewerManagerGithubLogin: string | null;
-  blockedByRunId: string | null;
   submission: SubmissionState;
 };
+
+type PreparedReviewRequest = ContextReviewSubmitRequest & { reviewedHead: string };
 
 export class ContextReviewPublisherError extends Error {
   constructor(
@@ -102,21 +71,21 @@ export async function submitContextReviewOutcome(input: {
   appCredentials: (GithubAppCredentials & { slug?: string }) | undefined;
   fetcher?: typeof fetch;
 }): Promise<ContextReviewSubmitResponse> {
-  const request = contextReviewSubmitRequestSchema.parse(input.request);
-  const payloadHash = hashPayload(request);
+  const parsedRequest = contextReviewSubmitRequestSchema.parse(input.request);
+  const request = { ...parsedRequest, body: parsedRequest.body.trimEnd() };
   const inspection = await input.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
     authorizeRun(run, input.callerAgentUuid);
-    await assertCurrentRun(db, run);
 
     if (run.submission.state === "submitted") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
+      if (run.submission.payloadHash !== hashPayload({ ...request, reviewedHead: run.submission.reviewedHead })) {
+        throw payloadMismatch();
+      }
       return { kind: "submitted" as const, response: submittedResponse(run.submission) };
     }
     if (run.submission.state === "failed") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
       throw alreadySubmitted();
     }
 
@@ -126,10 +95,13 @@ export async function submitContextReviewOutcome(input: {
       runtimeSessionToken: input.callerRuntimeSessionToken,
     });
     if (run.submission.state === "submitting" || run.submission.state === "unknown") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
+      const prepared = { ...request, reviewedHead: run.submission.reviewedHead };
+      if (run.submission.payloadHash !== hashPayload(prepared)) throw payloadMismatch();
       return {
         kind: "reconcile" as const,
         run,
+        request: prepared,
+        payloadHash: run.submission.payloadHash,
         current,
         reviewerClientId: run.submission.reviewerClientId,
       };
@@ -143,6 +115,20 @@ export async function submitContextReviewOutcome(input: {
     appCredentials: input.appCredentials,
     fetcher: input.fetcher,
   });
+
+  if (inspection.kind === "reconcile") {
+    return reconcileUnknownSubmission({
+      db: input.db,
+      run: inspection.run,
+      runId: input.runId,
+      request: inspection.request,
+      github,
+      payloadHash: inspection.payloadHash,
+      reviewerClientId: inspection.reviewerClientId,
+      fetcher: input.fetcher,
+    });
+  }
+
   const pullRequest = await getPullRequestForReview(
     github.token,
     inspection.current.owner,
@@ -154,34 +140,22 @@ export async function submitContextReviewOutcome(input: {
   });
   assertPullRequestReviewable(pullRequest, request);
 
-  if (inspection.kind === "pending" && inspection.run.blockedByRunId) {
-    await reconcileBlockingSubmission({
-      db: input.db,
-      currentRun: inspection.run,
-      github,
-      fetcher: input.fetcher,
-    });
+  const reviewedHead = normalizeCommitOid(pullRequest.headSha);
+  if (!reviewedHead) {
+    throw new ContextReviewPublisherError(
+      422,
+      "CONTEXT_REVIEW_PR_NOT_REVIEWABLE",
+      "GitHub did not return a full pull request head commit.",
+    );
   }
-
-  if (inspection.kind === "reconcile") {
-    return reconcileUnknownSubmission({
-      db: input.db,
-      run: inspection.run,
-      runId: input.runId,
-      request,
-      github,
-      payloadHash,
-      reviewerClientId: inspection.reviewerClientId,
-      fetcher: input.fetcher,
-    });
-  }
+  const preparedRequest: PreparedReviewRequest = { ...request, reviewedHead };
+  const payloadHash = hashPayload(preparedRequest);
 
   const claim = await input.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
     authorizeRun(run, input.callerAgentUuid);
-    await assertCurrentRun(db, run);
     await assertCurrentAuthority(db, run, {
       callerAgentUuid: input.callerAgentUuid,
       callerClientId: input.callerClientId,
@@ -190,18 +164,22 @@ export async function submitContextReviewOutcome(input: {
     });
 
     if (run.submission.state === "submitted") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
+      if (run.submission.payloadHash !== hashPayload({ ...request, reviewedHead: run.submission.reviewedHead })) {
+        throw payloadMismatch();
+      }
       return { kind: "submitted" as const, response: submittedResponse(run.submission) };
     }
     if (run.submission.state === "failed") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
       throw alreadySubmitted();
     }
     if (run.submission.state === "submitting" || run.submission.state === "unknown") {
-      if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
+      const claimedRequest = { ...request, reviewedHead: run.submission.reviewedHead };
+      if (run.submission.payloadHash !== hashPayload(claimedRequest)) throw payloadMismatch();
       return {
         kind: "reconcile" as const,
         run,
+        request: claimedRequest,
+        payloadHash: run.submission.payloadHash,
         reviewerClientId: run.submission.reviewerClientId,
       };
     }
@@ -211,7 +189,7 @@ export async function submitContextReviewOutcome(input: {
       state: "submitting",
       payloadHash,
       attemptId,
-      reviewedHead: request.reviewedHead,
+      reviewedHead: preparedRequest.reviewedHead,
       event: request.event,
       claimedAt: new Date().toISOString(),
       reviewerClientId: input.callerClientId,
@@ -225,15 +203,15 @@ export async function submitContextReviewOutcome(input: {
       db: input.db,
       run: claim.run,
       runId: input.runId,
-      request,
+      request: claim.request,
       github,
-      payloadHash,
+      payloadHash: claim.payloadHash,
       reviewerClientId: claim.reviewerClientId,
       fetcher: input.fetcher,
     });
   }
 
-  const marker = runMarker(input.runId);
+  const body = reviewBody(request.body, input.runId);
   let review: GithubPullRequestReview;
   try {
     review = await createPullRequestReview(
@@ -242,9 +220,9 @@ export async function submitContextReviewOutcome(input: {
         owner: inspection.current.owner,
         repo: inspection.current.repo,
         prNumber: claim.run.prNumber,
-        commitId: request.reviewedHead,
+        commitId: preparedRequest.reviewedHead,
         event: request.event,
-        body: `${request.body.trimEnd()}\n\n${marker}`,
+        body,
       },
       { fetcher: input.fetcher },
     );
@@ -254,7 +232,7 @@ export async function submitContextReviewOutcome(input: {
         state: "unknown",
         payloadHash,
         attemptId: claim.attemptId,
-        reviewedHead: request.reviewedHead,
+        reviewedHead: preparedRequest.reviewedHead,
         event: request.event,
         failedAt: new Date().toISOString(),
         reviewerClientId: input.callerClientId,
@@ -276,7 +254,7 @@ export async function submitContextReviewOutcome(input: {
   }
 
   const submitted = submissionFromReview({
-    reviewedHead: request.reviewedHead,
+    reviewedHead: preparedRequest.reviewedHead,
     event: request.event,
     payloadHash,
     review,
@@ -300,31 +278,6 @@ async function lockReviewChat(db: Database, chatId: string): Promise<void> {
   const [chat] = await db.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1);
   if (!chat) {
     throw new ContextReviewPublisherError(404, "CONTEXT_REVIEW_RUN_NOT_FOUND", "Context Reviewer chat not found.");
-  }
-}
-
-async function assertCurrentRun(db: Database, run: RunFacts): Promise<void> {
-  const [latest] = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.chatId, run.chatId),
-        eq(messages.source, "github"),
-        sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
-        sql`${messages.metadata}->>'contextReviewRepository' = ${run.repository}`,
-        sql`${messages.metadata}->>'contextReviewPrNumber' = ${String(run.prNumber)}`,
-        sql`${messages.metadata}->>'contextReviewRunId' IS NOT NULL`,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messages.id))
-    .limit(1);
-  if (latest?.id !== run.messageId) {
-    throw new ContextReviewPublisherError(
-      409,
-      "CONTEXT_REVIEW_RUN_SUPERSEDED",
-      "A newer Context Reviewer run superseded this run. Only the current run may publish a GitHub review.",
-    );
   }
 }
 
@@ -392,7 +345,6 @@ async function loadRunFacts(db: Database, chatId: string, runId: string): Promis
     reviewerAgentUuid,
     reviewerManagerHumanAgentId,
     reviewerManagerGithubLogin: readNonEmptyString(metadata.reviewerManagerGithubLogin),
-    blockedByRunId: readNonEmptyString(metadata.contextReviewBlockedByRunId),
     submission: parseSubmission(metadata.contextReviewSubmission),
   };
 }
@@ -600,119 +552,11 @@ async function prepareGithubPublisher(input: {
   }
 }
 
-async function reconcileBlockingSubmission(input: {
-  db: Database;
-  currentRun: RunFacts;
-  github: { token: string; appSlug: string };
-  fetcher?: typeof fetch;
-}): Promise<void> {
-  const blocker = await input.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    await lockReviewChat(db, input.currentRun.chatId);
-    const current = await loadRunFacts(db, input.currentRun.chatId, input.currentRun.runId);
-    await assertCurrentRun(db, current);
-    const blocking = await loadBlockingRun(db, current);
-    if (blocking.submission.state === "submitted" || blocking.submission.state === "failed") return null;
-    if (blocking.submission.state === "pending") throw invalidBlockingRun();
-    return blocking;
-  });
-  if (!blocker) return;
-
-  const [owner, repo] = blocker.repository.split("/");
-  if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
-  const reviews = await listPullRequestReviewsForRun(
-    input.github.token,
-    { owner, repo, prNumber: blocker.prNumber, marker: runMarker(blocker.runId), appSlug: input.github.appSlug },
-    { fetcher: input.fetcher },
-  ).catch(() => {
-    throw new ContextReviewPublisherError(
-      502,
-      "CONTEXT_REVIEW_GITHUB_UNKNOWN",
-      "Unable to reconcile the preceding GitHub review delivery before publishing the new head.",
-    );
-  });
-  const submission = blocker.submission;
-  if (submission.state !== "submitting" && submission.state !== "unknown") throw invalidBlockingRun();
-  const matching = reviews.filter((review) => review.commitId?.toLowerCase() === submission.reviewedHead.toLowerCase());
-  if (matching.length !== 1) {
-    throw new ContextReviewPublisherError(
-      502,
-      "CONTEXT_REVIEW_GITHUB_UNKNOWN",
-      "The preceding old-head review delivery remains unresolved. The new-head verdict is withheld so it cannot be overwritten by a late App review.",
-    );
-  }
-  const review = matching[0];
-  if (!review) throw invalidBlockingRun();
-  if (!reviewStateMatchesEvent(review.state, submission.event)) {
-    throw new ContextReviewPublisherError(
-      502,
-      "CONTEXT_REVIEW_GITHUB_UNKNOWN",
-      "The preceding App review marker does not match its durable verdict claim.",
-    );
-  }
-  const submitted = submissionFromReview({
-    reviewedHead: submission.reviewedHead,
-    event: submission.event,
-    payloadHash: submission.payloadHash,
-    review,
-    run: blocker,
-    callerClientId: submission.reviewerClientId,
-  });
-
-  await input.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    await lockReviewChat(db, input.currentRun.chatId);
-    const current = await loadRunFacts(db, input.currentRun.chatId, input.currentRun.runId);
-    await assertCurrentRun(db, current);
-    const refreshed = await loadBlockingRun(db, current);
-    if (refreshed.submission.state === "submitted" || refreshed.submission.state === "failed") return;
-    if (
-      (refreshed.submission.state !== "submitting" && refreshed.submission.state !== "unknown") ||
-      refreshed.submission.payloadHash !== submission.payloadHash ||
-      refreshed.submission.reviewedHead.toLowerCase() !== submission.reviewedHead.toLowerCase()
-    ) {
-      throw invalidBlockingRun();
-    }
-    const recorded = await setSubmissionForPayload(db, refreshed.messageId, submission.payloadHash, submitted);
-    if (!recorded) throw invalidBlockingRun();
-  });
-}
-
-async function loadBlockingRun(db: Database, current: RunFacts): Promise<RunFacts> {
-  if (!current.blockedByRunId || current.blockedByRunId === current.runId) throw invalidBlockingRun();
-  const blocking = await loadRunFacts(db, current.chatId, current.blockedByRunId);
-  if (
-    blocking.chatId !== current.chatId ||
-    blocking.organizationId !== current.organizationId ||
-    blocking.repository !== current.repository ||
-    blocking.prNumber !== current.prNumber ||
-    blocking.reviewerAgentUuid !== current.reviewerAgentUuid
-  ) {
-    throw invalidBlockingRun();
-  }
-  return blocking;
-}
-
-function reviewStateMatchesEvent(state: string | null, event: ContextReviewEvent): boolean {
-  if (state === "DISMISSED") return true;
-  if (event === "APPROVE") return state === "APPROVED";
-  if (event === "REQUEST_CHANGES") return state === "CHANGES_REQUESTED";
-  return state === "COMMENTED";
-}
-
-function invalidBlockingRun(): ContextReviewPublisherError {
-  return new ContextReviewPublisherError(
-    403,
-    "CONTEXT_REVIEW_RUN_FORBIDDEN",
-    "The Context Reviewer predecessor authority metadata is invalid.",
-  );
-}
-
 async function reconcileUnknownSubmission(input: {
   db: Database;
   run: RunFacts;
   runId: string;
-  request: ContextReviewSubmitRequest;
+  request: PreparedReviewRequest;
   github: { token: string; appSlug: string };
   payloadHash: string;
   reviewerClientId: string;
@@ -720,12 +564,6 @@ async function reconcileUnknownSubmission(input: {
 }): Promise<ContextReviewSubmitResponse> {
   const [owner, repo] = input.run.repository.split("/");
   if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
-  const pullRequest = await getPullRequestForReview(input.github.token, owner, repo, input.run.prNumber, {
-    fetcher: input.fetcher,
-  }).catch((error: unknown) => {
-    throw mapGithubPreflightError(error);
-  });
-  assertPullRequestReviewable(pullRequest, input.request);
   const reviews = await listPullRequestReviewsForRun(
     input.github.token,
     { owner, repo, prNumber: input.run.prNumber, marker: runMarker(input.runId), appSlug: input.github.appSlug },
@@ -737,7 +575,14 @@ async function reconcileUnknownSubmission(input: {
       "Unable to reconcile the unknown GitHub review delivery.",
     );
   });
-  const matching = reviews.filter((review) => review.commitId === input.request.reviewedHead);
+  const expectedBody = reviewBody(input.request.body, input.runId);
+  const expectedState = reviewStateForEvent(input.request.event);
+  const matching = reviews.filter(
+    (review) =>
+      review.commitId === input.request.reviewedHead &&
+      review.body === expectedBody &&
+      review.state?.toUpperCase() === expectedState,
+  );
   if (matching.length !== 1) {
     throw new ContextReviewPublisherError(
       502,
@@ -763,25 +608,11 @@ function assertPullRequestReviewable(
   pullRequest: { state: string; merged: boolean; draft: boolean; headSha: string; body: string | null },
   request: ContextReviewSubmitRequest,
 ): void {
-  if (pullRequest.body?.includes(CONTEXT_REVIEW_MANAGED_MARKER)) {
-    throw new ContextReviewPublisherError(
-      409,
-      "CONTEXT_REVIEW_RUN_FORBIDDEN",
-      "Managed Context Review PRs are owned by the assigned Reviewer Agent, not the legacy App publisher.",
-    );
-  }
   if (pullRequest.state !== "open" || pullRequest.merged || (request.event === "APPROVE" && pullRequest.draft)) {
     throw new ContextReviewPublisherError(
       422,
       "CONTEXT_REVIEW_PR_NOT_REVIEWABLE",
       "The pull request is closed, merged, or draft for an APPROVE outcome.",
-    );
-  }
-  if (pullRequest.headSha.toLowerCase() !== request.reviewedHead.toLowerCase()) {
-    throw new ContextReviewPublisherError(
-      409,
-      "CONTEXT_REVIEW_STALE_HEAD",
-      "The pull request head changed after review. Wait for the synchronize-triggered run.",
     );
   }
 }
@@ -885,53 +716,8 @@ async function setSubmissionForPayload(
 }
 
 function parseSubmission(value: unknown): SubmissionState {
-  if (!value || typeof value !== "object") return invalidSubmission();
-  const candidate = value as Record<string, unknown>;
-  if (candidate.state === "pending") return { state: "pending" };
-  if (
-    candidate.state === "submitting" &&
-    hasStrings(candidate, ["payloadHash", "attemptId", "reviewedHead", "event", "claimedAt", "reviewerClientId"]) &&
-    isContextReviewEvent(candidate.event)
-  ) {
-    return candidate as SubmissionState;
-  }
-  if (
-    candidate.state === "unknown" &&
-    hasStrings(candidate, ["payloadHash", "attemptId", "reviewedHead", "event", "failedAt", "reviewerClientId"]) &&
-    isContextReviewEvent(candidate.event)
-  ) {
-    return candidate as SubmissionState;
-  }
-  if (candidate.state === "failed" && hasStrings(candidate, ["payloadHash", "code", "failedAt"])) {
-    return candidate as SubmissionState;
-  }
-  if (
-    candidate.state === "submitted" &&
-    hasStrings(candidate, [
-      "payloadHash",
-      "reviewedHead",
-      "event",
-      "reviewUrl",
-      "appActor",
-      "submittedAt",
-      "reviewerAgentUuid",
-      "reviewerManagerHumanAgentId",
-      "reviewerClientId",
-    ]) &&
-    typeof candidate.reviewId === "number" &&
-    Number.isInteger(candidate.reviewId)
-  ) {
-    return candidate as SubmissionState;
-  }
-  return invalidSubmission();
-}
-
-function hasStrings(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => typeof value[key] === "string" && value[key].length > 0);
-}
-
-function isContextReviewEvent(value: unknown): value is ContextReviewEvent {
-  return value === "APPROVE" || value === "REQUEST_CHANGES" || value === "COMMENT";
+  const parsed = contextReviewSubmissionStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : invalidSubmission();
 }
 
 function invalidSubmission(): never {
@@ -950,14 +736,28 @@ function readPositiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
-function hashPayload(request: ContextReviewSubmitRequest): string {
+function normalizeCommitOid(value: string | null): string | null {
+  return value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+function hashPayload(request: PreparedReviewRequest): string {
   return createHash("sha256")
-    .update(JSON.stringify([request.reviewedHead.toLowerCase(), request.event, request.body]))
+    .update(JSON.stringify([request.reviewedHead.toLowerCase(), request.event, request.body.trimEnd()]))
     .digest("hex");
 }
 
 function runMarker(runId: string): string {
-  return `<!-- first-tree-context-review-run:${runId} -->`;
+  return `${CONTEXT_REVIEW_RUN_MARKER_PREFIX}${runId} -->`;
+}
+
+function reviewBody(body: string, runId: string): string {
+  return `${body.trimEnd()}\n\n${runMarker(runId)}`;
+}
+
+function reviewStateForEvent(event: ContextReviewEvent): "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" {
+  if (event === "APPROVE") return "APPROVED";
+  if (event === "REQUEST_CHANGES") return "CHANGES_REQUESTED";
+  return "COMMENTED";
 }
 
 function payloadMismatch(): ContextReviewPublisherError {

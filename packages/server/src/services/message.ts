@@ -3,7 +3,6 @@ import {
   attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
-  CONTEXT_REVIEW_TASK_TYPE,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
@@ -49,11 +48,7 @@ function stripUntrustedMetadataKeys(
   options: SendMessageOptions,
 ): Record<string, unknown> {
   const contextReviewKey = Object.keys(meta).find(
-    (key) =>
-      key === "contextTreeReviewer" ||
-      key.startsWith("contextReview") ||
-      key === "reviewPacketV1" ||
-      (key === "taskType" && meta[key] === CONTEXT_REVIEW_TASK_TYPE),
+    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
   );
   if (contextReviewKey && !options.allowContextReviewRun) {
     throw new BadRequestError(
@@ -344,8 +339,7 @@ export type SendMessageOptions = {
    * Trusted-internal capability for creating a Context Reviewer run message.
    * The `contextTreeReviewer` and `contextReview*` metadata namespace carries
    * publication authority and is rejected at every ordinary message boundary.
-   * Only the GitHub webhook compatibility dispatcher and the server-derived
-   * member keyed-task path may set this option.
+   * Only the GitHub App Context Reviewer webhook dispatcher may set this option.
    */
   allowContextReviewRun?: boolean;
   /**
@@ -653,10 +647,6 @@ async function sendMessageInner(
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   const txResult = await db.transaction(async (tx) => {
-    const isContextReviewRun =
-      data.source === "github" &&
-      data.metadata?.contextTreeReviewer === true &&
-      typeof data.metadata.contextReviewRunId === "string";
     // 1. Load participants and sender (inbox + org) in parallel — both are
     //    needed for fan-out + mention enforcement + post-tx session
     //    activation. Running concurrently keeps the hot send path on a
@@ -694,70 +684,11 @@ async function sendMessageInner(
     // Trial chat state is a server-owned single-run state machine. Lock and
     // re-read only those rows so concurrent outbox writes cannot apply stale
     // running-state transitions after another send completes the trial.
-    const chatRow =
-      initialTrial || isContextReviewRun
-        ? (
-            await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
-          )[0]
-        : chatRowSnapshot;
-
-    let contextReviewBlockedByRunId: string | null = null;
-    if (isContextReviewRun) {
-      const [latestRun] = await tx
-        .select({ metadata: messages.metadata })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.chatId, chatId),
-            eq(messages.source, "github"),
-            sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
-            sql`${messages.metadata}->>'contextReviewRunId' IS NOT NULL`,
-          ),
-        )
-        .orderBy(desc(messages.createdAt), desc(messages.id))
-        .limit(1);
-      const latestSubmission = latestRun?.metadata.contextReviewSubmission as
-        | { state?: unknown; reviewedHead?: unknown }
-        | undefined;
-      const latestState = latestSubmission?.state;
-      const inheritedBlocker =
-        latestState === "pending" && typeof latestRun?.metadata.contextReviewBlockedByRunId === "string"
-          ? latestRun.metadata.contextReviewBlockedByRunId
-          : null;
-      const activeBlocker =
-        latestState === "submitting" || latestState === "unknown"
-          ? typeof latestRun?.metadata.contextReviewRunId === "string"
-            ? latestRun.metadata.contextReviewRunId
-            : null
-          : inheritedBlocker;
-      if (activeBlocker) {
-        const previousHead =
-          latestState === "submitting" || latestState === "unknown"
-            ? typeof latestSubmission?.reviewedHead === "string"
-              ? latestSubmission.reviewedHead.toLowerCase()
-              : null
-            : typeof latestRun?.metadata.contextReviewHeadSha === "string"
-              ? latestRun.metadata.contextReviewHeadSha.toLowerCase()
-              : null;
-        const incomingHead =
-          typeof data.metadata?.contextReviewHeadSha === "string"
-            ? data.metadata.contextReviewHeadSha.toLowerCase()
-            : null;
-        const safelySupersedesOldHead =
-          data.metadata?.triggerEvent === "pull_request.synchronize" &&
-          previousHead !== null &&
-          incomingHead !== null &&
-          /^[0-9a-f]{40}$/.test(previousHead) &&
-          /^[0-9a-f]{40}$/.test(incomingHead) &&
-          previousHead !== incomingHead;
-        if (!safelySupersedesOldHead) {
-          throw new ForbiddenError(
-            "A previous Context Reviewer run has an unresolved GitHub review delivery for this head. Reconcile it before creating another run.",
-          );
-        }
-        contextReviewBlockedByRunId = activeBlocker;
-      }
-    }
+    const chatRow = initialTrial
+      ? (
+          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+        )[0]
+      : chatRowSnapshot;
 
     const prepared = preflightMessageSendIntent({
       chatId,
@@ -768,9 +699,7 @@ async function sendMessageInner(
       participants,
     });
     const { content: outboundContent, metadata: preparedMetadata, mentionedAgentIds: mergedMentions } = prepared;
-    const metadataToStore = contextReviewBlockedByRunId
-      ? { ...preparedMetadata, contextReviewBlockedByRunId }
-      : preparedMetadata;
+    const metadataToStore = preparedMetadata;
 
     assertLandingCampaignTrialMessageAllowed({
       chat: chatRow,
@@ -1119,14 +1048,10 @@ export async function editMessage(
   if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
   const protectedContextReviewKey = Object.keys(msg.metadata).find(
-    (key) =>
-      key === "contextTreeReviewer" ||
-      key.startsWith("contextReview") ||
-      key === "reviewPacketV1" ||
-      (key === "taskType" && msg.metadata[key] === CONTEXT_REVIEW_TASK_TYPE),
+    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
   );
   if (protectedContextReviewKey) {
-    throw new ForbiddenError("Managed Context Review task history cannot be edited");
+    throw new ForbiddenError("Context Reviewer run history cannot be edited");
   }
 
   // The open-question counter (`open_request_count`) is maintained only on the

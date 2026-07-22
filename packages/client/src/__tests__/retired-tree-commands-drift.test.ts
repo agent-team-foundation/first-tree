@@ -3,7 +3,8 @@
 // PR #848 retired everything under `first-tree tree` except `verify`; the
 // narrow hierarchy browser later returned as `tree tree`, followed by the
 // explicit-Team BYO task snapshot activator as `tree read`, then the clean
-// source-backed authoring preflight as `tree write`.
+// source-backed authoring preflight as `tree write`, and the trusted App
+// outcome publisher as `tree review`.
 // Agents pick up CLI instructions from two places at session start:
 //
 //   1. The runtime briefing emitted by `buildAgentBriefing()` —
@@ -73,7 +74,6 @@ const RETIRED_TREE_SUBCOMMANDS = [
   "codeowners",
   "claude-hook",
   "inject",
-  "review",
   "automation",
   "skill",
   // Pre-W1 / pre-PR-844 names that should also stay gone.
@@ -274,6 +274,7 @@ describe("retired tree subcommand drift guard", () => {
     expect(overview).toContain("tree tree");
     expect(overview).toContain("tree read");
     expect(overview).toContain("tree write");
+    expect(overview).toContain("tree review");
     for (const sub of RETIRED_TREE_SUBCOMMANDS) {
       // Word-boundary regex (not `.toContain`) so prose like
       // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.

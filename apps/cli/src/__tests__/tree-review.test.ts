@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,36 +53,34 @@ afterEach(async () => {
 });
 
 async function run(args: string[]): Promise<void> {
-  const { registerGithubContextReviewCommand } = await import("../commands/github/context-review.js");
+  const { registerTreeCommands } = await import("../commands/tree/index.js");
   const root = new Command();
-  const github = root.command("github");
-  registerGithubContextReviewCommand(github);
-  await root.parseAsync(["node", "test", "github", "context-review", "submit", ...args]);
+  registerTreeCommands(root);
+  await root.parseAsync(["node", "test", "tree", "review", ...args]);
 }
 
 function validArgs(): string[] {
-  return [
-    "--run",
-    "01900000-0000-7000-8000-000000000042",
-    "--head",
-    "a".repeat(40),
-    "--event",
-    "APPROVE",
-    "--body-file",
-    bodyFile,
-  ];
+  return ["--run", "01900000-0000-7000-8000-000000000042", "--event", "APPROVE", "--body-file", bodyFile];
 }
 
-describe("github context-review submit", () => {
+describe("tree review", () => {
   it("submits only the server-derived chat and narrow review payload", async () => {
-    await run([...validArgs(), "--agent", "reviewer"]);
-    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("reviewer");
+    await run(validArgs());
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith();
     expect(sdk.submitContextReview).toHaveBeenCalledWith("chat-42", "01900000-0000-7000-8000-000000000042", {
-      reviewedHead: "a".repeat(40),
       event: "APPROVE",
       body: "## Context approved\n",
     });
     expect(outputMocks.success).toHaveBeenCalledWith(expect.objectContaining({ appActor: "first-tree-staging[bot]" }));
+  });
+
+  it.each(["APPROVE", "REQUEST_CHANGES", "COMMENT"])("accepts the %s event", async (event) => {
+    await run(validArgs().map((value) => (value === "APPROVE" ? event : value)));
+    expect(sdk.submitContextReview).toHaveBeenCalledWith(
+      "chat-42",
+      expect.any(String),
+      expect.objectContaining({ event }),
+    );
   });
 
   it("fails before SDK creation without chat or runtime-session proof", async () => {
@@ -95,31 +94,57 @@ describe("github context-review submit", () => {
     expect(localAgentMocks.createSdk).not.toHaveBeenCalled();
   });
 
-  it("rejects invalid event, abbreviated head, and empty body", async () => {
+  it("rejects an invalid event and empty body", async () => {
     await expect(run(validArgs().map((value) => (value === "APPROVE" ? "MERGE" : value)))).rejects.toThrow(
-      "INVALID_CONTEXT_REVIEW",
-    );
-    await expect(run(validArgs().map((value) => (value === "a".repeat(40) ? "abc123" : value)))).rejects.toThrow(
       "INVALID_CONTEXT_REVIEW",
     );
     await writeFile(bodyFile, "", "utf8");
     await expect(run(validArgs())).rejects.toThrow("INVALID_CONTEXT_REVIEW");
   });
 
-  it("does not expose repo, PR, chat, token, or inline-body options", async () => {
-    const { registerGithubContextReviewCommand } = await import("../commands/github/context-review.js");
+  it("reads the review body from stdin and rejects oversized files", async () => {
+    const stdin = new PassThrough();
+    Object.defineProperty(stdin, "isTTY", { value: false });
+    const stdinSpy = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin as unknown as typeof process.stdin);
+    try {
+      const pending = run(validArgs().map((value) => (value === bodyFile ? "-" : value)));
+      stdin.end("Review from stdin\n");
+      await pending;
+    } finally {
+      stdinSpy.mockRestore();
+    }
+    expect(sdk.submitContextReview).toHaveBeenLastCalledWith(
+      "chat-42",
+      expect.any(String),
+      expect.objectContaining({ body: "Review from stdin\n" }),
+    );
+
+    await writeFile(bodyFile, Buffer.alloc(64 * 1024 + 1, "x"));
+    await expect(run(validArgs())).rejects.toThrow("REVIEW_BODY_TOO_LARGE");
+  });
+
+  it("propagates SDK publication errors through the shared handler", async () => {
+    sdk.submitContextReview.mockRejectedValueOnce(new Error("publisher unavailable"));
+    await expect(run(validArgs())).rejects.toThrow("publisher unavailable");
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalled();
+  });
+
+  it("exposes one direct review command without a submit layer", async () => {
+    const { registerTreeCommands } = await import("../commands/tree/index.js");
     const root = new Command();
-    const github = root.command("github");
-    registerGithubContextReviewCommand(github);
-    const contextReview = github.commands.find((command) => command.name() === "context-review");
-    const submit = contextReview?.commands.find((command) => command.name() === "submit");
-    expect(submit?.options.map((option) => option.long).sort()).toEqual([
-      "--agent",
-      "--body-file",
-      "--event",
-      "--head",
-      "--run",
-    ]);
+    registerTreeCommands(root);
+    const tree = root.commands.find((command) => command.name() === "tree");
+    const review = tree?.commands.find((command) => command.name() === "review");
+    expect(review?.commands).toHaveLength(0);
+    expect(review?.options.map((option) => option.long).sort()).toEqual(["--body-file", "--event", "--run"]);
+  });
+
+  it("does not expose the removed GitHub review command", async () => {
+    const { registerGithubCommands } = await import("../commands/github/index.js");
+    const root = new Command();
+    registerGithubCommands(root);
+    const github = root.commands.find((command) => command.name() === "github");
+    expect(github?.commands.map((command) => command.name())).not.toContain("context-review");
   });
 });
 

@@ -31,7 +31,6 @@ describe("FirstTreeHubSDK.submitContextReview", () => {
     });
 
     await sdk.submitContextReview("chat/id", "run/id", {
-      reviewedHead: "a".repeat(40),
       event: "APPROVE",
       body: "Approved.",
     });
@@ -42,7 +41,6 @@ describe("FirstTreeHubSDK.submitContextReview", () => {
     expect(new Headers(init?.headers).get("x-agent-id")).toBe("agent/reviewer");
     expect(new Headers(init?.headers).get("x-agent-runtime-session")).toBe("runtime-proof");
     expect(JSON.parse(String(init?.body))).toEqual({
-      reviewedHead: "a".repeat(40),
       event: "APPROVE",
       body: "Approved.",
     });
@@ -64,7 +62,6 @@ describe("FirstTreeHubSDK.submitContextReview", () => {
     });
     await expect(
       sdk.submitContextReview("chat", "run", {
-        reviewedHead: "b".repeat(40),
         event: "COMMENT",
         body: "Deferred.",
       }),

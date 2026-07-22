@@ -1,6 +1,11 @@
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
 
+import {
+  CONTEXT_REVIEW_BODY_MAX_BYTES,
+  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
+} from "../../../../shared/src/schemas/context-review-constants.js";
+
 import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
@@ -53,6 +58,8 @@ const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
+const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
+const CONTEXT_REVIEW_RUN_MARKER_PREFIX = ${JSON.stringify(CONTEXT_REVIEW_RUN_MARKER_PREFIX)};
 
 function preview(value) {
   if (!value) return "";
@@ -470,19 +477,54 @@ const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
 trace("first-tree call: " + commandLine(argv));
 
-if (argv[0] === "github" && argv[1] === "context-review" && argv[2] === "submit" && REVIEW_FIXTURE_PATH) {
+if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && argv[2] === "review-config") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  finish(
+    argv,
+    phase,
+    0,
+    JSON.stringify({
+      repo: "https://github.com/" + fixture.repo,
+      branch: "main",
+      enabled: true,
+      assigned: true,
+      agentUuid: fixture.reviewerAgentUuid,
+    }) + "\\n",
+    "",
+    { recordedOnly: true },
+  );
+}
+
+if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
-  const commitOid = optionValue(argv, "--head");
+  const commitOid = fixture.submissionHeadOid;
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
-  const exactOptions = argv.length === 11;
+  const exactOptions = argv.length === 8 && !argv.includes("--head") && !argv.includes("--agent");
   const action = event === "APPROVE" ? "approve" : event === "COMMENT" ? "comment" : event === "REQUEST_CHANGES" ? "request-changes" : null;
   let body = "";
   try {
-    body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
+    if (bodyFile === "-") {
+      body = process.stdin.isTTY ? "" : readFileSync(0, "utf8");
+    } else if (bodyFile) {
+      body = readFileSync(bodyFile, "utf8");
+    }
   } catch {}
-  const valid = exactOptions && runId === fixture.runId && commitOid === fixture.reviewHeadOid && action && body.length > 0;
+  const runtimeSessionTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
+  let runtimeSessionToken = "";
+  try {
+    runtimeSessionToken = runtimeSessionTokenFile ? readFileSync(runtimeSessionTokenFile, "utf8").trim() : "";
+  } catch {}
+  const trustedRuntime =
+    process.env.FIRST_TREE_CHAT_ID === fixture.chatId &&
+    process.env.FIRST_TREE_AGENT_ID === fixture.reviewerAgentUuid &&
+    runtimeSessionToken === fixture.runtimeSessionToken;
+  const validBody =
+    body.trim().length > 0 &&
+    Buffer.byteLength(body, "utf8") <= CONTEXT_REVIEW_BODY_MAX_BYTES &&
+    !body.includes(CONTEXT_REVIEW_RUN_MARKER_PREFIX);
+  const valid = exactOptions && trustedRuntime && runId === fixture.runId && action && validBody;
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }
@@ -499,6 +541,14 @@ if (argv[0] === "github" && argv[1] === "context-review" && argv[2] === "submit"
     repo: fixture.repo,
     runId,
   });
+  if (action === "approve") {
+    const statePath = REVIEW_FIXTURE_PATH + ".state";
+    let state = { views: 0 };
+    try {
+      state = JSON.parse(readFileSync(statePath, "utf8"));
+    } catch {}
+    writeFileSync(statePath, JSON.stringify({ ...state, approvedHead: commitOid }), "utf8");
+  }
   finish(
     argv,
     phase,

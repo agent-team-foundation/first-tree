@@ -9,8 +9,6 @@ export type ReviewScenario =
   | "draft"
   | "passing"
   | "semantic-failure"
-  | "stale-head"
-  | "submission-race"
   | "validator-failure";
 
 export type ContextTreeReviewEvalCase = {
@@ -50,6 +48,7 @@ export type ReviewEvent = {
 
 export type ReviewFixtureExpectation = {
   baseOid: string;
+  chatId: string;
   expectedFinalDraft: boolean;
   expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
@@ -57,7 +56,10 @@ export type ReviewFixtureExpectation = {
   headOid: string;
   prNumber: number;
   repo: string;
+  reviewerAgentUuid: string;
   runId: string;
+  runtimeSessionToken: string;
+  runtimeSessionTokenFile: string;
   submissionHeadOid: string;
   workspacePath: string;
 };
@@ -102,7 +104,6 @@ export type EvalMetrics = {
   semanticReadAfterVerify: boolean;
   semanticReadAfterFailedVerify: boolean;
   semanticReadBeforeVerify: boolean;
-  submissionRaceContained: boolean;
   targetMatches: boolean;
   verifyExitCodes: readonly number[];
   verifyFirst: boolean;
