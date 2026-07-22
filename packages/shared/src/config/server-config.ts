@@ -290,14 +290,17 @@ export const serverConfigSchema = defineConfig({
     /**
      * Analytics origins added to `script-src`, `connect-src`, and `img-src`
      * (e.g. "https://www.googletagmanager.com https://www.clarity.ms
-     * https://scripts.clarity.ms https://c.clarity.ms
-     * https://www.google-analytics.com"). The Clarity sub-hosts scripts. and
-     * c. are required — the www.clarity.ms tag loader pulls the real script
-     * and pixels from them (verified in a browser session 2026-07-22).
+     * https://scripts.clarity.ms https://c.clarity.ms https://c.bing.com
+     * https://www.google-analytics.com"). The Clarity sub-hosts scripts., c.,
+     * and c.bing.com are required — the www.clarity.ms tag loader pulls the
+     * real script and pixels from them (verified across two browser QA rounds
+     * 2026-07-22). The knob has no per-directive granularity, so the pixel
+     * hosts also land in script-src — an accepted, vendor-scoped widening.
      * Analytics scripts are only loaded on the production hostname, so
-     * non-production deployments leave this unset. GA4's linker collect POSTs
-     * to https://www.google.com — configure that via
-     * FIRST_TREE_CSP_EXTRA_CONNECT_SRC instead so it stays out of script-src.
+     * non-production deployments leave this unset. The collect endpoints
+     * (https://www.google.com for GA4 linker, https://b.clarity.ms for
+     * Clarity) belong to FIRST_TREE_CSP_EXTRA_CONNECT_SRC instead so they
+     * stay out of script-src/img-src.
      */
     cspAnalyticsOrigins: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_CSP_ANALYTICS_ORIGINS" }),
     /**
