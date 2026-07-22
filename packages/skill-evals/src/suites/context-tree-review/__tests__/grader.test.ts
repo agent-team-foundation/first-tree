@@ -348,6 +348,17 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
       {
         event: {
           item: {
+            command: "git -C .review-worktrees/42 diff --no-ext-diff base...HEAD",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        event: {
+          item: {
             command: `cat .review-worktrees/42/${safePath}`,
             exit_code: 0,
             status: "completed",
@@ -449,6 +460,29 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(true);
   });
 
+  it("requires both the successor full diff and explicit context reads", () => {
+    const evalCase = repairCase("semantic-failure");
+    const expected = repairExpectation(evalCase);
+    const repaired = repairIntegrity("success");
+
+    const withoutDiff = repairEvents(evalCase).filter(
+      (event) =>
+        !(event as { event?: { item?: { command?: string } } }).event?.item?.command?.includes(
+          "diff --no-ext-diff base...HEAD",
+        ),
+    );
+    expect(casePassed(evalCase, deriveMetrics(withoutDiff, evalCase, expected, repaired, 0))).toBe(false);
+
+    const withoutContext = repairEvents(evalCase);
+    const successorContext = withoutContext.findLast(
+      (event) =>
+        (event as { event?: { item?: { command?: string } } }).event?.item?.command ===
+        "cat .review-worktrees/42/system/review-contract.md",
+    ) as { event: { item: { command: string } } };
+    successorContext.event.item.command = "true";
+    expect(casePassed(evalCase, deriveMetrics(withoutContext, evalCase, expected, repaired, 0))).toBe(false);
+  });
+
   it("accepts a mixed review only after safe repair and protected-only handoff", () => {
     const evalCase = repairCase("mixed-repair-authority");
     const events = repairEvents(evalCase);
@@ -513,7 +547,7 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
-  it("accepts an exact base-to-successor content diff for an empty final diff", () => {
+  it("accepts an exact successor diff plus current parent context for a removed path", () => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
     const successorRead = events.findLast(
@@ -523,7 +557,7 @@ describe("context-tree-review grader", () => {
           ".review-worktrees/42/system/review-contract.md",
         ),
     ) as { event: { item: { command: string } } };
-    successorRead.event.item.command = "git -C .review-worktrees/42 diff base...HEAD";
+    successorRead.event.item.command = "cat .review-worktrees/42/system/NODE.md";
     const metrics = deriveMetrics(
       events,
       evalCase,
@@ -533,6 +567,25 @@ describe("context-tree-review grader", () => {
     );
     expect(metrics.successorSemanticReviewComplete).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("rejects a filesystem reader compounded with validation", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/review-contract.md && first-tree tree verify --json",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    const metrics = deriveMetrics(events, passingCase(), expectation, integrity, 0);
+    expect(metrics.verifyHeadBound).toBe(false);
+    expect(metrics.invalidReviewSemanticReadObserved).toBe(true);
+    expect(casePassed(passingCase(), metrics)).toBe(false);
   });
 
   it("rejects removed-path parent evidence from an old revision", () => {
@@ -998,6 +1051,12 @@ describe("context-tree-review grader", () => {
       command: "cd .review-worktrees/42 && git log -p",
       exitCode: 0,
       name: "reader after a compound cd",
+      status: "completed",
+    },
+    {
+      command: "git log -p",
+      exitCode: 0,
+      name: "cwd-less reader",
       status: "completed",
     },
   ])("fails closed for an unattributable review semantic command: $name", ({ command, exitCode, status }) => {

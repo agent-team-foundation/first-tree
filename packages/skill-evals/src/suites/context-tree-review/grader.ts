@@ -775,11 +775,11 @@ function gitSemanticReadAttribution(event: unknown, expectation: ReviewFixtureEx
     return [invocation];
   });
   if (semanticInvocations.length === 0) return "none";
-  const eventCwd = typeof event.cwd === "string" ? event.cwd : null;
+  const eventCwd = expectation.workspacePath;
   const reviewBound = semanticInvocations.some((invocation) =>
     isReviewWorktreeCwd(invocation.cwd, eventCwd, expectation),
   );
-  const unbound = semanticInvocations.some((invocation) => invocation.cwd === null && eventCwd === null);
+  const unbound = semanticInvocations.some((invocation) => invocation.cwd === null);
   if (structure.segments.length !== 1 || structure.operators.length !== 0) {
     const ambiguousCd =
       structure.segments.some((segment) => shellWords(segment)[0] === "cd") &&
@@ -913,13 +913,6 @@ function snapshotReadPaths(
         : [];
     for (const path of boundGitPaths) {
       if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
-    }
-    if (
-      segments.length === 1 &&
-      (cwdIsReviewWorktree || gitUsesReviewWorktree) &&
-      gitFullContentDiff(segment, expectation)
-    ) {
-      paths.push(...expectation.governedPaths);
     }
   }
   return paths.map((path) => normalizeObservedPath(path, expectation));
@@ -1576,6 +1569,7 @@ export function deriveMetrics(
         (offset) => order + (offset + 1) / 1_000,
       ),
     );
+    const command = commandFromCodexEvent(event);
     const observedPaths =
       isRecord(event) && event.type === "codex_event" ? snapshotReadPaths(event, expectation, true) : [];
     if (observedPaths.length > 0) successfulSnapshotReads.push({ order, paths: observedPaths });
@@ -1583,6 +1577,20 @@ export function deriveMetrics(
       ...snapshotReadPaths(event, expectation),
       ...snapshotGitContentAttemptPaths(event, expectation),
     ];
+    if (
+      command !== null &&
+      (shellStructure(command).segments.length !== 1 || shellStructure(command).operators.length !== 0) &&
+      attemptedPaths.some((path) => expectation.governedPaths.includes(path))
+    ) {
+      invalidReviewSemanticReadObserved = true;
+    }
+    if (
+      command !== null &&
+      /\bfirst-tree(?:-staging)?\s+tree\s+verify\b/u.test(command) &&
+      (shellStructure(command).segments.length !== 1 || shellStructure(command).operators.length !== 0)
+    ) {
+      invalidVerifyAttempts += 1;
+    }
     if (expectation.forbiddenPaths.some((path) => attemptedPaths.includes(path))) {
       prohibitedExpansionObserved = true;
     }
@@ -1598,7 +1606,6 @@ export function deriveMetrics(
     }
     const contentPaths = treeContentReadPaths(event, expectation);
     if (contentPaths.length > 0) treeContentReads.push({ order, paths: contentPaths });
-    const command = commandFromCodexEvent(event);
     if (command !== null && isRecord(event) && isRecord(event.event) && isRecord(event.event.item)) {
       const item = event.event.item;
       const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
@@ -1780,27 +1787,26 @@ export function deriveMetrics(
   );
   const successorSemanticReviewComplete =
     successorVerify !== undefined &&
-    ((fixtureIntegrity.finalDiffEmpty &&
-      reviewDiffReadOrders.some(
-        (order) => order > successorVerify.order && snapshotStableAfterVerify(order, successorVerify.order),
-      )) ||
-      (expectation.governedPaths.length > 0 &&
-        expectation.governedPaths.every((path) => {
-          if (
-            (governedReadOrders.get(path) ?? []).some(
-              (order) => order > successorVerify.order && snapshotStableAfterVerify(order, successorVerify.order),
-            )
-          )
-            return true;
-          if (!fixtureIntegrity.repairPathsRemoved || !expectation.repairPaths.includes(path)) return false;
-          const parent = `${path.slice(0, path.lastIndexOf("/"))}/NODE.md`;
-          return successfulSnapshotReads.some(
-            (read) =>
-              read.order > successorVerify.order &&
-              snapshotStableAfterVerify(read.order, successorVerify.order) &&
-              read.paths.includes(parent),
-          );
-        })));
+    reviewDiffReadOrders.some(
+      (order) => order > successorVerify.order && snapshotStableAfterVerify(order, successorVerify.order),
+    ) &&
+    expectation.governedPaths.length > 0 &&
+    expectation.governedPaths.every((path) => {
+      if (
+        (governedReadOrders.get(path) ?? []).some(
+          (order) => order > successorVerify.order && snapshotStableAfterVerify(order, successorVerify.order),
+        )
+      )
+        return true;
+      if (!fixtureIntegrity.repairPathsRemoved || !expectation.repairPaths.includes(path)) return false;
+      const parent = `${path.slice(0, path.lastIndexOf("/"))}/NODE.md`;
+      return successfulSnapshotReads.some(
+        (read) =>
+          read.order > successorVerify.order &&
+          snapshotStableAfterVerify(read.order, successorVerify.order) &&
+          read.paths.includes(parent),
+      );
+    });
   const finalVerify =
     expectation.repair === "success"
       ? successorVerify

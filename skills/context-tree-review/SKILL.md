@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.2
+version: 0.3.3
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer repairs every safely determined finding with its local git/gh identity before escalation, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.

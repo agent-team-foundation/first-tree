@@ -44,6 +44,12 @@ describe("context-tree-review fixture", () => {
     });
     try {
       const fixture = setupFixture(fixtureCase(scenario), paths);
+      if (scenario === "relationship-change") {
+        expect(fixture.expectation.requiredReferenceSearches).toEqual([
+          "system/review-contract.md",
+          "product/review-outcomes.md",
+        ]);
+      }
       const agents = readFileSync(join(paths.workspacePath, "AGENTS.md"), "utf8");
       for (const skill of [
         "first-tree-welcome",

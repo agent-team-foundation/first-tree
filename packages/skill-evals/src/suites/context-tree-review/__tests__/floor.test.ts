@@ -43,6 +43,7 @@ describe("context-tree-review floor", () => {
   it("makes approval mandatory for the passing ready case", () => {
     const passing = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "passing");
     expect(passing?.expected.action).toBe("approve");
+    expect(passing?.prompt).toContain("gh pr checks 42 --repo owner/context-tree");
   });
 
   it("keeps draft findings read-only and deferred", () => {
@@ -52,6 +53,7 @@ describe("context-tree-review floor", () => {
       firstHeading: "## Approval deferred",
       repair: "none",
     });
+    expect(draft?.expected.bodyHints).toContain("implementation");
   });
 
   it("requires repair-first behavior for deterministic findings", () => {
@@ -68,6 +70,7 @@ describe("context-tree-review floor", () => {
       repair: "success",
     });
     expect(denied?.expected).toMatchObject({ action: "request-changes", repair: "push-denied" });
+    expect(denied?.expected.bodyHints).toContain("restore branch push access");
   });
 
   it("maps a proven authority violation to request changes", () => {

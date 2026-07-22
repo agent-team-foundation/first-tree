@@ -396,7 +396,11 @@ exit 0
       runtimeSessionToken,
       runtimeSessionTokenFile,
       requiredReferenceSearches:
-        evalCase.fixture.scenario === "passing" && changed[0] !== undefined ? [changed[0].path] : [],
+        evalCase.fixture.scenario === "passing" && changed[0] !== undefined
+          ? [changed[0].path]
+          : evalCase.fixture.scenario === "relationship-change"
+            ? ["system/review-contract.md", "product/review-outcomes.md"]
+            : [],
       sourceBranch: "review-change",
       submissionHeadOid: headOid,
       workspacePath: paths.workspacePath,
