@@ -1,3 +1,4 @@
+import { canonicalizeServerAuthority } from "../../api/server-authority.js";
 import { SessionError, sessionErrorCodes } from "./errors.js";
 
 const SCOPE_KEY_PREFIX = "v1.";
@@ -64,7 +65,13 @@ function decodeBase64Url(value: string): Uint8Array {
 }
 
 export function createAccountScopeKey(serverAuthority: string, accountId: string): string {
-  const authority = requireBoundedIdentity(serverAuthority, "Server authority", MAX_SERVER_AUTHORITY_LENGTH);
+  const providedAuthority = requireBoundedIdentity(serverAuthority, "Server authority", MAX_SERVER_AUTHORITY_LENGTH);
+  let authority: string;
+  try {
+    authority = canonicalizeServerAuthority(providedAuthority);
+  } catch (error) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Server authority is not canonical", error);
+  }
   const account = requireBoundedIdentity(accountId, "Account id", MAX_ACCOUNT_ID_LENGTH);
   const canonicalTuple = JSON.stringify([authority, account]);
   return `${SCOPE_KEY_PREFIX}${encodeBase64Url(new TextEncoder().encode(canonicalTuple))}`;

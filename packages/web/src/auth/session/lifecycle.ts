@@ -36,7 +36,6 @@ export function installSessionLifecycleHooks(options: SessionLifecycleOptions): 
     scrubAndVeil();
     options.registry.cancelPendingOpens();
     options.registry.closeAllHandles();
-    closeCoordinatorConnections();
   };
   const onSuspend = (): void => {
     scrubAndVeil();

@@ -1,11 +1,10 @@
 import { SessionError, sessionErrorCodes } from "./errors.js";
-import { createAccountScopeKey } from "./scope.js";
+import { createAccountScopeKey, parseAccountScopeKey } from "./scope.js";
 
 export const AUTHORITY_SCHEMA_VERSION = 6 as const;
 
 const MAX_OPAQUE_ID_LENGTH = 512;
 const MAX_TOKEN_LENGTH = 64 * 1024;
-const MAX_ATTEMPT_KIND_LENGTH = 128;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | readonly JsonValue[] | Readonly<{ [key: string]: JsonValue }>;
@@ -18,8 +17,6 @@ export type ActivationCertificate = Readonly<{
   serverAuthority: string;
   accountId: string;
   scopeKey: string;
-  credentialRevision: number;
-  credentialFingerprint: string;
 }>;
 
 export type ActivationCertificateInput = Omit<ActivationCertificate, "v">;
@@ -28,6 +25,7 @@ export type ViewLease = Readonly<{
   activation: ActivationCertificate;
   organizationId: string;
   orgRevision: string;
+  ownerTabId: string;
   documentId: string;
   signal: AbortSignal;
 }>;
@@ -38,20 +36,23 @@ export type CredentialRecord = Readonly<{
   v: 1;
   sessionEpoch: string;
   activation: ActivationCertificate;
+  credentialRevision: number;
+  credentialFingerprint: string;
   accessToken: string;
   refreshToken: string;
 }>;
 
 export type CredentialRecordInput = Readonly<{
   activation: unknown;
+  credentialRevision: number;
+  credentialFingerprint: string;
   accessToken: string;
   refreshToken: string;
 }>;
 
-export type SessionAttempt = Readonly<{
+type SessionAttemptBase = Readonly<{
   v: 1;
   attemptId: string;
-  kind: string;
   serverAuthority: string;
   baselineGeneration: string;
   sourceEpoch: string | null;
@@ -59,17 +60,59 @@ export type SessionAttempt = Readonly<{
   payload: Readonly<{ [key: string]: JsonValue }>;
 }>;
 
-export type SessionAttemptInput = Omit<SessionAttempt, "v">;
+export type AcquisitionSessionAttempt = SessionAttemptBase & Readonly<{ kind: "acquisition" }>;
 
-export type TransitionPermit = Readonly<{
+export type ManagementFlowKind = "identity-link" | "identity-unlink" | "github-install-return";
+
+export type ManagementSessionAttempt = SessionAttemptBase &
+  Readonly<{
+    kind: "management";
+    flowKind: ManagementFlowKind;
+  }>;
+
+export type SessionAttempt = AcquisitionSessionAttempt | ManagementSessionAttempt;
+
+export type AcquisitionSessionAttemptInput = Omit<AcquisitionSessionAttempt, "v">;
+export type ManagementSessionAttemptInput = Omit<ManagementSessionAttempt, "v">;
+export type SessionAttemptInput = AcquisitionSessionAttemptInput | ManagementSessionAttemptInput;
+
+export type AcquisitionTransitionPermit = Readonly<{
   v: 1;
+  kind: "acquisition_transition";
   permitId: string;
   attemptId: string;
   target: ActivationCertificate;
+  targetCredentialFingerprint: string;
   expiresAt: number;
 }>;
 
-export type TransitionPermitInput = Omit<TransitionPermit, "v" | "target"> & Readonly<{ target: unknown }>;
+export type AcquisitionTransitionPermitInput = Omit<AcquisitionTransitionPermit, "v" | "target"> &
+  Readonly<{ target: unknown }>;
+
+/**
+ * Settings/provider management uses a separate capability domain. It can
+ * never be supplied to the session-activation transition APIs.
+ */
+export type ManagementDeliveryPermit = Readonly<{
+  v: 1;
+  kind: "management_delivery";
+  permitId: string;
+  attemptId: string;
+  serverAuthority: string;
+  sourceEpoch: string;
+  accountId: string;
+  organizationId: string;
+  ownerTabId: string;
+  expiresAt: number;
+}>;
+
+export type ManagementDeliveryPermitInput = Omit<ManagementDeliveryPermit, "v">;
+
+export type CredentialCursor = Readonly<{
+  sessionEpoch: string;
+  credentialRevision: number;
+  credentialFingerprint: string;
+}>;
 
 export type AuthorityPhase = "revoked" | "purging" | "source_purged";
 export type RetirementCause = "logout" | "owned_401" | "server_mismatch";
@@ -94,7 +137,7 @@ export type TransitionAuthority = Readonly<{
   mode: "transition";
   generation: string;
   revision: number;
-  permit: TransitionPermit;
+  permit: AcquisitionTransitionPermit;
   source: ActivationCertificate | null;
   phase: AuthorityPhase;
   cleanupReceipt?: string;
@@ -181,10 +224,11 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 }
 
 export function createActivationCertificate(input: ActivationCertificateInput): ActivationCertificate {
-  const serverAuthority = requireOpaqueId(input.serverAuthority, "Server authority", 2048);
+  const providedAuthority = requireOpaqueId(input.serverAuthority, "Server authority", 2048);
   const accountId = requireOpaqueId(input.accountId, "Account id");
   const scopeKey = requireOpaqueId(input.scopeKey, "Account scope key", 4096);
-  if (createAccountScopeKey(serverAuthority, accountId) !== scopeKey) {
+  const serverAuthority = parseAccountScopeKey(createAccountScopeKey(providedAuthority, accountId)).serverAuthority;
+  if (providedAuthority !== serverAuthority || createAccountScopeKey(serverAuthority, accountId) !== scopeKey) {
     throw new SessionError(
       sessionErrorCodes.invalidState,
       "Activation account scope does not match its authority/account",
@@ -199,8 +243,6 @@ export function createActivationCertificate(input: ActivationCertificateInput): 
     serverAuthority,
     accountId,
     scopeKey,
-    credentialRevision: requireRevision(input.credentialRevision, "Credential revision"),
-    credentialFingerprint: requireOpaqueId(input.credentialFingerprint, "Credential fingerprint", 1024),
   });
 }
 
@@ -215,8 +257,6 @@ export function validateActivationCertificate(value: unknown): ActivationCertifi
     serverAuthority: requireOpaqueId(value.serverAuthority, "Server authority", 2048),
     accountId: requireOpaqueId(value.accountId, "Account id"),
     scopeKey: requireOpaqueId(value.scopeKey, "Account scope key", 4096),
-    credentialRevision: requireRevision(value.credentialRevision, "Credential revision"),
-    credentialFingerprint: requireOpaqueId(value.credentialFingerprint, "Credential fingerprint", 1024),
   });
 }
 
@@ -228,6 +268,7 @@ export function createViewLease(input: ViewLeaseInput): ViewLease {
     activation: validateActivationCertificate(input.activation),
     organizationId: requireOpaqueId(input.organizationId, "Organization id"),
     orgRevision: requireOpaqueId(input.orgRevision, "Organization revision"),
+    ownerTabId: requireOpaqueId(input.ownerTabId, "Owner tab id"),
     documentId: requireOpaqueId(input.documentId, "Document id"),
     signal: input.signal,
   });
@@ -242,6 +283,7 @@ export function validateViewLease(value: unknown): ViewLease {
     activation: value.activation,
     organizationId: requireOpaqueId(value.organizationId, "Organization id"),
     orgRevision: requireOpaqueId(value.orgRevision, "Organization revision"),
+    ownerTabId: requireOpaqueId(value.ownerTabId, "Owner tab id"),
     documentId: requireOpaqueId(value.documentId, "Document id"),
     signal: value.signal,
   });
@@ -253,6 +295,8 @@ export function createCredentialRecord(input: CredentialRecordInput): Credential
     v: 1,
     sessionEpoch: activation.sessionEpoch,
     activation,
+    credentialRevision: requireRevision(input.credentialRevision, "Credential revision"),
+    credentialFingerprint: requireOpaqueId(input.credentialFingerprint, "Credential fingerprint", 1024),
     accessToken: requireToken(input.accessToken, "Access token"),
     refreshToken: requireToken(input.refreshToken, "Refresh token"),
   });
@@ -264,6 +308,8 @@ export function validateCredentialRecord(value: unknown): CredentialRecord {
   }
   const record = createCredentialRecord({
     activation: value.activation,
+    credentialRevision: requireRevision(value.credentialRevision, "Credential revision"),
+    credentialFingerprint: requireOpaqueId(value.credentialFingerprint, "Credential fingerprint", 1024),
     accessToken: requireToken(value.accessToken, "Access token"),
     refreshToken: requireToken(value.refreshToken, "Refresh token"),
   });
@@ -274,20 +320,21 @@ export function validateCredentialRecord(value: unknown): CredentialRecord {
 }
 
 export function createSessionAttempt(input: SessionAttemptInput): SessionAttempt {
-  if (input.kind.length > MAX_ATTEMPT_KIND_LENGTH) {
-    throw new SessionError(sessionErrorCodes.invalidState, "Attempt kind exceeds the length limit");
-  }
   const payload = validateJsonObject(input.payload);
-  return Object.freeze({
+  const base = {
     v: 1,
     attemptId: requireOpaqueId(input.attemptId, "Attempt id"),
-    kind: requireOpaqueId(input.kind, "Attempt kind", MAX_ATTEMPT_KIND_LENGTH),
     serverAuthority: requireOpaqueId(input.serverAuthority, "Server authority", 2048),
     baselineGeneration: requireOpaqueId(input.baselineGeneration, "Attempt baseline generation"),
     sourceEpoch: input.sourceEpoch === null ? null : requireOpaqueId(input.sourceEpoch, "Attempt source epoch"),
     expiresAt: requireExpiry(input.expiresAt),
     payload,
-  });
+  } as const;
+  if (input.kind === "acquisition") return Object.freeze({ ...base, kind: "acquisition" });
+  if (input.kind === "management") {
+    return Object.freeze({ ...base, kind: "management", flowKind: validateManagementFlowKind(input.flowKind) });
+  }
+  throw new SessionError(sessionErrorCodes.invalidState, "Attempt kind is unsupported");
 }
 
 export function validateSessionAttempt(value: unknown): SessionAttempt {
@@ -295,35 +342,94 @@ export function validateSessionAttempt(value: unknown): SessionAttempt {
     throw new SessionError(sessionErrorCodes.invalidState, "Session attempt is malformed");
   }
   const payload = validateJsonObject(value.payload);
-  return createSessionAttempt({
+  const base = {
     attemptId: requireOpaqueId(value.attemptId, "Attempt id"),
-    kind: requireOpaqueId(value.kind, "Attempt kind", MAX_ATTEMPT_KIND_LENGTH),
     serverAuthority: requireOpaqueId(value.serverAuthority, "Server authority", 2048),
     baselineGeneration: requireOpaqueId(value.baselineGeneration, "Attempt baseline generation"),
     sourceEpoch: value.sourceEpoch === null ? null : requireOpaqueId(value.sourceEpoch, "Attempt source epoch"),
     expiresAt: requireExpiry(value.expiresAt),
     payload,
-  });
+  } as const;
+  if (value.kind === "acquisition") return createSessionAttempt({ ...base, kind: "acquisition" });
+  if (value.kind === "management") {
+    return createSessionAttempt({ ...base, kind: "management", flowKind: validateManagementFlowKind(value.flowKind) });
+  }
+  throw new SessionError(sessionErrorCodes.invalidState, "Attempt kind is unsupported");
 }
 
-export function createTransitionPermit(input: TransitionPermitInput): TransitionPermit {
+function validateManagementFlowKind(value: unknown): ManagementFlowKind {
+  if (value === "identity-link" || value === "identity-unlink" || value === "github-install-return") return value;
+  throw new SessionError(sessionErrorCodes.invalidState, "Management flow kind is unsupported");
+}
+
+function createAcquisitionTransitionPermit(input: AcquisitionTransitionPermitInput): AcquisitionTransitionPermit {
+  if (input.kind !== "acquisition_transition") {
+    throw new SessionError(sessionErrorCodes.invalidState, "Acquisition transition permit has another domain");
+  }
   return Object.freeze({
     v: 1,
+    kind: "acquisition_transition",
     permitId: requireOpaqueId(input.permitId, "Transition permit id"),
     attemptId: requireOpaqueId(input.attemptId, "Transition attempt id"),
     target: validateActivationCertificate(input.target),
+    targetCredentialFingerprint: requireOpaqueId(
+      input.targetCredentialFingerprint,
+      "Target credential fingerprint",
+      1024,
+    ),
     expiresAt: requireExpiry(input.expiresAt),
   });
 }
 
-export function validateTransitionPermit(value: unknown): TransitionPermit {
-  if (!isRecord(value) || value.v !== 1) {
-    throw new SessionError(sessionErrorCodes.invalidState, "Transition permit is malformed");
+export function validateAcquisitionTransitionPermit(value: unknown): AcquisitionTransitionPermit {
+  if (!isRecord(value) || value.v !== 1 || value.kind !== "acquisition_transition") {
+    throw new SessionError(sessionErrorCodes.invalidState, "Acquisition transition permit is malformed");
   }
-  return createTransitionPermit({
+  return createAcquisitionTransitionPermit({
+    kind: "acquisition_transition",
     permitId: requireOpaqueId(value.permitId, "Transition permit id"),
     attemptId: requireOpaqueId(value.attemptId, "Transition attempt id"),
     target: value.target,
+    targetCredentialFingerprint: requireOpaqueId(
+      value.targetCredentialFingerprint,
+      "Target credential fingerprint",
+      1024,
+    ),
+    expiresAt: requireExpiry(value.expiresAt),
+  });
+}
+
+export function createManagementDeliveryPermit(input: ManagementDeliveryPermitInput): ManagementDeliveryPermit {
+  if (input.kind !== "management_delivery") {
+    throw new SessionError(sessionErrorCodes.invalidState, "Management delivery permit has another domain");
+  }
+  return Object.freeze({
+    v: 1,
+    kind: "management_delivery",
+    permitId: requireOpaqueId(input.permitId, "Management permit id"),
+    attemptId: requireOpaqueId(input.attemptId, "Management attempt id"),
+    serverAuthority: requireOpaqueId(input.serverAuthority, "Server authority", 2048),
+    sourceEpoch: requireOpaqueId(input.sourceEpoch, "Management source epoch"),
+    accountId: requireOpaqueId(input.accountId, "Management account id"),
+    organizationId: requireOpaqueId(input.organizationId, "Management organization id"),
+    ownerTabId: requireOpaqueId(input.ownerTabId, "Management owner tab id"),
+    expiresAt: requireExpiry(input.expiresAt),
+  });
+}
+
+export function validateManagementDeliveryPermit(value: unknown): ManagementDeliveryPermit {
+  if (!isRecord(value) || value.v !== 1 || value.kind !== "management_delivery") {
+    throw new SessionError(sessionErrorCodes.invalidState, "Management delivery permit is malformed");
+  }
+  return createManagementDeliveryPermit({
+    kind: "management_delivery",
+    permitId: requireOpaqueId(value.permitId, "Management permit id"),
+    attemptId: requireOpaqueId(value.attemptId, "Management attempt id"),
+    serverAuthority: requireOpaqueId(value.serverAuthority, "Server authority", 2048),
+    sourceEpoch: requireOpaqueId(value.sourceEpoch, "Management source epoch"),
+    accountId: requireOpaqueId(value.accountId, "Management account id"),
+    organizationId: requireOpaqueId(value.organizationId, "Management organization id"),
+    ownerTabId: requireOpaqueId(value.ownerTabId, "Management owner tab id"),
     expiresAt: requireExpiry(value.expiresAt),
   });
 }
@@ -353,7 +459,7 @@ export function validateAuthAuthority(value: unknown): AuthAuthority {
     return Object.freeze({ v: 6, mode: "active", generation, revision, session });
   }
   if (value.mode === "transition") {
-    const permit = validateTransitionPermit(value.permit);
+    const permit = validateAcquisitionTransitionPermit(value.permit);
     const source = value.source === null ? null : validateActivationCertificate(value.source);
     const phase = validatePhase(value.phase);
     const cleanupReceipt =
@@ -378,7 +484,32 @@ export function sameActivation(left: ActivationCertificate, right: ActivationCer
     left.transitionPermitId === right.transitionPermitId &&
     left.serverAuthority === right.serverAuthority &&
     left.accountId === right.accountId &&
-    left.scopeKey === right.scopeKey &&
+    left.scopeKey === right.scopeKey
+  );
+}
+
+export function credentialCursor(record: CredentialRecord): CredentialCursor {
+  return Object.freeze({
+    sessionEpoch: record.sessionEpoch,
+    credentialRevision: record.credentialRevision,
+    credentialFingerprint: record.credentialFingerprint,
+  });
+}
+
+export function validateCredentialCursor(value: unknown): CredentialCursor {
+  if (!isRecord(value)) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Credential cursor is malformed");
+  }
+  return Object.freeze({
+    sessionEpoch: requireOpaqueId(value.sessionEpoch, "Credential cursor epoch"),
+    credentialRevision: requireRevision(value.credentialRevision, "Credential cursor revision"),
+    credentialFingerprint: requireOpaqueId(value.credentialFingerprint, "Credential cursor fingerprint", 1024),
+  });
+}
+
+export function sameCredentialCursor(left: CredentialCursor, right: CredentialCursor): boolean {
+  return (
+    left.sessionEpoch === right.sessionEpoch &&
     left.credentialRevision === right.credentialRevision &&
     left.credentialFingerprint === right.credentialFingerprint
   );
@@ -429,7 +560,11 @@ export function validateCoordinatorSnapshot(value: unknown): CoordinatorSnapshot
       throw new SessionError(sessionErrorCodes.recoveryRequired, "Transition target does not match its authority");
     }
     const attempt = attempts.find((item) => item.attemptId === authority.permit.attemptId);
-    if (!attempt || attempt.serverAuthority !== authority.permit.target.serverAuthority) {
+    if (
+      !attempt ||
+      attempt.kind !== "acquisition" ||
+      attempt.serverAuthority !== authority.permit.target.serverAuthority
+    ) {
       throw new SessionError(sessionErrorCodes.recoveryRequired, "Transition does not own its exact attempt");
     }
     if (authority.source && attempt.baselineGeneration !== authority.source.authGeneration) {

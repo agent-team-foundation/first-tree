@@ -1,6 +1,9 @@
 import type { AuthSessionCoordinator } from "./coordinator.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
-import { createScopedDatabaseName, isDatabaseNameForScope } from "./scope.js";
+import { deleteDatabaseBarrier } from "./idb-delete-barrier.js";
+import { LEGACY_DATABASE_NAMES, type LegacyStorageAreas, scrubLegacyWebStorage } from "./legacy-scrub.js";
+import { PERSISTENT_CONTENT_DATABASE_INVENTORY } from "./persistence-inventory.js";
+import { createScopedDatabaseName } from "./scope.js";
 import {
   type ActivationCertificate,
   type ViewLease,
@@ -34,6 +37,33 @@ export type ContentBarrierOptions = Readonly<{
   registry?: ContentDatabaseRegistry;
   indexedDB?: IDBFactory;
   locks?: SessionLockManager;
+}>;
+
+export type PurgeAccountScopeOptions = LegacyStorageAreas &
+  Readonly<{
+    onBlocked?: (databaseName: string) => void;
+  }>;
+
+const verifiedPurgeCompletionBrand: unique symbol = Symbol("first-tree.verified-purge-completion");
+
+export type VerifiedPurgeCompletion = Readonly<{
+  [verifiedPurgeCompletionBrand]: true;
+}>;
+
+type VerifiedPurgeState = {
+  source: ActivationCertificate;
+  receipt: string;
+  signal: AbortSignal;
+  state: "available" | "claimed" | "consumed" | "revoked";
+};
+
+const verifiedPurgeCompletions = new WeakMap<VerifiedPurgeCompletion, VerifiedPurgeState>();
+
+export type VerifiedPurgeClaim = Readonly<{
+  source: ActivationCertificate;
+  receipt: string;
+  signal: AbortSignal;
+  settle: (committed: boolean) => void;
 }>;
 
 type OperationToken = {
@@ -102,8 +132,73 @@ function abortTransaction(transaction: IDBTransaction): void {
   }
 }
 
+function isThenable(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return false;
+  }
+  try {
+    return typeof (value as Readonly<{ then?: unknown }>).then === "function";
+  } catch {
+    // A hostile getter is asynchronous-capability-shaped and cannot be allowed
+    // to escape the synchronous IndexedDB upgrade/transaction boundary.
+    return true;
+  }
+}
+
+function createVerifiedPurgeCompletion(
+  source: ActivationCertificate,
+  receipt: string,
+  signal: AbortSignal,
+): VerifiedPurgeCompletion {
+  const completion = Object.freeze({ [verifiedPurgeCompletionBrand]: true as const });
+  verifiedPurgeCompletions.set(completion, { source, receipt, signal, state: "available" });
+  return completion;
+}
+
+function revokeVerifiedPurgeCompletion(completion: VerifiedPurgeCompletion): void {
+  const state = verifiedPurgeCompletions.get(completion);
+  if (state && state.state !== "consumed") state.state = "revoked";
+}
+
+/** Internal coordinator bridge. The completion cannot be forged or replayed. */
+export function claimVerifiedPurgeCompletion(value: unknown): VerifiedPurgeClaim {
+  if (typeof value !== "object" || value === null) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Verified purge completion is malformed");
+  }
+  const completion = value as VerifiedPurgeCompletion;
+  const state = verifiedPurgeCompletions.get(completion);
+  if (!state || state.state !== "available") {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Verified purge completion is unavailable");
+  }
+  state.state = "claimed";
+  let settled = false;
+  return Object.freeze({
+    source: state.source,
+    receipt: state.receipt,
+    signal: state.signal,
+    settle: (committed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      state.state = committed ? "consumed" : "available";
+    },
+  });
+}
+
+function createPurgeReceipt(): string {
+  if (!globalThis.crypto?.randomUUID) {
+    throw new SessionError(sessionErrorCodes.platformUnavailable, "Secure randomness is required for account purge");
+  }
+  return `purge-v1:${globalThis.crypto.randomUUID()}`;
+}
+
+type LifecycleFence = Readonly<{
+  generation: number;
+  signal: AbortSignal;
+}>;
+
 export class ContentDatabaseRegistry {
   private generation = 0;
+  private lifecycleController = new AbortController();
   private readonly operations = new Set<OperationToken>();
   private readonly handles = new Map<IDBDatabase, RegisteredHandle>();
   private readonly queuedLocks = new Set<AbortController>();
@@ -129,6 +224,14 @@ export class ContentDatabaseRegistry {
 
   public assertGeneration(generation: number): void {
     if (generation !== this.generation) throw staleOperation("Document lifecycle changed before storage admission");
+  }
+
+  public captureLifecycle(): LifecycleFence {
+    return Object.freeze({ generation: this.generation, signal: this.lifecycleController.signal });
+  }
+
+  public assertOperation(token: OperationToken): void {
+    this.assertCurrent(token);
   }
 
   public createOperation(lease: ViewLease, generation = this.generation): OperationToken {
@@ -250,6 +353,8 @@ export class ContentDatabaseRegistry {
   }
 
   public invalidateAllOperations(): void {
+    this.lifecycleController.abort(new SessionError(sessionErrorCodes.staleOperation, "Document lifecycle changed"));
+    this.lifecycleController = new AbortController();
     this.generation += 1;
     this.cancelQueuedLocks();
     for (const token of this.operations) this.invalidateOperation(token);
@@ -310,31 +415,6 @@ export class ContentOperation {
   }
 }
 
-export class ContentPurgeOperation {
-  private readonly factory: IDBFactory;
-  private readonly source: ActivationCertificate;
-  private readonly onBlocked: ((databaseName: string) => void) | undefined;
-
-  public constructor(factory: IDBFactory, source: ActivationCertificate, onBlocked?: (databaseName: string) => void) {
-    this.factory = factory;
-    this.source = source;
-    this.onBlocked = onBlocked;
-  }
-
-  public async deleteDatabases(databaseNames: readonly string[]): Promise<void> {
-    const uniqueNames = new Set(databaseNames);
-    if (uniqueNames.size !== databaseNames.length) {
-      throw new SessionError(sessionErrorCodes.invalidState, "Scoped database deletion list contains duplicates");
-    }
-    for (const databaseName of databaseNames) {
-      if (!isDatabaseNameForScope(databaseName, this.source.scopeKey)) {
-        throw new SessionError(sessionErrorCodes.invalidState, "Scoped database deletion target has another scope");
-      }
-      await deleteDatabaseBarrier(this.factory, databaseName, this.onBlocked);
-    }
-  }
-}
-
 export class ContentScopeBarrier {
   public readonly registry: ContentDatabaseRegistry;
   private readonly coordinator: AuthSessionCoordinator;
@@ -367,12 +447,15 @@ export class ContentScopeBarrier {
           const value = await this.registry.raceCancellation(token, Promise.resolve(callback(operation)));
           if (!this.registry.isCurrent(token)) throw staleOperation("Account-content operation became stale");
           await this.coordinator.admitView(lease);
+          this.registry.assertGeneration(queuedLock.generation);
+          if (!this.registry.isCurrent(token)) throw staleOperation("Account-content operation became stale");
           return value;
         } finally {
           this.registry.finishOperation(token);
         }
       });
       await this.coordinator.admitView(lease);
+      this.registry.assertGeneration(queuedLock.generation);
       return result;
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -384,28 +467,85 @@ export class ContentScopeBarrier {
     }
   }
 
-  public async withExclusive<T>(
-    sourceValue: unknown,
-    callback: (operation: ContentPurgeOperation) => T | PromiseLike<T>,
-    onBlocked?: (databaseName: string) => void,
-  ): Promise<T> {
+  public async purgeAccountScope(sourceValue: unknown, options: PurgeAccountScopeOptions): Promise<string> {
     const source = validateActivationCertificate(sourceValue);
     const lockName = `${CONTENT_SCOPE_LOCK_PREFIX}${source.scopeKey}`;
-    return this.locks.request(lockName, { mode: "exclusive" }, async () => {
-      await this.coordinator.assertPurgeSource(source);
-      this.registry.invalidateEpoch(source.sessionEpoch);
-      this.registry.closeScopeHandles(source.scopeKey);
-      const value = await callback(new ContentPurgeOperation(this.factory, source, onBlocked));
-      await this.coordinator.assertPurgeSource(source);
-      return value;
+    const lifecycle = this.registry.captureLifecycle();
+    try {
+      return await this.locks.request(lockName, { mode: "exclusive", signal: lifecycle.signal }, async () => {
+        this.registry.assertGeneration(lifecycle.generation);
+        await this.coordinator.assertPurgeSource(source, lifecycle.signal);
+        this.registry.assertGeneration(lifecycle.generation);
+        this.registry.invalidateEpoch(source.sessionEpoch);
+        this.registry.closeScopeHandles(source.scopeKey);
+
+        const scopedNames = PERSISTENT_CONTENT_DATABASE_INVENTORY.map((entry) =>
+          createScopedDatabaseName(entry.logicalName, entry.namespaceVersion, source.scopeKey),
+        );
+        const databaseNames = [...scopedNames, ...LEGACY_DATABASE_NAMES];
+        if (new Set(databaseNames).size !== databaseNames.length) {
+          throw new SessionError(sessionErrorCodes.invalidState, "Persistent database inventory contains duplicates");
+        }
+        for (const databaseName of databaseNames) {
+          this.registry.assertGeneration(lifecycle.generation);
+          await this.raceLifecycle(lifecycle, deleteDatabaseBarrier(this.factory, databaseName, options.onBlocked));
+        }
+
+        this.registry.assertGeneration(lifecycle.generation);
+        scrubLegacyWebStorage(options);
+        this.registry.assertGeneration(lifecycle.generation);
+        const finalPurgeAuthority = await this.coordinator.assertPurgeSource(source, lifecycle.signal);
+        this.registry.assertGeneration(lifecycle.generation);
+
+        if (finalPurgeAuthority.mode !== "retiring" && finalPurgeAuthority.mode !== "transition") {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Purge authority changed before completion");
+        }
+
+        const receipt =
+          finalPurgeAuthority.phase === "source_purged" && finalPurgeAuthority.cleanupReceipt
+            ? finalPurgeAuthority.cleanupReceipt
+            : createPurgeReceipt();
+        const completion = createVerifiedPurgeCompletion(source, receipt, lifecycle.signal);
+        try {
+          await this.coordinator.commitVerifiedPurge(completion);
+        } finally {
+          revokeVerifiedPurgeCompletion(completion);
+        }
+        this.registry.assertGeneration(lifecycle.generation);
+        return receipt;
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw staleOperation("Account purge was cancelled by the document lifecycle");
+      }
+      throw error;
+    }
+  }
+
+  private async raceLifecycle<T>(lifecycle: LifecycleFence, operation: Promise<T>): Promise<T> {
+    if (lifecycle.signal.aborted) throw staleOperation("Account purge was cancelled by the document lifecycle");
+    return new Promise<T>((resolve, reject) => {
+      const cancel = (): void => reject(staleOperation("Account purge was cancelled by the document lifecycle"));
+      lifecycle.signal.addEventListener("abort", cancel, { once: true });
+      void operation.then(
+        (value) => {
+          lifecycle.signal.removeEventListener("abort", cancel);
+          resolve(value);
+        },
+        (error: unknown) => {
+          lifecycle.signal.removeEventListener("abort", cancel);
+          reject(error);
+        },
+      );
     });
   }
 
-  public openDatabase(token: OperationToken, spec: ContentDatabaseSpec): Promise<IDBDatabase> {
+  public async openDatabase(token: OperationToken, spec: ContentDatabaseSpec): Promise<IDBDatabase> {
+    this.registry.assertOperation(token);
+    await this.coordinator.admitView(token.lease);
+    this.registry.assertOperation(token);
     if (!Number.isSafeInteger(spec.databaseVersion) || spec.databaseVersion < 1) {
-      return Promise.reject(
-        new SessionError(sessionErrorCodes.invalidState, "IndexedDB schema version must be a positive integer"),
-      );
+      throw new SessionError(sessionErrorCodes.invalidState, "IndexedDB schema version must be a positive integer");
     }
     const databaseName = createScopedDatabaseName(
       spec.logicalName,
@@ -459,12 +599,7 @@ export class ContentScopeBarrier {
         }
         try {
           const upgradeResult: unknown = spec.upgrade(request.result, event.oldVersion, event.newVersion, transaction);
-          if (
-            typeof upgradeResult === "object" &&
-            upgradeResult !== null &&
-            "then" in upgradeResult &&
-            typeof upgradeResult.then === "function"
-          ) {
+          if (isThenable(upgradeResult)) {
             throw new SessionError(sessionErrorCodes.invalidState, "Scoped database upgrades must be synchronous");
           }
           if (!this.registry.isCurrent(token)) abortStaleUpgrade();
@@ -483,20 +618,28 @@ export class ContentScopeBarrier {
           rejectOnce(staleOperation("Scoped database opened after invalidation"));
           return;
         }
-        try {
-          this.registry.registerHandle(token, request.result);
-          settled = true;
-          this.registry.finishPendingOpen(token);
-          resolve(request.result);
-        } catch (error) {
-          request.result.close();
-          rejectOnce(error);
-        }
+        void this.coordinator.admitView(token.lease).then(
+          () => {
+            try {
+              this.registry.registerHandle(token, request.result);
+              settled = true;
+              this.registry.finishPendingOpen(token);
+              resolve(request.result);
+            } catch (error) {
+              request.result.close();
+              rejectOnce(error);
+            }
+          },
+          (error: unknown) => {
+            request.result.close();
+            rejectOnce(error);
+          },
+        );
       };
     });
   }
 
-  public runTransaction(
+  public async runTransaction(
     token: OperationToken,
     database: IDBDatabase,
     stores: string | readonly string[],
@@ -504,9 +647,12 @@ export class ContentScopeBarrier {
     start: (transaction: IDBTransaction) => void,
   ): Promise<void> {
     this.registry.assertHandle(token, database);
+    await this.coordinator.admitView(token.lease);
+    this.registry.assertHandle(token, database);
     if (mode !== "readonly" && mode !== "readwrite") {
-      return Promise.reject(
-        new SessionError(sessionErrorCodes.invalidState, "Scoped content transactions must be readonly or readwrite"),
+      throw new SessionError(
+        sessionErrorCodes.invalidState,
+        "Scoped content transactions must be readonly or readwrite",
       );
     }
     let transaction: IDBTransaction;
@@ -514,8 +660,10 @@ export class ContentScopeBarrier {
       transaction = database.transaction(stores, mode);
       this.registry.registerTransaction(token, transaction);
     } catch (error) {
-      return Promise.reject(
-        toSessionError(error, sessionErrorCodes.persistenceUnavailable, "Scoped database transaction failed to start"),
+      throw toSessionError(
+        error,
+        sessionErrorCodes.persistenceUnavailable,
+        "Scoped database transaction failed to start",
       );
     }
 
@@ -560,7 +708,10 @@ export class ContentScopeBarrier {
         });
       };
       try {
-        start(transaction);
+        const startResult: unknown = start(transaction);
+        if (isThenable(startResult)) {
+          throw new SessionError(sessionErrorCodes.invalidState, "Scoped transaction starters must be synchronous");
+        }
         if (!this.registry.isCurrent(token)) abortTransaction(transaction);
       } catch (error) {
         abortTransaction(transaction);
@@ -580,25 +731,4 @@ export class ContentScopeBarrier {
   public closeDatabase(database: IDBDatabase): void {
     this.registry.closeHandle(database);
   }
-}
-
-export function deleteDatabaseBarrier(
-  factory: IDBFactory,
-  databaseName: string,
-  onBlocked?: (databaseName: string) => void,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let request: IDBOpenDBRequest;
-    try {
-      request = factory.deleteDatabase(databaseName);
-    } catch (error) {
-      reject(toSessionError(error, sessionErrorCodes.persistenceUnavailable, "Database deletion could not start"));
-      return;
-    }
-    request.onblocked = () => onBlocked?.(databaseName);
-    request.onerror = () => {
-      reject(toSessionError(request.error, sessionErrorCodes.persistenceUnavailable, "Database deletion failed"));
-    };
-    request.onsuccess = () => resolve();
-  });
 }

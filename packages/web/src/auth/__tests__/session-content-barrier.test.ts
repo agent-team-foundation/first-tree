@@ -1,6 +1,9 @@
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requestCandidateMe } from "../../api/candidate-client.js";
+import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
+import { deleteDatabaseBarrier } from "../session/idb-delete-barrier.js";
 import {
   type ActivationCertificate,
   AuthSessionCoordinator,
@@ -14,15 +17,14 @@ import {
   createCredentialRecord,
   createScopedDatabaseName,
   createSessionAttempt,
-  createTransitionPermit,
   createViewLease,
-  deleteDatabaseBarrier,
   isDatabaseNameForScope,
   parseAccountScopeKey,
   SessionError,
   type SessionLockManager,
   type SessionLockMode,
   type SessionLockOptions,
+  scrubLegacyPersistence,
   sessionErrorCodes,
 } from "../session/index.js";
 
@@ -128,6 +130,40 @@ function deferred<T = void>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+function deferNthOpen(
+  factory: IDBFactory,
+  targetIndex: number,
+): Readonly<{
+  started: Promise<void>;
+  release: () => void;
+}> {
+  const originalOpen = factory.open.bind(factory);
+  const started = deferred();
+  const released = deferred();
+  let index = 0;
+  vi.spyOn(factory, "open").mockImplementation((name: string, version?: number) => {
+    index += 1;
+    const request = version === undefined ? originalOpen(name) : originalOpen(name, version);
+    if (index !== targetIndex) return request;
+    return new Proxy(request, {
+      get(target, property) {
+        return Reflect.get(target, property, target);
+      },
+      set(target, property, value) {
+        if (property === "onsuccess" && typeof value === "function") {
+          target.onsuccess = (event) => {
+            started.resolve();
+            void released.promise.then(() => value.call(target, event));
+          };
+          return true;
+        }
+        return Reflect.set(target, property, value, target);
+      },
+    });
+  });
+  return Object.freeze({ started: started.promise, release: () => released.resolve() });
+}
+
 const SERVER_AUTHORITY = "https://hub.example.test/api/v1";
 
 function activation(label: string, generation = `generation-${label}`): ActivationCertificate {
@@ -139,21 +175,37 @@ function activation(label: string, generation = `generation-${label}`): Activati
     serverAuthority: SERVER_AUTHORITY,
     accountId,
     scopeKey: createAccountScopeKey(SERVER_AUTHORITY, accountId),
-    credentialRevision: 0,
-    credentialFingerprint: `fingerprint-${label}`,
   });
 }
 
-function credential(certificate: ActivationCertificate) {
+function base64Url(value: string): string {
+  return btoa(value).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+}
+
+function jwt(accountId: string, kind: "access" | "refresh"): string {
+  return `${base64Url(JSON.stringify({ alg: "HS256", typ: "JWT" }))}.${base64Url(
+    JSON.stringify({ sub: accountId, type: kind, exp: 2_100_000_000 }),
+  )}.signature`;
+}
+
+async function credential(certificate: ActivationCertificate) {
+  const accessToken = jwt(certificate.accountId, "access");
+  const refreshToken = jwt(certificate.accountId, "refresh");
+  const fingerprinted = await fingerprintCandidateTokenSnapshot(
+    createCandidateTokenSnapshot({ accessToken, refreshToken }),
+    certificate.serverAuthority,
+  );
   return createCredentialRecord({
     activation: certificate,
-    accessToken: `access-${certificate.sessionEpoch}`,
-    refreshToken: `refresh-${certificate.sessionEpoch}`,
+    credentialRevision: 0,
+    credentialFingerprint: fingerprinted.credentialFingerprint,
+    accessToken,
+    refreshToken,
   });
 }
 
 const CONTENT_SPEC: ContentDatabaseSpec = {
-  logicalName: "messages",
+  logicalName: "chat-content",
   namespaceVersion: 1,
   databaseVersion: 1,
   upgrade: (database) => {
@@ -175,25 +227,47 @@ async function activeFixture() {
     expiresAt: Date.now() + 60_000,
     payload: { mappedTab: "tab-a" },
   });
+  if (attempt.kind !== "acquisition") throw new Error("expected acquisition attempt fixture");
   await coordinator.putAttempt(attempt);
-  const permit = createTransitionPermit({
-    permitId: certificate.transitionPermitId,
-    attemptId: attempt.attemptId,
-    target: certificate,
-    expiresAt: Date.now() + 60_000,
-  });
-  await coordinator.reserveTransition(
-    { generation: "generation-0", revision: 1 },
-    permit,
-    null,
-    "null-source-attempt-a",
+  const targetCredential = await credential(certificate);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ user: { id: certificate.accountId } }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
   );
-  await coordinator.completeTransition(permit, credential(certificate), "null-source-attempt-a");
+  const proof = (
+    await requestCandidateMe({
+      candidate: targetCredential,
+      attempt,
+      serverAuthority: certificate.serverAuthority,
+      signal: new AbortController().signal,
+      dispatch: (start) => start(),
+      assertResponseCurrent: async () => undefined,
+    })
+  ).proof;
+  const scrub = await scrubLegacyPersistence({
+    localStorage: memoryStorage(),
+    sessionStorage: memoryStorage(),
+    indexedDB: factory,
+  });
+  const permit = await coordinator.reserveAcquisitionTransition(
+    { generation: "generation-0", revision: 1 },
+    proof,
+    certificate,
+    null,
+    scrub,
+  );
+  await coordinator.completeAcquisitionTransition(permit, proof);
   const controller = new AbortController();
   const lease = createViewLease({
     activation: certificate,
     organizationId: "org-a",
     orgRevision: "org-revision-a",
+    ownerTabId: "owner-tab-a",
     documentId: "document-a",
     signal: controller.signal,
   });
@@ -219,13 +293,39 @@ async function databaseNames(factory: IDBFactory): Promise<string[]> {
   return entries.flatMap((entry) => (entry.name ? [entry.name] : []));
 }
 
-afterEach(() => closeCoordinatorConnections());
+function memoryStorage(initial: Readonly<Record<string, string>> = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    get length() {
+      return values.size;
+    },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    getItem: (key: string) => values.get(key) ?? null,
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+  };
+}
+
+function purgeOptions(onBlocked?: (databaseName: string) => void) {
+  return {
+    localStorage: memoryStorage(),
+    sessionStorage: memoryStorage(),
+    ...(onBlocked ? { onBlocked } : {}),
+  };
+}
+
+afterEach(() => {
+  closeCoordinatorConnections();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("account/server physical namespaces", () => {
   it("round-trips injectively and never accepts another scope as a deletion target", () => {
     const tuples = [
       ["https://a.example/api/v1", "bc"],
-      ["https://a.example/api/v1b", "c"],
+      ["https://a.example:8443/api/v1", "c"],
       ["https://b.example/api/v1", "a:b"],
       ["https://a.example/api/v1", "account:with:delimiters"],
     ] as const;
@@ -269,13 +369,13 @@ describe("ContentScopeBarrier", () => {
     await writerEntered.promise;
 
     await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
-    const databaseName = createScopedDatabaseName("messages", 1, fixture.certificate.scopeKey);
+    const databaseName = createScopedDatabaseName("chat-content", 1, fixture.certificate.scopeKey);
     let purgeResolved = false;
-    const purge = barrier
-      .withExclusive(fixture.certificate, (operation) => operation.deleteDatabases([databaseName]))
-      .then(() => {
-        purgeResolved = true;
-      });
+    let receipt = "";
+    const purge = barrier.purgeAccountScope(fixture.certificate, purgeOptions()).then((value) => {
+      receipt = value;
+      purgeResolved = true;
+    });
     await Promise.resolve();
     expect(purgeResolved).toBe(false);
     expect(locks.events.filter((event) => event.startsWith("start:exclusive"))).toHaveLength(0);
@@ -285,8 +385,7 @@ describe("ContentScopeBarrier", () => {
     await purge;
     expect(await databaseNames(fixture.factory)).not.toContain(databaseName);
 
-    await fixture.coordinator.markPurgeComplete(fixture.certificate, "receipt-a");
-    await fixture.coordinator.completeRetirement(fixture.certificate, "receipt-a", "generation-none");
+    await fixture.coordinator.completeRetirement(fixture.certificate, receipt, "generation-none");
     const staleCallback = vi.fn();
     await expect(barrier.withShared(fixture.lease, staleCallback)).rejects.toMatchObject({
       code: sessionErrorCodes.admissionDenied,
@@ -305,7 +404,7 @@ describe("ContentScopeBarrier", () => {
       locks,
       registry,
     });
-    const databaseName = createScopedDatabaseName("messages", 1, fixture.certificate.scopeKey);
+    const databaseName = createScopedDatabaseName("chat-content", 1, fixture.certificate.scopeKey);
     const blocker = await rawOpen(fixture.factory, databaseName, 1, (database) => {
       database.createObjectStore("rows");
     });
@@ -326,11 +425,7 @@ describe("ContentScopeBarrier", () => {
     await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
 
     const deleteBlocked = vi.fn();
-    const purge = barrier.withExclusive(
-      fixture.certificate,
-      (operation) => operation.deleteDatabases([databaseName]),
-      deleteBlocked,
-    );
+    const purge = barrier.purgeAccountScope(fixture.certificate, purgeOptions(deleteBlocked));
     await Promise.resolve();
     blocker.close();
     await purge;
@@ -361,6 +456,257 @@ describe("ContentScopeBarrier", () => {
     expect(await databaseNames(factory)).not.toContain("blocked-delete");
   });
 
+  it("does not stamp cleanup when Web Storage verification fails", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
+    const failingStorage = {
+      length: 1,
+      key: () => "first-tree:tokens",
+      getItem: () => "plaintext-token",
+      removeItem: () => undefined,
+    };
+
+    await expect(
+      barrier.purgeAccountScope(fixture.certificate, {
+        localStorage: failingStorage,
+        sessionStorage: memoryStorage(),
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.persistenceUnavailable });
+    await expect(fixture.coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "retiring",
+      phase: "revoked",
+      cleanupReceipt: undefined,
+    });
+    expect("withExclusive" in barrier).toBe(false);
+    expect("markPurgeComplete" in fixture.coordinator).toBe(false);
+  });
+
+  it("does not stamp cleanup when an IndexedDB deletion fails", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
+
+    const failure = new DOMException("forced delete failure", "UnknownError");
+    const failedRequest = {
+      error: failure,
+      onblocked: null,
+      onerror: null,
+      onsuccess: null,
+    } as unknown as IDBOpenDBRequest;
+    vi.spyOn(fixture.factory, "deleteDatabase").mockImplementationOnce(() => {
+      queueMicrotask(() => failedRequest.onerror?.(new Event("error")));
+      return failedRequest;
+    });
+
+    await expect(barrier.purgeAccountScope(fixture.certificate, purgeOptions())).rejects.toMatchObject({
+      code: sessionErrorCodes.persistenceUnavailable,
+    });
+    await expect(fixture.coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "retiring",
+      phase: "revoked",
+      cleanupReceipt: undefined,
+    });
+  });
+
+  it("rejects an old purge after a newer same-scope activation without deleting its database", async () => {
+    const fixture = await activeFixture();
+    const locks = new OrderedTestLocks();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks,
+    });
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
+    const firstReceipt = await barrier.purgeAccountScope(fixture.certificate, purgeOptions());
+    await fixture.coordinator.completeRetirement(fixture.certificate, firstReceipt, "generation-none");
+
+    const next = createActivationCertificate({
+      sessionEpoch: "epoch-a-2",
+      authGeneration: "generation-a-2",
+      transitionPermitId: "permit-a-2",
+      serverAuthority: fixture.certificate.serverAuthority,
+      accountId: fixture.certificate.accountId,
+      scopeKey: fixture.certificate.scopeKey,
+    });
+    const nextAttempt = createSessionAttempt({
+      attemptId: "attempt-a-2",
+      kind: "acquisition",
+      serverAuthority: next.serverAuthority,
+      baselineGeneration: "generation-none",
+      sourceEpoch: null,
+      expiresAt: Date.now() + 60_000,
+      payload: { mappedTab: "tab-a-2" },
+    });
+    if (nextAttempt.kind !== "acquisition") throw new Error("expected acquisition attempt fixture");
+    await fixture.coordinator.putAttempt(nextAttempt);
+    const nextCredential = await credential(next);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ user: { id: next.accountId } }), {
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    const nextProof = (
+      await requestCandidateMe({
+        candidate: nextCredential,
+        attempt: nextAttempt,
+        serverAuthority: next.serverAuthority,
+        signal: new AbortController().signal,
+        dispatch: (start) => start(),
+        assertResponseCurrent: async () => undefined,
+      })
+    ).proof;
+    const scrub = await scrubLegacyPersistence({
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+      indexedDB: fixture.factory,
+    });
+    const beforeReservation = await fixture.coordinator.readAuthority();
+    const nextPermit = await fixture.coordinator.reserveAcquisitionTransition(
+      { generation: beforeReservation.generation, revision: beforeReservation.revision },
+      nextProof,
+      next,
+      null,
+      scrub,
+    );
+    await fixture.coordinator.completeAcquisitionTransition(nextPermit, nextProof);
+
+    const nextController = new AbortController();
+    const nextLease = createViewLease({
+      activation: next,
+      organizationId: "org-a",
+      orgRevision: "org-revision-a-2",
+      ownerTabId: "owner-tab-a-2",
+      documentId: "document-a-2",
+      signal: nextController.signal,
+    });
+    const nextBarrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks,
+    });
+    await nextBarrier.withShared(nextLease, async (operation) => {
+      const database = await operation.openDatabase(CONTENT_SPEC);
+      await operation.runTransaction(database, "rows", "readwrite", (transaction) => {
+        transaction.objectStore("rows").put("new-session", "owner");
+      });
+      operation.closeDatabase(database);
+    });
+    const databaseName = createScopedDatabaseName("chat-content", 1, next.scopeKey);
+    const deleteSpy = vi.spyOn(fixture.factory, "deleteDatabase");
+
+    await expect(barrier.purgeAccountScope(fixture.certificate, purgeOptions())).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(await databaseNames(fixture.factory)).toContain(databaseName);
+    await expect(fixture.coordinator.admitActivation(next)).resolves.toMatchObject({
+      authority: { session: next },
+    });
+  });
+
+  it("cancels a blocked purge on lifecycle suspension and lets a successor delete form the queue barrier", async () => {
+    const fixture = await activeFixture();
+    const locks = new OrderedTestLocks();
+    const registry = new ContentDatabaseRegistry();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks,
+      registry,
+    });
+    const databaseName = createScopedDatabaseName("chat-content", 1, fixture.certificate.scopeKey);
+    const blocker = await rawOpen(fixture.factory, databaseName, 1, (database) => database.createObjectStore("rows"));
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-retiring");
+    const blocked = deferred<string>();
+    const first = barrier.purgeAccountScope(fixture.certificate, purgeOptions(blocked.resolve));
+    await blocked.promise;
+
+    registry.invalidateAllOperations();
+    closeCoordinatorConnections();
+    await expect(first).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    await expect(fixture.coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "retiring",
+      phase: "revoked",
+    });
+
+    blocker.close();
+    const receipt = await barrier.purgeAccountScope(fixture.certificate, purgeOptions());
+    await expect(fixture.coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "retiring",
+      phase: "source_purged",
+      cleanupReceipt: receipt,
+    });
+    expect(await databaseNames(fixture.factory)).not.toContain(databaseName);
+  });
+
+  it("rejects object, callable, and hostile transaction thenables at runtime", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+
+    await barrier.withShared(fixture.lease, async (operation) => {
+      const database = await operation.openDatabase(CONTENT_SPEC);
+      await expect(
+        operation.runTransaction(database, "rows", "readwrite", async () => undefined),
+      ).rejects.toMatchObject({ code: sessionErrorCodes.invalidState });
+      // biome-ignore lint/suspicious/noThenProperty: this intentionally exercises callable thenable rejection.
+      const callable = Object.assign(() => undefined, { then: () => undefined });
+      await expect(operation.runTransaction(database, "rows", "readwrite", () => callable)).rejects.toMatchObject({
+        code: sessionErrorCodes.invalidState,
+      });
+      // biome-ignore lint/suspicious/noThenProperty: this intentionally exercises a hostile then getter.
+      const hostile = Object.defineProperty(() => undefined, "then", {
+        get: () => {
+          throw new Error("hostile getter must not escape");
+        },
+      });
+      await expect(operation.runTransaction(database, "rows", "readwrite", () => hostile)).rejects.toMatchObject({
+        code: sessionErrorCodes.invalidState,
+      });
+      operation.closeDatabase(database);
+    });
+  });
+
+  it("rejects callable thenables returned by an upgrade without creating a usable handle", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    // biome-ignore lint/suspicious/noThenProperty: this intentionally exercises callable thenable rejection.
+    const callable = Object.assign(() => undefined, { then: () => undefined });
+    const spec: ContentDatabaseSpec = {
+      logicalName: "callable-upgrade",
+      namespaceVersion: 1,
+      databaseVersion: 1,
+      upgrade: (database) => {
+        database.createObjectStore("rows");
+        return callable;
+      },
+    };
+
+    await expect(barrier.withShared(fixture.lease, (operation) => operation.openDatabase(spec))).rejects.toMatchObject({
+      code: sessionErrorCodes.invalidState,
+    });
+  });
+
   it("aborts queued lock admission on lifecycle invalidation", async () => {
     const fixture = await activeFixture();
     const locks = new OrderedTestLocks();
@@ -388,6 +734,30 @@ describe("ContentScopeBarrier", () => {
     expect(callback).not.toHaveBeenCalled();
     releaseBlocker.resolve();
     await blocker;
+  });
+
+  it.each([
+    ["inside the shared holder", 3],
+    ["after the shared holder releases", 5],
+  ] as const)("does not deliver a result when lifecycle changes during the final admission %s", async (_label, openIndex) => {
+    const fixture = await activeFixture();
+    const registry = new ContentDatabaseRegistry();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+      registry,
+    });
+    const latch = deferNthOpen(fixture.factory, openIndex);
+    const callback = vi.fn(() => "account-a-result");
+    const shared = barrier.withShared(fixture.lease, callback);
+
+    await latch.started;
+    registry.invalidateAllOperations();
+    latch.release();
+
+    await expect(shared).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed without IndexedDB or Web Locks", async () => {

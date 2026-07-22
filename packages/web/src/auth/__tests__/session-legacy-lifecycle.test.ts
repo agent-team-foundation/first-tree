@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AuthSessionCoordinator,
   ContentDatabaseRegistry,
   closeCoordinatorConnections,
   installSessionLifecycleHooks,
@@ -12,6 +13,35 @@ import {
   scrubLegacyWebStorage,
   sessionErrorCodes,
 } from "../session/index.js";
+
+function deferNextOpen(factory: IDBFactory): Readonly<{ started: Promise<void>; release: () => void }> {
+  const originalOpen = factory.open.bind(factory);
+  let startedResolve = (): void => undefined;
+  let releaseResolve = (): void => undefined;
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    releaseResolve = resolve;
+  });
+  vi.spyOn(factory, "open").mockImplementationOnce((name: string, version?: number) => {
+    const request = version === undefined ? originalOpen(name) : originalOpen(name, version);
+    return new Proxy(request, {
+      get: (target, property) => Reflect.get(target, property, target),
+      set(target, property, value) {
+        if (property === "onsuccess" && typeof value === "function") {
+          target.onsuccess = (event) => {
+            startedResolve();
+            void released.then(() => value.call(target, event));
+          };
+          return true;
+        }
+        return Reflect.set(target, property, value, target);
+      },
+    });
+  });
+  return Object.freeze({ started, release: releaseResolve });
+}
 
 class MemoryStorage implements StorageArea {
   private readonly values = new Map<string, string>();
@@ -59,7 +89,10 @@ function dispatch(target: EventTarget, name: string): void {
   target.dispatchEvent(new Event(name));
 }
 
-afterEach(() => closeCoordinatorConnections());
+afterEach(() => {
+  closeCoordinatorConnections();
+  vi.restoreAllMocks();
+});
 
 describe("legacy persistence scrub", () => {
   it("removes only the exact known inventory and reruns after legacy data reappears", async () => {
@@ -162,6 +195,33 @@ describe("legacy persistence scrub", () => {
 });
 
 describe("session lifecycle hooks", () => {
+  it("preserves an in-flight coordinator read on ordinary hidden but cancels it on pagehide", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const registry = new ContentDatabaseRegistry();
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
+    Object.defineProperty(documentTarget, "visibilityState", { configurable: true, value: "hidden" });
+    const dispose = installSessionLifecycleHooks({ registry, windowTarget, documentTarget });
+
+    const hiddenLatch = deferNextOpen(factory);
+    const hiddenRead = coordinator.readAuthority();
+    await hiddenLatch.started;
+    dispatch(documentTarget, "visibilitychange");
+    hiddenLatch.release();
+    await expect(hiddenRead).resolves.toMatchObject({ mode: "none", generation: "generation-0" });
+
+    vi.restoreAllMocks();
+    const suspendLatch = deferNextOpen(factory);
+    const suspendedRead = coordinator.readAuthority();
+    await suspendLatch.started;
+    dispatch(windowTarget, "pagehide");
+    suspendLatch.release();
+    await expect(suspendedRead).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    dispose();
+  });
+
   it("veils first on hidden, cancels pending opens, and reserves full invalidation for suspend", () => {
     const registry = new ContentDatabaseRegistry();
     const windowTarget = new EventTarget();

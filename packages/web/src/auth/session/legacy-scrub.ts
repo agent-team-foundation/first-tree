@@ -1,5 +1,5 @@
-import { deleteDatabaseBarrier } from "./content-barrier.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
+import { deleteDatabaseBarrier } from "./idb-delete-barrier.js";
 
 export const LEGACY_DATABASE_NAMES = Object.freeze([
   "first-tree-chat-cache",
@@ -57,6 +57,52 @@ export type LegacyScrubResult = LegacyStorageScrubResult &
   Readonly<{
     databasesDeleted: number;
   }>;
+
+const legacyScrubCompletionBrand: unique symbol = Symbol("first-tree.legacy-scrub-completion");
+
+export type LegacyScrubCompletion = LegacyScrubResult &
+  Readonly<{
+    [legacyScrubCompletionBrand]: true;
+  }>;
+
+type LegacyScrubCompletionState = {
+  receipt: string;
+  state: "available" | "claimed" | "consumed";
+};
+
+const legacyScrubCompletions = new WeakMap<LegacyScrubCompletion, LegacyScrubCompletionState>();
+
+/** Internal coordinator bridge. A caller-selected string can never stand in for a completed scrub. */
+export function claimLegacyScrubCompletion(value: unknown): Readonly<{
+  receipt: string;
+  settle: (committed: boolean) => void;
+}> {
+  if (typeof value !== "object" || value === null) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Legacy scrub completion is malformed");
+  }
+  const completion = value as LegacyScrubCompletion;
+  const state = legacyScrubCompletions.get(completion);
+  if (!state || state.state !== "available") {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Legacy scrub completion is unavailable");
+  }
+  state.state = "claimed";
+  let settled = false;
+  return Object.freeze({
+    receipt: state.receipt,
+    settle: (committed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      state.state = committed ? "consumed" : "available";
+    },
+  });
+}
+
+function createLegacyScrubReceipt(): string {
+  if (!globalThis.crypto?.randomUUID) {
+    throw new SessionError(sessionErrorCodes.platformUnavailable, "Secure randomness is required for legacy cleanup");
+  }
+  return `legacy-scrub-v1:${globalThis.crypto.randomUUID()}`;
+}
 
 function collectMatchingKeys(
   storage: StorageArea,
@@ -127,11 +173,13 @@ export async function scrubLegacyDatabases(
   return LEGACY_DATABASE_NAMES.length;
 }
 
-export async function scrubLegacyPersistence(options: LegacyScrubOptions): Promise<LegacyScrubResult> {
+export async function scrubLegacyPersistence(options: LegacyScrubOptions): Promise<LegacyScrubCompletion> {
   const storage = scrubLegacyWebStorage(options);
   const databasesDeleted = await scrubLegacyDatabases(
     getIndexedDbFactory(options.indexedDB),
     options.onDatabaseBlocked,
   );
-  return Object.freeze({ ...storage, databasesDeleted });
+  const completion = Object.freeze({ ...storage, databasesDeleted }) as LegacyScrubCompletion;
+  legacyScrubCompletions.set(completion, { receipt: createLegacyScrubReceipt(), state: "available" });
+  return completion;
 }
