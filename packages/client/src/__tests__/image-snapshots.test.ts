@@ -39,6 +39,7 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "img-snap-")));
     await mkdir(join(root, "shots"), { recursive: true });
     await writeFile(join(root, "shots", "filter.png"), PNG);
+    await writeFile(join(root, "shots", "filter with spaces.png"), PNG);
     await writeFile(join(root, "diagram.webp"), PNG);
     await writeFile(join(root, "notes.txt"), Buffer.from("hi"));
   });
@@ -72,6 +73,26 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     const res = await buildMessageImageSnapshots(`![d](${join(root, "diagram.webp")})`, root, opts(uploader));
     expect(res.imageRefs).toHaveLength(1);
     expect(res.imageRefs[0]?.mimeType).toBe("image/webp");
+    expect(res.strippedText).toBe("");
+  });
+
+  it("captures an angle-bracketed absolute in-workspace path", async () => {
+    const { uploader } = stubUploader();
+    const res = await buildMessageImageSnapshots(`![d](<${join(root, "diagram.webp")}>)`, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(1);
+    expect(res.imageRefs[0]).toMatchObject({ mimeType: "image/webp", filename: "diagram.webp" });
+    expect(res.strippedText).toBe("");
+  });
+
+  it("captures spaces inside an angle-bracketed path", async () => {
+    const { uploader } = stubUploader();
+    const res = await buildMessageImageSnapshots(
+      `![filter](<${join(root, "shots", "filter with spaces.png")}>)`,
+      root,
+      opts(uploader),
+    );
+    expect(res.imageRefs).toHaveLength(1);
+    expect(res.imageRefs[0]).toMatchObject({ mimeType: "image/png", filename: "filter with spaces.png" });
     expect(res.strippedText).toBe("");
   });
 
