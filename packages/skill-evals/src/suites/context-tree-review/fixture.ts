@@ -60,7 +60,7 @@ function changedBodies(
       },
     ];
   }
-  if (scenario === "semantic-failure" || scenario === "push-denied") {
+  if (scenario === "semantic-failure" || scenario === "push-denied" || scenario === "draft") {
     return [
       {
         path: "system/review-contract.md",

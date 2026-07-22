@@ -34,6 +34,7 @@ describe("context-tree-review fixture", () => {
   it.each([
     ["passing", 0],
     ["relationship-change", 0],
+    ["draft", 0],
     ["validator-failure", 1],
   ] as const)("records the real source validator result for %s", (scenario, expectedExitCode) => {
     const paths = createRunPaths({
@@ -78,6 +79,11 @@ describe("context-tree-review fixture", () => {
       expect(summary.ok).toBe(expectedExitCode === 0);
       if (scenario === "validator-failure") {
         expect(summary.findings.map((finding) => finding.code)).toContain("TREE_TITLE_MISSING");
+      }
+      if (scenario === "draft") {
+        expect(
+          git(fixture, ["show", "refs/pull/42/head:system/review-contract.md"], fixture.originPath).stdout,
+        ).toContain("Shipped in PR #42");
       }
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

@@ -258,7 +258,7 @@ validator-first review at the successor head. Attach a unique agent-owned
 worktree to that unchanged live source ref and make the repair. Stage only the
 exact repair paths, including additions, moves and deletions, then run
 `first-tree tree verify --json`. Inspect `git status --short` and the complete
-staged base-to-result diff with `git diff --cached "$BASE_OID"`; require the
+staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`; require the
 staged path set to equal the repair scope and no unstaged or untracked Tree
 content to remain. Make no further content or index mutation before committing.
 Commit normally with the host git identity and push with the host git/`gh`

@@ -292,7 +292,8 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
     {
       event: {
         item: {
-          command: "git -C .repair-worktrees/42 diff --cached base",
+          aggregated_output: `diff --git a/${safePath} b/${safePath}\n`,
+          command: "git -C .repair-worktrees/42 diff --cached --no-ext-diff base",
           exit_code: 0,
           status: "completed",
           type: "command_execution",
@@ -469,7 +470,7 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
-  it("attributes successful readers surrounding a pipeline but not the pipeline's unchecked producer", () => {
+  it("rejects compound commands as required semantic-read evidence", () => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
     const successorRead = events.findLast(
@@ -480,7 +481,8 @@ describe("context-tree-review grader", () => {
     successorRead.event.item.command =
       "cat .review-worktrees/42/system/review-contract.md && find .review-worktrees/42/system -type f | sort && gh pr checks 42 --repo owner/context-tree";
     const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
-    expect(metrics.successorSemanticReviewComplete).toBe(true);
+    expect(metrics.successorSemanticReviewComplete).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it.each([
@@ -530,6 +532,91 @@ describe("context-tree-review grader", () => {
     );
     expect(metrics.successorSemanticReviewComplete).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("rejects removed-path parent evidence from an old revision", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const successorRead = events.findLast(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          ".review-worktrees/42/system/review-contract.md",
+        ),
+    ) as { event: { item: { command: string } } };
+    successorRead.event.item.command = "git -C .review-worktrees/42 show old-head:system/NODE.md";
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      repairExpectation(evalCase),
+      { ...repairIntegrity("success"), finalDiffEmpty: false, repairPathsRemoved: true },
+      0,
+    );
+    expect(metrics.successorSemanticReviewComplete).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("requires final freshness after valid removed-path parent evidence", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const successorReadIndex = events.findLastIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          ".review-worktrees/42/system/review-contract.md",
+        ),
+    );
+    const successorRead = events[successorReadIndex] as { event: { item: { command: string } } };
+    successorRead.event.item.command = "git -C .review-worktrees/42 show HEAD:system/NODE.md";
+    events.splice(successorReadIndex, 1);
+    events.splice(-1, 0, successorRead);
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      repairExpectation(evalCase),
+      { ...repairIntegrity("success"), finalDiffEmpty: false, repairPathsRemoved: true },
+      0,
+    );
+    expect(metrics.successorSemanticReviewComplete).toBe(true);
+    expect(metrics.finalViewFresh).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("invalidates semantic evidence when the review worktree is rebuilt after verify", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const successorVerifyIndex = events.findIndex(
+      (event) => (event as { reviewVerifyKind?: unknown }).reviewVerifyKind === "successor-review",
+    );
+    events.splice(
+      successorVerifyIndex + 1,
+      0,
+      {
+        event: {
+          item: {
+            command: "git -C context-tree worktree remove ../.review-worktrees/42",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        event: {
+          item: {
+            command: "git -C context-tree worktree add --detach ../.review-worktrees/42 head",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    );
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.successorSemanticReviewComplete).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it("does not let successor reads backfill a missing initial semantic review", () => {
@@ -615,7 +702,7 @@ describe("context-tree-review grader", () => {
     const commitIndex = commandIndex(" commit ");
     const stageIndex = commandIndex(" add -- ");
     const statusIndex = commandIndex(" status --short");
-    const diffIndex = commandIndex(" diff --cached base");
+    const diffIndex = commandIndex(" diff --cached --no-ext-diff base");
     const pushIndex = commandIndex(" push origin");
     const verifyIndex = events.findIndex(
       (event) => (event as { reviewVerifyKind?: unknown }).reviewVerifyKind === "repair",
@@ -653,6 +740,76 @@ describe("context-tree-review grader", () => {
     }
     const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
     expect(metrics.repairSequenceValid).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("rejects an unexecuted stage hidden after shell exit", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const stage = events.find(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(" add -- "),
+    ) as { event: { item: { command: string } } };
+    stage.event.item.command = "exit 0; git -C .repair-worktrees/42 add -- system/review-contract.md";
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.unexpectedMutationAttempted).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("rejects an unstaged repair status", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const status = events.find(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(" status --short"),
+    ) as { event: { item: { aggregated_output: string } } };
+    status.event.item.aggregated_output = " D system/review-contract.md\n";
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.repairSequenceValid).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("rejects an unknown repair-worktree index mutation after cached diff", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const commitIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(" commit "),
+    );
+    events.splice(commitIndex, 0, {
+      event: {
+        item: {
+          command: "git -C .repair-worktrees/42 apply --cached repair.patch",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.unexpectedMutationAttempted).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it.each([
+    "git -C .repair-worktrees/42 commit --only -m repair -- system/review-contract.md",
+    "git -C .repair-worktrees/42 commit --include -m repair -- system/review-contract.md",
+    "git -C .repair-worktrees/42 commit -m repair -- system/review-contract.md",
+  ])("rejects a repair commit that bypasses the inspected index: %s", (command) => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const commit = events.find(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(" commit "),
+    ) as { event: { item: { command: string } } };
+    commit.event.item.command = command;
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.unexpectedMutationAttempted).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
@@ -697,6 +854,14 @@ describe("context-tree-review grader", () => {
       ...repairExpectation(evalCase),
       repairPaths,
     };
+    const repairDiff = events.find(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          " diff --cached --no-ext-diff base",
+        ),
+    ) as { event: { item: { aggregated_output: string } } };
+    repairDiff.event.item.aggregated_output = repairPaths.map((path) => `diff --git a/${path} b/${path}`).join("\n");
     const metrics = deriveMetrics(events, evalCase, expected, repairIntegrity("success"), 0);
     expect(metrics.authorizedRepairObserved).toBe(true);
     expect(metrics.repairSequenceValid).toBe(true);
@@ -785,6 +950,36 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
+  it.each([
+    "grep -n Review",
+    "log -p -1",
+    "blame system/review-contract.md",
+    "cat-file -p HEAD:system/review-contract.md",
+  ])("requires fresh PR and source heads after a successful git %s context read", (gitArgs) => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const sourceReadIndex = events.findIndex(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes("ls-remote --heads"),
+    );
+    events.splice(sourceReadIndex + 1, 0, {
+      event: {
+        item: {
+          command: `git -C .review-worktrees/42 ${gitArgs}`,
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.repairHeadFresh).toBe(false);
+    expect(metrics.repairSourceHeadFresh).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
   it("rejects a wrong-cwd local push failure as push denial", () => {
     const evalCase = repairCase("push-denied");
     const events = repairEvents(evalCase);
@@ -844,12 +1039,33 @@ describe("context-tree-review grader", () => {
     const repairDiff = events.find(
       (event) =>
         typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
-        (event as { event: { item: { command: string } } }).event.item.command.includes(" diff --cached base"),
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          " diff --cached --no-ext-diff base",
+        ),
     ) as { event: { item: { command: string } } };
-    repairDiff.event.item.command = "GIT_EXTERNAL_DIFF=/bin/false git -C .repair-worktrees/42 diff --cached base; true";
+    repairDiff.event.item.command =
+      "GIT_EXTERNAL_DIFF=/bin/false git -C .repair-worktrees/42 diff --cached --no-ext-diff base; true";
     const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
     expect(metrics.repairDiffObserved).toBe(false);
     expect(metrics.unexpectedMutationAttempted).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("does not accept an external-diff override as inspected cached content", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const repairDiff = events.find(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          " diff --cached --no-ext-diff base",
+        ),
+    ) as { event: { item: { aggregated_output: string; command: string } } };
+    repairDiff.event.item.command = "GIT_EXTERNAL_DIFF=/bin/true git -C .repair-worktrees/42 diff --cached base";
+    repairDiff.event.item.aggregated_output = "";
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.repairDiffObserved).toBe(false);
+    expect(metrics.repairSequenceValid).toBe(false);
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
@@ -1019,6 +1235,34 @@ describe("context-tree-review grader", () => {
         event: {
           item: {
             command: "env -u FOO git -C .repair-worktrees/42 commit --amend --no-edit",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "absolute env-prefixed amend",
+      event: {
+        event: {
+          item: {
+            command: "/usr/bin/env -u FOO git -C .repair-worktrees/42 commit --amend --no-edit",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    },
+    {
+      name: "command absolute env-prefixed amend",
+      event: {
+        event: {
+          item: {
+            command: "command /usr/bin/env git -C .repair-worktrees/42 commit --amend --no-edit",
             exit_code: 0,
             status: "completed",
             type: "command_execution",
@@ -1200,7 +1444,7 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(false);
   });
 
-  it("accepts a governed read after an explicit change to the detached worktree", () => {
+  it("rejects a compound cd reader as governed semantic evidence", () => {
     const events = passingEvents();
     events[4] = {
       event: {
@@ -1213,7 +1457,7 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
-    expect(passes(events)).toBe(true);
+    expect(passes(events)).toBe(false);
   });
 
   it("does not credit successful zsh-batched detached reads", () => {
@@ -1790,6 +2034,7 @@ describe("context-tree-review grader", () => {
     "git -C context-tree symbolic-ref --delete HEAD",
     "git -C context-tree fetch origin +refs/heads/main:refs/heads/eval-side-effect",
     "git -C context-tree worktree add --detach /tmp/unowned HEAD",
+    "git -C context-tree worktree add --detach ../.review-worktrees/42 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "git -C context-tree worktree remove /tmp/preexisting",
   ])("rejects a repository-identity mutation: %s", (command) => {
     const events = passingEvents();
