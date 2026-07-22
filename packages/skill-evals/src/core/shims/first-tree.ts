@@ -1,6 +1,8 @@
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
 
+import { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "@first-tree/shared";
+
 import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
@@ -53,6 +55,8 @@ const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
+const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
+const CONTEXT_REVIEW_RUN_MARKER_PREFIX = ${JSON.stringify(CONTEXT_REVIEW_RUN_MARKER_PREFIX)};
 
 function preview(value) {
   if (!value) return "";
@@ -498,7 +502,11 @@ if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const action = event === "APPROVE" ? "approve" : event === "COMMENT" ? "comment" : event === "REQUEST_CHANGES" ? "request-changes" : null;
   let body = "";
   try {
-    body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
+    if (bodyFile === "-") {
+      body = process.stdin.isTTY ? "" : readFileSync(0, "utf8");
+    } else if (bodyFile) {
+      body = readFileSync(bodyFile, "utf8");
+    }
   } catch {}
   const runtimeSessionTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
   let runtimeSessionToken = "";
@@ -509,7 +517,11 @@ if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
     process.env.FIRST_TREE_CHAT_ID === fixture.chatId &&
     process.env.FIRST_TREE_AGENT_ID === fixture.reviewerAgentUuid &&
     runtimeSessionToken === fixture.runtimeSessionToken;
-  const valid = exactOptions && trustedRuntime && runId === fixture.runId && action && body.length > 0;
+  const validBody =
+    body.trim().length > 0 &&
+    Buffer.byteLength(body, "utf8") <= CONTEXT_REVIEW_BODY_MAX_BYTES &&
+    !body.includes(CONTEXT_REVIEW_RUN_MARKER_PREFIX);
+  const valid = exactOptions && trustedRuntime && runId === fixture.runId && action && validBody;
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }

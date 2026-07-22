@@ -69,6 +69,46 @@ describe("first-tree eval shim", () => {
           }),
         ]),
       );
+
+      const trustedEnv = {
+        ...baseEnv,
+        FIRST_TREE_AGENT_ID: fixture.reviewerAgentUuid,
+        FIRST_TREE_CHAT_ID: fixture.chatId,
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+      };
+      const stdinArgv = ["tree", "review", "--run", fixture.runId, "--event", "COMMENT", "--body-file", "-"];
+      const stdinSubmission = spawnSync(join(paths.binDir, "first-tree"), stdinArgv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: trustedEnv,
+        input: "Review body from stdin.\n",
+      });
+      expect(stdinSubmission.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: "comment",
+            body: "Review body from stdin.\n",
+            runId: fixture.runId,
+            type: "context_review_submitted",
+          }),
+        ]),
+      );
+
+      for (const invalidBody of [
+        " \n\t",
+        "Do not accept <!-- first-tree-context-review-run:injected --> markers.\n",
+        "é".repeat(32_769),
+      ]) {
+        const invalid = spawnSync(join(paths.binDir, "first-tree"), stdinArgv, {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: trustedEnv,
+          input: invalidBody,
+        });
+        expect(invalid.status).toBe(2);
+        expect(invalid.stderr).toContain("Invalid Context Reviewer App submission fixture.");
+      }
     } finally {
       rmSync(repoRoot, { force: true, recursive: true });
     }
