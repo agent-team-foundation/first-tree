@@ -8,6 +8,7 @@ import {
   normalizeAuthJoinPath,
 } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
+import { consumeBootstrapAuthFragment } from "../auth/bootstrap-fragment.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
@@ -62,7 +63,16 @@ export function OAuthCompletePage() {
     if (processedRef.current) return;
     processedRef.current = true;
 
-    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+    // Production captured and removed this fragment before evaluating the
+    // App/Sentry/analytics import graph. The location fallback keeps isolated
+    // component tests and old embedded shells recoverable, and is scrubbed
+    // before any value is parsed or adopted.
+    const captured = consumeBootstrapAuthFragment() ?? window.location.hash;
+    if (window.location.hash) {
+      const search = typeof window.location.search === "string" ? window.location.search : "";
+      window.history.replaceState(null, "", `${window.location.pathname}${search}`);
+    }
+    const hash = captured.startsWith("#") ? captured.slice(1) : captured;
     const params = new URLSearchParams(hash);
     const accessToken = params.get("access");
     const refreshToken = params.get("refresh");
@@ -122,9 +132,6 @@ export function OAuthCompletePage() {
     if (joinPath === "solo" || joinPath === "invite") {
       markOnboardingResume(joinPath);
     }
-
-    // Wipe the fragment immediately — token sits in localStorage from here on.
-    window.history.replaceState(null, "", window.location.pathname);
 
     void (async () => {
       try {

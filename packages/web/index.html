@@ -26,6 +26,10 @@
     <script>
       (() => {
         if (window.location.hostname !== "cloud.first-tree.ai") return;
+        // OAuth/continuation fragments are scrubbed by the tiny main entry
+        // before the app import graph runs. Do not race that scrub by loading
+        // a third-party analytics script on callback documents at all.
+        if (window.location.pathname === "/auth/complete" || window.location.pathname === "/auth/github/complete") return;
         window.dataLayer = window.dataLayer || [];
         // Keep the official gtag queue shape. gtag.js consumes the function's
         // Arguments object; pushing the rest-parameter Array leaves commands
@@ -55,6 +59,7 @@
     <script>
       (() => {
         if (window.location.hostname !== "cloud.first-tree.ai") return;
+        if (window.location.pathname === "/auth/complete" || window.location.pathname === "/auth/github/complete") return;
         window.clarity =
           window.clarity ||
           ((...args) => {

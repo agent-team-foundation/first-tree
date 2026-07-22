@@ -1,55 +1,88 @@
 /**
- * Query-parameter keys whose VALUES are replaced with `***` whenever a URL is
- * logged or stamped onto a span attribute. Kept aligned with `LOG_REDACT_PATHS`
- * so structured-log redaction (object fields) and URL-string redaction (query
- * parameters) share the same vocabulary.
- *
- * Comparison is case-sensitive. Every JWT-bearing URL in this codebase uses
- * the lowercase `?token=…` form (browser WebSocket can't set Authorization
- * headers, hence the query-param fallback in admin WS), so we trade the
- * safety of case-insensitive matching for a tighter implementation.
+ * Canonical, lowercase URL-context keys whose values must never reach logs or
+ * trace attributes. This list is deliberately independent of structured-field
+ * redaction: ordinary application fields such as `{ code: "no_installation" }`
+ * are useful and are not URL capabilities.
  */
 export const REDACT_QUERY_KEYS: ReadonlySet<string> = new Set([
   "token",
   "access_token",
-  "accessToken",
+  "accesstoken",
   "refresh_token",
-  "refreshToken",
+  "refreshtoken",
   "jwt",
   "password",
   "secret",
   "api_key",
-  "apiKey",
+  "apikey",
   "credentials",
   "authorization",
+  "code",
+  "state",
+  "ticket",
+  "claim",
 ]);
 
 const REDACTED = "***";
 
+function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
+}
+
+type RedactedComponent = { ok: true; value: string } | { ok: false };
+
 /**
- * Replace sensitive query-parameter values with `***` while preserving the
- * path, every other parameter, and the rest of the URL verbatim.
- *
- * Walks the query string by `&` then by the **first** `=`. Only the key is
- * matched against the redact set; the value is never inspected. So a literal
- * `?organizationId=019dfb...` is always preserved regardless of how the
- * value happens to look.
+ * Redact one form-style query or fragment component without normalizing its
+ * original spelling, order, or duplicates. Keys are decoded exactly once
+ * using form semantics. Malformed key encoding fails closed for the entire
+ * component because a downstream parser may still accept an alias that a
+ * best-effort logger would otherwise miss.
+ */
+function redactComponent(component: string): RedactedComponent {
+  if (component.length === 0) return { ok: true, value: component };
+  const output: string[] = [];
+  for (const pair of component.split("&")) {
+    const equalsIndex = pair.indexOf("=");
+    const rawKey = equalsIndex === -1 ? pair : pair.slice(0, equalsIndex);
+    let decodedKey: string;
+    try {
+      decodedKey = decodeURIComponent(rawKey.replace(/\+/g, " "));
+    } catch {
+      return { ok: false };
+    }
+    if (REDACT_QUERY_KEYS.has(asciiLower(decodedKey))) {
+      output.push(`${rawKey}=${REDACTED}`);
+    } else {
+      output.push(pair);
+    }
+  }
+  return { ok: true, value: output.join("&") };
+}
+
+/**
+ * Replace sensitive query and form-style fragment values while preserving
+ * every safe byte. GitLab's path capability is scrubbed first. This helper is
+ * total for every JavaScript string and never constructs URL/URLSearchParams,
+ * so duplicate occurrences and malformed raw targets cannot be collapsed or
+ * reinterpreted before redaction.
  */
 export function redactUrl(url: string): string {
   const pathRedacted = url.replace(/(\/api\/v1\/webhooks\/gitlab\/)[^/?#]+/g, `$1${REDACTED}`);
-  const qIdx = pathRedacted.indexOf("?");
-  if (qIdx === -1) return pathRedacted;
-  const path = pathRedacted.slice(0, qIdx);
-  const query = pathRedacted.slice(qIdx + 1);
-  if (query.length === 0) return pathRedacted;
-  const redacted = query
-    .split("&")
-    .map((pair) => {
-      const eq = pair.indexOf("=");
-      if (eq === -1) return pair;
-      const key = pair.slice(0, eq);
-      return REDACT_QUERY_KEYS.has(key) ? `${key}=${REDACTED}` : pair;
-    })
-    .join("&");
-  return `${path}?${redacted}`;
+  const fragmentIndex = pathRedacted.indexOf("#");
+  const beforeFragment = fragmentIndex === -1 ? pathRedacted : pathRedacted.slice(0, fragmentIndex);
+  const fragment = fragmentIndex === -1 ? null : pathRedacted.slice(fragmentIndex + 1);
+  const queryIndex = beforeFragment.indexOf("?");
+  const path = queryIndex === -1 ? beforeFragment : beforeFragment.slice(0, queryIndex);
+  const query = queryIndex === -1 ? null : beforeFragment.slice(queryIndex + 1);
+
+  let result = path;
+  if (query !== null) {
+    const redactedQuery = redactComponent(query);
+    result += `?${redactedQuery.ok ? redactedQuery.value : REDACTED}`;
+  }
+  if (fragment !== null) {
+    const redactedFragment = redactComponent(fragment);
+    result += `#${redactedFragment.ok ? redactedFragment.value : REDACTED}`;
+  }
+  return result;
 }

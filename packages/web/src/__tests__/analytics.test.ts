@@ -3,11 +3,24 @@ import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
 
 const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+const mainEntry = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");
 
 describe("production gtag bootstrap", () => {
   it("queues the official Arguments object so gtag.js processes commands", () => {
     expect(indexHtml).toContain("window.dataLayer.push(arguments)");
     expect(indexHtml).not.toContain("window.dataLayer.push(args)");
+  });
+
+  it("does not load third-party analytics on fragment-bearing callback documents", () => {
+    const callbackGuard =
+      'window.location.pathname === "/auth/complete" || window.location.pathname === "/auth/github/complete"';
+    expect(indexHtml.split(callbackGuard)).toHaveLength(3);
+  });
+
+  it("scrubs callback fragments before evaluating the application import graph", () => {
+    expect(mainEntry).not.toMatch(/^import\s/mu);
+    expect(mainEntry.indexOf("window.history.replaceState")).toBeGreaterThan(-1);
+    expect(mainEntry.indexOf("window.history.replaceState")).toBeLessThan(mainEntry.indexOf('import("./main-app.js")'));
   });
 });
 

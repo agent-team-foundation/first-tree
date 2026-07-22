@@ -37,6 +37,9 @@ describe("redactUrl", () => {
     expect(redactUrl("/x?apiKey=a")).toBe("/x?apiKey=***");
     expect(redactUrl("/x?credentials=a")).toBe("/x?credentials=***");
     expect(redactUrl("/x?authorization=Bearer+a")).toBe("/x?authorization=***");
+    expect(redactUrl("/x?code=oauth-code&state=oauth-state&ticket=t&claim=c")).toBe(
+      "/x?code=***&state=***&ticket=***&claim=***",
+    );
   });
 
   it("preserves non-sensitive params verbatim", () => {
@@ -53,11 +56,27 @@ describe("redactUrl", () => {
   });
 
   it("does not match keys that merely contain a sensitive substring", () => {
-    // Case-sensitive set membership: `userToken` is not in the redact set, so
-    // it passes through. (Pair this with `LOG_REDACT_PATHS` for object-level
-    // coverage on similar names.)
     expect(redactUrl("/x?userToken=keep")).toBe("/x?userToken=keep");
-    expect(redactUrl("/x?TOKEN=keep")).toBe("/x?TOKEN=keep");
+  });
+
+  it("matches ASCII case and encoded aliases without normalizing their spelling", () => {
+    expect(redactUrl("/x?TOKEN=a&CoDe=b&%63ode=c&accessToken=d&apiKey=e")).toBe(
+      "/x?TOKEN=***&CoDe=***&%63ode=***&accessToken=***&apiKey=***",
+    );
+  });
+
+  it("redacts every duplicate and key-only sensitive occurrence", () => {
+    expect(redactUrl("/x?state=A&state=B&code&safe")).toBe("/x?state=***&state=***&code=***&safe");
+  });
+
+  it("redacts form-style fragments independently", () => {
+    expect(redactUrl("/auth/complete?next=%2Fteam#claim=secret&x=1")).toBe("/auth/complete?next=%2Fteam#claim=***&x=1");
+    expect(redactUrl("/x#STATE=a&safe=b")).toBe("/x#STATE=***&safe=b");
+  });
+
+  it("fails closed for malformed key encodings", () => {
+    expect(redactUrl("/x?%ZZ=canary&x=1#claim=secret")).toBe("/x?***#claim=***");
+    expect(redactUrl("/x?safe=1#%E0%A4%A=canary")).toBe("/x?safe=1#***");
   });
 
   it("handles params with no value (key-only fragments)", () => {
