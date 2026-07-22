@@ -296,12 +296,15 @@ whether it landed; never retry blindly.
 
 ## Choose one App review outcome
 
-Immediately before submitting any outcome, use `gh pr view` again and require
-the live repository, state, draft flag, base ref/OID and head repository/ref/OID
-to still match the reviewed snapshot. This freshness check applies to `COMMENT`
-and `REQUEST_CHANGES` as well as `APPROVE`. If any identity or state fact moved,
-discard the old conclusion and repeat the validator-first review against the
-successor state before publishing.
+Immediately before submitting any outcome, rerun
+`first-tree org context-tree review-config --json`; require the live repository
+and branch, enabled Reviewer and assigned Agent to match the reviewed authority
+tuple. Then use `gh pr view` again and require its base ref to equal that live
+binding branch and its repository, state, draft flag, base ref/OID and head
+repository/ref/OID to match the reviewed snapshot. This applies to `COMMENT`,
+`REQUEST_CHANGES` and `APPROVE`. Unreadable or changed authority publishes
+nothing. If only the PR state moved within the same authority, discard the old
+conclusion and restart against the successor state.
 
 Choose exactly one outcome from the latest reviewed state:
 
@@ -354,9 +357,11 @@ Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 10 minutes. A repairable failure returns to repair; another failed check
 produces a non-approving outcome. If checks remain pending at the deadline,
 submit no approval and report the wait state without creating a watcher or job.
-After check polling completes, repeat the final `gh pr view` freshness read
-immediately before submitting any outcome. If the head or state moved, discard
-the conclusion and restart review; never publish from the pre-wait snapshot.
+After check polling completes, rerun the same live Reviewer configuration check
+and repeat the final `gh pr view` freshness read before `APPROVE`. If authority
+became unreadable or changed, publish nothing. If the PR moved within the same
+authority, discard the conclusion and restart review; never publish from the
+pre-wait snapshot.
 
 After the App approval command succeeds, the exact full SHA in that command's
 `data.reviewedHead` is the only merge authority. Do not use the earlier local

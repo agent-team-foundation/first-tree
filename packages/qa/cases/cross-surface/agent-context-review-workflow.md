@@ -107,10 +107,13 @@ GitHub review and repository gate.
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
   creates exactly one App review for that head. Confirm missing or revoked
-  `pull_requests: write` fails closed. Confirm the final PR freshness read
-  happens after validation, the complete semantic/content review and
-  current-head checks, and compares repository, base ref/OID and head
-  repository/ref/OID.
+  `pull_requests: write` fails closed. Before every outcome, and again after
+  check polling for `APPROVE`, confirm the Reviewer rereads the live binding
+  repository/branch, enabled Reviewer and assigned Agent, then requires the PR
+  base to equal that branch. Confirm the final PR freshness read happens after
+  validation, the complete semantic/content review and current-head checks,
+  and compares repository, base ref/OID and head repository/ref/OID. Changed or
+  unreadable authority must publish nothing.
 - Simulate an uncertain GitHub review write. Confirm the existing
   pending/submitting/unknown/failed/submitted publication state and hidden run
   marker reconcile the same run without a duplicate POST.

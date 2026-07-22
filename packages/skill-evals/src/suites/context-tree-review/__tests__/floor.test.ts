@@ -120,8 +120,10 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("Untouched protected residuals retain\ntheir original classification");
     expect(skill).toContain('staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`');
     expect(skill).toContain("A draft PR is read-only even when its findings would be mechanically");
-    expect(skill).toContain("After check polling completes, repeat the final `gh pr view` freshness read");
-    expect(skill).toContain("the live repository, state, draft flag, base ref/OID and head repository/ref/OID");
+    expect(skill).toContain("Immediately before submitting any outcome, rerun");
+    expect(skill).toContain("its base ref to equal that live\nbinding branch");
+    expect(skill).toContain("After check polling completes, rerun the same live Reviewer configuration check");
+    expect(skill).toContain("its repository, state, draft flag, base ref/OID and head\nrepository/ref/OID");
     expect(skill).toContain("branch-attached repair worktree through normal `git worktree remove`");
     expect(skill).toContain("`data.reviewedHead` is the only merge authority");
     expect(skill).toMatch(/gh api \\\s+--method PUT/u);
