@@ -153,6 +153,9 @@ vi.mock("../pages/settings-github-preview.js", () => ({
   SettingsGithubPreviewPage: () => <div>settings github preview</div>,
 }));
 vi.mock("../pages/onboarding-preview.js", () => ({ OnboardingPreviewPage: () => <div>onboarding preview</div> }));
+vi.mock("../pages/context-tree-setup-preview.js", () => ({
+  ContextTreeSetupPreviewPage: () => <div>context tree setup preview</div>,
+}));
 vi.mock("../pages/team-preview.js", () => ({ TeamPreviewPage: () => <div>team preview</div> }));
 vi.mock("../pages/resources-preview.js", () => ({ ResourcesPreviewPage: () => <div>resources preview</div> }));
 vi.mock("../pages/agent-detail-preview.js", () => ({ AgentDetailPreviewPage: () => <div>agent detail preview</div> }));
@@ -466,5 +469,34 @@ describe("App routes", () => {
     const productionPreview = await renderAppAt("/preview/styleguide", false);
     expect(productionPreview).toContain("styleguide preview");
     expect(productionPreview).not.toContain("context preview");
+  });
+
+  it("exposes Context Tree setup only in development and on the staging channel", async () => {
+    expect(await renderAppAt("/preview/context-tree-setup")).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "staging";
+    expect(await renderAppAt("/preview/context-tree-setup", false)).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.settled = false;
+    const pendingRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(pendingRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/preview/context-tree-setup");
+    await resetRenderedApp();
+
+    serverChannelStateMock.settled = true;
+    serverChannelStateMock.channel = null;
+    const unknownRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(unknownRoute).toContain("workspace page");
+    expect(unknownRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "prod";
+    const productionRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(productionRoute).toContain("workspace page");
+    expect(productionRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
   });
 });

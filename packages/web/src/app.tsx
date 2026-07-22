@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, type ReactNode, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteTracker } from "./analytics.js";
 import { AuthProvider } from "./auth/auth-context.js";
@@ -153,6 +153,15 @@ const SettingsGithubPreviewPage = import.meta.env.DEV
     )
   : null;
 
+// Public fixture preview for the BYO Context Tree handoff. It is compiled into
+// hosted builds so staging can expose it, but the route gate below fails closed
+// on production and unknown channels. It has no auth or backend mutations.
+const ContextTreeSetupPreviewPage = lazy(() =>
+  import("./pages/context-tree-setup-preview.js").then((module) => ({
+    default: module.ContextTreeSetupPreviewPage,
+  })),
+);
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -178,6 +187,16 @@ export function App() {
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
+              <Route
+                path="/preview/context-tree-setup"
+                element={
+                  <StagingPreviewGate>
+                    <Suspense fallback={null}>
+                      <ContextTreeSetupPreviewPage />
+                    </Suspense>
+                  </StagingPreviewGate>
+                }
+              />
               {ContextPreviewPage ? (
                 <Route
                   path="/preview/context"
@@ -481,6 +500,13 @@ type MobileExperienceState = {
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
+}
+
+function StagingPreviewGate({ children }: { children: ReactNode }) {
+  const { channel, settled } = useServerChannelState();
+  if (!settled) return null;
+  if (!import.meta.env.DEV && channel !== "staging") return <Navigate to="/" replace />;
+  return children;
 }
 
 function LegacyUserSettingsRedirect() {
