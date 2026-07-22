@@ -64,9 +64,12 @@ GitHub review and repository gate.
 - Exercise repairable validator and semantic failures on a same-repository
   branch. Confirm local git/`gh` credentials repair, commit, and push every
   objectively determined, decision-preserving finding before the agent chooses
-  an App outcome. A fully repairable ready PR must not ask the author to change
-  it and must approve only after validating and semantically reviewing the
-  successor head.
+  an App outcome. Immediately before mutation, confirm the live PR and source
+  branch still equal the reviewed head. Confirm repair validation and a
+  complete base-to-result content diff happen before the normal commit and
+  push. A fully repairable ready PR must not ask the author to change it and
+  must approve only after validating and semantically reviewing the successor
+  head.
 - Exercise mixed safe and protected findings. Confirm the Reviewer repairs the
   safe batch first, then uses
   `first-tree tree review --run ... --event COMMENT --body-file ...` to hand off
@@ -83,7 +86,9 @@ GitHub review and repository gate.
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
   creates exactly one App review for that head. Confirm missing or revoked
-  `pull_requests: write` fails closed.
+  `pull_requests: write` fails closed. Confirm the final PR freshness read
+  happens after validation, the complete semantic/content review and
+  current-head checks.
 - Simulate an uncertain GitHub review write. Confirm the existing
   pending/submitting/unknown/failed/submitted publication state and hidden run
   marker reconcile the same run without a duplicate POST.
@@ -96,6 +101,9 @@ GitHub review and repository gate.
 - Force local merge permission, ruleset, check and transient provider failures.
   Confirm the agent reports approval plus the merge error, does not duplicate
   or roll back the App review, and does not claim success.
+- Confirm every known clean Reviewer-owned detached review worktree and
+  branch-attached repair worktree is removed normally. Dirty or unknown paths
+  must remain fail-closed for manual recovery.
 
 ## Expected Result
 

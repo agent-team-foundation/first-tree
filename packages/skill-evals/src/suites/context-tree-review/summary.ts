@@ -13,12 +13,20 @@ export function buildGrading(
     evalCase.expected.repair === "success"
       ? metrics.authorizedRepairObserved &&
         metrics.repairCommitObserved &&
+        metrics.repairDiffObserved &&
+        metrics.repairHeadFresh &&
         metrics.repairPushObserved &&
+        metrics.repairSequenceValid &&
         metrics.successorVerifyPassed &&
         metrics.successorSemanticReviewComplete &&
         !metrics.authorHandoffForRepairableFinding
       : evalCase.expected.repair === "push-denied"
-        ? metrics.authorizedRepairObserved && metrics.repairCommitObserved && metrics.repairPushDenied
+        ? metrics.authorizedRepairObserved &&
+          metrics.repairCommitObserved &&
+          metrics.repairDiffObserved &&
+          metrics.repairHeadFresh &&
+          metrics.repairPushDenied &&
+          metrics.repairSequenceValid
         : !metrics.authorizedRepairObserved && !metrics.repairCommitObserved && !metrics.repairPushObserved;
   const integrityOk =
     metrics.fixtureIntegrity.mainHeadUnchanged &&
@@ -43,7 +51,7 @@ export function buildGrading(
       ),
       evidence(
         "process_pass",
-        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; invalid expansion after failed verify=${metrics.semanticReadAfterFailedVerify}; repair=${evalCase.expected.repair}; successor verify=${metrics.successorVerifyPassed}; successor semantic=${metrics.successorSemanticReviewComplete}; final fresh=${metrics.finalViewFresh}`,
+        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; invalid expansion after failed verify=${metrics.semanticReadAfterFailedVerify}; repair=${evalCase.expected.repair}; repair head fresh=${metrics.repairHeadFresh}; repair diff=${metrics.repairDiffObserved}; repair sequence=${metrics.repairSequenceValid}; successor verify=${metrics.successorVerifyPassed}; successor semantic=${metrics.successorSemanticReviewComplete}; checks current=${metrics.checksCurrentHead}; final fresh=${metrics.finalViewFresh}`,
       ),
       evidence(
         "outcome_pass",
@@ -72,6 +80,7 @@ export function buildGrading(
           evalCase.fixture.scenario === "archive-only" ||
           metrics.semanticReadAfterVerify) &&
         metrics.finalViewFresh &&
+        metrics.checksCurrentHead &&
         metrics.reviewAfterFinalView &&
         repairProcess,
       outcome_pass:
@@ -93,7 +102,7 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   writeFileSync(
     summary.summaryMdPath,
-    `# context-tree-review Eval: ${summary.caseId}\n\n- passed: ${summary.passed}\n- expectedAction: ${summary.expectedAction}\n- reviewActions: ${summary.metrics.reviewEvents.map((item) => item.action).join(", ") || "none"}\n- verifyExitCodes: ${summary.metrics.verifyExitCodes.join(", ")}\n- verifyHeadBound: ${summary.metrics.verifyHeadBound}\n- authorizedRepairObserved: ${summary.metrics.authorizedRepairObserved}\n- repairCommitObserved: ${summary.metrics.repairCommitObserved}\n- repairPushObserved: ${summary.metrics.repairPushObserved}\n- repairPushDenied: ${summary.metrics.repairPushDenied}\n- successorVerifyPassed: ${summary.metrics.successorVerifyPassed}\n- successorSemanticReviewComplete: ${summary.metrics.successorSemanticReviewComplete}\n- finalViewFresh: ${summary.metrics.finalViewFresh}\n- finalReviewBoundToSuccessorHead: ${summary.metrics.finalReviewBoundToSuccessorHead}\n- authorHandoffForRepairableFinding: ${summary.metrics.authorHandoffForRepairableFinding}\n- blockedGithubAttempts: ${summary.metrics.blockedGithubAttempts}\n- unexpectedMutationAttempted: ${summary.metrics.unexpectedMutationAttempted}\n\n## Grading\n\n${gradingMarkdownRows(summary.grading)}\n`,
+    `# context-tree-review Eval: ${summary.caseId}\n\n- passed: ${summary.passed}\n- expectedAction: ${summary.expectedAction}\n- reviewActions: ${summary.metrics.reviewEvents.map((item) => item.action).join(", ") || "none"}\n- verifyExitCodes: ${summary.metrics.verifyExitCodes.join(", ")}\n- verifyHeadBound: ${summary.metrics.verifyHeadBound}\n- authorizedRepairObserved: ${summary.metrics.authorizedRepairObserved}\n- repairHeadFresh: ${summary.metrics.repairHeadFresh}\n- repairCommitObserved: ${summary.metrics.repairCommitObserved}\n- repairDiffObserved: ${summary.metrics.repairDiffObserved}\n- repairSequenceValid: ${summary.metrics.repairSequenceValid}\n- repairPushObserved: ${summary.metrics.repairPushObserved}\n- repairPushDenied: ${summary.metrics.repairPushDenied}\n- successorVerifyPassed: ${summary.metrics.successorVerifyPassed}\n- successorSemanticReviewComplete: ${summary.metrics.successorSemanticReviewComplete}\n- checksCurrentHead: ${summary.metrics.checksCurrentHead}\n- finalViewFresh: ${summary.metrics.finalViewFresh}\n- finalReviewBoundToSuccessorHead: ${summary.metrics.finalReviewBoundToSuccessorHead}\n- authorHandoffForRepairableFinding: ${summary.metrics.authorHandoffForRepairableFinding}\n- blockedGithubAttempts: ${summary.metrics.blockedGithubAttempts}\n- unexpectedMutationAttempted: ${summary.metrics.unexpectedMutationAttempted}\n\n## Grading\n\n${gradingMarkdownRows(summary.grading)}\n`,
     "utf8",
   );
 }

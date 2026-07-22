@@ -101,6 +101,7 @@ export type ViewEvent = {
   eventIndex: number;
   headRefOid: string;
   isDraft: boolean;
+  order: number;
   prNumber: number;
   repo: string;
   state: string;
@@ -111,6 +112,7 @@ export type EvalMetrics = {
   authorizedRepairObserved: boolean;
   bodyHintsObserved: boolean;
   blockedGithubAttempts: number;
+  checksCurrentHead: boolean;
   expectedHeadingObserved: boolean;
   finalViewFresh: boolean;
   firstTreeReadLoaded: boolean;
@@ -121,9 +123,12 @@ export type EvalMetrics = {
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
   repairCommitObserved: boolean;
+  repairDiffObserved: boolean;
+  repairHeadFresh: boolean;
   repairPathsExact: boolean;
   repairPushDenied: boolean;
   repairPushObserved: boolean;
+  repairSequenceValid: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

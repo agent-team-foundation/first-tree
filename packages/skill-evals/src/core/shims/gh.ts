@@ -85,6 +85,16 @@ function liveReviewHead(fixture) {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
+function liveReviewFiles(fixture, baseOid, headOid) {
+  if (!fixture.originPath || !baseOid || !headOid) return [];
+  const result = spawnSync("git", ["--git-dir", fixture.originPath, "diff", "--name-only", baseOid, headOid], {
+    encoding: "utf8",
+  });
+  return result.status === 0
+    ? result.stdout.split("\\n").filter(Boolean).map((path) => ({ path }))
+    : [];
+}
+
 function auditPublishedRefs(fixture) {
   try {
     return readFileSync(EVENTS_PATH, "utf8")
@@ -327,7 +337,12 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
     });
   }
   const template = fixture.view || fixture.views[Math.min(state.views, fixture.views.length - 1)];
-  const view = { ...template, headRefOid: liveReviewHead(fixture) };
+  const headRefOid = liveReviewHead(fixture);
+  const view = {
+    ...template,
+    files: liveReviewFiles(fixture, template.baseRefOid, headRefOid),
+    headRefOid,
+  };
   const viewIndex = state.views;
   state.views += 1;
   writeFileSync(statePath, JSON.stringify(state), "utf8");
@@ -358,6 +373,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "checks") {
     type: "github_pr_checks_viewed",
     phase,
     argv,
+    checksPassed: true,
     cwd: process.cwd(),
     headRefOid: liveReviewHead(fixture),
     prNumber: fixture.prNumber,

@@ -114,7 +114,7 @@ policy rule, future-agent impact and actionable correction.
 
 For every finding in a trusted run, classify it before choosing an outcome:
 
-- `SAFE_REPAIR` — the PR is same-repository and non-fork, the live source ref
+- `SAFE_REPAIR` — the PR is ready for review, same-repository and non-fork, the live source ref
   exists, the current local git/`gh` identity can push, Tree and source evidence
   determine one correction, and the change does not cross a protected boundary.
   The assigned reviewer **must** repair it before escalation. No PR-body consent
@@ -146,14 +146,18 @@ unambiguously authorize the change:
 - ambiguous product decisions, conflicting evidence or missing authority;
 - changes that would rewrite or amend another author's commit.
 
-Objective validation, frontmatter, placement, link, duplication and
-decision-preserving wording defects are `SAFE_REPAIR` when the evidence fully
-determines the correction. Filling an invalid missing or empty `owners` value
-from one unambiguous existing parent/member ownership record is a mechanical
-repair; selecting or replacing an owner is a protected decision.
+Objective validation, non-ownership frontmatter, placement, link, duplication
+and decision-preserving wording defects are `SAFE_REPAIR` when the evidence
+fully determines the correction. Any `owners` edit remains a protected
+ownership decision, including filling a missing or empty value; parent or
+member ownership does not implicitly assign ownership to another node.
 
-Attach a unique agent-owned worktree to the live source ref, make the repair,
-run `first-tree tree verify --json`, and inspect the complete base-to-head diff.
+Immediately before mutation, re-read the live PR and source ref and require both
+to equal `REVIEWED_HEAD`. If either moved, discard every finding and restart the
+validator-first review at the successor head. Attach a unique agent-owned
+worktree to that unchanged live source ref, make the repair, run
+`first-tree tree verify --json`, and inspect the complete base-to-result diff
+with `git diff "$BASE_OID"` before staging or committing.
 Commit normally with the host git identity and push with the host git/`gh`
 credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
 base branch or retarget the PR. If a remote write result is unknown, fetch and
@@ -243,8 +247,9 @@ possible. Review the latest live PR state rather than trying to elect one
 exclusive run. A run's App publication remains idempotent only for the same
 event and body; an unresolved App write is reconciled by its hidden run marker.
 
-Always remove known clean detached worktrees through normal
-`git worktree remove`. Never force-remove an unknown or dirty path.
+Always remove every known clean, agent-owned detached review worktree and
+branch-attached repair worktree through normal `git worktree remove`. Never
+force-remove an unknown or dirty path; report it for recovery instead.
 
 Report the reviewed head, verification, repairs, App review action and merge
 result, or one concrete human action. Chat is coordination only: do not copy the

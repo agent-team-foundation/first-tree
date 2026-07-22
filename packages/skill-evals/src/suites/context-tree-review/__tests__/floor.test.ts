@@ -84,10 +84,14 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("A mixed review must repair all");
     expect(skill).toContain("Never ask the author to perform a\n  `SAFE_REPAIR`");
     expect(skill).toContain("same-repository and non-fork");
+    expect(skill).toContain("ready for review, same-repository and non-fork");
     expect(skill).toContain("`PROTECTED_DECISION`");
     expect(skill).toContain("`REPAIR_BLOCKED`");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
+    expect(skill).toContain("Immediately before mutation, re-read the live PR and source ref");
+    expect(skill).toContain('with `git diff "$BASE_OID"` before staging or committing');
+    expect(skill).toContain("branch-attached repair worktree through normal `git worktree remove`");
     expect(skill).toContain('gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash');
     expect(skill).not.toContain("--match-head-commit");
     expect(skill).not.toContain("parse-repair-scope");

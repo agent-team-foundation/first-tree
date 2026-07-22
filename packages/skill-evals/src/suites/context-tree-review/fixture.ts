@@ -38,7 +38,7 @@ const DEFAULT_SKILL_NAMES = [
 
 function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
   const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The existing parent and member records uniquely establish \`eval-owner\` for missing ownership metadata; they do not authorize replacing an existing owner. The current durable review decision is that the GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.\n`;
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for all ownership changes and \`decisionLocksCode\`. Member or parent ownership does not implicitly assign an owner to another node. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The current durable review decision is that the GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.\n`;
 }
 
 function changedBodies(
@@ -56,7 +56,7 @@ function changedBodies(
     return [
       {
         path: "system/review-contract.md",
-        content: `---\ntitle: "Review Contract"\nowners: []\n---\n\n# Review Contract\n\n## Decision\n\nThe GitHub App publishes Context Tree review outcomes.\n`,
+        content: `---\nowners: [eval-owner]\n---\n\n# Review Contract\n\n## Decision\n\nThe GitHub App publishes Context Tree review outcomes.\n`,
       },
     ];
   }
@@ -128,23 +128,22 @@ function refOid(gitDir: string, ref: string): string {
 
 function repairContentValid(fixture: ReviewFixture, sourceHeadOid: string): boolean {
   if (fixture.expectation.repair === "none") return sourceHeadOid === fixture.expectation.headOid;
-  const show = (path: string) => runCommand("git", ["show", `${sourceHeadOid}:${path}`], fixture.treePath);
+  const showAt = (oid: string, path: string) => runCommand("git", ["show", `${oid}:${path}`], fixture.treePath);
+  const show = (path: string) => showAt(sourceHeadOid, path);
   if (fixture.expectation.repairPaths.includes("system/review-contract.md")) {
     const shown = show("system/review-contract.md");
     if (fixture.expectation.initialVerifyMustPass === false) {
-      return shown.exitCode === 0 && /^owners:\s*\[eval-owner\]$/mu.test(shown.stdout);
+      const original = showAt(fixture.expectation.headOid, "system/review-contract.md");
+      const withoutRepairedTitle = shown.stdout.replace(/^title:\s*(?:"Review Contract"|Review Contract)\n/mu, "");
+      return shown.exitCode === 0 && original.exitCode === 0 && withoutRepairedTitle === original.stdout;
     }
     if (shown.exitCode !== 0) {
       return /GitHub App/iu.test(show("system/NODE.md").stdout);
     }
-    return (
-      /GitHub App/iu.test(shown.stdout) &&
-      !/reviewPullRequest|POST \/reviews|Shipped in PR|Copy future source changes/iu.test(shown.stdout)
-    );
+    return false;
   }
   if (fixture.expectation.repairPaths.includes("system/review-wording.md")) {
     const wordingResult = show("system/review-wording.md");
-    const wording = wordingResult.exitCode === 0 ? wordingResult.stdout : show("system/NODE.md").stdout;
     const protectedPath = "system/authority-contract.md";
     const protectedDiff = runCommand(
       "git",
@@ -153,8 +152,8 @@ function repairContentValid(fixture: ReviewFixture, sourceHeadOid: string): bool
     );
     return (
       protectedDiff.exitCode === 0 &&
-      /GitHub App/iu.test(wording) &&
-      !/reviewPullRequest|provenance|Copy future source changes/iu.test(wording)
+      wordingResult.exitCode !== 0 &&
+      /GitHub App publishes the formal review verdict/iu.test(show("system/NODE.md").stdout)
     );
   }
   return false;

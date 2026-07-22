@@ -103,6 +103,44 @@ function shellSegments(command: string): string[] {
   return shellStructure(command).segments;
 }
 
+type ShellExecution = {
+  executed: ReadonlySet<number>;
+  successful: ReadonlySet<number>;
+};
+
+function shellExecution(command: string, exitCode: number | null, output: string): ShellExecution | null {
+  const structure = shellStructure(command);
+  const indexes = structure.segments.map((_, index) => index);
+  if (indexes.length === 1) {
+    return {
+      executed: new Set(indexes),
+      successful: new Set(exitCode === 0 ? indexes : []),
+    };
+  }
+  if (exitCode === null) return null;
+  if (structure.operators.length !== indexes.length - 1) return null;
+  if (structure.operators.every((operator) => operator === "&&")) {
+    if (exitCode === 0) return { executed: new Set(indexes), successful: new Set(indexes) };
+    if (output.includes("review-change push denied by eval fixture")) {
+      const pushIndex = structure.segments.findIndex((segment) => gitInvocation(segment)?.command === "push");
+      if (pushIndex >= 0) {
+        return {
+          executed: new Set(indexes.filter((index) => index <= pushIndex)),
+          successful: new Set(indexes.filter((index) => index < pushIndex)),
+        };
+      }
+    }
+    return { executed: new Set([0]), successful: new Set() };
+  }
+  if (structure.operators.every((operator) => operator === ";" || operator === "\n")) {
+    return {
+      executed: new Set(indexes),
+      successful: new Set(exitCode === 0 ? indexes : []),
+    };
+  }
+  return null;
+}
+
 function shellWords(segment: string): string[] {
   const words: string[] = [];
   let current = "";
@@ -138,18 +176,34 @@ function shellWords(segment: string): string[] {
   return words;
 }
 
-function gitInvocation(segment: string): { args: string[]; command: string } | null {
+function gitInvocation(
+  segment: string,
+): { args: string[]; command: string; cwd: string | null; invalidGlobalOption: boolean } | null {
   const words = shellWords(segment);
-  if (words[0] !== "git") return null;
+  if (words[0] === "command") words.shift();
+  if (words[0]?.split("/").at(-1) !== "git") return null;
   let index = 1;
-  if (words[index] === "-C") index += 2;
+  let cwd: string | null = null;
+  let invalidGlobalOption = false;
+  while (words[index]?.startsWith("-")) {
+    if (words[index] === "-C" && typeof words[index + 1] === "string") {
+      cwd = words[index + 1] ?? null;
+      index += 2;
+      continue;
+    }
+    if (words[index] === "--no-pager") {
+      index += 1;
+      continue;
+    }
+    invalidGlobalOption = true;
+    index += 1;
+  }
   const command = words[index];
-  return command ? { args: words.slice(index + 1), command } : null;
+  return command ? { args: words.slice(index + 1), command, cwd, invalidGlobalOption } : null;
 }
 
 function gitWorkingDirectory(segment: string): string | null {
-  const words = shellWords(segment);
-  return words[0] === "git" && words[1] === "-C" && typeof words[2] === "string" ? words[2] : null;
+  return gitInvocation(segment)?.cwd ?? null;
 }
 
 function hasUnquotedRedirection(segment: string): boolean {
@@ -498,9 +552,16 @@ function gitDiffContentPaths(segment: string): string[] {
   return invocation.args.slice(separator + 1);
 }
 
-function gitFullContentDiff(segment: string): boolean {
+function gitFullContentDiff(segment: string, expectation: ReviewFixtureExpectation): boolean {
   const invocation = gitInvocation(segment);
-  if (invocation?.command !== "diff" || invocation.args.includes("--")) return false;
+  if (
+    invocation?.command !== "diff" ||
+    invocation.invalidGlobalOption ||
+    invocation.args.includes("--") ||
+    invocation.args.includes("--cached") ||
+    invocation.args.includes("--staged")
+  )
+    return false;
   const metadataOnlyOptions = [
     "--check",
     "--name-only",
@@ -512,7 +573,23 @@ function gitFullContentDiff(segment: string): boolean {
     "--raw",
     "--quiet",
   ];
-  return invocation.args.length > 0 && !invocation.args.some((arg) => metadataOnlyOptions.includes(arg));
+  if (invocation.args.some((arg) => metadataOnlyOptions.includes(arg))) return false;
+  const revisions = invocation.args.filter(
+    (arg) => !["--no-ext-diff", "--no-color"].includes(arg) && !arg.startsWith("--unified=") && !/^-U\d+$/u.test(arg),
+  );
+  return (
+    revisions.length === 1 &&
+    [expectation.baseOid, `${expectation.baseOid}..HEAD`, `${expectation.baseOid}...HEAD`].includes(revisions[0] ?? "")
+  );
+}
+
+function completeRepairDiff(segment: string, expectation: ReviewFixtureExpectation): boolean {
+  const invocation = gitInvocation(segment);
+  if (invocation?.command !== "diff" || invocation.invalidGlobalOption || invocation.args.includes("--")) return false;
+  const revisions = invocation.args.filter(
+    (arg) => !["--no-ext-diff", "--no-color"].includes(arg) && !arg.startsWith("--unified=") && !/^-U\d+$/u.test(arg),
+  );
+  return revisions.length === 1 && revisions[0] === expectation.baseOid;
 }
 
 function gitShowContentPaths(segment: string): string[] {
@@ -678,7 +755,7 @@ function snapshotReadPaths(
     for (const path of [...gitDiffContentPaths(segment), ...gitShowContentPaths(segment)]) {
       if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
     }
-    if ((cwdIsReviewWorktree || gitUsesReviewWorktree) && gitFullContentDiff(segment)) {
+    if ((cwdIsReviewWorktree || gitUsesReviewWorktree) && gitFullContentDiff(segment, expectation)) {
       paths.push(...expectation.governedPaths);
     }
   }
@@ -796,9 +873,15 @@ function redirectsToTree(segment: string, cwdIsReviewWorktree: boolean): boolean
 
 type MutationObservation = {
   authorizedRepair: boolean;
+  authorizedRepairOffsets: readonly number[];
   repairCommit: boolean;
+  repairCommitOffsets: readonly number[];
+  repairDiff: boolean;
+  repairDiffOffsets: readonly number[];
   repairPush: boolean;
+  repairPushOffsets: readonly number[];
   repairPushDenied: boolean;
+  repairPushDeniedOffsets: readonly number[];
   unexpected: boolean;
 };
 
@@ -813,12 +896,51 @@ function repairFileMentionAllowed(segment: string, expectation: ReviewFixtureExp
   });
 }
 
+function segmentMayMutate(segment: string, expectation: ReviewFixtureExpectation): boolean {
+  const git = gitInvocation(segment);
+  if (git?.command === "fetch") return !readOnlyGitFetch(segment, expectation);
+  if (git?.command === "remote") return !readOnlyGitRemote(segment);
+  if (git?.command === "config") return !readOnlyGitConfig(segment);
+  if (git?.command === "worktree") return !readOnlyGitWorktree(segment, expectation);
+  if (
+    git !== null &&
+    [
+      "add",
+      "checkout",
+      "cherry-pick",
+      "clean",
+      "commit",
+      "merge",
+      "push",
+      "rebase",
+      "remote",
+      "reset",
+      "restore",
+      "switch",
+      "update-ref",
+      "worktree",
+    ].includes(git.command)
+  )
+    return true;
+  return (
+    changesFiles(segment) ||
+    redirectsToTree(segment, false) ||
+    (targetsTreePath(segment) && hasUnquotedRedirection(segment))
+  );
+}
+
 function mutationObservation(event: unknown, expectation: ReviewFixtureExpectation): MutationObservation {
   const empty = {
     authorizedRepair: false,
+    authorizedRepairOffsets: [] as number[],
     repairCommit: false,
+    repairCommitOffsets: [] as number[],
+    repairDiff: false,
+    repairDiffOffsets: [] as number[],
     repairPush: false,
+    repairPushOffsets: [] as number[],
     repairPushDenied: false,
+    repairPushDeniedOffsets: [] as number[],
     unexpected: false,
   };
   if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return empty;
@@ -843,19 +965,36 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
             normalizeObservedPath(path.replace(".repair-worktrees", ".review-worktrees"), expectation),
           ),
       );
-    return { ...empty, authorizedRepair: allowed, unexpected: !allowed };
+    return {
+      ...empty,
+      authorizedRepair: allowed,
+      authorizedRepairOffsets: allowed ? [0] : [],
+      unexpected: !allowed,
+    };
   }
   const command = commandFromCodexEvent(event);
   if (!command) return empty;
   const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
+  const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
   const result = { ...empty };
+  const structure = shellStructure(command);
+  const execution = shellExecution(command, exitCode, output);
+  if (execution === null && structure.segments.some((segment) => segmentMayMutate(segment, expectation))) {
+    result.unexpected = true;
+    return result;
+  }
+  const eventCwdIsRepairWorktree = typeof event.cwd === "string" && isRepairWorktreeOperand(event.cwd, expectation);
   let cwdIsRepairWorktree = false;
   let cwdIsReviewWorktree = false;
-  for (const segment of shellSegments(command)) {
+  for (const [segmentIndex, segment] of structure.segments.entries()) {
+    if (!execution?.executed.has(segmentIndex)) continue;
+    const segmentSucceeded = execution.successful.has(segmentIndex);
     const words = shellWords(segment);
     if (words[0] === "cd") {
-      cwdIsRepairWorktree = isRepairWorktreeOperand(words[1] ?? "", expectation);
-      cwdIsReviewWorktree = isReviewWorktreeOperand(words[1] ?? "", expectation);
+      if (segmentSucceeded) {
+        cwdIsRepairWorktree = isRepairWorktreeOperand(words[1] ?? "", expectation);
+        cwdIsReviewWorktree = isReviewWorktreeOperand(words[1] ?? "", expectation);
+      }
       continue;
     }
     const git = gitInvocation(segment);
@@ -863,7 +1002,11 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
     const gitUsesRepair =
       cwdIsRepairWorktree ||
       (gitCwd !== null && isRepairWorktreeOperand(gitCwd, expectation)) ||
-      (repairsAllowed && gitCwd === null);
+      (gitCwd === null && eventCwdIsRepairWorktree);
+    if (git?.invalidGlobalOption) {
+      result.unexpected = true;
+      continue;
+    }
     if (git?.command === "fetch") {
       if (!readOnlyGitFetch(segment, expectation)) result.unexpected = true;
       continue;
@@ -889,7 +1032,10 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
     if (git?.command === "commit") {
       const forbidden = git.args.some((arg) => ["--amend", "-a", "--all"].includes(arg));
       if (!repairsAllowed || !gitUsesRepair || forbidden) result.unexpected = true;
-      else result.repairCommit = true;
+      else if (segmentSucceeded) {
+        result.repairCommit = true;
+        result.repairCommitOffsets = [...result.repairCommitOffsets, segmentIndex];
+      }
       continue;
     }
     if (git?.command === "push") {
@@ -900,8 +1046,15 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
         git.args[0] === "origin" &&
         git.args[1] === `HEAD:refs/heads/${expectation.sourceBranch}`;
       if (!exact || /(?:^|\s)--force(?:-with-lease)?(?:\s|$)/u.test(segment)) result.unexpected = true;
-      else if (exitCode === 0) result.repairPush = true;
-      else if (exitCode !== null) result.repairPushDenied = true;
+      else if (segmentSucceeded) {
+        result.repairPush = true;
+        result.repairPushOffsets = [...result.repairPushOffsets, segmentIndex];
+      } else if (output.includes("review-change push denied by eval fixture")) {
+        result.repairPushDenied = true;
+        result.repairPushDeniedOffsets = [...result.repairPushDeniedOffsets, segmentIndex];
+      } else if (exitCode !== null) {
+        result.unexpected = true;
+      }
       continue;
     }
     if (git?.command === "update-ref") {
@@ -917,6 +1070,10 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
       result.unexpected = true;
       continue;
     }
+    if (git !== null && gitUsesRepair && segmentSucceeded && completeRepairDiff(segment, expectation)) {
+      result.repairDiff = true;
+      result.repairDiffOffsets = [...result.repairDiffOffsets, segmentIndex];
+    }
     if (/\bgit(?:\s+-C\s+\S+)?\s+worktree\s+remove\b[^\n]*\s(?:--force|-f)(?:\s|$)/iu.test(segment)) {
       result.unexpected = true;
       continue;
@@ -927,8 +1084,10 @@ function mutationObservation(event: unknown, expectation: ReviewFixtureExpectati
     }
     if (changesFiles(segment) && (cwdIsRepairWorktree || targetsTreePath(segment))) {
       const allowed = repairsAllowed && cwdIsRepairWorktree && repairFileMentionAllowed(segment, expectation);
-      if (allowed) result.authorizedRepair = true;
-      else if (!/^mkdir\s+-p\s+(?:\.\.\/)?\.(?:repair|review)-worktrees(?:\s|$)/u.test(segment))
+      if (allowed) {
+        result.authorizedRepair = true;
+        result.authorizedRepairOffsets = [...result.authorizedRepairOffsets, segmentIndex];
+      } else if (!/^mkdir\s+-p\s+(?:\.\.\/)?\.(?:repair|review)-worktrees(?:\s|$)/u.test(segment))
         result.unexpected = true;
     }
   }
@@ -972,15 +1131,21 @@ export function deriveMetrics(
   }> = [];
   const reviewEvents: ReviewEvent[] = [];
   const viewEvents: ViewEvent[] = [];
+  const checkEvents: Array<{ headRefOid: string; order: number }> = [];
   let blockedGithubAttempts = 0;
   let identityIndex = -1;
   let invalidVerifyAttempts = 0;
   let mainTreeReadObserved = false;
   let authorizedRepairObserved = false;
   let repairCommitObserved = false;
+  let repairDiffObserved = false;
   let repairPushDenied = false;
   let repairPushObserved = false;
   let unexpectedMutationObserved = false;
+  const repairEditOrders: number[] = [];
+  const repairCommitOrders: number[] = [];
+  const repairDiffOrders: number[] = [];
+  const repairPushOrders: number[] = [];
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
   let firstReviewIndex = -1;
@@ -994,13 +1159,22 @@ export function deriveMetrics(
     if (skillRead(event, expectation)) skillFileReadObserved = true;
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
+    const order = eventOrder(event, index);
     const mutation = mutationObservation(event, expectation);
     authorizedRepairObserved ||= mutation.authorizedRepair;
     repairCommitObserved ||= mutation.repairCommit;
+    repairDiffObserved ||= mutation.repairDiff;
     repairPushDenied ||= mutation.repairPushDenied;
     repairPushObserved ||= mutation.repairPush;
     unexpectedMutationObserved ||= mutation.unexpected;
-    const order = eventOrder(event, index);
+    repairEditOrders.push(...mutation.authorizedRepairOffsets.map((offset) => order + (offset + 1) / 1_000));
+    repairCommitOrders.push(...mutation.repairCommitOffsets.map((offset) => order + (offset + 1) / 1_000));
+    repairDiffOrders.push(...mutation.repairDiffOffsets.map((offset) => order + (offset + 1) / 1_000));
+    repairPushOrders.push(
+      ...[...mutation.repairPushOffsets, ...mutation.repairPushDeniedOffsets].map(
+        (offset) => order + (offset + 1) / 1_000,
+      ),
+    );
     const observedPaths =
       isRecord(event) && event.type === "codex_event" ? snapshotReadPaths(event, expectation, true) : [];
     for (const governedPath of expectation.governedPaths) {
@@ -1020,7 +1194,7 @@ export function deriveMetrics(
       event.event.item.exit_code === 0 &&
       shellSegments(command).some((segment) => {
         const cwd = gitWorkingDirectory(segment);
-        return gitInvocation(segment)?.command === "diff" && cwd !== null && isReviewWorktreeOperand(cwd, expectation);
+        return cwd !== null && isReviewWorktreeOperand(cwd, expectation) && gitFullContentDiff(segment, expectation);
       })
     ) {
       reviewDiffReadOrders.push(order);
@@ -1046,10 +1220,21 @@ export function deriveMetrics(
         eventIndex: index,
         headRefOid: event.headRefOid,
         isDraft: event.isDraft,
+        order,
         prNumber: event.prNumber,
         repo: event.repo,
         state: event.state,
       });
+    }
+    if (
+      event.type === "github_pr_checks_viewed" &&
+      event.phase === "model" &&
+      event.checksPassed === true &&
+      typeof event.headRefOid === "string" &&
+      event.prNumber === expectation.prNumber &&
+      event.repo === expectation.repo
+    ) {
+      checkEvents.push({ headRefOid: event.headRefOid, order });
     }
     if (
       event.type === "first_tree_result" &&
@@ -1121,13 +1306,6 @@ export function deriveMetrics(
     );
   const initialViewObserved =
     firstView !== undefined && firstView.headRefOid === expectation.headOid && firstView.eventIndex < firstVerifyIndex;
-  const finalViewFresh =
-    preReviewViews.length >= 2 &&
-    finalView !== undefined &&
-    finalView.headRefOid === fixtureIntegrity.finalHeadOid &&
-    finalView.state === expectation.expectedFinalState &&
-    finalView.isDraft === expectation.expectedFinalDraft &&
-    finalView.eventIndex > firstVerifyIndex;
   const semanticReadAfterVerify =
     expectation.governedPaths.length > 0 &&
     expectation.governedPaths.every((path) =>
@@ -1172,8 +1350,68 @@ export function deriveMetrics(
           const parent = `${path.slice(0, path.lastIndexOf("/"))}/NODE.md`;
           return treeContentReads.some((read) => read.order > successorVerify.order && read.paths.includes(parent));
         })));
+  const finalVerify =
+    expectation.repair === "success"
+      ? successorVerify
+      : verifyEvents.findLast((item) => item.exitCode === 0 && item.head === fixtureIntegrity.finalHeadOid);
+  const finalVerifyOrder = finalVerify?.order ?? Number.NEGATIVE_INFINITY;
+  const finalSemanticOrders = [
+    ...[...governedReadOrders.values()].flat().filter((order) => order > finalVerifyOrder),
+    ...reviewDiffReadOrders.filter((order) => order > finalVerifyOrder),
+  ];
+  const finalSemanticOrder = finalSemanticOrders.length > 0 ? Math.max(...finalSemanticOrders) : finalVerifyOrder;
+  const currentHeadChecks = checkEvents.filter(
+    (item) => item.headRefOid === fixtureIntegrity.finalHeadOid && item.order > finalSemanticOrder,
+  );
+  const checksCurrentHead = review?.action !== "approve" || currentHeadChecks.length > 0;
+  const finalChecksOrder = currentHeadChecks.length > 0 ? Math.max(...currentHeadChecks.map((item) => item.order)) : 0;
+  const lastRepairPushOrder = repairPushOrders.length > 0 ? Math.max(...repairPushOrders) : 0;
+  const requiredFreshnessOrder = Math.max(finalVerifyOrder, finalSemanticOrder, finalChecksOrder, lastRepairPushOrder);
+  const finalViewFresh =
+    preReviewViews.length >= 2 &&
+    finalView !== undefined &&
+    finalView.headRefOid === fixtureIntegrity.finalHeadOid &&
+    finalView.state === expectation.expectedFinalState &&
+    finalView.isDraft === expectation.expectedFinalDraft &&
+    finalView.order > requiredFreshnessOrder;
   const repairVerifyPassed = verifyEvents.some((item) => item.kind === "repair" && item.exitCode === 0);
-  const authorHandoffLanguage = /\b(?:author|contributor|please|must|needs? to|ask\s+[^\n]*\s+to)\b/iu;
+  const firstRepairEditOrder = repairEditOrders.toSorted((left, right) => left - right)[0];
+  const firstRepairCommitOrder = repairCommitOrders.toSorted((left, right) => left - right)[0];
+  const firstRepairPushOrder = repairPushOrders.toSorted((left, right) => left - right)[0];
+  const preRepairView =
+    firstRepairEditOrder === undefined
+      ? undefined
+      : viewEvents.filter((view) => view.order < firstRepairEditOrder).at(-1);
+  const discoveryOrders = [...governedReadOrders.values()]
+    .flat()
+    .filter((order) => firstRepairEditOrder !== undefined && order < firstRepairEditOrder);
+  const lastDiscoveryOrder = discoveryOrders.length > 0 ? Math.max(...discoveryOrders) : firstVerifyOrder;
+  const repairHeadFresh =
+    expectation.repair === "none" ||
+    (preRepairView !== undefined &&
+      preRepairView.headRefOid === expectation.headOid &&
+      preRepairView.state === expectation.expectedFinalState &&
+      !preRepairView.isDraft &&
+      preRepairView.order > lastDiscoveryOrder);
+  const orderedRepairVerify = verifyEvents.find(
+    (item) =>
+      item.kind === "repair" &&
+      item.exitCode === 0 &&
+      firstRepairEditOrder !== undefined &&
+      firstRepairCommitOrder !== undefined &&
+      item.order > firstRepairEditOrder &&
+      item.order < firstRepairCommitOrder,
+  );
+  const repairSequenceValid =
+    expectation.repair === "none" ||
+    (firstRepairEditOrder !== undefined &&
+      orderedRepairVerify !== undefined &&
+      firstRepairCommitOrder !== undefined &&
+      firstRepairPushOrder !== undefined &&
+      repairDiffOrders.some((order) => order > orderedRepairVerify.order && order < firstRepairCommitOrder) &&
+      firstRepairCommitOrder < firstRepairPushOrder);
+  const authorHandoffLanguage =
+    /\b(?:author|contributor|please|must|needs? to|should|has to|ask\s+[^\n]*\s+to)\b|(?:^|[.!?]\s+|[-*]\s+)(?:fix|change|update|correct|remove|revise|address|resolve)\b/iu;
   const authorHandoffForRepairableFinding = body
     .split(/\n\s*\n/gu)
     .some(
@@ -1187,12 +1425,12 @@ export function deriveMetrics(
       (item) =>
         item.commitOid === fixtureIntegrity.finalHeadOid && item.currentHeadOid === fixtureIntegrity.finalHeadOid,
     );
-  authorizedRepairObserved ||= repairCommitObserved && fixtureIntegrity.repairPathsExact;
   return {
     authorHandoffForRepairableFinding,
     authorizedRepairObserved,
     blockedGithubAttempts,
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
+    checksCurrentHead,
     expectedHeadingObserved:
       evalCase.expected.firstHeading === undefined || firstHeading?.startsWith(evalCase.expected.firstHeading) === true,
     finalViewFresh,
@@ -1204,9 +1442,12 @@ export function deriveMetrics(
     initialViewObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
     repairCommitObserved,
+    repairDiffObserved,
+    repairHeadFresh,
     repairPathsExact: fixtureIntegrity.repairPathsExact,
     repairPushDenied,
     repairPushObserved,
+    repairSequenceValid,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
@@ -1258,18 +1499,24 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     evalCase.expected.repair === "success"
       ? metrics.authorizedRepairObserved &&
         metrics.repairCommitObserved &&
+        metrics.repairDiffObserved &&
+        metrics.repairHeadFresh &&
         metrics.repairPushObserved &&
         !metrics.repairPushDenied &&
         metrics.repairPathsExact &&
+        metrics.repairSequenceValid &&
         metrics.successorVerifyPassed &&
         metrics.successorSemanticReviewComplete &&
         !metrics.authorHandoffForRepairableFinding
       : evalCase.expected.repair === "push-denied"
         ? metrics.authorizedRepairObserved &&
           metrics.repairCommitObserved &&
+          metrics.repairDiffObserved &&
+          metrics.repairHeadFresh &&
           !metrics.repairPushObserved &&
           metrics.repairPushDenied &&
           metrics.repairPathsExact &&
+          metrics.repairSequenceValid &&
           !metrics.successorVerifyPassed
         : !metrics.authorizedRepairObserved &&
           !metrics.repairCommitObserved &&
@@ -1290,6 +1537,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
       metrics.semanticReadAfterVerify) &&
     verifyStatus &&
     metrics.finalViewFresh &&
+    metrics.checksCurrentHead &&
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
     !metrics.unexpectedMutationAttempted &&
