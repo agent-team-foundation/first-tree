@@ -7,6 +7,13 @@ export {
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
 export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
+export {
+  buildLoginCommand,
+  buildPortableBootstrapCommand,
+  CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+  type ConnectBootstrapCommandTemplate,
+  materializeConnectBootstrapCommand,
+} from "./connect-bootstrap.js";
 // -- Document review (docloop) anchor building / locating --
 export {
   type BuildDocAnchorInput,

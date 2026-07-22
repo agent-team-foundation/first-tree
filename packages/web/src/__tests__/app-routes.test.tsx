@@ -23,10 +23,20 @@ vi.mock("../hooks/pulse-context.js", () => ({
 const serverChannelStateMock = vi.hoisted(() => ({
   channel: "prod" as "dev" | "staging" | "prod" | null,
   settled: true,
+  commandTemplate: {
+    command:
+      "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+      "~/.local/bin/first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+  } as {
+    command: string;
+    codePlaceholder: string;
+  } | null,
 }));
 
 vi.mock("../hooks/use-server-channel.js", () => ({
   useServerChannelState: () => serverChannelStateMock,
+  useContextTreeSetupPreviewBootstrapState: () => serverChannelStateMock,
 }));
 
 vi.mock("../components/ui/toast.js", () => ({
@@ -153,6 +163,11 @@ vi.mock("../pages/settings-github-preview.js", () => ({
   SettingsGithubPreviewPage: () => <div>settings github preview</div>,
 }));
 vi.mock("../pages/onboarding-preview.js", () => ({ OnboardingPreviewPage: () => <div>onboarding preview</div> }));
+vi.mock("../pages/context-tree-setup-preview.js", () => ({
+  ContextTreeSetupPreviewPage: () => (
+    <div data-testid="context-tree-setup-preview-mock">context tree setup preview</div>
+  ),
+}));
 vi.mock("../pages/team-preview.js", () => ({ TeamPreviewPage: () => <div>team preview</div> }));
 vi.mock("../pages/resources-preview.js", () => ({ ResourcesPreviewPage: () => <div>resources preview</div> }));
 vi.mock("../pages/agent-detail-preview.js", () => ({ AgentDetailPreviewPage: () => <div>agent detail preview</div> }));
@@ -207,6 +222,12 @@ describe("App routes", () => {
     setViewportWidth(1280);
     serverChannelStateMock.channel = "prod";
     serverChannelStateMock.settled = true;
+    serverChannelStateMock.commandTemplate = {
+      command:
+        "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+        "~/.local/bin/first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+      codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    };
   });
 
   afterEach(async () => {
@@ -466,5 +487,51 @@ describe("App routes", () => {
     const productionPreview = await renderAppAt("/preview/styleguide", false);
     expect(productionPreview).toContain("styleguide preview");
     expect(productionPreview).not.toContain("context preview");
+  });
+
+  it("exposes Context Tree setup only in development and on the staging channel", async () => {
+    expect(await renderAppAt("/preview/context-tree-setup")).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "staging";
+    expect(await renderAppAt("/preview/context-tree-setup", false)).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.commandTemplate = null;
+    const reloadSpy = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
+    const missingAuthority = await renderAppAt("/preview/context-tree-setup", false);
+    expect(missingAuthority).toContain("Preview unavailable");
+    expect(document.querySelector('[data-testid="context-tree-setup-preview-mock"]')).toBeNull();
+    const reloadButton = document.querySelector<HTMLButtonElement>("button");
+    expect(reloadButton?.textContent).toBe("Reload preview");
+    await act(async () => reloadButton?.click());
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    reloadSpy.mockRestore();
+    expect(window.location.pathname).toBe("/preview/context-tree-setup");
+    await resetRenderedApp();
+
+    serverChannelStateMock.commandTemplate = {
+      command: "first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+      codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    };
+    serverChannelStateMock.settled = false;
+    const pendingRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(pendingRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/preview/context-tree-setup");
+    await resetRenderedApp();
+
+    serverChannelStateMock.settled = true;
+    serverChannelStateMock.channel = null;
+    const unknownRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(unknownRoute).toContain("workspace page");
+    expect(unknownRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "prod";
+    const productionRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(productionRoute).toContain("workspace page");
+    expect(productionRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
   });
 });
