@@ -73,9 +73,9 @@ describe("first-tree-seed floor invariants", () => {
     expect(durableProgressMarkdown).toContain("binding change");
   });
 
-  it("publishes the portable Seed skill as version 0.4.0", () => {
-    expect(skillVersion).toBe("0.4.0");
-    expect(skillMarkdown).toContain("version: 0.4.0");
+  it("publishes the portable Seed skill as version 0.4.1", () => {
+    expect(skillVersion).toBe("0.4.1");
+    expect(skillMarkdown).toContain("version: 0.4.1");
     expect(skillMarkdown).toContain('first-tree: ">=0.5.16 <0.6.0"');
     expect(openAiMetadata).toContain("$first-tree-seed");
     expect(openAiMetadata).toContain("merged durable progress");
@@ -122,8 +122,24 @@ describe("first-tree-seed floor invariants", () => {
 
   it("delays App coverage guidance until a reviewable milestone", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open");
-    expect(skillMarkdown).toMatch(/do not interrupt source resolution,\s+structure/);
+    expect(skillMarkdown).toMatch(/do\s+not interrupt source resolution,\s+structure/u);
     expect(skillMarkdown).toMatch(/Relay only a recovery URL returned/);
+  });
+
+  it("follows GitLab tree MRs without inventing GitHub setup", () => {
+    expect(skillMarkdown).toContain("first-tree gitlab follow <mr-url>");
+    expect(skillMarkdown).toContain("created or an existing\ndeterministic MR is resolved/reused");
+    expect(skillMarkdown).toContain("creating or resolving/reusing the task's GitLab MR");
+    expect(skillMarkdown).toContain("returned pending or active state is success");
+    expect(skillMarkdown).toContain("only pending waits\nfor a matching valid webhook");
+    expect(skillMarkdown).toContain("failure does not invalidate the MR");
+    expect(skillMarkdown).toContain("no GitHub App coverage guidance applies");
+    expect(skillMarkdown).toContain("Never substitute `/settings/github`");
+  });
+
+  it("discovers GitLab CI as a Tier 0 operations signal", () => {
+    expect(skillMarkdown).toContain("`.gitlab-ci.yml`");
+    expect(skillMarkdown).toContain("`.gitlab/`");
   });
 
   it("ships behavioral gates for managed sources and portable durable recovery", () => {

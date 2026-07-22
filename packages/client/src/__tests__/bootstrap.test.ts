@@ -655,12 +655,14 @@ describe("installCoreSkills", () => {
     expect(logs.join("\n")).toContain("installed first-tree-welcome");
   });
 
-  it("removes retired onboarding skills when installing the default skill family", () => {
+  it("removes retired core skills when installing the default skill family", () => {
     const workspace = join(tmpBase, "core-skills-retired");
     mkdirSync(join(workspace, ".agents", "skills", "first-tree-kickoff"), { recursive: true });
     writeFileSync(join(workspace, ".agents", "skills", "first-tree-kickoff", "SKILL.md"), "stale kickoff skill\n");
     mkdirSync(join(workspace, ".agents", "skills", "first-tree-guide"), { recursive: true });
     writeFileSync(join(workspace, ".agents", "skills", "first-tree-guide", "SKILL.md"), "stale guide skill\n");
+    mkdirSync(join(workspace, ".agents", "skills", "first-tree-gitlab"), { recursive: true });
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree-gitlab", "SKILL.md"), "stale GitLab skill\n");
     mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
     symlinkSync(
       `../../${join(".agents", "skills", "first-tree-kickoff")}`,
@@ -669,6 +671,10 @@ describe("installCoreSkills", () => {
     symlinkSync(
       `../../${join(".agents", "skills", "first-tree-guide")}`,
       join(workspace, ".claude", "skills", "first-tree-guide"),
+    );
+    symlinkSync(
+      `../../${join(".agents", "skills", "first-tree-gitlab")}`,
+      join(workspace, ".claude", "skills", "first-tree-gitlab"),
     );
     const bundledSkillsRoot = makeFixtureSkillsRoot(
       "core-skills-retired",
@@ -686,6 +692,8 @@ describe("installCoreSkills", () => {
     expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-kickoff"))).toThrow();
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-guide"))).toBe(false);
     expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-guide"))).toThrow();
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-gitlab"))).toBe(false);
+    expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-gitlab"))).toThrow();
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-welcome", "SKILL.md"))).toBe(true);
   });
 

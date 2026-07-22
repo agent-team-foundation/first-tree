@@ -3,7 +3,7 @@ name: first-tree-write
 version: 0.12.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. If no source artifact is available, there is no write task; ask the user for one.
+description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations against GitHub-bound Context Trees. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. Managed GitLab trees use the ordinary MR path. If no source artifact is available, there is no write task; ask the user for one.
 ---
 
 # First Tree Write
@@ -33,8 +33,10 @@ Writing is source-driven. Acceptable sources include:
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
-When the source repo or issue lives on GitHub or GitLab, choose the matching
-forge CLI (`gh` or `glab`) and use PR/MR language accordingly.
+When the source repo or issue lives on GitHub or GitLab, use its matching CLI
+(`gh` or `glab`) for that source artifact. Before any tree push or review
+request, detect the Context Tree forge from its own `origin`; never infer it
+from the source.
 
 An Audit finding is valid only for its recorded tree HEAD. Before any target
 selection, worktree creation, or mutation, fetch the bound upstream default
@@ -61,14 +63,17 @@ Choose one mode before target selection:
 
 - **Managed:** use the generated workspace binding and briefing when present;
   the source gate and write policy below remain unchanged.
-- **BYO clean:** require the user's explicit Team id, the existing exact
+- **BYO clean (GitHub-bound Context Trees only):** require the user's explicit Team id, the existing exact
   snapshot created by `tree read`, a concrete source artifact and revision,
   current source context, current target/parent/linked tree context, and the
   user's write intent. Do not require or reconstruct a Workspace manifest,
   managed briefing, setup-chat transcript, Web selection, default/current
   Team, cached owner/role, or prior task.
 
-For BYO, obtain the current local `gh` login and run this at activation:
+Clean BYO Write preflight requires a GitHub-hosted tree. A GitLab-bound tree
+cannot use this activation: do not request `gh`, claim App Reviewer authority,
+or mutate; report the boundary and stop. Managed GitLab uses ordinary MRs.
+For eligible GitHub BYO, obtain the current local `gh` login and run:
 
 ```text
 first-tree --json tree write --team "<team-id>" \
@@ -117,10 +122,15 @@ resolves the Server current Reviewer when the pull request event arrives.
    worktree, then perform the second exact-head check above before pushing that
    branch and creating the draft PR/MR with its head explicitly bound to the
    published branch.
-7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
-   description focused on the source and the tree nodes changed; do not put
-   PR/MR IDs, source links, or audit trails into node bodies. Audit-originated
-   tree PRs/MRs must be created as draft and left draft for independent review.
+7. **Prepare the PR/MR.** Detect the Context Tree forge from its own `origin`,
+   never the source artifact. One source artifact maps to one tree PR/MR. Keep
+   delivery history out of node bodies. An Audit-originated GitHub PR must be
+   created as draft and left draft for independent `context-tree-review`. An
+   Audit-originated GitLab MR stays draft for ordinary independent review;
+   never claim an automated verdict or merge. After creating, resolving or
+   reusing any GitLab MR, run `first-tree gitlab follow <mr-url>` in the task Chat. A
+   returned pending or active state is success; failure does not invalidate the
+   MR, so report only the Chat attention gap.
 8. **Let the App reviewer own GitHub review dispatch.** For a ready GitHub PR
    against the bound Context Tree repository, the GitHub App webhook creates or
    reuses the PR-scoped Reviewer Chat and trusted review run. The writer
@@ -129,7 +139,8 @@ resolves the Server current Reviewer when the pull request event arrives.
 
 ## GitHub Context Review handoff
 
-When Context Reviewer is enabled, keep the PR body useful to a human reviewer:
+Use this section only for a GitHub Context Tree PR. GitLab MRs use ordinary
+independent review. When Context Reviewer is enabled, keep the PR body useful to a human reviewer:
 summarize the source artifact, durable decision and rationale, changed nodes and
 verification result. Do not add a repair-consent block, exact-file permission
 list, legacy dispatch marker or task payload. The configured review agent may

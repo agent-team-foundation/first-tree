@@ -1,6 +1,7 @@
 ---
 name: first-tree-read
-description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports an explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR review or an explicit broad audit of stored tree content; `context-tree-review` and `context-tree-audit` exclusively own those snapshots.
+version: 0.1.2
+description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports an explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content; `context-tree-review` owns its supported GitHub PR snapshots, GitLab MRs use ordinary review on a stable MR head, and `context-tree-audit` owns audit snapshots.
 ---
 
 # First Tree Read
@@ -19,10 +20,13 @@ request to audit stored normal content on the default branch belongs to
 `context-tree-audit`; do not start this task-scoped read workflow first.
 
 Do not use this skill for a Cloud Context Reviewer wake-up or an explicit
-request to review a Context Tree pull request. `context-tree-review` has
-exclusive precedence there and reads only from its detached, validated PR-head
-snapshot; running this workflow first would refresh and inspect the main tree
-checkout instead.
+request to review a Context Tree PR/MR. `context-tree-review` has exclusive
+precedence for its supported GitHub PR path and reads only from its detached,
+validated PR-head snapshot; running this workflow first would refresh and
+inspect the main tree checkout instead. For a GitLab MR, do not claim Context
+Review support or run this task-scoped main-tree workflow as a substitute. Use
+the ordinary GitLab review workflow on a stable MR head under the generated
+Context Tree Policy.
 
 Do not use this skill for an explicit broad audit of the whole tree, a domain,
 or selected stored normal paths. `context-tree-audit` has exclusive precedence
@@ -156,7 +160,7 @@ Extract concrete selectors from the request:
 
 - repo, package, app, or service names
 - file paths, directories, route names, command names, schema names, or config keys
-- feature names, domain terms, error text, PR / issue titles, or owner names
+- feature names, domain terms, error text, PR/MR or issue titles, or owner names
 - cross-domain hints such as auth, billing, CLI, daemon, context tree, web, server, client, or shared
 
 Start broad enough to find the right domain, then narrow to the nodes that

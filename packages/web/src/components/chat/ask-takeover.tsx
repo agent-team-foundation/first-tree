@@ -45,7 +45,7 @@ import {
 } from "../mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { FileChip } from "../ui/file-chip.js";
-import { Markdown } from "../ui/markdown.js";
+import { Markdown, type MarkdownProps } from "../ui/markdown.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
 
 /**
@@ -112,6 +112,7 @@ export function AskTakeover({
   askerName,
   sending = false,
   mentionCandidates = [],
+  markdownComponents,
   error,
   onReply,
   onSkip,
@@ -135,6 +136,8 @@ export function AskTakeover({
    *  (self-excluded, same source as the composer). Empty → no autocomplete and
    *  every `@<token>` stays plain text. */
   mentionCandidates?: MentionCandidate[];
+  /** Host-provided link presentation shared with the message timeline. */
+  markdownComponents?: MarkdownProps["components"];
   /** A host-side send failure to surface in the card (the composer is covered,
    *  so a failed resolve must show here or it looks like nothing happened). */
   error?: string;
@@ -630,7 +633,7 @@ export function AskTakeover({
               lineHeight: 1.6,
             }}
           >
-            <Markdown>{body}</Markdown>
+            <Markdown components={markdownComponents}>{body}</Markdown>
           </div>
 
           {/* Answer surface — options + Other (or a single free-text box),

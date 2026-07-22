@@ -26,6 +26,11 @@ export {
   USERNAME_MAX_LENGTH,
   USERNAME_SUFFIX_RESERVE,
 } from "./external-account.js";
+export {
+  type GitlabEntityPath,
+  type GitlabEntityPathParseResult,
+  parseGitlabEntityPath,
+} from "./gitlab-entity-path.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {

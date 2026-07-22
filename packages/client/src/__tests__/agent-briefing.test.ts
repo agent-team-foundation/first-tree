@@ -336,7 +336,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(tree).toContain('Use `owners: ["*"]` only when a human explicitly opens');
     expect(tree).toContain("ownership to everyone");
     expect(tree).toContain("Metadata supports scanning, routing, and responsibility");
-    expect(tree).toContain("### Write / Verify / PR Discipline");
+    expect(tree).toContain("### Write / Verify / PR/MR Discipline");
     expect(briefing).not.toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
     expect(briefing).toContain("`first-tree-read`");
     expect(briefing).toContain("`first-tree-seed`");
@@ -623,7 +623,8 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(gitlab).toContain("Default: follow what you create");
     expect(gitlab).toContain("first-tree gitlab follow <url>");
-    expect(gitlab).toContain("pending and inbound-only");
+    expect(gitlab).toContain("inbound-only and may return pending or active");
+    expect(gitlab).toContain("while an already active line stays active");
     expect(gitlab).toContain("without calling GitLab");
     expect(gitlab).toContain("gitlab follow <url> --rebind");
     expect(gitlab).toContain("does not invalidate an entity that was already created");
@@ -727,7 +728,8 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
-    expect(tree).toContain("`context-tree-review` or `context-tree-audit` exclusively");
+    expect(tree).toContain("Load `context-tree-review` only for GitHub PRs");
+    expect(tree).toContain("Load\n`context-tree-audit` exclusively for audits");
     expect(tree).toContain("**Normal content**");
     expect(tree).toContain("**Archive/supporting content**");
     expect(tree).toContain("**Member content**");
@@ -735,7 +737,8 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
-    expect(tree).toContain("Context Tree PR\nreviews and explicit broad audits of stored normal content");
+    expect(tree).toContain("GitLab MRs use ordinary GitLab review on a stable head");
+    expect(tree).toContain("never enter the GitHub-only Context Reviewer state machine");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");
@@ -744,7 +747,7 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("fresh context");
     expect(tree).toContain("persistent context");
-    expect(tree).toContain("specific PR, design doc");
+    expect(tree).toContain("specific PR/MR, design doc");
     expect(tree).toMatch(/request explicitly includes\s+creating and updating the needed tree-node\s+files/);
     expect(tree).toContain("`NODE.md` and other `*.md` nodes");
     expect(tree).toMatch(/Implementation-only changes skip\s+the tree write/);
@@ -752,8 +755,8 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("first-tree tree verify");
     expect(tree).toContain("open them together");
     expect(tree).toContain("cross-link");
-    expect(tree).toContain("open the tree PR as a draft");
-    expect(tree).toContain("merge the code PR first");
+    expect(tree).toContain("open the tree PR/MR as a draft");
+    expect(tree).toContain("merge the code PR/MR first");
     expect(tree).toContain("final merged code");
     expect(tree).not.toContain("need not merge first");
     expect(tree).not.toContain("`first-tree-context`");
@@ -862,6 +865,7 @@ describe("buildAgentBriefing — Skills", () => {
       .find((line) => line.startsWith("description:"));
     expect(descLine, "SKILL.md must have a frontmatter description").toBeDefined();
     expect(descLine).toMatch(/defect in First Tree itself/i);
+    expect(descLine).toMatch(/GitLab integration/i);
     expect(descLine).toMatch(/not for filing an issue into the user's own or bound source repo/i);
 
     // Surface 2 — Codex metadata (independent routing surface for the codex provider).
@@ -877,7 +881,23 @@ describe("buildAgentBriefing — Skills", () => {
         .find((line) => line.startsWith("| `first-tree-file-bug`"));
       expect(row, `file-bug family-map row missing for contextTreePath=${contextTreePath}`).toBeDefined();
       expect(row).toMatch(/bug in First Tree itself/i);
+      expect(row).toMatch(/GitHub or GitLab integration/i);
       expect(row).toMatch(/First Tree's own repo \(not the user's own\/bound repo\)/i);
+    }
+  });
+
+  it("keeps GitLab tree reviews outside the GitHub-only Context Reviewer route", () => {
+    for (const contextTreePath of ["/tree", null]) {
+      const briefing = buildAgentBriefing(makeOpts({ contextTreePath }));
+      const reviewRow = briefing.split("\n").find((line) => line.startsWith("| `context-tree-review`"));
+      const seedRow = briefing.split("\n").find((line) => line.startsWith("| `first-tree-seed`"));
+
+      expect(reviewRow, `context-tree-review row missing for contextTreePath=${contextTreePath}`).toBeDefined();
+      expect(reviewRow).toContain("GitHub Context Tree pull request");
+      expect(reviewRow).toContain("GitLab MRs use ordinary GitLab review");
+      expect(seedRow, `first-tree-seed row missing for contextTreePath=${contextTreePath}`).toContain(
+        "GitHub or GitLab URL",
+      );
     }
   });
 

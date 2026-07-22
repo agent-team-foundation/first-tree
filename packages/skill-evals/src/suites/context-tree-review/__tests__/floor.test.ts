@@ -74,4 +74,24 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("App-authored PR review is the only GitHub verdict");
     expect(skill).toContain("do not copy the\nGitHub verdict into a second canonical comment/status/receipt");
   });
+
+  it("keeps Context Tree review GitHub-only and fails closed for GitLab", () => {
+    const skillDir = join(repoRoot, "skills", "context-tree-review");
+    const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");
+    const description = skill.split("\n").find((line) => line.startsWith("description:"));
+    const openai = readFileSync(join(skillDir, "agents", "openai.yaml"), "utf8");
+
+    expect(description).toMatch(/Review a GitHub pull request/);
+    expect(description).toMatch(/do not use it for GitLab Merge Requests/);
+    expect(skill).toContain("This workflow is GitHub-only");
+    expect(skill).toContain("ordinary independent GitLab MR review path");
+    expect(skill).toContain("A GitLab URL, Merge Request identifier, or bound GitLab upstream");
+    expect(skill).toContain("A local mirror cannot override this exclusion");
+    expect(skill).toContain("classify the upstream before any clone");
+    expect(skill).toContain("stop before any Reviewer configuration\n   lookup, clone");
+    expect(skill).toContain("never fall back to\n   `gh` or substitute `glab`");
+    expect(skill).toContain("A local filesystem mirror is not provider\n   authority");
+    expect(skill).toContain("prove a GitHub pull request before any fetch");
+    expect(openai).toContain("trusted GitHub App Context Reviewer run");
+  });
 });

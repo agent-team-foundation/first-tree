@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.4.0
+version: 0.4.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Supports clean explicit-Team invocation without a Workspace manifest, managed briefing, or prior setup-chat transcript, while preserving managed-workspace compatibility. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses unrelated re-seeding once the tree has domain structure and recovers Phase 2 from durable merged Tree state plus the same explicit sources."
@@ -285,15 +285,19 @@ current approval, dismiss stale approvals on push, block force pushes, and do
 not require Code Owner review. Do not treat this setup failure as
 a reason to delete or recreate the Context Repo.
 
-**Delay integration coverage guidance until there is a reviewable milestone —
-recommend, never block.** Detect the Context Tree repo's forge from its own
-`origin`; do not infer it from a source repo. State A's `tree init` always
-creates a GitHub-hosted tree and prints GitHub App coverage guidance. For a
-pre-existing GitLab-hosted tree in state B, relay an integration URL or settings
-target only when First Tree returns it explicitly; otherwise state that no
-documented First Tree integration path was returned and do not invent one.
-Capture any authoritative result, but do not interrupt source resolution,
-structure review, or Phase 1 work with an installation detour.
+**Keep repository coverage separate from entity attention, and delay coverage
+guidance until there is a reviewable milestone.** Detect the Context Tree repo's
+forge from its own `origin`; do not infer it from a source repo. State A's `tree
+init` always creates a GitHub-hosted tree and prints GitHub App coverage
+guidance. A pre-existing GitLab-hosted tree in state B has no GitHub App
+coverage step. After each Phase 1 or Phase 2 GitLab MR is created or an existing
+deterministic MR is resolved/reused, run `first-tree gitlab follow <mr-url>` in
+that task Chat. A returned pending or active state is success; only pending waits
+for a matching valid webhook. Failure does not invalidate the MR, so report only
+the First Tree Chat attention gap. This follow is not an installation detour; do
+not interrupt source resolution, structure review, or Phase 1 work. Relay a
+separate GitLab integration recovery target only when First Tree returns one
+explicitly; never invent a product path.
 
 **After the Phase 1 PR/MR is open**, or earlier only when the next requested
 operation actually needs Cloud snapshot/reviewer access, surface an uncovered
@@ -320,9 +324,11 @@ tree repo once in the setup chat. Relay only a recovery URL returned by
 - **GitHub tree, suspended install:** `tree init` prints the
   installation-settings URL — relay it and say to reactivate the First Tree App
   installation there.
-- **GitLab-hosted existing tree:** use only a GitLab integration URL/settings
-  target returned by First Tree. Never substitute `/settings/github`, a GitHub
-  App URL, or an invented GitLab product path.
+- **GitLab-hosted existing tree:** no GitHub App coverage guidance applies. MR
+  attention uses `first-tree gitlab follow` after creation or recovery/reuse.
+  Relay any separate recovery target only when First Tree returns it explicitly.
+  Never substitute `/settings/github`, a GitHub App URL, or an invented GitLab
+  product path.
 
 **B — Bound but unseeded.** The tree is bound and holds at most non-normal
 supporting/member structure under the generated policy's content classes,
@@ -498,7 +504,7 @@ tier left a specific question unanswered.
 
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Filesystem walk over every resolved source checkout (including declared bare-source read worktrees): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
+| 0    | Filesystem walk over every resolved source checkout (including declared bare-source read worktrees): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`, `.gitlab-ci.yml`, and `.gitlab/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
 | 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` / `glab repo view` metadata where available (skip silently on **any** failure — 4xx, missing token, no network, no `gh` / `glab` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 
@@ -697,6 +703,9 @@ Notes on defaults:
   again before PR/MR creation. Require current Admin plus the same canonical
   binding repo and branch. Query the forge by the deterministic head branch
   first; reuse an existing branch or PR/MR instead of duplicating it.
+- After creating or resolving/reusing the task's GitLab MR, run `first-tree
+  gitlab follow <mr-url>`. A returned pending or active state is success; a
+  follow failure does not invalidate the MR.
 - Stop after the PR/MR is open. Do **not** start Phase 2 work until the
   approved structure and durable progress record are merged.
 
@@ -989,6 +998,9 @@ After all sub-agents return:
 - In portable mode, repeat the Seed preflight immediately before push and
   before PR/MR creation; require the same Team and binding, and reuse an
   existing deterministic branch or PR/MR by head.
+- After creating or resolving/reusing the task's GitLab MR, run `first-tree
+  gitlab follow <mr-url>`. A returned pending or active state is success; a
+  follow failure does not invalidate the MR.
 
 After PR/MR 2 opens, the seed skill is done. Subsequent writes are owned
 by `first-tree-write`; subsequent maintenance uses focused tasks with

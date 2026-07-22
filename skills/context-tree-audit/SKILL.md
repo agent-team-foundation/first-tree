@@ -1,6 +1,6 @@
 ---
 name: context-tree-audit
-description: Audit stored normal content on the bound Context Tree's current default branch when a human explicitly asks to audit the whole tree, a domain, or specific normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems. Do not use for ordinary task reads, source-backed writes, Context Tree PR reviews, or empty-tree setup.
+description: Audit stored normal content on the bound Context Tree's current default branch when a human explicitly asks to audit the whole tree, a domain, or specific normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems. Do not use for ordinary task reads, source-backed writes, Context Tree PR/MR reviews, or empty-tree setup.
 ---
 
 # Context Tree Audit
@@ -23,15 +23,15 @@ or names a domain or set of normal paths to audit. This trigger is exclusive:
 do not run `first-tree-read` first and expand a task-scoped read into an audit.
 
 Do not use this workflow for a concrete source artifact that should be written
-to the tree, a Context Tree pull request review, ordinary task context, or an
-empty-tree setup. Those remain owned by their dedicated skills.
+to the tree, a Context Tree pull request or merge request review, ordinary task
+context, or an empty-tree setup. Those remain owned by their dedicated skills.
 
 Choose the execution mode from the request:
 
 - **Report-only (default):** a request to audit, inspect, or report grants
-  read-only authority. Perform no commit, push, pull request, issue, tracked
-  ask, or other external mutation; report findings and recommended routes in
-  the completion response.
+  read-only authority. Perform no commit, push, pull request, merge request,
+  issue, tracked ask, or other external mutation; report findings and
+  recommended routes in the completion response.
 - **Maintenance:** select this only when the human explicitly asks to maintain,
   fix, or create follow-up artifacts. Mutation authority extends only to the
   requested artifact kinds. High-confidence local findings may produce one
@@ -80,7 +80,7 @@ Each finding must contain:
 - `evidence`: verifiable current source, configuration, validator output,
   human decision, or related canonical normal content;
 - `confidence`: `mechanical`, `strong`, `uncertain`, or `human-authority`;
-- `action`: report, focused tree PR, issue or draft proposal, tracked human
+- `action`: report, focused tree PR/MR, issue or draft proposal, tracked human
   ask, or source-code escalation.
 
 Tree history and forge discussion may help locate evidence, but delivery
@@ -92,15 +92,15 @@ an automatic normal-content rewrite.
 
 - In Report-only mode, record every finding and its recommended route in the
   response, including authority conflicts. Do not create an issue, proposal,
-  tracked ask, branch, commit, or pull request.
-- A local mechanical or strong semantic finding may become one small tree PR
-  in Maintenance mode only after it becomes a concrete audit source artifact.
-  Include the audited SHA and scope, exact finding group, current evidence,
-  canonical-placement judgment, and risk. Then load `first-tree-write`; that
-  skill rechecks freshness and owns target selection, drafting, verification,
-  worktree, and PR discipline. Every Audit-originated tree PR is created as a
-  draft and remains draft when Audit and Writer finish. Audit never edits the
-  tree directly.
+  tracked ask, branch, commit, pull request, or merge request.
+- A local mechanical or strong semantic finding may become one small tree
+  PR/MR in Maintenance mode only after it becomes a concrete audit source
+  artifact. Include the audited SHA and scope, exact finding group, current
+  evidence, canonical-placement judgment, and risk. Then load
+  `first-tree-write`; that skill rechecks freshness and owns target selection,
+  drafting, verification, worktree, and PR/MR discipline. Every
+  Audit-originated tree PR/MR is created as a draft and remains draft when
+  Audit and Writer finish. Audit never edits the tree directly.
 - Weak, broad, or cross-domain evidence does not change normal truth. Report it
   or, when Maintenance explicitly authorizes it, create a focused issue or
   draft proposal that names the missing evidence.
@@ -112,18 +112,22 @@ an automatic normal-content rewrite.
 - No findings means report the exact audited SHA, scope, validator result, and
   evidence coverage. Do not claim correctness outside the inspected scope.
 
-One pull request carries one coherent finding group. Do not turn a broad audit
-into a tree-wide rewrite or a bundle of unrelated domain changes.
+One pull request or merge request carries one coherent finding group. Do not
+turn a broad audit into a tree-wide rewrite or a bundle of unrelated domain
+changes.
 
 ## Mutation Boundary
 
 Audit owns discovery, evidence classification, and action selection. It does
-not own a second authoring policy or pull request verdict workflow.
+not own a second authoring policy or PR/MR verdict workflow.
 
-Never edit `owners` without explicit human authority, approve a pull request
-created from this audit, merge, change repository governance, create a new CLI
-surface, or claim scheduled execution. Any tree PR continues through
-`context-tree-review`.
+Never edit `owners` without explicit human authority, approve a pull request or
+merge request created from this audit, merge, change repository governance,
+create a new CLI surface, or claim scheduled execution. A GitHub tree PR
+continues through `context-tree-review`. A GitLab tree MR remains draft and
+continues through ordinary independent GitLab MR review; never invoke
+`context-tree-review` for it. Audit never marks either artifact ready, approves
+it, or merges it.
 
 ## Completion Report
 

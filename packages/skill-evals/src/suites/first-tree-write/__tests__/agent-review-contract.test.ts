@@ -26,12 +26,24 @@ describe("first-tree-write App review handoff floor", () => {
   });
 
   it("keeps clean BYO Write bound to explicit Team and exact snapshot", () => {
+    expect(skill).toContain("BYO clean (GitHub-bound Context Trees only)");
+    expect(skill).toContain("A GitLab-bound tree\ncannot use this activation");
     expect(skill).toContain('first-tree --json tree write --team "<team-id>"');
     expect(skill).toContain('--snapshot "<exact-snapshot>" --github-login "<gh-login>"');
     expect(skill).toContain("Do not require or reconstruct a Workspace manifest");
     expect(skill).toContain("separate task worktree and branch from the returned exact base commit");
     expect(skill).toContain("immediately before the first push");
     expect(skill).toContain("observability only, never local routing");
+  });
+
+  it("selects publication forge from the Context Tree and follows ordinary GitLab MRs", () => {
+    expect(skill).toMatch(/detect the Context Tree forge from its own `origin`/u);
+    expect(skill).toContain("never infer it\nfrom the source");
+    expect(skill).toMatch(/Audit-originated GitLab MR stays draft for ordinary independent review/u);
+    expect(skill).toContain("first-tree gitlab follow <mr-url>");
+    expect(skill).toContain("creating, resolving or\n   reusing any GitLab MR");
+    expect(skill).toContain("returned pending or active state is success");
+    expect(skill).toContain("failure does not invalidate the\n   MR");
   });
 
   it("keeps version metadata and the standalone VERSION file aligned", () => {

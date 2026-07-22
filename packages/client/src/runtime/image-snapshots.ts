@@ -18,14 +18,14 @@ import {
 /**
  * Outbound image capture — the picture sibling of `doc-snapshots.ts`.
  *
- * When an agent's `chat send` body contains a markdown image `![alt](path)`
- * whose target is a local image file inside the sender's own workspace fence,
- * we upload the bytes to the org attachment store and hand the caller an
- * `ImageRefContent` (the exact shape a human image send produces). The caller
- * then converts the message to a `format: "file"` batch: caption = the body
- * with the captured image spans stripped, `attachments` = these refs. Web then
- * renders it identically to a human image send (caption on top, thumbnails
- * below) — zero web/server change.
+ * When an agent's `chat send` body contains a markdown image `![alt](path)` or
+ * `![alt](<path>)` whose target is a local image file inside the sender's own
+ * workspace fence, we upload the bytes to the org attachment store and hand
+ * the caller an `ImageRefContent` (the exact shape a human image send
+ * produces). The caller then converts the message to a `format: "file"` batch:
+ * caption = the body with the captured image spans stripped, `attachments` =
+ * these refs. Web then renders it identically to a human image send (caption on
+ * top, thumbnails below) — zero web/server change.
  *
  * Scope (see the paired design note): we deliberately capture ONLY markdown
  * image syntax (an explicit "show this picture" intent, unlike a bare filename
@@ -219,17 +219,19 @@ function basename(p: string): string {
 }
 
 /**
- * Collect markdown image mentions `![alt](path)` that are LOCAL, supported
- * image embeds. A leading `!` is required (distinguishes an image from a doc
- * link); a `\` before the `!` escapes it (odd-run parity). A web URL target is
- * skipped — an absolute scheme (`http:`, `data:`, …) OR a protocol-relative
- * `//host/…` — since those render inline and are not workspace files. The
- * target must have a supported image extension, so the per-message cap is over
- * eligible images (an unsupported `.txt` target never consumes budget). Mentions
- * inside a block code sample (fenced or indented) are dropped — the agent is
- * SHOWING the markdown, not embedding an image. Inline code (`` `![](x)` ``) is
- * intentionally NOT excluded: a rare place for a full embed, and treating it as
- * live keeps the send side from reproducing the renderer's inline parsing.
+ * Collect markdown image mentions `![alt](path)` and `![alt](<path>)` that are
+ * LOCAL, supported image embeds. Angle-bracket destinations may contain spaces;
+ * the brackets are syntax and are not part of the captured path. A leading `!`
+ * is required (distinguishes an image from a doc link); a `\` before the `!`
+ * escapes it (odd-run parity). A web URL target is skipped — an absolute scheme
+ * (`http:`, `data:`, …) OR a protocol-relative `//host/…` — since those render
+ * inline and are not workspace files. The target must have a supported image
+ * extension, so the per-message cap is over eligible images (an unsupported
+ * `.txt` target never consumes budget). Mentions inside a block code sample
+ * (fenced or indented) are dropped — the agent is SHOWING the markdown, not
+ * embedding an image. Inline code (`` `![](x)` ``) is intentionally NOT
+ * excluded: a rare place for a full embed, and treating it as live keeps the
+ * send side from reproducing the renderer's inline parsing.
  */
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   // Guard: skip capture on an absurdly large body so a pathological message can
@@ -241,12 +243,12 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   // (bounded quantifiers keep it linear — an unbounded `[^\]\n]*` would rescan
   // to EOF at every `![`). Only when there IS a candidate do we compute the
   // (more expensive) code ranges — an ordinary text-only send pays nothing here.
-  const re = /!\[[^\]\n]{0,512}\]\(([^\s)"]{1,2048})(?:\s+"[^"]*")?\)/g;
+  const re = /!\[[^\]\n]{0,512}\]\((?:<([^<>\n]{1,2048})>|([^\s)"]{1,2048}))(?:\s+"[^"]*")?\)/g;
   const candidates: ImageOccurrence[] = [];
   let match: RegExpExecArray | null = re.exec(text);
   while (match !== null) {
     const whole = match[0];
-    const target = match[1];
+    const target = match[1] ?? match[2];
     const start = match.index;
     // CommonMark escape parity: `!` is escaped only by an ODD run of
     // backslashes. `\![](x)` is an escaped literal (skip); `\\![](x)` is a

@@ -4,6 +4,7 @@ const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn()
 vi.mock("../client.js", () => ({
   api: apiMock,
   withOrg: (path: string) => `/orgs/current${path}`,
+  withOrgAt: (organizationId: string, path: string) => `/orgs/${organizationId}${path}`,
 }));
 
 describe("GitLab Settings API", () => {
@@ -17,6 +18,7 @@ describe("GitLab Settings API", () => {
   it("uses org-scoped collection routes and resource-scoped lifecycle routes", async () => {
     const gitlab = await import("../gitlab-connections.js");
     await gitlab.listGitlabConnections();
+    await gitlab.listGitlabConnectionsAt("chat-team");
     await gitlab.createGitlabConnection({ displayName: "Private", instanceOrigin: "https://gitlab.internal" });
     await gitlab.regenerateGitlabBearer("connection/id");
     await gitlab.replaceGitlabConnection("connection/id", {
@@ -34,6 +36,7 @@ describe("GitLab Settings API", () => {
     await gitlab.removeGitlabIdentityLink("link/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-connections");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/chat-team/gitlab-connections");
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/gitlab-connections", {
       displayName: "Private",
       instanceOrigin: "https://gitlab.internal",

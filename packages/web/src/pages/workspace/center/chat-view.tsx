@@ -37,11 +37,13 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
+  createContext,
   memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -132,10 +134,12 @@ import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
+import { useGitlabEntityPresentation } from "../../../hooks/use-gitlab-entity-presentation.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
+import { gitlabEntityLinkPresentation } from "../../../lib/gitlab-entity-link.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-usage.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -549,6 +553,8 @@ type MessageRowProps = {
   isTrial: boolean;
 };
 
+const GitlabInstanceOriginContext = createContext<string | null>(null);
+
 type MessageBodyProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
@@ -572,6 +578,7 @@ const MessageMarkdown = memo(function MessageMarkdown({ children, components, re
 const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipants }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const gitlabInstanceOrigin = useContext(GitlabInstanceOriginContext);
   // Generic attachment refs (doc-preview is the first consumer; kind:
   // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
   // look the ref up and seed the drawer's cache. Old messages (legacy inline
@@ -715,14 +722,35 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           setSearchParams(next);
         };
 
+        const gitlabPresentation =
+          typeof children === "string" && children === href
+            ? gitlabEntityLinkPresentation(href, gitlabInstanceOrigin)
+            : null;
+
         return (
-          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
-            {children}
+          <a
+            {...props}
+            href={href}
+            title={gitlabPresentation?.title ?? props.title}
+            onClick={onClick}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {gitlabPresentation?.label ?? children}
           </a>
         );
       },
     }),
-    [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
+    [
+      docAttachmentRefs,
+      failedDocMentions,
+      gitlabInstanceOrigin,
+      msg.chatId,
+      msg.id,
+      queryClient,
+      searchParams,
+      setSearchParams,
+    ],
   );
 
   return (
@@ -1701,7 +1729,7 @@ export function ChatView({
     if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // A nested top layer (for example the Activity Inspector) owns the first
+      // A nested top layer (for example a dialog or autocomplete) owns the first
       // Escape and marks it handled. Keep the details rail open until the next
       // Escape instead of dismissing two layers in one keypress.
       if (event.defaultPrevented) return;
@@ -1834,6 +1862,14 @@ export function ChatView({
     initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
     staleTime: 10_000,
   });
+
+  // A globally addressed chat may render before the shell finishes switching
+  // Teams. Bind the trust decision to the rendered chat's Team, never to the
+  // transient shell selection, and refresh it so remote connection changes
+  // eventually replace (or remove) the compact-label trust boundary.
+  const chatOrganizationId = chatDetail?.organizationId ?? null;
+  const { instanceOrigin: gitlabInstanceOrigin, markdownComponents: askMarkdownComponents } =
+    useGitlabEntityPresentation(chatOrganizationId);
 
   // Fetch one chat-scoped batch with an independent newest-first window per
   // non-human speaker. Chat membership is the disclosure boundary, so a
@@ -3545,6 +3581,7 @@ export function ChatView({
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                markdownComponents={askMarkdownComponents}
                 isTrial={isTrial}
                 mobile={composerMobile}
                 onReply={(answer) => {
@@ -4002,7 +4039,16 @@ export function ChatView({
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-                {/* Live activity is view-only awareness, so watchers keep the
+                {!readOnly && chatTokenUsage && chatProcessedTokens > 0 ? (
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                    title={formatTokenUsageTitle(chatTokenUsage)}
+                  >
+                    {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
+                  </div>
+                ) : null}
+                {/* Live status is view-only awareness, so watchers keep the
                     same stable “what are agents doing?” entry as participants.
                     Reply controls below remain gated by `readOnly`. */}
                 <ComposeStatusBar
@@ -4014,12 +4060,11 @@ export function ChatView({
                   <div
                     ref={readOnlyComposerRef}
                     tabIndex={-1}
-                    className="flex items-center"
+                    className="composer-card flex items-center"
                     style={{
                       gap: "var(--sp-3)",
                       padding: "var(--sp-2) var(--sp-3)",
                       border: "var(--hairline) solid var(--border)",
-                      borderRadius: 6,
                       // Raised surface (`--bg-raised`) so the slot reads as a
                       // distinct input card lifted above the timeline (`--bg`),
                       // sharing the header chrome's surface. Mirrors the editable
@@ -4053,15 +4098,6 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatProcessedTokens > 0 ? (
-                      <div
-                        className="mono text-caption"
-                        style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={formatTokenUsageTitle(chatTokenUsage)}
-                      >
-                        {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
-                      </div>
-                    ) : null}
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}
@@ -4682,7 +4718,9 @@ export function ChatView({
       </div>
     </div>
   );
-  return body;
+  return (
+    <GitlabInstanceOriginContext.Provider value={gitlabInstanceOrigin}>{body}</GitlabInstanceOriginContext.Provider>
+  );
 }
 
 function MobileChatDetailsSheet({

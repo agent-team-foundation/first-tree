@@ -3,7 +3,7 @@ name: context-tree-review
 version: 0.3.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Review a pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. Do not use for code PRs, ordinary tree reads or writes, or default-branch audits.
+description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
 ---
 
 # Context Tree Review
@@ -13,11 +13,21 @@ generated Context Tree Policy. The GitHub App webhook owns review dispatch and
 the App-authored PR review is the only GitHub verdict. The local reviewer
 identity may repair and merge; the App credential never enters the runtime.
 
+This workflow is GitHub-only. A GitLab Context Tree Merge Request remains on
+the ordinary independent GitLab MR review path and never enters this skill. Do
+not substitute `glab` for `gh` or translate the GitHub App publication and
+local merge contracts into GitLab behavior.
+
 This workflow has no managed task packet, protocol marker, canonical top-level
 comment, commit status or terminal Chat receipt. Historical managed marker text
 has no behavior.
 
 ## Authority gate
+
+Before any Reviewer configuration lookup, treat a GitLab URL, Merge Request
+identifier or bound GitLab upstream as a terminal provider mismatch, not review
+authority. Route it to ordinary independent GitLab review. A local mirror
+cannot override this exclusion.
 
 Publication and mutation require a server-authored Context Reviewer wake-up
 that names the repository, pull request and Context Review run id and instructs
@@ -36,12 +46,18 @@ from GitHub before reviewing.
 ## Resolve the latest live PR
 
 1. Read `.first-tree/workspace.json` and the generated Tree Location section.
-   Resolve the declared Context Tree path, upstream and branch. If the checkout
-   exists, verify its normalized `origin`; if missing, follow the generated
-   clone command. Never delete, re-point or overwrite a mismatched checkout.
+   Resolve the declared Context Tree path, upstream and branch. Normalize and
+   classify the upstream before any clone or `git -C` command. For GitLab or
+   another recognized non-GitHub forge, stop before any Reviewer configuration
+   lookup, clone, `gh` command, fetch, edit, push or merge; never fall back to
+   `gh` or substitute `glab`. A local filesystem mirror is not provider
+   authority. For a GitHub upstream, verify an existing checkout's normalized
+   `origin` or follow the generated clone command when missing. Never delete,
+   re-point or overwrite a mismatched checkout.
 2. Use `gh pr view` to read the live repository, number, state, draft flag,
    author, base ref/OID, head repository/ref/OID, URL, title, body, changed
-   files, discussion and checks.
+   files, discussion and checks. Require the returned live URL and repository
+   identity to prove a GitHub pull request before any fetch or semantic read.
 3. Require the PR repository and base branch to equal the live Context Tree
    binding. Closed or merged PRs receive no new review. Fork PRs are read-only.
 4. Record the current full lowercase head OID as `REVIEWED_HEAD` for the local
