@@ -509,6 +509,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     const composerInputRef = createRef<HTMLTextAreaElement>();
     const attachButtonRef = createRef<HTMLButtonElement>();
     const externalSurfaceRef = createRef<HTMLDivElement>();
+    const outsideAction = vi.fn();
 
     h.render(
       withProviders(
@@ -516,8 +517,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
           <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
           <div ref={externalSurfaceRef}>
             <textarea ref={composerInputRef} aria-label="Message composer" />
-            <button ref={attachButtonRef} type="button">
-              Attach file
+            <button ref={attachButtonRef} type="button" onClick={outsideAction}>
+              Timeline action
             </button>
           </div>
         </>,
@@ -534,12 +535,37 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(composerInputRef.current);
 
+    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Expand current agent output"]');
+    await act(async () => {
+      trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      trigger?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    expect(document.activeElement).toBe(composerInputRef.current);
+
+    await act(async () => {
+      composerInputRef.current?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await act(async () => {
       attachButtonRef.current?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
     });
     await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    expect(outsideAction).not.toHaveBeenCalled();
+
+    await act(async () => {
+      attachButtonRef.current?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      attachButtonRef.current?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    });
+    await h.flush();
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(outsideAction).toHaveBeenCalledTimes(1);
 
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await act(async () => {
@@ -559,6 +585,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     const details = h.container.querySelector("[data-current-agent-output]");
     await act(async () => {
       details?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+
+    await act(async () => {
+      details?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      externalSurfaceRef.current?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      document.body.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
     });
     await h.flush();
     expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
