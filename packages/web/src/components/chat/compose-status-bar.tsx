@@ -93,15 +93,12 @@ export function ComposeStatusBar({
   chatId,
   agents,
   fallbackFocusRef,
-  composerSurfaceRef,
 }: {
   chatId: string;
   /** Non-human agent participants, used for stable display-name lookup. */
   agents: ChatParticipantDetail[];
   /** Stable composer control that receives focus if the status surface vanishes. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
-  /** Editable composer surface whose use signals a switch from monitoring to composing. */
-  composerSurfaceRef?: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
@@ -144,28 +141,21 @@ export function ComposeStatusBar({
   }, [chatId]);
 
   useEffect(() => {
-    if (!composerSurfaceRef) return;
-    const collapseForComposerIntent = (event: Event) => {
-      const target = event.target;
-      if (target instanceof Node && composerSurfaceRef.current?.contains(target)) setExpanded(false);
-    };
-    document.addEventListener("focusin", collapseForComposerIntent);
-    document.addEventListener("drop", collapseForComposerIntent);
-    return () => {
-      document.removeEventListener("focusin", collapseForComposerIntent);
-      document.removeEventListener("drop", collapseForComposerIntent);
-    };
-  }, [composerSurfaceRef]);
-
-  useEffect(() => {
     if (attention.length === 0) return;
-    const clearOutsidePointerFocus = (event: PointerEvent) => {
+    const collapseForOutsideIntent = (event: Event) => {
       const target = event.target;
-      if (target instanceof Node && !surfaceRef.current?.contains(target)) focusWithinRef.current = false;
+      if (!(target instanceof Node) || surfaceRef.current?.contains(target)) return;
+      focusWithinRef.current = false;
+      if (expanded) setExpanded(false);
     };
-    document.addEventListener("pointerdown", clearOutsidePointerFocus, true);
-    return () => document.removeEventListener("pointerdown", clearOutsidePointerFocus, true);
-  }, [attention.length]);
+    const eventTypes = expanded
+      ? (["pointerdown", "focusin", "click", "wheel", "touchstart", "drop"] as const)
+      : (["pointerdown"] as const);
+    for (const type of eventTypes) document.addEventListener(type, collapseForOutsideIntent, true);
+    return () => {
+      for (const type of eventTypes) document.removeEventListener(type, collapseForOutsideIntent, true);
+    };
+  }, [attention.length, expanded]);
 
   useEffect(() => {
     if (attention.length === 0) {

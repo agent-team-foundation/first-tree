@@ -498,7 +498,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).not.toBe(fallbackRef.current);
   });
 
-  it("collapses when the user focuses or drops input into the editable composer", async () => {
+  it("collapses for outside interaction intent while keeping internal scrolling open", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -506,19 +506,15 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         activity: activity("agent-nova", { turnText: "Inspect the current turn" }),
       }),
     ]);
-    const composerSurfaceRef = createRef<HTMLDivElement>();
     const composerInputRef = createRef<HTMLTextAreaElement>();
     const attachButtonRef = createRef<HTMLButtonElement>();
+    const externalSurfaceRef = createRef<HTMLDivElement>();
 
     h.render(
       withProviders(
         <>
-          <ComposeStatusBar
-            chatId="chat-1"
-            agents={[agent("agent-nova", "Nova")]}
-            composerSurfaceRef={composerSurfaceRef}
-          />
-          <div ref={composerSurfaceRef}>
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+          <div ref={externalSurfaceRef}>
             <textarea ref={composerInputRef} aria-label="Message composer" />
             <button ref={attachButtonRef} type="button">
               Attach file
@@ -539,17 +535,83 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).toBe(composerInputRef.current);
 
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
-    await act(async () => attachButtonRef.current?.focus());
-    await h.flush();
-    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
-    expect(document.activeElement).toBe(attachButtonRef.current);
-
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await act(async () => {
-      composerSurfaceRef.current?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      attachButtonRef.current?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
     });
     await h.flush();
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => {
+      externalSurfaceRef.current?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => {
+      externalSurfaceRef.current?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const details = h.container.querySelector("[data-current-agent-output]");
+    await act(async () => {
+      details?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+  });
+
+  it("clears status focus ownership when an outside drop unmounts focused output", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") })],
+    );
+    const fallbackRef = createRef<HTMLButtonElement>();
+    const externalRef = createRef<HTMLButtonElement>();
+    const dropTargetRef = createRef<HTMLDivElement>();
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} fallbackFocusRef={fallbackRef} />
+          <div ref={dropTargetRef}>Drop files here</div>
+          <button ref={externalRef} type="button">
+            Later control
+          </button>
+          <button ref={fallbackRef} type="button">
+            Composer fallback
+          </button>
+        </>,
+        queryClient,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const jump = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Nova"]');
+    if (!jump) throw new Error("Expected timeline jump");
+    jump.focus();
+
+    await act(async () => {
+      dropTargetRef.current?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    externalRef.current?.focus();
+    await act(async () => {
+      queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+    });
+    await h.flush();
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull());
+    expect(document.activeElement).toBe(externalRef.current);
+    expect(document.activeElement).not.toBe(fallbackRef.current);
   });
 
   it("places inline output after its trigger and keeps focus on the disclosure", async () => {
@@ -582,7 +644,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("leaves Escape to a later focused keyboard layer outside the inline output", async () => {
+  it("collapses for a later focused keyboard layer without consuming its Escape", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -609,12 +671,13 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const laterLayer = h.container.querySelector<HTMLInputElement>('input[aria-label="Mention autocomplete"]');
     if (!laterLayer) throw new Error("Expected later keyboard layer");
-    laterLayer.focus();
+    await act(async () => laterLayer.focus());
+    await h.flush();
 
     await keyDown(h, laterLayer, "Escape");
 
     expect(externalEscape).toHaveBeenCalledTimes(1);
-    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(laterLayer);
   });
 

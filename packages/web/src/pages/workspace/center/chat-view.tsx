@@ -1753,7 +1753,6 @@ export function ChatView({
   // dialog) rendered over a still-mounted chat can't bubble Enter into it and
   // silently resolve the pinned question in the background.
   const composerFooterRef = useRef<HTMLDivElement | null>(null);
-  const composerInputSurfaceRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Scrollable container that holds the message timeline. Ref is wired
   // up on the corresponding <div> below; consumed by useChatScroll (for
@@ -4056,7 +4055,6 @@ export function ChatView({
                   chatId={chatId}
                   agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
                   fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
-                  composerSurfaceRef={readOnly ? undefined : composerInputSurfaceRef}
                 />
                 {readOnly ? (
                   <div
@@ -4105,7 +4103,6 @@ export function ChatView({
                         the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
-                      ref={composerInputSurfaceRef}
                       className="composer-card composer-input"
                       // Phone-only: flatten the card's top corners while a picker
                       // panel (mention or slash) is docked flush above it so the two
