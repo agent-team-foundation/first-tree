@@ -11,6 +11,7 @@ import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappin
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { processedEvents } from "../db/schema/processed-events.js";
 import { users } from "../db/schema/users.js";
 import * as eventDedupService from "../services/event-dedup.js";
 import * as githubAudienceService from "../services/github-audience.js";
@@ -774,43 +775,102 @@ describe("POST /webhooks/github-app", () => {
     }
   });
 
-  it("unclaims a delivery when downstream handling fails and logs unclaim failures", async () => {
+  it("recovers a delivery whose handling and release both failed once the claim TTL elapses", async () => {
+    // End-to-end regression for the issue #317 headline scenario: audience
+    // resolution fails AND the release fails (leak path 2), so the pending
+    // claim survives with its original TTL. Before the claim lease this row
+    // was permanent and every redelivery was deduped — the event was lost.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100017;
     const deliveryId = randomUUID();
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    // A followed chat so the recovered redelivery has a visible card to land.
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#913",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 913,
+        title: "Issue",
+        html_url: "https://github.com/owner/repo/issues/913",
+        body: "",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "author", type: "User" },
+      installation: { id: installationId },
+    };
+
     const audienceSpy = vi
       .spyOn(githubAudienceService, "resolveGithubAudience")
       .mockRejectedValueOnce(new Error("audience down"));
-    const unclaimSpy = vi.spyOn(eventDedupService, "unclaimEvent").mockRejectedValueOnce(new Error("unclaim down"));
+    const releaseSpy = vi
+      .spyOn(eventDedupService, "releaseClaimedEvent")
+      .mockRejectedValueOnce(new Error("release down"));
 
     try {
-      const res = await postWebhook(
-        app,
-        "issues",
-        {
-          action: "opened",
-          issue: {
-            number: 913,
-            title: "Issue",
-            html_url: "https://github.com/owner/repo/issues/913",
-            body: "",
-          },
-          repository: { full_name: "owner/repo" },
-          sender: { login: "author", type: "User" },
-          installation: { id: installationId },
-        },
-        { deliveryId },
-      );
+      const res = await postWebhook(app, "issues", payload, { deliveryId });
 
       expect(res.statusCode).toBe(500);
       expect(audienceSpy).toHaveBeenCalled();
-      expect(unclaimSpy).toHaveBeenCalledWith(app.db, deliveryId, "github");
+      expect(releaseSpy).toHaveBeenCalledWith(app.db, deliveryId, "github", expect.any(String));
     } finally {
       audienceSpy.mockRestore();
-      unclaimSpy.mockRestore();
+      releaseSpy.mockRestore();
     }
+
+    const stuck = await app.db
+      .select()
+      .from(processedEvents)
+      .where(and(eq(processedEvents.eventId, deliveryId), eq(processedEvents.platform, "github")));
+    expect(stuck[0]).toMatchObject({ status: "pending" });
+
+    // Inside the TTL the claim still shields the delivery: deduped, with
+    // claimState telling the operator to redeliver after the TTL.
+    const shielded = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(shielded.statusCode).toBe(200);
+    expect(shielded.json()).toMatchObject({ ok: true, deduped: true, claimState: "pending" });
+
+    // TTL elapses (rewound in the DB), the operator redelivers: the claim is
+    // taken over inline and the event is fully processed this time.
+    await app.db
+      .update(processedEvents)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(and(eq(processedEvents.eventId, deliveryId), eq(processedEvents.platform, "github")));
+
+    const recovered = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ ok: true, delivered: 1 });
+    const cards = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(cards).toHaveLength(1);
+    const finished = await app.db
+      .select()
+      .from(processedEvents)
+      .where(and(eq(processedEvents.eventId, deliveryId), eq(processedEvents.platform, "github")));
+    expect(finished[0]).toMatchObject({ status: "done", expiresAt: null, claimToken: null });
   });
 
   it("Bug 1 — pull_request.synchronize delivers to subscribed chat (was silenced before)", async () => {
@@ -2036,7 +2096,12 @@ describe("POST /webhooks/github-app", () => {
     expect(first.statusCode).toBe(200);
     const second = await postWebhook(app, "issues", payload, { deliveryId });
     expect(second.statusCode).toBe(200);
-    expect(second.json().deduped).toBe(true);
+    expect(second.json()).toMatchObject({ deduped: true, claimState: "done" });
+    const rows = await app.db
+      .select()
+      .from(processedEvents)
+      .where(and(eq(processedEvents.eventId, deliveryId), eq(processedEvents.platform, "github")));
+    expect(rows[0]).toMatchObject({ status: "done" });
   });
 
   it("duplicate context reviewer delivery is deduped and does not send another task", async () => {
@@ -2053,7 +2118,7 @@ describe("POST /webhooks/github-app", () => {
 
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
-    expect(second.json().deduped).toBe(true);
+    expect(second.json()).toMatchObject({ deduped: true, claimState: "done" });
     const messageRows = await app.db.select({ id: messages.id }).from(messages);
     expect(messageRows).toHaveLength(1);
   });

@@ -197,6 +197,10 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // timer would only add nondeterminism.
       archiveSweepIntervalSeconds: 0,
       archiveMappedIdleSeconds: 60 * 60,
+      webhookClaimTtlSeconds: 300,
+      // Same rationale as archiveSweepIntervalSeconds: suites that exercise
+      // the webhook-claim sweeper call `sweepExpiredWebhookClaims` directly.
+      webhookClaimSweepIntervalSeconds: 0,
       notificationWebhookUrl: undefined,
     },
     update: {

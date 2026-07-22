@@ -29,6 +29,7 @@ import {
   observeGitlabEntityAndResolveFollowers,
   removeGitlabEntityFollow,
 } from "../services/gitlab-entity-follow.js";
+import * as gitlabWebhookService from "../services/gitlab-webhook.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
@@ -450,6 +451,63 @@ describe("GitLab Stage 2A backend", () => {
     expect(response.statusCode).toBe(400);
     const after = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
     expect(after).toHaveLength(before.length);
+  });
+
+  it("rolls back the claim with the fence when processing fails inside it, and a redelivery reprocesses", async () => {
+    // The GitLab path runs the whole claim state machine inside the ingress
+    // fence transaction: a handler failure rolls the pending claim INSERT
+    // back with everything else (zero residue), so the same delivery id can
+    // simply be redelivered — the transactional equivalent of the GitHub
+    // path's expire-and-take-over recovery.
+    const app = getApp();
+    const first = await connection(app);
+    const chatId = `chat_${randomUUID()}`;
+    await app.db
+      .insert(chats)
+      .values({ id: chatId, organizationId: first.admin.organizationId, type: "group", metadata: {} });
+    await app.db.insert(chatMembership).values({
+      chatId,
+      agentId: first.admin.humanAgentUuid,
+      role: "owner",
+      accessMode: "speaker",
+    });
+    await declareGitlabEntityFollow(app.db, {
+      organizationId: first.admin.organizationId,
+      connectionId: first.connectionId,
+      chatId,
+      declaredByAgentId: first.admin.humanAgentUuid,
+      humanAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.admin.humanAgentUuid,
+      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+    });
+    const stableId = `fence-rollback-${randomUUID()}`;
+    const claimRows = async () => {
+      const rows = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
+      return rows.filter((row) => row.eventId.startsWith(first.connectionId));
+    };
+
+    const audienceSpy = vi
+      .spyOn(gitlabWebhookService, "resolveGitlabAudience")
+      .mockRejectedValueOnce(new Error("audience down inside fence"));
+    try {
+      const failed = await postWebhook(app, first.bearer, issuePayload(), { stableId });
+      expect(failed.statusCode).toBe(500);
+      expect(audienceSpy).toHaveBeenCalledOnce();
+    } finally {
+      audienceSpy.mockRestore();
+    }
+    expect(await claimRows()).toHaveLength(0);
+
+    const redelivered = await postWebhook(app, first.bearer, issuePayload(), { stableId });
+    expect(redelivered.statusCode).toBe(200);
+    expect(redelivered.json()).toMatchObject({ ok: true, outcome: "delivered" });
+    const cards = await app.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.source, "gitlab")));
+    expect(cards).toHaveLength(1);
+    const [claimRow] = await claimRows();
+    expect(claimRow).toMatchObject({ status: "done", expiresAt: null, claimToken: null });
   });
 
   it("applies content/body guards while accepting valid unsupported events as no-ops", async () => {

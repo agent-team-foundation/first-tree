@@ -114,6 +114,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
             const processed = await processScmWebhookDelivery({
               db: tx,
               ingress: normalized.ingress,
+              claimTtlSeconds: app.config.runtime.webhookClaimTtlSeconds,
               observation: normalized.observation,
               event: applied.event,
               applyObservation: async () => {
