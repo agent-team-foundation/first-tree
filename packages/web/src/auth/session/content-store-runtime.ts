@@ -50,37 +50,70 @@ type InstalledRuntime = {
 };
 
 let installedRuntime: InstalledRuntime | null = null;
+// A React unmount can precede pagehide/freeze. Keep one detached runtime's
+// lifecycle observers alive so that later suspension still retires its view.
+let dormantRuntime: InstalledRuntime | null = null;
 let lastInstalledSourceView: ViewLease | null = null;
 const retiredSourceSignals = new WeakSet<AbortSignal>();
-const retiredSourceViews = new WeakMap<AbortSignal, ViewLease[]>();
+// Signal, organization, and document identity are deliberately excluded:
+// suspension retires the revision itself, so changing those fields cannot
+// revive a view that has not been reconciled onto a fresh org revision.
+const retiredViewRevisionKeys = new Set<string>();
 
-function sameView(left: ViewLease, right: ViewLease): boolean {
+function viewRevisionKey(lease: ViewLease): string {
+  const { activation } = lease;
+  return JSON.stringify([
+    activation.sessionEpoch,
+    activation.authGeneration,
+    activation.transitionPermitId,
+    activation.serverAuthority,
+    activation.accountId,
+    activation.scopeKey,
+    lease.orgRevision,
+  ]);
+}
+
+function sameViewRevision(left: ViewLease, right: ViewLease): boolean {
+  return sameActivation(left.activation, right.activation) && left.orgRevision === right.orgRevision;
+}
+
+function sameViewIdentity(left: ViewLease, right: ViewLease): boolean {
   return (
     sameActivation(left.activation, right.activation) &&
     left.organizationId === right.organizationId &&
     left.orgRevision === right.orgRevision &&
     left.ownerTabId === right.ownerTabId &&
-    left.documentId === right.documentId &&
-    left.signal === right.signal
+    left.documentId === right.documentId
   );
 }
 
+function sameView(left: ViewLease, right: ViewLease): boolean {
+  return sameViewIdentity(left, right) && left.signal === right.signal;
+}
+
 function retireRuntime(runtime: InstalledRuntime): void {
+  if (dormantRuntime === runtime) dormantRuntime = null;
   runtime.detachAbortSources();
   runtime.controller.abort(new SessionError(sessionErrorCodes.staleOperation, "Content view was replaced"));
 }
 
+function parkRuntime(runtime: InstalledRuntime): void {
+  if (runtime.controller.signal.aborted) {
+    runtime.detachAbortSources();
+    if (dormantRuntime === runtime) dormantRuntime = null;
+    return;
+  }
+  if (dormantRuntime && dormantRuntime !== runtime) dormantRuntime.detachAbortSources();
+  dormantRuntime = runtime;
+  runtime.controller.abort(new SessionError(sessionErrorCodes.staleOperation, "Content view was unmounted"));
+}
+
 function isRetiredSourceView(lease: ViewLease): boolean {
-  return retiredSourceViews.get(lease.signal)?.some((retired) => sameView(retired, lease)) ?? false;
+  return retiredViewRevisionKeys.has(viewRevisionKey(lease));
 }
 
 function retireSourceView(lease: ViewLease): void {
-  const retired = retiredSourceViews.get(lease.signal);
-  if (retired) {
-    if (!retired.some((candidate) => sameView(candidate, lease))) retired.push(lease);
-    return;
-  }
-  retiredSourceViews.set(lease.signal, [lease]);
+  retiredViewRevisionKeys.add(viewRevisionKey(lease));
 }
 
 /**
@@ -99,19 +132,41 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
   if (sourceLease.signal.aborted || retiredSourceSignals.has(sourceLease.signal) || isRetiredSourceView(sourceLease)) {
     throw new SessionError(sessionErrorCodes.staleOperation, "Cannot install an invalidated content view");
   }
+  const previousSourceView = lastInstalledSourceView;
+  if (
+    previousSourceView &&
+    sameViewRevision(previousSourceView, sourceLease) &&
+    !sameView(previousSourceView, sourceLease)
+  ) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "A content view cannot reuse its source revision");
+  }
   const lifecycle = barrier.registry.captureLifecycle();
   if (lifecycle.signal.aborted) {
     throw new SessionError(sessionErrorCodes.staleOperation, "Cannot install during a suspended document lifecycle");
   }
 
   const controller = new AbortController();
+  let runtimeRecord: InstalledRuntime | null = null;
+  const clearDormantRuntime = (): void => {
+    if (runtimeRecord && dormantRuntime === runtimeRecord) dormantRuntime = null;
+  };
+  const detachAbortSources = (): void => {
+    sourceLease.signal.removeEventListener("abort", forwardSourceAbort);
+    lifecycle.signal.removeEventListener("abort", forwardLifecycleAbort);
+  };
   const forwardSourceAbort = (): void => {
+    retireSourceView(sourceLease);
     retiredSourceSignals.add(sourceLease.signal);
     controller.abort(sourceLease.signal.reason);
+    detachAbortSources();
+    clearDormantRuntime();
   };
   const forwardLifecycleAbort = (): void => {
+    retireSourceView(sourceLease);
     retiredSourceSignals.add(sourceLease.signal);
     controller.abort(lifecycle.signal.reason);
+    detachAbortSources();
+    clearDormantRuntime();
   };
   sourceLease.signal.addEventListener("abort", forwardSourceAbort, { once: true });
   lifecycle.signal.addEventListener("abort", forwardLifecycleAbort, { once: true });
@@ -135,21 +190,19 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
     lease,
     sourceLease,
     controller,
-    detachAbortSources: () => {
-      sourceLease.signal.removeEventListener("abort", forwardSourceAbort);
-      lifecycle.signal.removeEventListener("abort", forwardLifecycleAbort);
-    },
+    detachAbortSources,
   };
+  runtimeRecord = runtime;
 
-  const previousSourceView = lastInstalledSourceView;
   if (previousSourceView && !sameView(previousSourceView, sourceLease)) {
-    if (previousSourceView.signal === sourceLease.signal) {
-      retireSourceView(previousSourceView);
-    } else {
-      retiredSourceSignals.add(previousSourceView.signal);
-    }
+    retireSourceView(previousSourceView);
+    if (previousSourceView.signal !== sourceLease.signal) retiredSourceSignals.add(previousSourceView.signal);
   }
   lastInstalledSourceView = sourceLease;
+  if (dormantRuntime) {
+    dormantRuntime.detachAbortSources();
+    dormantRuntime = null;
+  }
   const previous = installedRuntime;
   installedRuntime = runtime;
   if (previous) retireRuntime(previous);
@@ -157,7 +210,7 @@ export function installContentStoreRuntime(input: ContentStoreRuntimeInstallatio
   return () => {
     if (installedRuntime !== runtime) return;
     installedRuntime = null;
-    retireRuntime(runtime);
+    parkRuntime(runtime);
   };
 }
 

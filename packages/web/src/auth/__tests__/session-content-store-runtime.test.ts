@@ -190,14 +190,112 @@ describe("content store runtime", () => {
       installContentStoreRuntime({ barrier: contentBarrier, lease: forgedRevisionOnOldSignal }),
     ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
 
+    const resumeController = new AbortController();
+    const forgedSignalOnOldRevision = createViewLease({
+      ...sourceLease,
+      signal: resumeController.signal,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: forgedSignalOnOldRevision }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+
     const reconciledLease = createViewLease({
       ...sourceLease,
       orgRevision: `${sourceLease.orgRevision}-reconciled`,
-      signal: new AbortController().signal,
+      signal: resumeController.signal,
     });
     install({ barrier: contentBarrier, lease: reconciledLease });
     expect(captureContentStoreRuntime(sourceLease)).toBeNull();
     expect(captureContentStoreRuntime(reconciledLease)?.lease.signal.aborted).toBe(false);
+
+    const retiredRevisionWithForgedContext = createViewLease({
+      ...sourceLease,
+      organizationId: `${sourceLease.organizationId}-forged`,
+      ownerTabId: `${sourceLease.ownerTabId}-forged`,
+      documentId: `${sourceLease.documentId}-forged`,
+      signal: new AbortController().signal,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: retiredRevisionWithForgedContext }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+    expect(captureContentStoreRuntime(reconciledLease)?.lease.signal.aborted).toBe(false);
+    disposeHooks();
+  });
+
+  it.each([
+    "pagehide",
+    "freeze",
+  ] as const)("retires a source on %s even when its runtime was already disposed", (eventName) => {
+    const registry = new ContentDatabaseRegistry();
+    const contentBarrier = barrier(registry);
+    const sourceLease = view(`disposed-${eventName}`);
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget();
+    const disposeHooks = installSessionLifecycleHooks({ registry, windowTarget, documentTarget });
+    const disposeRuntime = install({ barrier: contentBarrier, lease: sourceLease });
+
+    disposeRuntime();
+    expect(captureContentStoreRuntime(sourceLease)).toBeNull();
+    const target = eventName === "pagehide" ? windowTarget : documentTarget;
+    target.dispatchEvent(new Event(eventName));
+
+    expect(() => installContentStoreRuntime({ barrier: contentBarrier, lease: sourceLease })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+
+    const forgedRevisionOnOldSignal = createViewLease({
+      ...sourceLease,
+      orgRevision: `${sourceLease.orgRevision}-forged`,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: forgedRevisionOnOldSignal }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+
+    const resumeController = new AbortController();
+    const forgedSignalOnOldRevision = createViewLease({
+      ...sourceLease,
+      signal: resumeController.signal,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: forgedSignalOnOldRevision }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+
+    const reconciledLease = createViewLease({
+      ...sourceLease,
+      orgRevision: `${sourceLease.orgRevision}-reconciled`,
+      signal: resumeController.signal,
+    });
+    install({ barrier: contentBarrier, lease: reconciledLease });
+    expect(captureContentStoreRuntime(reconciledLease)).not.toBeNull();
+
+    const retiredRevisionWithForgedContext = createViewLease({
+      ...sourceLease,
+      organizationId: `${sourceLease.organizationId}-forged`,
+      ownerTabId: `${sourceLease.ownerTabId}-forged`,
+      documentId: `${sourceLease.documentId}-forged`,
+      signal: new AbortController().signal,
+    });
+    expect(() =>
+      installContentStoreRuntime({ barrier: contentBarrier, lease: retiredRevisionWithForgedContext }),
+    ).toThrowError(expect.objectContaining({ code: sessionErrorCodes.staleOperation }));
+    expect(captureContentStoreRuntime(reconciledLease)?.lease.signal.aborted).toBe(false);
+    disposeHooks();
+  });
+
+  it("allows an exact source to remount after ordinary hidden without retiring its view", () => {
+    const registry = new ContentDatabaseRegistry();
+    const contentBarrier = barrier(registry);
+    const sourceLease = view("ordinary-hidden-remount");
+    const windowTarget = new EventTarget();
+    const documentTarget = Object.assign(new EventTarget(), { visibilityState: "hidden" as const });
+    const disposeHooks = installSessionLifecycleHooks({ registry, windowTarget, documentTarget });
+    const disposeRuntime = install({ barrier: contentBarrier, lease: sourceLease });
+
+    disposeRuntime();
+    documentTarget.dispatchEvent(new Event("visibilitychange"));
+
+    expect(() => install({ barrier: contentBarrier, lease: sourceLease })).not.toThrow();
+    expect(captureContentStoreRuntime(sourceLease)).not.toBeNull();
     disposeHooks();
   });
 
@@ -250,8 +348,31 @@ describe("content store runtime", () => {
     expect(() => installContentStoreRuntime({ barrier: contentBarrier, lease: sourceA })).toThrowError(
       expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
     );
+    const recreatedA = createViewLease({
+      ...sourceA,
+      signal: new AbortController().signal,
+    });
+    expect(() => installContentStoreRuntime({ barrier: contentBarrier, lease: recreatedA })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
     expect(captureContentStoreRuntime(sourceA)).toBeNull();
     expect(captureContentStoreRuntime(sourceB)?.lease.organizationId).toBe("org-shared-signal-b");
+  });
+
+  it("rejects changing only the source signal without a reconciled view revision", () => {
+    const contentBarrier = barrier();
+    const sourceLease = view("signal-swap");
+    install({ barrier: contentBarrier, lease: sourceLease });
+    const swappedSignalLease = createViewLease({
+      ...sourceLease,
+      signal: new AbortController().signal,
+    });
+
+    expect(() => installContentStoreRuntime({ barrier: contentBarrier, lease: swappedSignalLease })).toThrowError(
+      expect.objectContaining({ code: sessionErrorCodes.staleOperation }),
+    );
+    expect(captureContentStoreRuntime(sourceLease)).not.toBeNull();
+    expect(captureContentStoreRuntime(swappedSignalLease)).toBeNull();
   });
 
   it("snapshots installation getters exactly once", () => {
