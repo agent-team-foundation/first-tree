@@ -18,6 +18,14 @@ describe("server authority", () => {
     expect(serverAuthorityFromPublicUrl("https://first-tree.example/")).toBe("https://first-tree.example/api/v1");
   });
 
+  it("rejects an IDN whose canonical punycode authority exceeds the byte limit", () => {
+    const compactUnicodeHost = Array.from({ length: 260 }, () => "é").join(".");
+    const input = `https://${compactUnicodeHost}/api/v1`;
+
+    expect(input.length).toBeLessThan(2048);
+    expect(() => canonicalizeServerAuthority(input)).toThrow("must not exceed 2048 bytes");
+  });
+
   it.each([
     "https://first-tree.example/app",
     "https://first-tree.example/app/",

@@ -13,6 +13,7 @@ describe("GET /bootstrap/config", () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
     expect(res.json()).toMatchObject({
       allowedOrg: null,
       serverCommandVersion: "test.version",

@@ -72,6 +72,9 @@ describe("redactUrl", () => {
   it("redacts form-style fragments independently", () => {
     expect(redactUrl("/auth/complete?next=%2Fteam#claim=secret&x=1")).toBe("/auth/complete?next=%2Fteam#claim=***&x=1");
     expect(redactUrl("/x#STATE=a&safe=b")).toBe("/x#STATE=***&safe=b");
+    expect(redactUrl("/auth/complete#access=access-jwt&refresh=refresh-jwt")).toBe(
+      "/auth/complete#access=***&refresh=***",
+    );
   });
 
   it("fails closed for malformed key encodings", () => {

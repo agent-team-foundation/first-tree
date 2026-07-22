@@ -51,8 +51,9 @@ UI results through a real persistent Chromium profile.
    reads, verify no A message text, image/data URL, draft, read anchor, team, agent, repository, onboarding, install, or
    summary state can be read or rendered. Verify B's own cache, image, draft, and selected team work normally.
 
-Also retain an A physical database deliberately in a controlled branch (without making logout claim success) and prove
-that B still cannot read it through store APIs or DOM. This distinguishes namespace isolation from successful deletion.
+In an isolated run cell, seed an A physical database as a retained fixture (or deliberately hold its cleanup blocked
+without allowing logout to report success) and prove that B still cannot read it through store APIs or DOM. This
+distinguishes namespace isolation from successful deletion without modifying the product under test.
 
 ### Late work, tabs, and lifecycle
 

@@ -24,6 +24,8 @@ const RAW_TARGET_MAX_BYTES = 2_048;
 const ENCODED_AUTHORITY_MAX_BYTES = SERVER_AUTHORITY_MAX_LENGTH * 3;
 const ADMIN_WS_RAW_TARGET_MAX_BYTES = ENCODED_AUTHORITY_MAX_BYTES + 256;
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const OFFLINE_ELIGIBLE_TRANSPORT_CODES = new Set(["EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "ETIMEDOUT"]);
+const TRANSPORT_ERROR_CAUSE_MAX_DEPTH = 4;
 const AVATAR_TARGET_PATTERN =
   /^\/api\/v1\/agents\/([a-z0-9_-]{1,100})\/avatar\?v=(0|[1-9][0-9]{0,15})&ft_authority=([A-Za-z0-9_-]{43})$/;
 const ADMIN_WS_TARGET_PATTERN = new RegExp(
@@ -52,6 +54,41 @@ type ParsedAdminWsTarget = {
   upstreamTarget: string;
   expectedAuthority: string;
 };
+
+function readErrorProperty(error: object, property: "cause" | "code"): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: Reflect.get(error, property) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Classify only the OS failures for which a previously verified Vite target
+ * may be treated as temporarily offline. Fetch wraps these in a TypeError, so
+ * inspect a short cause chain without consulting attacker-influenced messages.
+ * Any explicit but unknown code, accessor failure, cycle, or excessive depth
+ * fails closed.
+ */
+export function isOfflineEligibleAuthorityTransportError(error: unknown): boolean {
+  const visited = new Set<object>();
+  let current = error;
+  for (let depth = 0; depth < TRANSPORT_ERROR_CAUSE_MAX_DEPTH; depth += 1) {
+    if ((typeof current !== "object" || current === null) && typeof current !== "function") return false;
+    if (visited.has(current)) return false;
+    visited.add(current);
+
+    const codeResult = readErrorProperty(current, "code");
+    if (!codeResult.ok) return false;
+    if (codeResult.value !== undefined) {
+      return typeof codeResult.value === "string" && OFFLINE_ELIGIBLE_TRANSPORT_CODES.has(codeResult.value);
+    }
+    const causeResult = readErrorProperty(current, "cause");
+    if (!causeResult.ok) return false;
+    current = causeResult.value;
+  }
+  return false;
+}
 
 /**
  * Canonical server identity used by the browser storage namespace and by the
@@ -188,7 +225,10 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<Ui
 
 async function probeServerAuthority(target: string, timeoutMs: number, bodyMaxBytes: number): Promise<ProbeResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // A unique reason distinguishes our bounded probe timeout from unrelated
+  // AbortError / TimeoutError failures raised by fetch or application code.
+  const timeoutReason = new DOMException("server authority probe timed out", "TimeoutError");
+  const timeout = setTimeout(() => controller.abort(timeoutReason), timeoutMs);
   try {
     const response = await fetch(`${target}${SERVER_AUTHORITY_PATH}`, {
       method: "GET",
@@ -237,8 +277,12 @@ async function probeServerAuthority(target: string, timeoutMs: number, bodyMaxBy
     const authority = parseCanonicalServerAuthority(record.authority);
     if (!authority) return { ok: false, offlineEligible: false, reason: "malformed" };
     return { ok: true, authority };
-  } catch {
-    return { ok: false, offlineEligible: true, reason: "transport" };
+  } catch (error) {
+    return {
+      ok: false,
+      offlineEligible: error === timeoutReason || isOfflineEligibleAuthorityTransportError(error),
+      reason: "transport",
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -347,15 +391,18 @@ function forwardAdminUpgrade(args: {
       "Sec-WebSocket-Version": "13",
     },
   });
-  const timeout = setTimeout(() => upstreamRequest.destroy(new Error("upgrade timeout")), timeoutMs);
+  const timeoutReason = new Error("admin websocket upgrade timed out");
+  const timeout = setTimeout(() => upstreamRequest.destroy(timeoutReason), timeoutMs);
   let settled = false;
-  const fail = (offlineEligible = true): void => {
+  const fail = (offlineEligible: boolean): void => {
     if (settled) return;
     settled = true;
     clearTimeout(timeout);
     endUpgradeJson(clientSocket, 503, { error: "server_authority_unavailable", offlineEligible });
   };
-  upstreamRequest.once("error", fail);
+  upstreamRequest.once("error", (error) => {
+    fail(error === timeoutReason || isOfflineEligibleAuthorityTransportError(error));
+  });
   upstreamRequest.once("response", (response) => {
     response.resume();
     fail(false);

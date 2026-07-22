@@ -4,11 +4,18 @@ import { useTestApp } from "./helpers.js";
 describe("POST /auth/cache-eviction", () => {
   const getApp = useTestApp();
 
-  it("returns a best-effort cache clear response to a credential-free same-origin request", async () => {
+  it("accepts a real Vite-origin request with unrelated same-origin cookies", async () => {
     const res = await getApp().inject({
       method: "POST",
       url: "/api/v1/auth/cache-eviction",
-      headers: { "sec-fetch-site": "same-origin", "x-first-tree-cache-eviction": "1" },
+      headers: {
+        cookie: "analytics_id=ambient; oauth_nonce=ambient",
+        origin: "http://127.0.0.1:5173",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-first-tree-cache-eviction": "1",
+      },
     });
 
     expect(res.statusCode).toBe(204);
@@ -32,12 +39,13 @@ describe("POST /auth/cache-eviction", () => {
       },
     },
     {
-      name: "cookie-bearing",
+      name: "refresh-authority-bearing",
       headers: {
         "sec-fetch-site": "same-origin",
         "x-first-tree-cache-eviction": "1",
-        cookie: "first_tree_session=must-not-be-used",
+        "content-type": "application/json",
       },
+      payload: { refreshToken: "must-not-be-used" },
     },
     {
       name: "proxy-credential-bearing",
@@ -55,8 +63,16 @@ describe("POST /auth/cache-eviction", () => {
         origin: "http://127.0.0.1:0",
       },
     },
-  ])("rejects a $name request without emitting Clear-Site-Data", async ({ headers }) => {
-    const res = await getApp().inject({ method: "POST", url: "/api/v1/auth/cache-eviction", headers });
+    {
+      name: "non-Vite loopback origin",
+      headers: {
+        "sec-fetch-site": "same-origin",
+        "x-first-tree-cache-eviction": "1",
+        origin: "http://localhost:5173",
+      },
+    },
+  ])("rejects a $name request without emitting Clear-Site-Data", async ({ headers, payload }) => {
+    const res = await getApp().inject({ method: "POST", url: "/api/v1/auth/cache-eviction", headers, payload });
 
     expect(res.statusCode).toBe(403);
     expect(res.headers["cache-control"]).toBe("no-store");

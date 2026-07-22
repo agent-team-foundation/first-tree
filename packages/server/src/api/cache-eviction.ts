@@ -9,7 +9,7 @@ export async function cacheEvictionRoutes(app: FastifyInstance): Promise<void> {
     if (singleHeader(request, CACHE_EVICTION_HEADER) !== "1") {
       return reply.status(403).send({ error: "Cache eviction request rejected" });
     }
-    if (hasCredentials(request)) {
+    if (hasCredentialAuthority(request)) {
       return reply.status(403).send({ error: "Cache eviction request must be credential-free" });
     }
     if (!isAllowedBrowserOrigin(app, request)) {
@@ -21,11 +21,11 @@ export async function cacheEvictionRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
-function hasCredentials(request: FastifyRequest): boolean {
+function hasCredentialAuthority(request: FastifyRequest): boolean {
   return (
     request.headers.authorization !== undefined ||
     request.headers["proxy-authorization"] !== undefined ||
-    request.headers.cookie !== undefined
+    request.body !== undefined
   );
 }
 
@@ -47,6 +47,14 @@ function isAllowedBrowserOrigin(app: FastifyInstance, request: FastifyRequest): 
     return false;
   }
   if (canonicalOrigin !== origin) return false;
+
+  const parsedOrigin = new URL(canonicalOrigin);
+  const isViteLoopbackOrigin =
+    fetchSite === "same-origin" &&
+    parsedOrigin.protocol === "http:" &&
+    parsedOrigin.hostname === "127.0.0.1" &&
+    parsedOrigin.port !== "";
+  if (isViteLoopbackOrigin) return true;
 
   const allowed = new Set<string>();
   allowed.add(new URL(configuredServerAuthority(app.config)).origin);

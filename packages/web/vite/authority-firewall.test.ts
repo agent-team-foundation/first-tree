@@ -9,6 +9,7 @@ import {
   avatarAuthorityTag,
   EXPECTED_AUTHORITY_HEADER,
   firstTreeAuthorityFirewall,
+  isOfflineEligibleAuthorityTransportError,
   normalizeViteProxyTarget,
   parseCanonicalServerAuthority,
   SERVER_AUTHORITY_PATH,
@@ -30,7 +31,16 @@ type UpgradeRecord = {
   headers: IncomingHttpHeaders;
 };
 
-type ProbeMode = "ok" | "redirect" | "status" | "content-type" | "malformed" | "schema" | "noncanonical" | "oversized";
+type ProbeMode =
+  | "ok"
+  | "redirect"
+  | "status"
+  | "content-type"
+  | "malformed"
+  | "schema"
+  | "noncanonical"
+  | "oversized"
+  | "timeout";
 
 type FakeUpstream = {
   server: Server;
@@ -39,6 +49,7 @@ type FakeUpstream = {
   upgrades: UpgradeRecord[];
   authority: string;
   probeMode: ProbeMode;
+  upgradeMode: "ok" | "malformed";
 };
 
 async function listen(server: Server): Promise<string> {
@@ -67,6 +78,7 @@ async function createFakeUpstream(): Promise<FakeUpstream> {
     upgrades: [] as UpgradeRecord[],
     authority: S1_AUTHORITY,
     probeMode: "ok" as ProbeMode,
+    upgradeMode: "ok" as const,
   };
   state.server = createHttpServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -79,6 +91,11 @@ async function createFakeUpstream(): Promise<FakeUpstream> {
         body: Buffer.concat(chunks),
       });
       if (request.url === SERVER_AUTHORITY_PATH) {
+        if (state.probeMode === "timeout") {
+          // Keep the response pending until the probe's own abort closes it.
+          request.socket.once("close", () => response.destroy());
+          return;
+        }
         if (state.probeMode === "redirect") {
           response.writeHead(302, { Location: "/somewhere-else" }).end();
           return;
@@ -135,6 +152,10 @@ async function createFakeUpstream(): Promise<FakeUpstream> {
   });
   state.server.on("upgrade", (request, socket) => {
     state.upgrades.push({ url: request.url, headers: { ...request.headers } });
+    if (state.upgradeMode === "malformed") {
+      socket.end("HTTP/1.1 malformed\r\n\r\n");
+      return;
+    }
     const key = request.headers["sec-websocket-key"];
     const accept = createHash("sha1")
       .update(`${typeof key === "string" ? key : ""}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -237,6 +258,7 @@ describe("Vite server-authority firewall", () => {
     upstream.upgrades.length = 0;
     upstream.authority = S1_AUTHORITY;
     upstream.probeMode = "ok";
+    upstream.upgradeMode = "ok";
   });
 
   afterAll(async () => {
@@ -515,6 +537,19 @@ describe("Vite server-authority firewall", () => {
     ]);
   });
 
+  it("hard-fails a malformed upstream websocket handshake instead of claiming offline recovery", async () => {
+    upstream.upgradeMode = "malformed";
+    const response = await rawUpgrade(
+      viteOrigin,
+      `/api/v1/orgs/org-1/ws/?ft_authority=${encodeURIComponent(S1_AUTHORITY)}`,
+    );
+
+    expect(response).toContain(" 503 ");
+    expect(response).toContain('"offlineEligible":false');
+    expect(upstream.requests.map((record) => record.url)).toEqual([SERVER_AUTHORITY_PATH]);
+    expect(upstream.upgrades).toHaveLength(1);
+  });
+
   it("admits the shared maximum authority through HTTP and the owned upgrade", async () => {
     const maxAuthority = `http://${"a".repeat(2_034)}/api/v1`;
     upstream.authority = maxAuthority;
@@ -548,6 +583,47 @@ describe("Vite server-authority firewall", () => {
 });
 
 describe("authority firewall validation", () => {
+  it.each([
+    ["connection refused", "ECONNREFUSED"],
+    ["temporary DNS failure", "EAI_AGAIN"],
+    ["unknown DNS host", "ENOTFOUND"],
+    ["connection reset", "ECONNRESET"],
+    ["OS timeout", "ETIMEDOUT"],
+  ])("allows offline recovery only for an explicit %s transport code", (_name, code) => {
+    const cause = Object.assign(new Error("must not be inspected"), { code });
+    expect(isOfflineEligibleAuthorityTransportError(new TypeError("fetch failed", { cause }))).toBe(true);
+  });
+
+  it.each([
+    ["self-signed TLS certificate", "DEPTH_ZERO_SELF_SIGNED_CERT"],
+    ["TLS hostname mismatch", "ERR_TLS_CERT_ALTNAME_INVALID"],
+    ["malformed HTTP response", "HPE_INVALID_CONSTANT"],
+    ["truncated response", "UND_ERR_RES_CONTENT_LENGTH_MISMATCH"],
+    ["socket/protocol failure", "UND_ERR_SOCKET"],
+    ["unsupported protocol", "ERR_INVALID_PROTOCOL"],
+  ])("hard-fails a %s error", (_name, code) => {
+    const cause = Object.assign(new Error("must not be inspected"), { code });
+    expect(isOfflineEligibleAuthorityTransportError(new TypeError("fetch failed", { cause }))).toBe(false);
+  });
+
+  it("hard-fails programmer errors and malformed error objects", () => {
+    expect(isOfflineEligibleAuthorityTransportError(new TypeError("programmer bug"))).toBe(false);
+    expect(isOfflineEligibleAuthorityTransportError({ code: 500 })).toBe(false);
+    expect(isOfflineEligibleAuthorityTransportError({ code: "econnrefused" })).toBe(false);
+
+    const circular: { cause?: unknown } = {};
+    circular.cause = circular;
+    expect(isOfflineEligibleAuthorityTransportError(circular)).toBe(false);
+
+    const throwingAccessor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(throwingAccessor, "code", {
+      get() {
+        throw new Error("programmer getter");
+      },
+    });
+    expect(isOfflineEligibleAuthorityTransportError(throwingAccessor)).toBe(false);
+  });
+
   it("normalizes a target origin and rejects paths or credentials", () => {
     expect(normalizeViteProxyTarget("HTTP://LOCALHOST:80/")).toBe("http://localhost");
     expect(() => normalizeViteProxyTarget("https://user@example.test")).toThrow("must not contain credentials");
@@ -591,6 +667,24 @@ describe("authority firewall validation", () => {
       expect(await response.json()).toEqual({ error: "server_authority_unavailable", offlineEligible: true });
     } finally {
       await running.server.close();
+    }
+  });
+
+  it("marks only the probe's own timeout abort as offline eligible", async () => {
+    const upstream = await createFakeUpstream();
+    upstream.probeMode = "timeout";
+    const running = await createTestVite(upstream.origin, 25);
+    try {
+      const response = await fetch(`${running.origin}/api/v1/future`, {
+        headers: { "X-First-Tree-Expected-Authority": S1_AUTHORITY },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "server_authority_unavailable", offlineEligible: true });
+      expect(upstream.requests).toHaveLength(1);
+      expect(upstream.requests[0]?.url).toBe(SERVER_AUTHORITY_PATH);
+    } finally {
+      await running.server.close();
+      await closeServer(upstream.server);
     }
   });
 });

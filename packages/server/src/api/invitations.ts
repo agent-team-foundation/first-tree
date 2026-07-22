@@ -11,6 +11,7 @@ import { UnauthorizedError } from "../errors.js";
 export async function publicInvitationRoutes(app: FastifyInstance): Promise<void> {
   const { previewInvitation } = await import("../services/invitation.js");
   app.get<{ Params: { token: string } }>("/:token/preview", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
     if (!request.params.token) throw new UnauthorizedError("Token required");
     const preview = await previewInvitation(app.db, request.params.token);
     return reply.send(preview);

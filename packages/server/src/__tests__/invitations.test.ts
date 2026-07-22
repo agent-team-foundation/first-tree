@@ -166,6 +166,7 @@ describe("Invitation lifecycle", () => {
 
     const preview = await app.inject({ method: "GET", url: `/api/v1/invitations/${token}/preview` });
     expect(preview.statusCode).toBe(200);
+    expect(preview.headers["cache-control"]).toBe("no-store");
     const body = preview.json<{ organizationName: string; role: string; expiresAt: string | null }>();
     expect(body.role).toBe("member");
     // expiresAt is exposed so the invite page can render an "Expires in N days" hint.
@@ -197,6 +198,7 @@ describe("Invitation lifecycle", () => {
 
     const preview = await app.inject({ method: "GET", url: `/api/v1/invitations/${token}/preview` });
     expect(preview.statusCode).toBe(404);
+    expect(preview.headers["cache-control"]).toBe("no-store");
   });
 
   it("join via invite token records redemption + sets membership active", async () => {

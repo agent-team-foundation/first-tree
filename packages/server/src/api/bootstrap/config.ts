@@ -17,7 +17,8 @@ export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void>
    * (see issue #255). A public bootstrap endpoint can't resolve an
    * installation without a caller, so the field is surfaced as `null`.
    */
-  app.get("/config", async () => {
+  app.get("/config", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
     return {
       allowedOrg: null as string | null,
       serverCommandVersion: app.commandVersion(),

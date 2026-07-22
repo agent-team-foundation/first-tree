@@ -53,7 +53,11 @@ export function canonicalizeServerAuthority(value: string): string {
   if (pathname !== SERVER_AUTHORITY_PATH) {
     throw new Error(`Server authority path must be exactly ${SERVER_AUTHORITY_PATH}`);
   }
-  return `${parsed.origin}${SERVER_AUTHORITY_PATH}`;
+  const canonical = `${parsed.origin}${SERVER_AUTHORITY_PATH}`;
+  if (new TextEncoder().encode(canonical).byteLength > SERVER_AUTHORITY_MAX_LENGTH) {
+    throw new Error(`Canonical server authority must not exceed ${SERVER_AUTHORITY_MAX_LENGTH} bytes`);
+  }
+  return canonical;
 }
 
 /** Derive the fixed API authority from a configured public server origin. */

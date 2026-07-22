@@ -6,8 +6,10 @@
  */
 export const REDACT_QUERY_KEYS: ReadonlySet<string> = new Set([
   "token",
+  "access",
   "access_token",
   "accesstoken",
+  "refresh",
   "refresh_token",
   "refreshtoken",
   "jwt",
