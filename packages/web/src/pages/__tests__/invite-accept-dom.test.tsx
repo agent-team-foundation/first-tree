@@ -54,6 +54,9 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client.js")>();
   return { ...actual, api: { ...actual.api, get: clientMocks.get, post: clientMocks.post } };
 });
+vi.mock("../../api/anonymous-client.js", () => ({
+  anonymousApi: { get: clientMocks.get },
+}));
 vi.mock("../../auth/auth-context.js", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => authMock.value,
@@ -152,6 +155,7 @@ beforeEach(() => {
   onboardingMocks.markOnboardingResume.mockReset();
   clientMocks.get.mockImplementation(async (path: string) => {
     if (path === "/bootstrap/config") return { authProviders: providerAvailability };
+    if (path === "/invitations/token-1/preview") return preview();
     if (path === "/me/organizations") return [org()];
     if (path === "/me") return { member: { organizationId: "org-old" } };
     throw new Error(`Unexpected GET ${path}`);
@@ -160,13 +164,6 @@ beforeEach(() => {
     organizationId: "org-new",
     memberId: "member-new",
     role: "member",
-  });
-  Object.defineProperty(globalThis, "fetch", {
-    configurable: true,
-    value: vi.fn(async () => ({
-      ok: true,
-      json: async () => preview(),
-    })),
   });
 });
 
@@ -185,7 +182,10 @@ describe("InviteAcceptPage", () => {
     const container = await renderDom(<InviteAcceptPage />);
 
     await waitForText(container, "New Team");
-    expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/invitations/token-1/preview");
+    expect(clientMocks.get).toHaveBeenCalledWith(
+      "/invitations/token-1/preview",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
     expect(container.textContent).toContain("You'll switch from");
     expect(container.textContent).toContain("Old Team");
     expect(container.textContent).toContain("Expires in 2 hours");
@@ -223,9 +223,10 @@ describe("InviteAcceptPage", () => {
     await act(async () => root?.unmount());
     root = null;
 
-    Object.defineProperty(globalThis, "fetch", {
-      configurable: true,
-      value: vi.fn(async () => ({ ok: false, json: async () => ({}) })),
+    clientMocks.get.mockImplementation(async (path: string) => {
+      if (path === "/bootstrap/config") return { authProviders: providerAvailability };
+      if (path === "/invitations/token-1/preview") throw new Error("invalid invitation");
+      throw new Error(`Unexpected GET ${path}`);
     });
     const errorPage = await renderDom(<InviteAcceptPage />);
     await waitForText(errorPage, "This invitation is no longer valid");

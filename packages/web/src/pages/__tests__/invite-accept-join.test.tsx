@@ -17,6 +17,7 @@ const authMocks = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({ post: vi.fn() }));
+const anonymousApiMocks = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => ({
@@ -29,6 +30,10 @@ vi.mock("../../auth/auth-context.js", () => ({
 
 vi.mock("../../api/client.js", () => ({
   api: { post: apiMocks.post },
+}));
+
+vi.mock("../../api/anonymous-client.js", () => ({
+  anonymousApi: { get: anonymousApiMocks.get },
 }));
 
 vi.mock("../../hooks/use-server-channel.js", () => ({
@@ -56,15 +61,9 @@ async function flush(): Promise<void> {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
-  // Preview fetch (unauthenticated GET) — return a minimal valid invitation.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ organizationDisplayName: "Invited Org", expiresAt: null }),
-    })),
-  );
+  anonymousApiMocks.get.mockResolvedValue({ organizationDisplayName: "Invited Org", expiresAt: null });
   apiMocks.post.mockReset();
+  anonymousApiMocks.get.mockClear();
   authMocks.selectOrganization.mockClear();
   authMocks.adoptTokens.mockClear();
 });

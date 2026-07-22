@@ -1276,10 +1276,10 @@ describe("web DOM interaction coverage", () => {
 
   it("renders login states and builds safe OAuth links", async () => {
     const { LoginPage } = await import("../login.js");
-    const { api } = await import("../../api/client.js");
-    const originalGet = api.get;
+    const { anonymousApi } = await import("../../api/anonymous-client.js");
+    const originalGet = anonymousApi.get;
     let availability = { google: true, github: true };
-    api.get = async <T,>(path: string): Promise<T> => {
+    anonymousApi.get = async <T,>(path: string): Promise<T> => {
       if (path === "/bootstrap/config") {
         return { authProviders: availability } as T;
       }
@@ -1320,7 +1320,7 @@ describe("web DOM interaction coverage", () => {
       const authed = await renderDom(<LoginPage />, "/login", undefined);
       expect(authed.container.textContent).toBe("");
     } finally {
-      api.get = originalGet;
+      anonymousApi.get = originalGet;
     }
   });
 

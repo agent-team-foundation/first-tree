@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "../../api/client.js";
+import { anonymousApi } from "../../api/anonymous-client.js";
 import {
   extractAuthProviderAvailability,
   extractChannel,
@@ -14,8 +14,8 @@ import {
   useServerChannelState,
 } from "../use-server-channel.js";
 
-vi.mock("../../api/client.js", () => ({
-  api: {
+vi.mock("../../api/anonymous-client.js", () => ({
+  anonymousApi: {
     get: vi.fn(),
   },
 }));
@@ -104,7 +104,7 @@ describe("extractAuthProviderAvailability", () => {
 
 describe("server bootstrap hooks", () => {
   it("reads channel and growth flags from the public bootstrap config", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({
+    vi.mocked(anonymousApi.get).mockResolvedValueOnce({
       channel: "staging",
       growthLandingPagesEnabled: true,
       authProviders: { google: true, github: true },
@@ -112,14 +112,14 @@ describe("server bootstrap hooks", () => {
 
     const observed = await renderBootstrapProbe();
 
-    expect(api.get).toHaveBeenCalledWith("/bootstrap/config");
+    expect(anonymousApi.get).toHaveBeenCalledWith("/bootstrap/config");
     expect(observed.channel).toEqual({ channel: "staging", settled: true });
     expect(observed.growth).toEqual({ enabled: true, settled: true });
     expect(observed.growthEnabled).toBe(true);
   });
 
   it("settles to safe defaults when the bootstrap config request fails", async () => {
-    vi.mocked(api.get).mockRejectedValueOnce(new Error("bootstrap unavailable"));
+    vi.mocked(anonymousApi.get).mockRejectedValueOnce(new Error("bootstrap unavailable"));
 
     const observed = await renderBootstrapProbe();
 

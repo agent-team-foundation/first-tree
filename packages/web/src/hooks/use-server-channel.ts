@@ -1,7 +1,7 @@
 import { type AuthProviderAvailability, authProviderAvailabilitySchema } from "@first-tree/shared";
 import type { ChannelName } from "@first-tree/shared/channel";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client.js";
+import { anonymousApi } from "../api/anonymous-client.js";
 
 type ServerBootstrapConfig = {
   channel: ChannelName | null;
@@ -53,7 +53,7 @@ function extractServerBootstrapConfig(data: unknown): ServerBootstrapConfig {
 }
 
 async function fetchServerBootstrapConfig(): Promise<ServerBootstrapConfig> {
-  const data = await api.get<unknown>("/bootstrap/config");
+  const data = await anonymousApi.get<unknown>("/bootstrap/config");
   return extractServerBootstrapConfig(data);
 }
 

@@ -2,6 +2,7 @@ import type { InvitationPreview } from "@first-tree/shared";
 import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { anonymousApi } from "../api/anonymous-client.js";
 import { api } from "../api/client.js";
 import { type AuthProvider, beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -33,8 +34,8 @@ export function InviteAcceptPage() {
   const navigate = useNavigate();
   const { isAuthenticated, selectOrganization, teamDisplayName } = useAuth();
   const { providers, settled: providersSettled } = useAuthProviderAvailabilityState();
-  const [preview, setPreview] = useState<InvitationPreview | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [previewState, setPreviewState] = useState<{ token: string; value: InvitationPreview } | null>(null);
+  const [errorState, setErrorState] = useState<{ token: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // Current team name for the "you'll switch from X to Y" warning. Comes
   // straight from the auth context's selected membership — no extra fetch.
@@ -43,19 +44,24 @@ export function InviteAcceptPage() {
 
   useEffect(() => {
     if (!token) return;
+    const controller = new AbortController();
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/invitations/${encodeURIComponent(token)}/preview`);
-        if (!res.ok) {
-          setError("This invitation is no longer valid");
-          return;
-        }
-        setPreview((await res.json()) as InvitationPreview);
+        const res = await anonymousApi.get<InvitationPreview>(`/invitations/${encodeURIComponent(token)}/preview`, {
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setPreviewState({ token, value: res });
       } catch {
-        setError("Network error while loading invitation");
+        if (!controller.signal.aborted) {
+          setErrorState({ token, message: "This invitation is no longer valid" });
+        }
       }
     })();
+    return () => controller.abort();
   }, [token]);
+
+  const preview = previewState !== null && previewState.token === token ? previewState.value : null;
+  const error = errorState !== null && errorState.token === token ? errorState.message : null;
 
   if (!token)
     return (
@@ -96,7 +102,7 @@ export function InviteAcceptPage() {
       markOnboardingResume("invite");
       navigate("/onboarding", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to join team");
+      setErrorState({ token, message: err instanceof Error ? err.message : "Failed to join team" });
     } finally {
       setBusy(false);
     }
