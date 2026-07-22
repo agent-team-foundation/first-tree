@@ -89,6 +89,24 @@ After validation passes, complete two distinct reasoning passes on the same
 `REVIEWED_HEAD`. They are quality checks, not a required machine-formatted
 ledger.
 
+Use distinct Context Tree content perspectives across those passes instead of
+repeating one generic checklist:
+
+- **Decision steward:** challenge whether each claim belongs as durable current
+  truth, preserves the rationale a future decision-maker needs, routes
+  responsibility correctly and displaces obsolete truth under the generated
+  policy.
+- **Tree curator:** challenge edit-versus-add, structure, canonical placement,
+  scan density, duplication and relationship choices against the generated
+  policy so the tree keeps one findable home for each decision.
+- **Future agent:** ask whether normal content alone lets a future reader find,
+  understand and correctly apply the decision without source history,
+  archive/supporting material or tribal context.
+
+The Challenge pass then supplies a separate adversarial perspective. These are
+reasoning lenses for one Reviewer, not extra agents, outputs, votes or protocol
+state.
+
 ### Evidence pass
 
 Read every changed normal/member file and only the surrounding context required
@@ -113,7 +131,9 @@ After the Evidence pass, assume that approving the pull request would be wrong
 and try to disprove its safety. Challenge the complete head for:
 
 - contradiction with current normal truth or a `decisionLocksCode` node;
+- failure of either generated-policy content-admission test;
 - duplicated canonical truth or placement in the wrong node;
+- an unnecessary leaf or directory that should be an edit to existing truth;
 - incorrect normal/member/archive classification;
 - missing rationale or unsupported durable claims;
 - unauthorized ownership, locked-decision, top-level or governance changes;

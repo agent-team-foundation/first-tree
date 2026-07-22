@@ -80,6 +80,10 @@ describe("context-tree-review floor", () => {
 
     expect(skill).toContain("### Evidence pass");
     expect(skill).toContain("### Challenge pass");
+    expect(skill).toContain("**Decision steward:**");
+    expect(skill).toContain("**Tree curator:**");
+    expect(skill).toContain("**Future agent:**");
+    expect(skill).toContain("not extra agents, outputs, votes or protocol\nstate");
     expect(skill).toContain("Both passes must complete on the final head");
     expect(skill).toContain("restart the full\nvalidator-first review on the resulting head");
     expect(skill).toMatch(/repair did\s+not introduce a new blocker/u);
