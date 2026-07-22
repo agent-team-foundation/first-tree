@@ -39,6 +39,8 @@ describe("first-tree-write Agent Review contract floor", () => {
   });
 
   it("keeps clean BYO Write bound to explicit Team, exact snapshot, and existing keyed authority", () => {
+    expect(skill).toContain("BYO clean (GitHub-bound Context Trees only)");
+    expect(skill).toContain("A GitLab-bound tree cannot use this");
     expect(skill).toContain('first-tree --json tree write --team "<team-id>"');
     expect(skill).toContain('--snapshot "<exact-snapshot>" --github-login "<gh-login>"');
     expect(skill).toContain("Do not require or reconstruct a Workspace manifest");
@@ -52,9 +54,19 @@ describe("first-tree-write Agent Review contract floor", () => {
     expect(skill).toContain("same keyed handoff for that PR");
   });
 
+  it("selects publication forge from the Context Tree and follows ordinary GitLab MRs", () => {
+    expect(skill).toMatch(/detect the Context Tree forge from its own `origin`/u);
+    expect(skill).toContain("never infer it from the source");
+    expect(skill).toMatch(/Audit-originated GitLab MR stays draft\s+for ordinary independent review/u);
+    expect(skill).toContain("first-tree gitlab follow <mr-url>");
+    expect(skill).toContain("creating or resolving/reusing any GitLab MR");
+    expect(skill).toContain("returned pending or active state is success");
+    expect(skill).toContain("failure does not invalidate the MR");
+  });
+
   it("keeps version metadata and the standalone VERSION file aligned", () => {
     const version = readFileSync(join(skillPath, "VERSION"), "utf8").trim();
-    expect(version).toBe("0.11.0");
+    expect(version).toBe("0.11.1");
     expect(skill).toContain(`version: ${version}`);
     expect(skill.split("\n").length).toBeLessThanOrEqual(500);
   });

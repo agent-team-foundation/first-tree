@@ -1,4 +1,4 @@
 interface:
   display_name: "Context Tree Review"
-  short_description: "Review a Context Tree PR against generated policy"
-  default_prompt: "Use $context-tree-review to inspect this managed Context Tree pull request, repair only within the declared scope, fully re-review successor heads, and exact-head squash-merge a confirmed READY result."
+  short_description: "Review a GitHub Context Tree PR safely"
+  default_prompt: "Use $context-tree-review to inspect this managed GitHub Context Tree pull request, repair only within the declared scope, fully re-review successor heads, and exact-head squash-merge a confirmed READY result."

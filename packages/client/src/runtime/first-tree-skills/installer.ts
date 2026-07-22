@@ -62,7 +62,7 @@ export const CORE_SKILL_NAMES = [
   "context-tree-audit",
 ] as const;
 
-const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
+const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff", "first-tree-gitlab"] as const;
 
 /**
  * The current installer has no separate tree-bound payload tier: all shipped

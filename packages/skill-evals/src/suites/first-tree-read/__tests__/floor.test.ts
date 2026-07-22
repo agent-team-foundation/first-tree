@@ -10,6 +10,7 @@ const validateFloor = FIRST_TREE_READ_SUITE.validateFloor;
 if (!validateFloor) throw new Error("first-tree-read suite must define validateFloor");
 
 const skill = readFileSync(join(process.cwd(), "../../skills/first-tree-read/SKILL.md"), "utf8");
+const skillVersion = readFileSync(join(process.cwd(), "../../skills/first-tree-read/VERSION"), "utf8").trim();
 
 describe("first-tree-read floor contract", () => {
   it("keeps the declared gate matrix complete", () => {
@@ -30,5 +31,17 @@ describe("first-tree-read floor contract", () => {
   it("preserves the managed-workspace compatibility route", () => {
     expect(skill).toContain("Otherwise retain the **managed workspace** path below");
     expect(skill).toContain("pull-before-selector behavior");
+  });
+
+  it("routes PR/MR review without claiming GitLab Context Review support", () => {
+    expect(skill).toContain("request to review a Context Tree PR/MR");
+    expect(skill).toContain("For a GitLab MR, do not claim Context\nReview support");
+    expect(skill).toContain("ordinary GitLab review workflow on a stable MR head");
+    expect(skill).toContain("PR/MR or issue titles");
+  });
+
+  it("keeps version metadata aligned", () => {
+    expect(skillVersion).toBe("0.1.2");
+    expect(skill).toContain(`version: ${skillVersion}`);
   });
 });

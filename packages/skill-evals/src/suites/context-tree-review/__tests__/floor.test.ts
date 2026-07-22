@@ -47,6 +47,27 @@ describe("context-tree-review floor", () => {
     expect(cloud).not.toContain("tree verify");
   });
 
+  it("keeps Context Tree review GitHub-only and fails closed for GitLab", () => {
+    const skillDir = join(repoRoot, "skills", "context-tree-review");
+    const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");
+    const description = skill.split("\n").find((line) => line.startsWith("description:"));
+    const openai = readFileSync(join(skillDir, "agents", "openai.yaml"), "utf8");
+
+    expect(description).toBeDefined();
+    expect(description).toMatch(/Review a GitHub pull request/);
+    expect(description).toMatch(/do not use it for GitLab Merge Requests/);
+    expect(skill).toContain("This workflow is GitHub-only");
+    expect(skill).toContain("ordinary independent GitLab MR review path");
+    expect(skill).toContain("A GitLab URL, Merge Request identifier, or bound GitLab upstream");
+    expect(skill).toContain("A local mirror cannot override this exclusion");
+    expect(skill).toContain("classify it before any clone");
+    expect(skill).toContain("stop before any Reviewer\n   configuration lookup, clone");
+    expect(skill).toContain("never fall back to `gh` or substitute `glab`");
+    expect(skill).toContain("A local filesystem mirror is not provider authority");
+    expect(skill).toContain("prove a GitHub pull request before any fetch");
+    expect(openai).toContain("managed GitHub Context Tree pull request");
+  });
+
   it("pins the managed Reviewer repair and exact-head merge contract", () => {
     const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
 

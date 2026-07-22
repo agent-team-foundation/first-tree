@@ -170,6 +170,7 @@ const RETIRED_SKILL_NAMES = [
   "first-tree-context",
   "first-tree-sync",
   "first-tree-github",
+  "first-tree-gitlab",
   "first-tree-guide",
   "first-tree-onboarding",
   "first-tree-kickoff",

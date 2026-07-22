@@ -32,7 +32,7 @@ describe("agent briefing template assets", () => {
       expect(copiedSource).toContain("## GitLab Working Posture");
       expect(copiedSource).toContain("## GitLab Entity Attention");
       expect(copiedSource).toContain("gitlab follow <url>");
-      expect(copiedSource).toContain("pending and inbound-only");
+      expect(copiedSource).toContain("inbound-only and may return pending or active");
       expect(copiedSource).not.toContain("first-tree-gitlab");
       expect(copiedSource).not.toContain("glab mr subscribe <iid-or-branch>");
       expect(copiedSource).toContain("## Context Tree Policy");
