@@ -3,18 +3,29 @@ import type { SkillCaseGrading } from "../../core/result-schema.js";
 
 export type SubmittedReviewAction = "approve" | "comment" | "request-changes";
 export type ReviewAction = "none" | SubmittedReviewAction;
+export type RepairExpectation = "none" | "push-denied" | "success";
 export type ReviewScenario =
   | "archive-only"
   | "authority"
   | "draft"
+  | "mixed-repair-authority"
   | "passing"
+  | "push-denied"
   | "relationship-change"
   | "semantic-failure"
   | "validator-failure";
 
 export type ContextTreeReviewEvalCase = {
   briefingMode: "minimal";
-  expected: { action: ReviewAction; bodyHints: readonly string[]; firstHeading?: string; verifyMustPass: boolean };
+  expected: {
+    action: ReviewAction;
+    bodyHints: readonly string[];
+    firstHeading?: string;
+    initialVerifyMustPass: boolean;
+    repair: RepairExpectation;
+    repairPaths: readonly string[];
+    repairableHandoffHints?: readonly string[];
+  };
   fixture: { scenario: ReviewScenario };
   id: string;
   prompt: string;
@@ -51,29 +62,42 @@ export type ReviewFixtureExpectation = {
   baseOid: string;
   chatId: string;
   expectedFinalDraft: boolean;
-  expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
   forbiddenPaths: readonly string[];
   governedPaths: readonly string[];
   headOid: string;
+  initialVerifyMustPass: boolean;
   prNumber: number;
+  repair: RepairExpectation;
+  repairPaths: readonly string[];
+  repairWorktreePath: string;
   repo: string;
   reviewerAgentUuid: string;
   runId: string;
   runtimeSessionToken: string;
   runtimeSessionTokenFile: string;
+  sourceBranch: string;
   requiredReferenceSearches: readonly string[];
   submissionHeadOid: string;
   workspacePath: string;
 };
 
 export type ReviewFixtureIntegrity = {
+  finalDiffEmpty: boolean;
+  finalHeadOid: string;
   mainHeadUnchanged: boolean;
   mainWorktreeClean: boolean;
-  originRefsUnchanged: boolean;
+  originRefsValid: boolean;
+  repairCommitValid: boolean;
+  repairContentValid: boolean;
+  repairPathsExact: boolean;
+  repairPathsRemoved: boolean;
+  repairWorktreeCleaned: boolean;
   reviewWorktreeCleaned: boolean;
+  sourceAndPullMatch: boolean;
+  sourceHeadOid: string;
   treeConfigUnchanged: boolean;
-  treeRefsUnchanged: boolean;
+  treeRefsValid: boolean;
   treeWorktreesUnchanged: boolean;
 };
 
@@ -87,8 +111,10 @@ export type ViewEvent = {
 };
 
 export type EvalMetrics = {
+  authorHandoffForRepairableFinding: boolean;
   bodyHintsObserved: boolean;
   blockedGithubAttempts: number;
+  checksCurrentHead: boolean;
   expectedHeadingObserved: boolean;
   finalViewFresh: boolean;
   firstTreeReadLoaded: boolean;
@@ -98,6 +124,7 @@ export type EvalMetrics = {
   identityReadObserved: boolean;
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
+  repairPushDenied: boolean;
   mutationAttempted: boolean;
   prohibitedExpansionObserved: boolean;
   referenceSearchAfterVerify: boolean;
@@ -109,7 +136,11 @@ export type EvalMetrics = {
   semanticReadAfterVerify: boolean;
   semanticReadAfterFailedVerify: boolean;
   semanticReadBeforeVerify: boolean;
+  successorDiffReviewed: boolean;
+  successorSemanticReviewComplete: boolean;
+  successorVerifyPassed: boolean;
   targetMatches: boolean;
+  finalReviewBoundToSuccessorHead: boolean;
   verifyExitCodes: readonly number[];
   verifyFirst: boolean;
   verifyHeadBound: boolean;

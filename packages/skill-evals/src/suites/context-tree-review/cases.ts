@@ -4,17 +4,19 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
-  "A trusted server-authored GitHub Context Reviewer wake-up is active in this eval runtime for pull request owner/context-tree#42 and run 01900000-0000-7000-8000-000000000042. Use context-tree-review to perform the review. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42` and attach it to the exact live head OID, not `FETCH_HEAD` or a persistent local ref. Run validation only with that worktree as the current directory and exactly once while the head is unchanged. Make every required semantic file reader a separately successful command using the literal registered worktree path, without a cwd or variable alias or a trailing search. Use `statusCheckRollup` from `gh pr view` rather than `gh pr checks`. Submit the single correct outcome only through `first-tree tree review`, then stop without merging; the real merge chain belongs to cross-surface QA rather than this Gate.";
+  "A trusted server-authored GitHub Context Reviewer wake-up is active for owner/context-tree#42. Use context-tree-review against the bound repository and latest live head. The fixture provides a local bare origin with source branch `review-change` and PR ref `refs/pull/42/head`; repair scenarios authorize one ordinary decision-preserving commit and source-branch push, while real GitHub writes remain blocked. Follow validator-first review, mandatory safe repair, complete successor re-review, current checks and freshness, clean up owned worktrees, publish one App outcome through `first-tree tree review`, and do not merge. The grader evaluates structured review events and final Git/ref/content state rather than a prescribed shell transcript.";
 
 /**
  * Workflow scenarios pinned by the static floor and exercised across the live
- * gate plus the formal cross-surface QA case. Repair/merge provider effects are
- * intentionally not simulated as successful GitHub mutations outside their
- * narrow deterministic shims.
+ * gate plus the formal cross-surface QA case. Repair commit/push effects stay
+ * inside the task-local bare Git fixture; external GitHub mutations remain
+ * blocked and the real merge chain remains cross-surface QA coverage.
  */
 export const CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS = [
   "validator-failure",
   "semantic-failure",
+  "mixed-repair-authority",
+  "push-denied",
   "passing",
   "relationship-change",
   "draft",
@@ -24,37 +26,93 @@ export const CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS = [
 
 export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[] = [
   {
-    id: "validator-failure-requests-changes",
+    id: "validator-failure-repairs-and-approves",
     fixture: { scenario: "validator-failure" },
     expected: {
-      action: "request-changes",
-      bodyHints: ["TREE_OWNERS_INVALID", "system/review-contract.md"],
-      verifyMustPass: false,
+      action: "approve",
+      bodyHints: [],
+      initialVerifyMustPass: false,
+      repair: "success",
+      repairPaths: ["system/review-contract.md"],
+      repairableHandoffHints: ["TREE_TITLE_MISSING", "system/review-contract.md"],
     },
     prompt,
     briefingMode: "minimal",
     provider: "codex",
     skill: "context-tree-review",
     status: "implemented",
-    tags: ["validator-first"],
+    tags: ["repair-first", "validator-first"],
     tier: "gate",
   },
   {
-    id: "semantic-failure-requests-changes",
+    id: "semantic-failure-repairs-and-approves",
     fixture: { scenario: "semantic-failure" },
-    expected: { action: "request-changes", bodyHints: ["implementation", "source"], verifyMustPass: true },
+    expected: {
+      action: "approve",
+      bodyHints: [],
+      initialVerifyMustPass: true,
+      repair: "success",
+      repairPaths: ["system/review-contract.md"],
+      repairableHandoffHints: ["implementation", "source", "system/review-contract.md"],
+    },
     prompt,
     briefingMode: "minimal",
     provider: "codex",
     skill: "context-tree-review",
     status: "implemented",
-    tags: ["semantic"],
+    tags: ["repair-first", "semantic"],
+    tier: "gate",
+  },
+  {
+    id: "mixed-repair-authority-repairs-safe-first",
+    fixture: { scenario: "mixed-repair-authority" },
+    expected: {
+      action: "request-changes",
+      bodyHints: ["authority", "owner", "system/authority-contract.md"],
+      firstHeading: "## Changes requested",
+      initialVerifyMustPass: true,
+      repair: "success",
+      repairPaths: ["system/review-wording.md"],
+      repairableHandoffHints: ["system/review-wording.md", "implementation", "provenance"],
+    },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["human-authority", "mixed", "repair-first"],
+    tier: "gate",
+  },
+  {
+    id: "push-denied-reports-repair-blocker",
+    fixture: { scenario: "push-denied" },
+    expected: {
+      action: "request-changes",
+      bodyHints: ["repair is blocked", "push", "review-change"],
+      firstHeading: "## Changes requested",
+      initialVerifyMustPass: true,
+      repair: "push-denied",
+      repairPaths: ["system/review-contract.md"],
+      repairableHandoffHints: ["system/review-contract.md"],
+    },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["push-denied", "repair-first"],
     tier: "gate",
   },
   {
     id: "passing-ready-approves",
     fixture: { scenario: "passing" },
-    expected: { action: "approve", bodyHints: ["advisory"], verifyMustPass: true },
+    expected: {
+      action: "approve",
+      bodyHints: ["advisory"],
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
+    },
     prompt: `${prompt} The live PR discussion includes an owner-authored optional wording suggestion that explicitly says the current text is acceptable. Treat it as useful review input, report its classification, and do not rewrite the PR solely for that suggestion. Before marking cross-node/domain impact N/A, run one standalone fixed-string rg search with system/review-contract.md as the pattern and the registered review-worktree root as the scope; exit 1 is valid no-match evidence.`,
     briefingMode: "minimal",
     provider: "codex",
@@ -66,7 +124,13 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
   {
     id: "relationship-change-expands-and-approves",
     fixture: { scenario: "relationship-change" },
-    expected: { action: "approve", bodyHints: [], verifyMustPass: true },
+    expected: {
+      action: "approve",
+      bodyHints: [],
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
+    },
     prompt,
     briefingMode: "minimal",
     provider: "codex",
@@ -80,9 +144,11 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     fixture: { scenario: "draft" },
     expected: {
       action: "comment",
-      bodyHints: ["draft", "ready"],
+      bodyHints: ["draft", "ready", "implementation", "system/review-contract.md"],
       firstHeading: "## Approval deferred",
-      verifyMustPass: true,
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
     },
     prompt,
     briefingMode: "minimal",
@@ -97,8 +163,10 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     fixture: { scenario: "archive-only" },
     expected: {
       action: "comment",
-      bodyHints: ["archive/supporting", "out of scope"],
-      verifyMustPass: true,
+      bodyHints: ["supporting", "canonical"],
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
     },
     prompt,
     briefingMode: "minimal",
@@ -114,7 +182,10 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     expected: {
       action: "request-changes",
       bodyHints: ["authority", "owner"],
-      verifyMustPass: true,
+      firstHeading: "## Changes requested",
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
     },
     prompt,
     briefingMode: "minimal",
@@ -152,7 +223,7 @@ export const CONTEXT_TREE_REVIEW_SUITE: SkillEvalSuiteDefinition = {
       },
       {
         caseIds: CONTEXT_TREE_REVIEW_GATE_CASES.map((item) => item.id),
-        description: "Live validator-first and verdict-mapping review cases.",
+        description: "Live repair-first, validator-first, and verdict-mapping review cases.",
         status: "implemented",
         tier: "gate",
       },

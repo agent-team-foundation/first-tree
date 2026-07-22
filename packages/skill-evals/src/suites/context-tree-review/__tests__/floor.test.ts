@@ -18,6 +18,8 @@ describe("context-tree-review floor", () => {
     expect(CONTEXT_TREE_REVIEW_GATE_CASES.map((item) => item.fixture.scenario)).toEqual([
       "validator-failure",
       "semantic-failure",
+      "mixed-repair-authority",
+      "push-denied",
       "passing",
       "relationship-change",
       "draft",
@@ -28,6 +30,8 @@ describe("context-tree-review floor", () => {
     expect(CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS).toEqual([
       "validator-failure",
       "semantic-failure",
+      "mixed-repair-authority",
+      "push-denied",
       "passing",
       "relationship-change",
       "draft",
@@ -39,11 +43,42 @@ describe("context-tree-review floor", () => {
   it("makes approval mandatory for the passing ready case", () => {
     const passing = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "passing");
     expect(passing?.expected.action).toBe("approve");
+    expect(passing?.prompt).toContain("current checks and freshness");
+  });
+
+  it("keeps draft findings read-only and deferred", () => {
+    const draft = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "draft");
+    expect(draft?.expected).toMatchObject({
+      action: "comment",
+      firstHeading: "## Approval deferred",
+      repair: "none",
+    });
+    expect(draft?.expected.bodyHints).toContain("implementation");
+  });
+
+  it("requires repair-first behavior for deterministic findings", () => {
+    const validator = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
+    const semantic = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "semantic-failure");
+    const mixed = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "mixed-repair-authority");
+    const denied = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "push-denied");
+
+    expect(validator?.expected).toMatchObject({ action: "approve", repair: "success" });
+    expect(semantic?.expected).toMatchObject({ action: "approve", repair: "success" });
+    expect(mixed?.expected).toMatchObject({
+      action: "request-changes",
+      firstHeading: "## Changes requested",
+      repair: "success",
+    });
+    expect(denied?.expected).toMatchObject({ action: "request-changes", repair: "push-denied" });
+    expect(denied?.expected.bodyHints).toEqual(expect.arrayContaining(["push", "review-change"]));
   });
 
   it("maps a proven authority violation to request changes", () => {
     const authority = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "authority");
-    expect(authority?.expected.action).toBe("request-changes");
+    expect(authority?.expected).toMatchObject({
+      action: "request-changes",
+      firstHeading: "## Changes requested",
+    });
   });
 
   it("uses one trusted App-run publication path", () => {
@@ -66,14 +101,30 @@ describe("context-tree-review floor", () => {
     expect(cloud).not.toContain("gh pr review");
   });
 
-  it("pins local repair, App verdict, and response-head local merge", () => {
+  it("pins mandatory local repair, App verdict, and response-head local merge", () => {
     const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
 
     expect(skill).toContain("first-tree org context-tree review-config --json");
-    expect(skill).toContain("No PR-body consent block or task packet is required");
-    expect(skill).toContain("same-repository, non-fork PR");
+    expect(skill).toContain("No PR-body consent\n  block or task packet is required");
+    expect(skill).toContain("`SAFE_REPAIR` is an obligation, not an option");
+    expect(skill).toContain("A mixed review must repair all");
+    expect(skill).toMatch(/Never ask the author\s+to perform a `SAFE_REPAIR`/u);
+    expect(skill).toContain("same-repository and non-fork");
+    expect(skill).toContain("ready for review, same-repository and non-fork");
+    expect(skill).toContain("`PROTECTED_DECISION`");
+    expect(skill).toContain("`REPAIR_BLOCKED`");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
+    expect(skill).toContain("Immediately before mutation, rerun");
+    expect(skill).toContain("Immediately before push, rerun\n`first-tree org context-tree review-config --json`");
+    expect(skill).toContain("Untouched protected residuals retain\ntheir original classification");
+    expect(skill).toContain('staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`');
+    expect(skill).toContain("A draft PR is read-only even when its findings would be mechanically");
+    expect(skill).toContain("Immediately before submitting any outcome, rerun");
+    expect(skill).toContain("its base ref to equal that live\nbinding branch");
+    expect(skill).toContain("After check polling completes, rerun the same live Reviewer configuration check");
+    expect(skill).toContain("its repository, state, draft flag, base ref/OID and head\nrepository/ref/OID");
+    expect(skill).toContain("branch-attached repair worktree through normal `git worktree remove`");
     expect(skill).toContain("`data.reviewedHead` is the only merge authority");
     expect(skill).toMatch(/gh api \\\s+--method PUT/u);
     expect(skill).toContain('"sha=$REVIEWED_HEAD"');
@@ -104,7 +155,7 @@ describe("context-tree-review floor", () => {
     expect(skill).toMatch(/leaf-local body change with none of these\s+observable triggers/u);
     expect(skill).toContain("Do not\nrecursively read every descendant");
     expect(skill).toContain("do not read unrelated domains merely because the tree is\nsmall");
-    expect(skill).toContain("A proven unauthorized ownership, lock or governance change");
+    expect(skill).toContain("proven unauthorized ownership, lock or governance");
     expect(skill).toMatch(/this is\s+focused PR review, not a\s+whole-tree audit/u);
     expect(skill).toContain("Do not manufacture a finding merely to\ndemonstrate adversarial review");
     expect(skill).toContain("Both passes must complete on the final head");

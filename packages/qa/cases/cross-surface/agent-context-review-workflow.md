@@ -11,9 +11,10 @@ surfaces: [cli, client, server, github, runtime]
 
 Confirm that supported activity on a pull request in the bound Context Tree
 repository creates or reuses one PR-scoped Reviewer Chat and wakes the assigned
-review agent. Confirm the agent reviews the latest live PR, may repair it with
-its local identity, publishes the formal verdict through the GitHub App, and
-uses its local identity for squash merge.
+review agent. Confirm the agent reviews the latest live PR, repairs every safely
+determined finding with its local identity before escalation, publishes the
+formal verdict through the GitHub App, and uses its local identity for squash
+merge.
 
 Deterministic schemas and Skill wording belong in product tests and Skill
 evals. This case proves the assembled App webhook, Chat/Inbox, runtime, CLI,
@@ -35,9 +36,10 @@ GitHub review and repository gate.
   configure the App as a bypass actor. For a migrated repository, confirm no
   effective ruleset still requires the retired `first-tree/context-review`
   status, which the App-review-only workflow no longer publishes.
-- Prepare ready, draft, fork, validator-failing, semantic-failing, repairable,
-  check-failing and merge-failing PRs. The PR body needs no repair-consent or
-  machine-readable scope block.
+- Prepare ready, draft, fork, repairable validator-failing, repairable
+  semantic-failing, mixed safe/protected, push-denied, check-failing and
+  merge-failing PRs. The PR body needs no repair-consent or machine-readable
+  scope block.
 - Store redacted evidence outside the repository.
 
 ## Operate and Observe
@@ -59,9 +61,32 @@ GitHub review and repository gate.
 - Confirm the Reviewer resolves the bound repository and latest live PR,
   creates an isolated worktree, and runs `first-tree tree verify --json` before
   semantic review. Draft and fork PRs remain non-approving/read-only.
-- Exercise validation and semantic failures. Confirm the Reviewer uses
-  `first-tree tree review --run ... --event REQUEST_CHANGES|COMMENT --body-file ...`;
-  the removed GitHub command, `--head`, and `--agent` are unavailable.
+- Exercise repairable validator and semantic failures on a same-repository
+  branch. Confirm local git/`gh` credentials repair, commit, and push every
+  objectively determined, decision-preserving finding before the agent chooses
+  an App outcome. Immediately before mutation and again immediately before
+  push, confirm the live binding, enabled Reviewer and assigned Agent still
+  match the trusted run, and the complete live PR identity and source branch
+  still equal the reviewed state. Confirm the exact repair paths,
+  including additions, moves and deletions, are staged before repair
+  validation; then confirm status and the complete cached base-to-result diff
+  are inspected with no later content/index mutation before the normal commit
+  and push. A fully repairable ready PR must not ask the author to change it and
+  must approve only after validating and semantically reviewing the successor
+  head.
+- Exercise mixed safe and protected findings. Confirm the Reviewer repairs the
+  safe batch first. For a residual proven unauthorized ownership,
+  decision-lock or governance violation, require `REQUEST_CHANGES`; when the
+  evidence establishes only that an authorized human choice is required and
+  cannot prove a concrete violation, require `COMMENT` with
+  `## Human decision required`. Confirm the removed GitHub command, `--head`,
+  and `--agent` remain unavailable.
+- Deny a normal source-branch push. Confirm the Reviewer does not force-push,
+  amend, rebase, alter remotes, or use an App token; it reconciles observable
+  refs and submits `REQUEST_CHANGES` with the specific push blocker and one
+  recovery action. After every successful repair push, confirm the agent
+  fetches, validates, and fully reviews the latest resulting PR state. A
+  synchronize-triggered duplicate run is acceptable.
 - Exercise a domain `NODE.md`, changed `soft_links`/Markdown link or explicit
   cross-domain reference, and node add/move/rename/delete change. Confirm the
   Reviewer expands only to affected outgoing targets, incoming references,
@@ -73,19 +98,22 @@ GitHub review and repository gate.
   authorized choice cannot yet be established comments with a human-decision
   request.
 - Exercise a repair on a same-repository branch. Confirm local git/`gh`
-  credentials create and push decision-preserving changes, never force-push,
-  amend, rebase, edit protected ownership/decision-lock material without clear
-  authority, or use an App token. After push, confirm the agent fetches and
-  fully checks the latest resulting PR state. On that successor head, confirm it
-  reruns validation, the complete Evidence pass, the complete Challenge pass and
-  required checks instead of reusing predecessor reads or conclusions. Confirm
-  the original blocker is gone and the repair introduced no new blocker before
-  approval. A synchronize-triggered duplicate run is acceptable.
+  credentials use the repair-first sequence above. On the successor head,
+  confirm it reruns validation, the complete Evidence pass, the complete
+  Challenge pass and required checks instead of reusing predecessor reads or
+  conclusions. Confirm the original blocker is gone and the repair introduced
+  no new blocker before approval.
 - For a clean ready PR, wait for required checks and invoke `tree review` with
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
   creates exactly one App review for that head. Confirm missing or revoked
-  `pull_requests: write` fails closed.
+  `pull_requests: write` fails closed. Before every outcome, and again after
+  check polling for `APPROVE`, confirm the Reviewer rereads the live binding
+  repository/branch, enabled Reviewer and assigned Agent, then requires the PR
+  base to equal that branch. Confirm the final PR freshness read happens after
+  validation, the complete semantic/content review and current-head checks,
+  and compares repository, base ref/OID and head repository/ref/OID. Changed or
+  unreadable authority must publish nothing.
 - Simulate an uncertain GitHub review write. Confirm the existing
   pending/submitting/unknown/failed/submitted publication state and hidden run
   marker reconcile the same run without a duplicate POST.
@@ -110,20 +138,27 @@ GitHub review and repository gate.
 - Treat these queue and provider results as live GitHub evidence. Controlled
   command stubs verify only the documented request/response contract and are
   not evidence of real merge-queue, ruleset, permission or transport behavior.
+- Confirm every known clean Reviewer-owned detached review worktree and
+  branch-attached repair worktree is removed normally. Dirty or unknown paths
+  must remain fail-closed for manual recovery.
 
 ## Expected Result
 
-PASS: the App webhook owns review dispatch; the Reviewer can repair with its
-local identity; the App alone publishes the PR review; the repository requires
-a current approval and dismisses it after push; and one local REST squash merge
-uses only the successful App response head without retry, deferred state or
-bypass.
+PASS: the App webhook owns review dispatch; the Reviewer repairs every safely
+determined finding with its local identity before escalating only residual
+protected or blocked findings; the App alone publishes the PR review; the
+repository requires a current approval and dismisses it after push; and one
+local REST squash merge uses only the successful App response head without
+retry, deferred state or bypass.
 
 FAIL: a writer can create review authority; a task packet or legacy marker
-changes routing; a fork/draft run mutates or approves; the App merges; the local
-identity publishes the review; an old approval survives a push; the local merge
-uses another head, retries or creates deferred state; or a bypass, force push,
-`gh pr merge`, `--admin`, or `--auto` path is used.
+changes routing; a fork/draft run mutates or approves; a safely repairable
+finding goes directly to `REQUEST_CHANGES`; a mixed review returns its safe and
+protected findings together to the author; a repair push is not followed by a
+complete successor-head review; the App merges; the local identity publishes
+the review; an old approval survives a push; the local merge uses another head,
+retries or creates deferred state; or a bypass, force push, `gh pr merge`,
+`--admin`, or `--auto` path is used.
 
 BLOCKED: the isolated cell cannot provide the candidate surfaces, disposable
 GitHub repository, real accepted App installation, eligible runtime or

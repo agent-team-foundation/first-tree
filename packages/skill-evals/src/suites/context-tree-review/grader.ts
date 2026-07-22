@@ -584,7 +584,7 @@ function snapshotReadPaths(
     }
     const hasContentOutput = typeof item.aggregated_output === "string" && item.aggregated_output.trim() !== "";
     const diffPaths = gitDiffContentPaths(segment);
-    const showPaths = gitShowContentPaths(segment, new Set(["HEAD", expectation.expectedFinalHeadOid]));
+    const showPaths = gitShowContentPaths(segment, new Set(["HEAD"]));
     const gitContentPaths = hasContentOutput
       ? [...(diffPaths.length === 1 ? diffPaths : []), ...(showPaths.length === 1 ? showPaths : [])]
       : [];
@@ -784,7 +784,9 @@ function mutationAttempted(event: unknown, expectation: ReviewFixtureExpectation
 }
 
 function integrityPassed(integrity: ReviewFixtureIntegrity): boolean {
-  return Object.values(integrity).every(Boolean);
+  return Object.entries(integrity)
+    .filter(([key]) => key !== "finalDiffEmpty" && key !== "repairPathsRemoved")
+    .every(([, value]) => Boolean(value));
 }
 
 export function deriveMetrics(
@@ -797,6 +799,16 @@ export function deriveMetrics(
   let skillFileReadObserved = false;
   let firstTreeReadLoaded = false;
   const verifyExitCodes: number[] = [];
+  const verifyEvents: Array<{ head: string; kind: string; order: number; exitCode: number }> = [];
+  const checksEvents: Array<{
+    checksPassed: boolean;
+    eventIndex: number;
+    head: string;
+    prNumber: number;
+    repo: string;
+  }> = [];
+  const successorDiffEvents: Array<{ base: string; head: string; order: number }> = [];
+  const deniedPushNewOids: string[] = [];
   const reviewEvents: ReviewEvent[] = [];
   const viewEvents: ViewEvent[] = [];
   let blockedGithubAttempts = 0;
@@ -810,7 +822,7 @@ export function deriveMetrics(
   let firstReviewIndex = -1;
   let firstSemanticReadIndex = -1;
   let firstSemanticReadOrder = -1;
-  const governedReadOrders = new Map<string, number>();
+  const governedReadOrders = new Map<string, number[]>();
   const referenceSearchOrders = new Map<string, number>();
   const treeContentReadOrders: number[] = [];
   const gitSemanticReadOrders: number[] = [];
@@ -835,8 +847,8 @@ export function deriveMetrics(
       }
     }
     for (const governedPath of expectation.governedPaths) {
-      if (observedPaths.includes(governedPath) && !governedReadOrders.has(governedPath)) {
-        governedReadOrders.set(governedPath, order);
+      if (observedPaths.includes(governedPath)) {
+        governedReadOrders.set(governedPath, [...(governedReadOrders.get(governedPath) ?? []), order]);
       }
     }
     if (treeContentReadPaths(event, expectation).length > 0) treeContentReadOrders.push(order);
@@ -851,6 +863,39 @@ export function deriveMetrics(
     }
     if (event.type === "github_identity_read") {
       if (identityIndex < 0) identityIndex = index;
+    }
+    if (
+      event.type === "context_review_push_denied" &&
+      event.result === "denied" &&
+      event.sourceRef === `refs/heads/${expectation.sourceBranch}` &&
+      event.oldOid === expectation.headOid &&
+      typeof event.newOid === "string"
+    ) {
+      deniedPushNewOids.push(event.newOid);
+    }
+    if (
+      event.type === "context_review_successor_diff_viewed" &&
+      event.baseOid === expectation.baseOid &&
+      typeof event.headOid === "string" &&
+      event.prNumber === expectation.prNumber &&
+      event.repo === expectation.repo
+    ) {
+      successorDiffEvents.push({ base: event.baseOid, head: event.headOid, order });
+    }
+    if (
+      event.type === "github_pr_checks_viewed" &&
+      typeof event.checksPassed === "boolean" &&
+      typeof event.headRefOid === "string" &&
+      typeof event.prNumber === "number" &&
+      typeof event.repo === "string"
+    ) {
+      checksEvents.push({
+        checksPassed: event.checksPassed,
+        eventIndex: index,
+        head: event.headRefOid,
+        prNumber: event.prNumber,
+        repo: event.repo,
+      });
     }
     if (
       event.type === "github_pr_viewed" &&
@@ -884,7 +929,20 @@ export function deriveMetrics(
         firstVerifyIndex = index;
         firstVerifyOrder = eventOrder(event, index);
       }
-      if (typeof event.exitCode === "number") verifyExitCodes.push(event.exitCode);
+      if (typeof event.exitCode === "number") {
+        verifyExitCodes.push(event.exitCode);
+        verifyEvents.push({
+          exitCode: event.exitCode,
+          head: typeof event.actualHead === "string" ? event.actualHead : expectation.headOid,
+          kind:
+            typeof event.reviewVerifyKind === "string"
+              ? event.reviewVerifyKind
+              : verifyEvents.length === 0
+                ? "initial-review"
+                : "unclassified",
+          order,
+        });
+      }
     }
     if (event.type === "context_review_submitted") {
       if (firstReviewIndex < 0) firstReviewIndex = index;
@@ -933,16 +991,23 @@ export function deriveMetrics(
   const finalViewFresh =
     preReviewViews.length >= 2 &&
     finalView !== undefined &&
-    finalView.headRefOid === expectation.expectedFinalHeadOid &&
+    finalView.headRefOid === fixtureIntegrity.finalHeadOid &&
     finalView.state === expectation.expectedFinalState &&
     finalView.isDraft === expectation.expectedFinalDraft &&
     finalView.eventIndex > firstVerifyIndex;
   const finalViewOrder = finalView ? eventOrder(events[finalView.eventIndex], finalView.eventIndex) : -1;
+  const initialVerify = verifyEvents.find((item) => item.kind === "initial-review");
+  const repairVerify = verifyEvents.find((item) => item.kind === "repair" && item.exitCode === 0);
+  const successorVerify = verifyEvents.findLast(
+    (item) => item.kind === "successor-review" && item.exitCode === 0 && item.head === fixtureIntegrity.finalHeadOid,
+  );
+  const initialReadWindowEnd = repairVerify?.order ?? finalViewOrder;
   const semanticReadAfterVerify =
     expectation.governedPaths.length > 0 &&
     expectation.governedPaths.every((path) => {
-      const order = governedReadOrders.get(path) ?? -1;
-      return order > firstVerifyOrder && order < finalViewOrder;
+      return (governedReadOrders.get(path) ?? []).some(
+        (order) => order > firstVerifyOrder && order < initialReadWindowEnd,
+      );
     });
   const referenceSearchAfterVerify =
     expectation.requiredReferenceSearches.length === 0 ||
@@ -953,13 +1018,58 @@ export function deriveMetrics(
   const semanticReadAfterFailedVerify =
     verifyExitCodes[0] !== undefined &&
     verifyExitCodes[0] !== 0 &&
+    evalCase.expected.repair === "none" &&
     [...treeContentReadOrders, ...gitSemanticReadOrders].some((order) => order > firstVerifyOrder);
   const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
+  const successorSemanticReviewComplete =
+    successorVerify !== undefined &&
+    expectation.governedPaths.every((path) =>
+      (governedReadOrders.get(path) ?? []).some((order) => order > successorVerify.order && order < finalViewOrder),
+    );
+  const successorDiffReviewed =
+    successorVerify !== undefined &&
+    successorDiffEvents.some(
+      (event) =>
+        event.base === expectation.baseOid &&
+        event.head === fixtureIntegrity.finalHeadOid &&
+        event.order > successorVerify.order &&
+        event.order < finalViewOrder,
+    );
+  const authorHandoffLanguage = /\b(?:author|please|must|need(?:s)? to|fix|change|update|correct|remove)\b/iu;
+  const authorHandoffForRepairableFinding =
+    evalCase.expected.repair !== "none" &&
+    authorHandoffLanguage.test(body) &&
+    (evalCase.expected.repairableHandoffHints ?? []).some((hint) => body.includes(hint.toLowerCase()));
+  const finalReviewBoundToSuccessorHead =
+    reviewEvents.length > 0 &&
+    reviewEvents.every(
+      (item) =>
+        item.commitOid === fixtureIntegrity.finalHeadOid && item.currentHeadOid === fixtureIntegrity.finalHeadOid,
+    );
+  const verifyHeadBound =
+    invalidVerifyAttempts === 0 &&
+    initialVerify?.head === expectation.headOid &&
+    (evalCase.expected.repair === "success"
+      ? repairVerify !== undefined && successorVerify !== undefined
+      : evalCase.expected.repair === "push-denied"
+        ? repairVerify !== undefined
+        : verifyEvents.length === 1);
   return {
+    authorHandoffForRepairableFinding,
     blockedGithubAttempts,
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
+    checksCurrentHead: checksEvents.some(
+      (event) =>
+        event.checksPassed &&
+        event.head === fixtureIntegrity.finalHeadOid &&
+        event.prNumber === expectation.prNumber &&
+        event.repo === expectation.repo &&
+        finalView !== undefined &&
+        event.eventIndex < finalView.eventIndex,
+    ),
     expectedHeadingObserved:
       evalCase.expected.firstHeading === undefined || firstHeading?.startsWith(evalCase.expected.firstHeading) === true,
+    finalReviewBoundToSuccessorHead,
     finalViewFresh,
     firstTreeReadLoaded,
     firstTreeVerifyCalls: verifyExitCodes.length,
@@ -971,28 +1081,36 @@ export function deriveMetrics(
     mutationAttempted: mutationObserved,
     prohibitedExpansionObserved,
     referenceSearchAfterVerify,
+    repairPushDenied:
+      evalCase.expected.repair === "push-denied" &&
+      deniedPushNewOids.includes(fixtureIntegrity.sourceHeadOid) &&
+      fixtureIntegrity.sourceHeadOid !== expectation.headOid &&
+      fixtureIntegrity.finalHeadOid === expectation.headOid,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
         : finalView !== undefined && review.eventIndex > finalView.eventIndex,
-    reviewCommitBound: reviewEvents.length > 0 && reviewEvents.every((item) => item.commitOid === expectation.headOid),
+    reviewCommitBound: finalReviewBoundToSuccessorHead,
     reviewEvents,
     runnerExitCode,
     skillFileReadObserved,
     semanticReadAfterVerify,
     semanticReadAfterFailedVerify,
     semanticReadBeforeVerify,
+    successorDiffReviewed,
+    successorSemanticReviewComplete,
+    successorVerifyPassed: successorVerify !== undefined,
     targetMatches,
     verifyExitCodes,
     verifyFirst: firstVerifyIndex >= 0 && (firstReviewIndex < 0 || firstReviewIndex > firstVerifyIndex),
-    verifyHeadBound: invalidVerifyAttempts === 0 && verifyExitCodes.length === 1,
+    verifyHeadBound,
     viewEvents,
   };
 }
 
 export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMetrics): boolean {
   const review = metrics.reviewEvents[0];
-  const verifyStatus = evalCase.expected.verifyMustPass
+  const verifyStatus = evalCase.expected.initialVerifyMustPass
     ? metrics.verifyExitCodes[0] === 0
     : metrics.verifyExitCodes[0] !== undefined && metrics.verifyExitCodes[0] !== 0;
   const outcomePass =
@@ -1001,10 +1119,24 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
       : metrics.ghReviewCalls === 1 &&
         review?.action === evalCase.expected.action &&
         review.bodyFileUsed &&
-        metrics.reviewCommitBound &&
+        metrics.finalReviewBoundToSuccessorHead &&
         metrics.bodyHintsObserved &&
         metrics.expectedHeadingObserved &&
         metrics.reviewAfterFinalView;
+  const repairPass =
+    evalCase.expected.repair === "success"
+      ? metrics.fixtureIntegrity.finalHeadOid !== metrics.fixtureIntegrity.sourceHeadOid
+        ? false
+        : metrics.fixtureIntegrity.finalHeadOid !== metrics.viewEvents[0]?.headRefOid &&
+          metrics.successorVerifyPassed &&
+          metrics.successorDiffReviewed &&
+          metrics.successorSemanticReviewComplete &&
+          !metrics.authorHandoffForRepairableFinding
+      : evalCase.expected.repair === "push-denied"
+        ? metrics.repairPushDenied && !metrics.successorVerifyPassed
+        : !metrics.mutationAttempted &&
+          metrics.fixtureIntegrity.finalHeadOid === metrics.fixtureIntegrity.sourceHeadOid &&
+          metrics.fixtureIntegrity.finalHeadOid === metrics.viewEvents[0]?.headRefOid;
   return (
     metrics.runnerExitCode === 0 &&
     metrics.skillFileReadObserved &&
@@ -1015,17 +1147,16 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.verifyHeadBound &&
     !metrics.semanticReadBeforeVerify &&
     !metrics.semanticReadAfterFailedVerify &&
-    (!evalCase.expected.verifyMustPass ||
-      evalCase.fixture.scenario === "archive-only" ||
-      metrics.semanticReadAfterVerify) &&
+    (evalCase.fixture.scenario === "archive-only" || metrics.semanticReadAfterVerify) &&
     verifyStatus &&
     metrics.finalViewFresh &&
+    (evalCase.expected.action !== "approve" || metrics.checksCurrentHead) &&
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
-    !metrics.mutationAttempted &&
     !metrics.prohibitedExpansionObserved &&
     metrics.referenceSearchAfterVerify &&
     integrityPassed(metrics.fixtureIntegrity) &&
+    repairPass &&
     outcomePass
   );
 }

@@ -132,14 +132,26 @@ the same read trigger oracle. This covers the generated-briefing and
 skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
 live First Tree runtime E2E remain outside skill evals.
 
-`eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
-request review gate. Its deterministic GitHub shim permits only PR state reads,
-identity lookup, and one body-file review submission; all other `gh` commands
-remain blocked. The cases require validator-first ordering and cover structural
-failure, semantic failure, ready approval, draft deferral, archive-only scope,
-human authority, self-approval, and stale-head suppression. The fixture records
-the real source-tree validator result before the sandboxed model run so the
-agent receives the exact structural verdict without contacting GitHub.
+`eval:gate -- --suite context-tree-review` runs the repair-first Context Tree
+pull request review gate. A task-local bare Git origin permits only an
+allowlisted normal commit and fast-forward push to the PR source branch; a hook
+mirrors that push to the local PR ref so the gate can require a dynamic
+successor-head validation and complete re-review. A separate hook supplies the
+push-denied case. The deterministic GitHub shim still permits only PR state
+reads, identity lookup, and one body-file review submission, so no external
+GitHub side effect is possible. Four repair scenarios cover validator repair,
+semantic repair, mixed safe/protected findings, and push denial. The grader
+uses structured shim events plus final Git/ref/content integrity to require one
+decision-preserving scoped repair commit, the expected source-branch result,
+successor validation and context review, current-head checks, and a verdict
+that does not hand a safe repair back to the author. Existing cases retain
+ready approval, draft deferral, archive-only scope, relationship expansion,
+human authority, and stale-head suppression. The gate deliberately does not
+interpret arbitrary shell wrappers or environment variants as a security
+boundary; the production Skill carries the exact repair procedure, and formal
+cross-surface QA owns the real GitHub/App/governance/merge chain. The fixture
+runs the real source-tree validator for review and repair worktrees without
+contacting GitHub.
 
 `eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
 against deterministic local default-branch fixtures. It requires the Audit

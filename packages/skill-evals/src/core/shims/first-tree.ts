@@ -1,10 +1,7 @@
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-  CONTEXT_REVIEW_BODY_MAX_BYTES,
-  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
-} from "../../../../shared/src/schemas/context-review-constants.js";
+import { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "@first-tree/shared";
 
 import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
@@ -17,6 +14,7 @@ export function createFirstTreeShim(
     recordedModelVerifyCwd?: string;
     recordedModelVerifyHead?: string;
     recordedModelVerifyPath?: string;
+    reviewVerifyRunnerPath?: string;
     auditFixturePath?: string;
     reviewFixturePath?: string;
     seedPreflight?: {
@@ -28,6 +26,7 @@ export function createFirstTreeShim(
   } = {},
 ): void {
   const tsxBin = join(paths.packageRoot, "node_modules", ".bin", "tsx");
+  const tsxLoaderPath = join(paths.packageRoot, "node_modules", "tsx", "dist", "loader.mjs");
   const sourceCliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
   const distCliEntry = join(paths.repoRoot, "apps", "cli", "dist", "cli", "index.mjs");
   const shimPath = join(paths.binDir, "first-tree");
@@ -48,6 +47,7 @@ import { basename, join, relative, resolve } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const TSX_BIN = ${JSON.stringify(tsxBin)};
+const TSX_LOADER_PATH = ${JSON.stringify(tsxLoaderPath)};
 const SOURCE_CLI_ENTRY = ${JSON.stringify(sourceCliEntry)};
 const DIST_CLI_ENTRY = ${JSON.stringify(distCliEntry)};
 const MODEL_VERIFY_MODE = ${JSON.stringify(options.modelVerifyMode ?? "shim")};
@@ -56,6 +56,7 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
+const REVIEW_VERIFY_RUNNER_PATH = ${JSON.stringify(options.reviewVerifyRunnerPath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
 const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
@@ -114,6 +115,14 @@ function optionValueWithEquals(argv, name) {
   const prefix = name + "=";
   const value = argv.find((arg) => arg.startsWith(prefix));
   return value ? value.slice(prefix.length) : null;
+}
+
+function liveReviewHead(fixture) {
+  if (!fixture.originPath || !fixture.pullRef) return fixture.submissionHeadOid || fixture.reviewHeadOid;
+  const result = spawnSync("git", ["--git-dir", fixture.originPath, "rev-parse", fixture.pullRef], {
+    encoding: "utf8",
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
 }
 
 function commandIndex(argv, command, subcommand) {
@@ -498,7 +507,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
 if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
-  const commitOid = fixture.submissionHeadOid;
+  const commitOid = liveReviewHead(fixture);
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
   const exactOptions = argv.length === 8 && !argv.includes("--head") && !argv.includes("--agent");
@@ -536,7 +545,7 @@ if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
     body,
     bodyFileUsed: true,
     commitOid,
-    currentHeadOid: fixture.submissionHeadOid,
+    currentHeadOid: commitOid,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
     runId,
@@ -757,6 +766,90 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
       writerVerifyBindingValid: true,
     });
   }
+}
+
+if (REVIEW_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const exactCommand = argv.length === 3 && argv[2] === "--json";
+  let actualCwd = null;
+  let reviewCwd = null;
+  let repairCwd = null;
+  let actualCommonDir = null;
+  let treeCommonDir = null;
+  try {
+    actualCwd = realpathSync(process.cwd());
+    reviewCwd = existsSync(fixture.reviewWorktreePath) ? realpathSync(fixture.reviewWorktreePath) : null;
+    repairCwd = existsSync(fixture.repairWorktreePath) ? realpathSync(fixture.repairWorktreePath) : null;
+    const actualCommon = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    const treeCommon = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: fixture.treePath,
+      encoding: "utf8",
+    });
+    actualCommonDir = actualCommon.status === 0 ? realpathSync(resolve(process.cwd(), actualCommon.stdout.trim())) : null;
+    treeCommonDir = treeCommon.status === 0 ? realpathSync(resolve(fixture.treePath, treeCommon.stdout.trim())) : null;
+  } catch {}
+  const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" });
+  const symbolicHeadResult = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: process.cwd(), encoding: "utf8" });
+  const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
+  const liveHead = liveReviewHead(fixture);
+  const sourceHeadResult = spawnSync("git", ["rev-parse", "refs/heads/" + fixture.sourceBranch], {
+    cwd: fixture.treePath,
+    encoding: "utf8",
+  });
+  const sourceHead = sourceHeadResult.status === 0 ? sourceHeadResult.stdout.trim() : null;
+  const reviewBinding =
+    actualCwd !== null &&
+    actualCwd === reviewCwd &&
+    actualHead === liveHead &&
+    symbolicHeadResult.status !== 0 &&
+    statusResult.status === 0 &&
+    statusResult.stdout.trim() === "";
+  const repairBinding =
+    actualCwd !== null &&
+    actualCwd === repairCwd &&
+    actualHead === sourceHead &&
+    symbolicHeadResult.status === 0 &&
+    symbolicHeadResult.stdout.trim() === "refs/heads/" + fixture.sourceBranch;
+  const verifyBindingValid =
+    exactCommand &&
+    actualCommonDir !== null &&
+    actualCommonDir === treeCommonDir &&
+    (reviewBinding || repairBinding);
+  if (!verifyBindingValid) {
+    finish(argv, phase, 2, "", "Context review validation requires the registered review or repair worktree.\\n", {
+      actualHead,
+      expectedHead: liveHead,
+      reviewVerifyKind: "invalid",
+      verifyBindingValid: false,
+    });
+  }
+  const hasDistCli = existsSync(DIST_CLI_ENTRY);
+  const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || process.execPath;
+  const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE
+    ? argv
+    : hasDistCli
+      ? [DIST_CLI_ENTRY, ...argv]
+      : ["--import", TSX_LOADER_PATH, REVIEW_VERIFY_RUNNER_PATH];
+  const result = spawnSync(realCommand, realArgs, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: process.env,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  finish(argv, phase, result.status ?? 1, result.stdout || "", result.stderr || "", {
+    actualHead,
+    expectedHead: reviewBinding ? liveHead : sourceHead,
+    recordedRealVerify: true,
+    reviewVerifyKind: repairBinding ? "repair" : actualHead === fixture.initialHeadOid ? "initial-review" : "successor-review",
+    verifyBindingValid: true,
+  });
 }
 
 if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {

@@ -1,17 +1,19 @@
 ---
 name: context-tree-review
-version: 0.3.2
+version: 0.3.3
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
+description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer repairs every safely determined finding with its local git/gh identity before escalation, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
 ---
 
 # Context Tree Review
 
 Review the latest live state of one Context Tree pull request under the
 generated Context Tree Policy. The GitHub App webhook owns review dispatch and
-the App-authored PR review is the only GitHub verdict. The local reviewer
-identity may repair and merge; the App credential never enters the runtime.
+the App-authored PR review is the only GitHub verdict. On a trusted run, the
+local reviewer identity must repair every safely determined finding before
+escalating any residual blocker, and may merge after approval. The App
+credential never enters the runtime.
 
 This workflow is GitHub-only. A GitLab Context Tree Merge Request remains on
 the ordinary independent GitLab MR review path and never enters this skill. Do
@@ -53,7 +55,11 @@ from GitHub before reviewing.
    `gh` or substitute `glab`. A local filesystem mirror is not provider
    authority. For a GitHub upstream, verify an existing checkout's normalized
    `origin` or follow the generated clone command when missing. Never delete,
-   re-point or overwrite a mismatched checkout.
+   re-point or overwrite a mismatched checkout. Discovery is metadata-only:
+   do not use `rg`, `grep`, `find`, `cat`, `sed`, Git object readers, or another
+   content scan against the bound main Context Tree. Its normal, member and
+   archive content is not review input until the detached PR snapshot passes
+   validation.
 2. Use `gh pr view` to read the live repository, number, state, draft flag,
    author, base ref/OID, head repository/ref/OID, URL, title, body, changed
    files, discussion and checks. Require the returned live URL and repository
@@ -81,10 +87,15 @@ git rev-parse HEAD
 first-tree tree verify --json
 ```
 
-Structural validation failure is a blocking finding. It may enter the repair
-workflow only when every repair gate below passes; otherwise stop semantic
-review and prepare `REQUEST_CHANGES`. Unreadable validator output or unavailable
-CLI is an execution failure and publishes no content verdict.
+Structural validation failure is a blocking finding. Classify it immediately
+under the repair rules below. When the validator identifies a changed path and
+the correction is objective, inspect only that file, its parent `NODE.md`, and
+the minimum ownership or link target context needed to determine the repair.
+This narrow repair read is not semantic review. Repair and rerun validation
+before reading unrelated normal content. If the repair gates do not pass, stop
+semantic review and prepare the residual blocker outcome. Unreadable validator
+output or unavailable CLI is an execution failure and publishes no content
+verdict.
 
 After validation passes, complete two distinct reasoning passes on the same
 `REVIEWED_HEAD`. They are quality checks, not a required machine-formatted
@@ -194,11 +205,35 @@ The checklist is an internal completeness tool, not a required review-body
 template or machine ledger. Report material evidence and findings concisely
 instead of pasting the checklist.
 
-## Repair with the local identity
+## Repair first with the local identity
 
-The assigned review agent may directly repair a same-repository, non-fork PR
-whose source branch still exists and whose current local git/`gh` identity can
-push. No PR-body consent block or task packet is required.
+For every finding in a trusted run, classify it before choosing an outcome:
+
+A draft PR is read-only even when its findings would be mechanically
+repairable on a ready PR. Do not mutate, commit or push from a draft run;
+record the findings in an `## Approval deferred` `COMMENT` and wait for a
+fresh ready-for-review run before classifying them for repair.
+
+- `SAFE_REPAIR` — the PR is ready for review, same-repository and non-fork, the live source ref
+  exists, the current local git/`gh` identity can push, Tree and source evidence
+  determine one correction, and the change does not cross a protected boundary.
+  The assigned reviewer **must** repair it before escalation. No PR-body consent
+  block or task packet is required.
+- `PROTECTED_DECISION` — the correction would choose ownership, a code-lock,
+  top-level structure, repository governance, or an ambiguous product decision,
+  or the evidence conflicts or lacks the required human authority. Do not make
+  that decision; retain it as a residual for the author or owner.
+- `REPAIR_BLOCKED` — the source ref disappeared, the PR is a fork, push access
+  is unavailable, concurrent head movement cannot be reconciled safely, the
+  remote write result remains unknown after inspection, or the same stable
+  finding survives a repair. Stop mutation and report that specific failure
+  category plus one executable recovery action.
+
+`SAFE_REPAIR` is an obligation, not an option. A mixed review must repair all
+safe findings in one minimal, same-theme batch before handing off only the
+remaining protected or blocked findings. The presence of one protected decision
+does not permit mechanical or decision-preserving findings to be returned to
+the author.
 
 Keep repairs limited to defects found while reviewing the PR. Never use review
 as authority to expand the proposal into unrelated paths. Treat these as
@@ -211,50 +246,83 @@ unambiguously authorize the change:
 - ambiguous product decisions, conflicting evidence or missing authority;
 - changes that would rewrite or amend another author's commit.
 
-Objective validation, frontmatter, placement, link, duplication and
-decision-preserving wording defects may be repaired when the evidence fully
-determines the correction.
+Objective validation, non-ownership frontmatter, placement, link, duplication
+and decision-preserving wording defects are `SAFE_REPAIR` when the evidence
+fully determines the correction. Any `owners` edit remains a protected
+ownership decision, including filling a missing or empty value; parent or
+member ownership does not implicitly assign ownership to another node.
 
-Attach a unique agent-owned worktree to the live source ref, make the repair,
-run `first-tree tree verify --json`, and inspect the complete base-to-head diff.
-Commit normally with the host git identity and push with the host git/`gh`
-credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
-base branch or retarget the PR. If a remote write result is unknown, fetch and
-inspect before retrying.
+Immediately before mutation, rerun
+`first-tree org context-tree review-config --json`; require the live binding,
+enabled Reviewer and assigned Agent to still match the trusted run. Re-read the
+complete PR identity and source ref; require open/ready state, the reviewed
+repository, base ref/OID, head repository/ref/OID and `REVIEWED_HEAD`, with the
+source ref at that same head. On change, discard the findings and restart or
+report the authority, binding or ref failure as `REPAIR_BLOCKED`. Attach a unique
+agent-owned worktree to the unchanged source ref. Stage only the repair paths,
+including
+additions, moves and deletions, then run
+`first-tree tree verify --json`. Inspect `git status --short` and the complete
+staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`; require the
+staged path set to equal the repair scope and no unstaged or untracked Tree
+content to remain. Make no further content or index mutation before committing.
+Commit normally with the host git identity. Immediately before push, rerun
+`first-tree org context-tree review-config --json` and repeat the complete PR
+identity and source-ref checks against `REVIEWED_HEAD`; never push after any
+authority, binding, state or ref change.
+Push with the host git/`gh` credential only while that authority remains current.
+Never force-push, use
+`--force-with-lease`, amend, rebase, merge the base branch or retarget the PR.
 
-After a successful repair push, fetch the latest PR state and restart the full
-validator-first review on the resulting head. Repeat both the Evidence and
+After a successful repair push, fetch the latest live PR state and restart the full
+validator-first review on the resulting head. Repeat the semantic Evidence and
 Challenge passes, re-read the required surrounding context, inspect the complete
-base-to-head diff and rerun checks. Do not reuse findings, reads or check
-conclusions from the predecessor head.
+base-to-head diff and rerun checks. Do not reuse findings, reads, outcomes or
+check conclusions from the predecessor head.
 
+Use the stable finding key `path + policy rule + issue` to prove convergence for
+the keys targeted by one repair batch. Do not impose an arbitrary attempt count,
+but stop as `REPAIR_BLOCKED` when a targeted key survives its own repair or the
+targeted blocker set has no net reduction. Untouched protected residuals retain
+their original classification.
 Confirm that every repaired blocker is actually gone and that the repair did
 not introduce a new blocker, change the author's durable intent or cross an
 authority boundary. If a blocker survives or recurs, the repair creates a new
 blocker, or the evidence becomes ambiguous, stop repairing and choose a
 non-approving outcome. The synchronize webhook may also create another run; an
 occasional duplicate wake-up is harmless.
+For an uncertain push, fetch and inspect the source and PR refs before deciding
+whether it landed; never retry blindly.
 
 ## Choose one App review outcome
 
+Immediately before submitting any outcome, rerun
+`first-tree org context-tree review-config --json`; require the live repository
+and branch, enabled Reviewer and assigned Agent to match the reviewed authority
+tuple. Then use `gh pr view` again and require its base ref to equal that live
+binding branch and its repository, state, draft flag, base ref/OID and head
+repository/ref/OID to match the reviewed snapshot. This applies to `COMMENT`,
+`REQUEST_CHANGES` and `APPROVE`. Unreadable or changed authority publishes
+nothing. If only the PR state moved within the same authority, discard the old
+conclusion and restart against the successor state.
+
 Choose exactly one outcome from the latest reviewed state:
 
-- `REQUEST_CHANGES` for structural or semantic blockers that were not safely
-  repaired;
-- `COMMENT` for draft PRs, supporting-only changes, protected/human-authority
-  decisions or another explicitly non-approvable state without a repairable
-  blocker;
+- `REQUEST_CHANGES` for a blocker that remains after repair, is specifically
+  `REPAIR_BLOCKED`, or is a proven unauthorized ownership, lock or governance
+  change. Name the concrete blocker and recovery action. Never ask the author
+  to perform a `SAFE_REPAIR`. Start the body with `## Changes requested`;
+- `COMMENT` for draft PRs, supporting-only changes, or a protected decision
+  whose available evidence cannot establish the authorized choice. Name the
+  exact authority boundary and ask only its author or owner to decide it. Start
+  a protected-residual body with `## Human decision required`, a draft body
+  with `## Approval deferred`, and a supporting-only body with a direct
+  content-class summary;
 - `APPROVE` only for a ready PR whose final head passed validation, both quality
   passes and acceptable checks with no unresolved blocker.
 
 A ready, otherwise safe PR with only `Advisory` findings still receives
 `APPROVE`; include the advice concisely in the approval body.
-
-A proven unauthorized ownership, lock or governance change is a `Blocking`
-authority violation and therefore receives `REQUEST_CHANGES`. Use `COMMENT`
-with a human-decision request only when the available evidence cannot establish
-which authorized choice is correct, so no concrete violation can yet be
-asserted.
 
 Keep the review body concise but evidence-based: identify the inspected head,
 verification result, material context checked, challenge result, any repair and
@@ -289,12 +357,16 @@ Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 10 minutes. A repairable failure returns to repair; another failed check
 produces a non-approving outcome. If checks remain pending at the deadline,
 submit no approval and report the wait state without creating a watcher or job.
+After check polling completes, rerun the same live Reviewer configuration check
+and repeat the final `gh pr view` freshness read before `APPROVE`. If authority
+became unreadable or changed, publish nothing. If the PR moved within the same
+authority, discard the conclusion and restart review; never publish from the
+pre-wait snapshot.
 
 After the App approval command succeeds, the exact full SHA in that command's
 `data.reviewedHead` is the only merge authority. Do not use the earlier local
 snapshot head, webhook data or another `gh pr view`. Run this sequence once
 with the host local `gh` identity:
-
 <!-- context-review-merge-contract:start -->
 ```sh
 APPROVAL_RESPONSE="$(
@@ -384,6 +456,11 @@ evidence; a merged reconciliation is valid only when its PR head is the exact
 queue or transport failure, leave the App approval intact and do not attempt
 another merge. Never use `--admin` or `--auto`.
 
+GitHub exposes a head SHA compare-and-set but no base-ref compare-and-set for
+this merge request. The final complete-identity read is a freshness check, not
+an atomic base guard; the current small live-state design accepts that narrow
+read-to-merge retarget race instead of adding a queue or disabling local merge.
+
 ## Recovery and reporting
 
 Webhook and Inbox delivery are at-least-once, so duplicate run messages are
@@ -391,8 +468,9 @@ possible. Review the latest live PR state rather than trying to elect one
 exclusive run. A run's App publication remains idempotent only for the same
 event and body; an unresolved App write is reconciled by its hidden run marker.
 
-Always remove known clean detached worktrees through normal
-`git worktree remove`. Never force-remove an unknown or dirty path.
+Always remove every known clean, agent-owned detached review worktree and
+branch-attached repair worktree through normal `git worktree remove`. Never
+force-remove an unknown or dirty path; report it for recovery instead.
 
 Report the reviewed head, verification, repairs, App review action and merge
 result, or one concrete human action. Chat is coordination only: do not copy the
