@@ -43,7 +43,7 @@ selection, worktree creation, or mutation, fetch the bound upstream default
 branch and require its exact remote HEAD to equal the finding's audited HEAD.
 If it advanced, do not apply the old finding. Re-run Audit validation, target
 and source-evidence reads on a new exact snapshot, or fail closed without a
-tree diff or pull request.
+tree diff or PR/MR.
 
 For an Audit finding, repeat that fetch and exact remote-HEAD comparison after
 drafting and verification, immediately before any push or PR/MR creation. If
@@ -125,8 +125,8 @@ resolves the Server current Reviewer when the pull request event arrives.
 7. **Prepare the PR/MR.** Detect the Context Tree forge from its own `origin`,
    never the source artifact. One source artifact maps to one tree PR/MR. Keep
    delivery history out of node bodies. Audit-originated tree PRs/MRs must be created as draft and left draft.
-   A GitHub PR uses independent `context-tree-review`. An Audit-originated
-   GitLab MR stays draft for ordinary independent review;
+   A GitHub PR uses independent `context-tree-review`.
+   An Audit-originated GitLab MR stays draft for ordinary independent review;
    never claim an automated verdict or merge. After creating, resolving or
    reusing any GitLab MR, run `first-tree gitlab follow <mr-url>` in the task Chat. A
    returned pending or active state is success; failure does not invalidate the
@@ -335,7 +335,9 @@ The Context-management CLI you actually depend on while writing is small:
 - `first-tree tree verify` — validate frontmatter and node structure;
   the write gate that must pass before any commit.
 - `first-tree tree write` — in BYO mode, revalidate one explicit Team and
-  exact `tree read` snapshot before authoring and first remote mutation.
+  exact snapshot before mutation; currently requires a GitHub-hosted tree.
+- `first-tree gitlab follow` — after a GitLab MR exists, wire inbound activity
+  into the task Chat; a returned pending or active state is success.
 
 Everything else (worktrees, commits, PRs/MRs, and source reads) uses standard
 tools (`git`, `gh`, `glab`, `Read`, etc.).

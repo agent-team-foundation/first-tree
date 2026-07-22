@@ -1,8 +1,7 @@
 name: Droid Auto Review
 
 on:
-  pull_request:
-    types: [opened, ready_for_review, reopened, synchronize]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

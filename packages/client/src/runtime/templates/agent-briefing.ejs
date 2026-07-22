@@ -136,7 +136,7 @@ git -C <source> worktree add <%- readWorktreePath %> origin/main
 git -C <source> worktree remove <%- readWorktreePath %>
 ```
 
-**Task worktree** — one per task branch, frozen for the PR's life:
+**Task worktree** — one per task branch, frozen for the PR/MR's life:
 
 ```bash
 git -C <source> fetch origin
@@ -146,7 +146,7 @@ git -C <source> worktree add <%- taskWorktreePath %> -b <new-branch> origin/main
 Replace placeholders to fit. If a repo declares a pinned `ref`, branch
 from that ref instead of `origin/main`. Do not rebase/merge mid-task
 unless a human asks. Remove read worktrees after use and task worktrees
-when the PR closes.
+when the PR/MR closes.
 
 ## Communication
 
@@ -225,7 +225,7 @@ For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 ## GitLab Entity Attention
 
 - **Default: follow what you create.** After creating a GitLab Issue or Merge Request for this task, wire its inbound webhook activity into the current chat with `<%- bin %> gitlab follow <url>`. Skip only when the entity is clearly unrelated to this chat or the human explicitly does not want it tracked. A follow failure does not invalidate an entity that was already created; report only the First Tree chat attention gap.
-- GitLab follow is pending and inbound-only: First Tree records the declaration without calling GitLab, then activates it when the next matching valid webhook arrives. One human/delegate attention line lives in one chat; if it is already followed elsewhere, work there by default or use `<%- bin %> gitlab follow <url> --rebind` only when the task context should move. It is independent of the current account's native GitLab notifications. Use native `glab` subscribe/unsubscribe only when the human explicitly asks for personal-account notifications.
+- GitLab follow is inbound-only and may return pending or active. A new declaration is pending because First Tree records it without calling GitLab; the next matching valid webhook activates it, while an already active line stays active. One human/delegate attention line lives in one chat; if it is already followed elsewhere, work there by default or use `<%- bin %> gitlab follow <url> --rebind` only when the task context should move. It is independent of the current account's native GitLab notifications. Use native `glab` subscribe/unsubscribe only when the human explicitly asks for personal-account notifications.
 - Run `<%- bin %> gitlab unfollow <url>` only when the human explicitly asks this chat to stop tracking the entity, never automatically when an Issue closes, an MR merges, or the task finishes. Unfollow removes every automatic or manual binding for that entity in the current chat; a later explicit reviewer, assignee, or mention event may create a new route. Use the current URL shown by `<%- bin %> gitlab following` after a project rename. Full flags and pending/active output live under `<%- bin %> gitlab follow --help`, `<%- bin %> gitlab following --help`, and `<%- bin %> gitlab unfollow --help`.
 
 ## Asking Humans
@@ -352,7 +352,7 @@ Before writing, apply both questions to every candidate fact:
 
 1. **Decision test.** Does this source establish or change something a future
    agent must respect when making cross-domain choices?
-2. **Durability test.** If the triggering commit or PR were rewritten, would
+2. **Durability test.** If the triggering commit or PR/MR were rewritten, would
    the decision still stand?
 
 The candidate belongs in the tree only when both answers are yes. Failing the
@@ -414,10 +414,10 @@ ownership to everyone. Metadata supports scanning, routing, and responsibility.
 
 Prefer body sections in this order, omitting any that do not apply:
 `Decision`, `Rationale`, `Constraints`, `Cross-Domain`. There is no
-`Source`, `Provenance`, or `Shipped-in` section; PR / commit / issue
-delivery history lives in git history and PR descriptions, not node prose.
+`Source`, `Provenance`, or `Shipped-in` section; PR/MR / commit / issue
+delivery history lives in git history and PR/MR descriptions, not node prose.
 
-### Write / Verify / PR Discipline
+### Write / Verify / PR/MR Discipline
 
 Default to not writing: a missing node is a question, a noisy node is a trap.
 Source-backed writes require a concrete source artifact and surrounding context
@@ -425,8 +425,8 @@ Source-backed writes require a concrete source artifact and surrounding context
 content) unless already known. Actionable future work does not live in normal
 tree content; put it in an issue, source artifact, or human decision instead.
 `<%- contextTree.verifyCommand %>` must pass before any tree commit. Keep tree prose current-state: no timeline,
-provenance, PR references, or implementation detail. A source-backed tree PR
-should stay scoped to one source artifact so owner review and rollback stay
+provenance, PR/MR references, or implementation detail. A source-backed tree
+PR/MR should stay scoped to one source artifact so owner review and rollback stay
 precise.<% if (contextTree.bound) { %>
 
 ## Reading the Tree
@@ -436,11 +436,12 @@ When a task has a repo/path/feature/domain/owner/source signal, load
 you to inspect `<%- contextTree.hierarchyHelpCommand %>` inside the tree repo,
 then use `tree tree` selectors to find focused files before reading their
 Markdown content with normal file reads. Treat code, CLI, review, repo,
-path, bug, and error tasks as tree-read signals, except Context Tree PR
-reviews and explicit broad audits of stored normal content. Load
-`context-tree-review` or `context-tree-audit` exclusively for those workflows;
-do not run `first-tree-read` first. Each owns its detached snapshot, validation,
-and reads without turning a task-scoped main-tree read into a broader workflow.
+path, bug, and error tasks as tree-read signals, except Context Tree reviews
+and explicit broad audits. Load `context-tree-review` only for GitHub PRs;
+GitLab MRs use ordinary GitLab review on a stable head under this policy and
+never enter the GitHub-only Context Reviewer state machine. Load
+`context-tree-audit` exclusively for audits. Do not run `first-tree-read` first
+for these workflows; each owns its snapshot without refreshing mutable main.
 
 At minimum start with the root `NODE.md`; **If the root also contains an `AGENTS.md`, read it too**
 because it carries org-level rules. Follow
@@ -467,7 +468,7 @@ tree bootstrap from readable sources, load `first-tree-seed`.<% } %><% if (conte
 ## Writing the Tree
 
 Tree writes are source-driven. A chat is **fresh context**; the tree is
-**persistent context** for future agents. When a specific PR, design doc,
+**persistent context** for future agents. When a specific PR/MR, design doc,
 meeting note, review thread, or pasted source changes a durable decision,
 constraint, owner, or cross-domain relationship, load `first-tree-write`
 and make the smallest correct tree diff. When a task calls for a tree write,
@@ -476,14 +477,14 @@ files (`NODE.md` and other `*.md` nodes) as structured persistent-context
 output. Implementation-only changes skip the tree write — not the read.
 
 If there is no specific source artifact, there is no write task yet:
-ask for the PR, design doc, meeting note, or pasted source before
+ask for the PR/MR, design doc, meeting note, or pasted source before
 editing the tree. Before editing, read the target/parent/soft-linked
 nodes the skill identifies; after editing, run `<%- contextTree.verifyCommand %>`.
 
-When a code PR and tree PR are both needed, open them together, cross-link
-the PR descriptions, open the tree PR as a draft, merge the code PR first,
-then reconcile the tree PR against the final merged code and mark it ready.
-Do not put PR numbers, commit history, diffs, or implementation details in
+When a code PR/MR and tree PR/MR are both needed, open them together, cross-link
+the descriptions, open the tree PR/MR as a draft, merge the code PR/MR first,
+then reconcile the tree PR/MR against the final merged code and mark it ready.
+Do not put PR/MR numbers, commit history, diffs, or implementation details in
 tree node prose.<% } else { %>
 
 ## Writing the Tree
@@ -515,7 +516,7 @@ Upstream: `<%- contextTree.upstreamUrl %>` (branch `<%- contextTree.branch %>`).
   reads. On network/credential failure, use the local copy and report it.
 - **Read-only**: never edit this clone in place. Tree writes branch a
   worktree off it (`<%- contextTree.addWorktreeCommand %>`) and go through
-  a PR.<% } else { %>
+  a PR/MR.<% } else { %>
 
 ## Tree Location
 
