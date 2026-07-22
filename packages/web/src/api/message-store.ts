@@ -22,9 +22,17 @@
  * issue first-tree-all 119 under parent first-tree-all 118.
  */
 
+import { currentUserIdFromToken } from "../lib/current-user-id.js";
 import type { MessageWithDelivery } from "./chats.js";
 
-const DB_NAME = "first-tree-chat-cache";
+// Pre-namespacing database name (SEC-042). Databases are now named per
+// account (`first-tree-chat-cache:u:<userId>`) so one account can never
+// open another's cache on a shared browser profile. The legacy database is
+// deleted — not migrated — the first time a namespaced open succeeds:
+// legacy rows carry no user attribution, so migrating them could hand a
+// previous account's cached messages to the current one. The logout purge
+// (`lib/purge-local-data.ts`) sweeps it as well.
+const LEGACY_DB_NAME = "first-tree-chat-cache";
 // Schema version is shared with read-state-store.ts (M2). Both modules
 // open the same DB; whichever opens first triggers any pending upgrade.
 // Each module's onupgradeneeded must defensively create-if-not-exists
@@ -49,16 +57,33 @@ type StoredMessage = {
   cachedAt: number;
 };
 
-let dbPromise: Promise<IDBDatabase | null> | null = null;
+// One connection per database name — keyed (rather than a single cached
+// promise) because a logout → login as another account happens without a
+// page reload, so the module must serve different namespaced databases
+// within one page lifetime.
+const dbPromises = new Map<string, Promise<IDBDatabase | null>>();
+// Delete the legacy (pre-namespacing) database at most once per session.
+let legacyDeleteRequested = false;
+
+/** Database name for one account, mirroring the `u:<userId>` scope prefix
+ *  convention the draft store already uses. */
+function dbNameForUser(userId: string): string {
+  return `${LEGACY_DB_NAME}:u:${userId}`;
+}
 
 function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") {
-      resolve(null);
-      return;
-    }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  // Resolve the identity on EVERY call: the same page can serve different
+  // accounts across logout/login, and an anonymous session must not create
+  // (or read) any database at all. All production callers sit behind the
+  // auth gate, so the anonymous branch is defensive.
+  const userId = currentUserIdFromToken();
+  if (userId === null) return Promise.resolve(null);
+  const dbName = dbNameForUser(userId);
+  const existing = dbPromises.get(dbName);
+  if (existing) return existing;
+  const promise = new Promise<IDBDatabase | null>((resolve) => {
+    const req = indexedDB.open(dbName, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -72,11 +97,47 @@ function openDb(): Promise<IDBDatabase | null> {
         db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Close automatically when another context — another tab, or the
+      // logout purge in this one — wants to delete or upgrade this
+      // database; otherwise its deleteDatabase would stay blocked for as
+      // long as this connection lives.
+      db.onversionchange = () => {
+        db.close();
+        dbPromises.delete(dbName);
+      };
+      if (!legacyDeleteRequested) {
+        legacyDeleteRequested = true;
+        try {
+          // Fire-and-forget: see LEGACY_DB_NAME for why the legacy
+          // database is deleted rather than migrated.
+          indexedDB.deleteDatabase(LEGACY_DB_NAME);
+        } catch {
+          // Best-effort — the logout purge sweeps the legacy name too.
+        }
+      }
+      resolve(db);
+    };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });
-  return dbPromise;
+  dbPromises.set(dbName, promise);
+  return promise;
+}
+
+/**
+ * Close every connection this module holds so a subsequent
+ * `indexedDB.deleteDatabase` is not blocked by this tab's own handles.
+ * Called by the logout purge before it deletes databases. A connection
+ * still opening settles first and is then closed by the queued callback;
+ * either way the map is cleared so later calls re-open fresh.
+ */
+export function closeDbForPurge(): void {
+  for (const promise of dbPromises.values()) {
+    void promise.then((db) => db?.close());
+  }
+  dbPromises.clear();
 }
 
 /**

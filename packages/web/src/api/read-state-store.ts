@@ -29,7 +29,15 @@
  * 120.
  */
 
-const DB_NAME = "first-tree-chat-cache";
+import { currentUserIdFromToken } from "../lib/current-user-id.js";
+
+// Pre-namespacing database name (SEC-042). This module shares one
+// per-account database (`first-tree-chat-cache:u:<userId>`) with
+// message-store.ts but holds its own connection, so the logout purge must
+// close BOTH modules' handles. The legacy database is deleted — not
+// migrated — on first namespaced open; see message-store.ts for the
+// rationale.
+const LEGACY_DB_NAME = "first-tree-chat-cache";
 const DB_VERSION = 2;
 const MESSAGES_STORE = "messages";
 const MESSAGES_INDEX = "by_chat_created";
@@ -63,16 +71,26 @@ export type ReadState = {
   updatedAt: number;
 };
 
-let dbPromise: Promise<IDBDatabase | null> | null = null;
+// One connection per database name; see message-store.ts for why this is
+// a map rather than a single cached promise.
+const dbPromises = new Map<string, Promise<IDBDatabase | null>>();
+let legacyDeleteRequested = false;
+
+function dbNameForUser(userId: string): string {
+  return `${LEGACY_DB_NAME}:u:${userId}`;
+}
 
 function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") {
-      resolve(null);
-      return;
-    }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  // Per-call identity resolution — anonymous sessions never touch disk;
+  // an in-page account switch transparently lands on the right database.
+  const userId = currentUserIdFromToken();
+  if (userId === null) return Promise.resolve(null);
+  const dbName = dbNameForUser(userId);
+  const existing = dbPromises.get(dbName);
+  if (existing) return existing;
+  const promise = new Promise<IDBDatabase | null>((resolve) => {
+    const req = indexedDB.open(dbName, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
@@ -83,11 +101,42 @@ function openDb(): Promise<IDBDatabase | null> {
         db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Let a purge or another tab's delete/upgrade proceed instead of
+      // staying blocked on this connection.
+      db.onversionchange = () => {
+        db.close();
+        dbPromises.delete(dbName);
+      };
+      if (!legacyDeleteRequested) {
+        legacyDeleteRequested = true;
+        try {
+          // Idempotent with message-store's own legacy delete.
+          indexedDB.deleteDatabase(LEGACY_DB_NAME);
+        } catch {
+          // Best-effort — the logout purge sweeps the legacy name too.
+        }
+      }
+      resolve(db);
+    };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });
-  return dbPromise;
+  dbPromises.set(dbName, promise);
+  return promise;
+}
+
+/**
+ * Close this module's connections ahead of a purge's `deleteDatabase`.
+ * message-store.ts holds a separate connection to the same database, so
+ * the purge calls both modules' `closeDbForPurge`.
+ */
+export function closeDbForPurge(): void {
+  for (const promise of dbPromises.values()) {
+    void promise.then((db) => db?.close());
+  }
+  dbPromises.clear();
 }
 
 /**

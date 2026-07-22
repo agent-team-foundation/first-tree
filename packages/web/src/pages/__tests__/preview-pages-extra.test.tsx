@@ -59,7 +59,7 @@ const DEFAULT_AUTH = {
   adoptTokens: async () => undefined,
   selectOrganization: async () => undefined,
   refreshMe: async () => undefined,
-  logout: () => undefined,
+  logout: async () => undefined,
 } as AuthValue;
 
 const JSON_HEADERS = { "Content-Type": "application/json" };

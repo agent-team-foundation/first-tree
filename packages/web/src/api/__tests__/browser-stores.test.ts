@@ -1,6 +1,21 @@
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MessageWithDelivery } from "../chats.js";
+
+// Identity control for the per-account database namespacing (SEC-042); see
+// message-store.test.ts for why the identity is mocked rather than seeded
+// through real tokens in this node-environment suite.
+const identityMock = vi.hoisted(() => ({ userId: "user-1" as string | null }));
+
+vi.mock("../../lib/current-user-id.js", () => ({
+  currentUserIdFromToken: () => identityMock.userId,
+  lastKnownUserId: () => identityMock.userId,
+}));
+
+beforeEach(() => {
+  identityMock.userId = "user-1";
+});
 
 type Callback = () => void;
 
@@ -259,5 +274,102 @@ describe("read-state-store", () => {
     const clearTx = await waitForTransaction(db.transactions, 2);
     clearTx.onabort?.();
     await expect(clear).resolves.toBeUndefined();
+  });
+});
+
+async function listDatabaseNames(): Promise<string[]> {
+  const dbs = await indexedDB.databases();
+  return dbs
+    .map((d) => d.name)
+    .filter((n): n is string => typeof n === "string")
+    .sort();
+}
+
+/** Delete a database, reporting whether the delete had to wait on a blocked
+ *  phase before completing. */
+function deleteDb(name: string): Promise<"success" | "blocked-then-success"> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name);
+    let blocked = false;
+    req.onblocked = () => {
+      blocked = true;
+    };
+    req.onsuccess = () => resolve(blocked ? "blocked-then-success" : "success");
+    req.onerror = () => reject(req.error ?? new Error("delete failed"));
+  });
+}
+
+describe("per-account namespacing (SEC-042)", () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory();
+  });
+
+  it("image-store writes into a database named for the current account and isolates accounts", async () => {
+    const { getImage, putImage } = await loadImageStore();
+    await putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" });
+    expect(await listDatabaseNames()).toEqual(["first-tree-images:u:user-1"]);
+
+    identityMock.userId = "user-2";
+    expect(await getImage("img-1")).toBeNull();
+
+    identityMock.userId = "user-1";
+    expect(await getImage("img-1")).toEqual({ base64: "abc123", mimeType: "image/png" });
+  });
+
+  it("image-store keeps the reject contract for writes while signed out and creates no database", async () => {
+    const { getImage, putImage } = await loadImageStore();
+    identityMock.userId = null;
+
+    await expect(putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" })).rejects.toThrow(
+      "Image storage unavailable",
+    );
+    expect(await getImage("img-1")).toBeNull();
+    expect(await listDatabaseNames()).toEqual([]);
+  });
+
+  it("image-store requests deletion of the legacy database on first namespaced open", async () => {
+    const { putImage } = await loadImageStore();
+    const spy = vi.spyOn(indexedDB, "deleteDatabase");
+    await putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" });
+    expect(spy.mock.calls.filter(([name]) => name === "first-tree-images")).toHaveLength(1);
+  });
+
+  it("read-state-store writes into the shared per-account chat-cache database and no-ops while signed out", async () => {
+    const { getReadState, setReadState } = await loadReadStateStore();
+    await setReadState("chat-1", "msg-1", "msg-2");
+    expect(await listDatabaseNames()).toEqual(["first-tree-chat-cache:u:user-1"]);
+
+    identityMock.userId = null;
+    await expect(setReadState("chat-2", "msg-3", "msg-4")).resolves.toBeUndefined();
+    expect(await getReadState("chat-1")).toBeNull();
+    expect(await listDatabaseNames()).toEqual(["first-tree-chat-cache:u:user-1"]);
+  });
+
+  it("purge must close BOTH chat-cache connections (message-store and read-state-store) for a delete to complete", async () => {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const messageStore = await import("../message-store.js");
+    const readStateStore = await import("../read-state-store.js");
+
+    const message: MessageWithDelivery = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "user-1",
+      format: "text",
+      content: { text: "hello" },
+      metadata: {},
+      inReplyTo: null,
+      source: "web",
+      createdAt: new Date(2026, 0, 1).toISOString(),
+    };
+    await messageStore.cacheMessages("chat-1", [message]);
+    await readStateStore.setReadState("chat-1", "m1", "m1");
+
+    // Two modules, one database, one connection each — the purge closes both.
+    messageStore.closeDbForPurge();
+    readStateStore.closeDbForPurge();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(deleteDb("first-tree-chat-cache:u:user-1")).resolves.toBe("success");
   });
 });
