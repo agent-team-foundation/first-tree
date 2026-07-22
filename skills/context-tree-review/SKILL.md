@@ -118,6 +118,16 @@ by policy:
 - ownership-adjacent member content when ownership or review routing matters;
 - a linked source artifact only when claim accuracy cannot otherwise be judged.
 
+Expand cross-node/domain review only when the change touches a domain
+`NODE.md`, relationship, cross-domain constraint or canonical decision, or
+moves, renames or deletes a node. Mechanically identify incoming references to
+the old and new changed paths, then read only the affected outgoing targets
+from the base and head, parent, children, siblings, neighbouring normal nodes
+and ownership context needed to judge propagation. Check whether a domain-level
+change leaves dependent truth stale or crosses another domain's authority. A
+leaf-local change with no relationship impact needs no expansion; this is
+focused PR review, not a whole-tree audit.
+
 Bind every read visibly to the detached worktree. Normal content is current
 durable truth, member content supplies Who, and archive/supporting material is
 evidence rather than canonical truth. For each changed durable claim, establish
@@ -137,13 +147,43 @@ and try to disprove its safety. Challenge the complete head for:
 - incorrect normal/member/archive classification;
 - missing rationale or unsupported durable claims;
 - unauthorized ownership, locked-decision, top-level or governance changes;
-- missing or incorrect cross-domain relationships and `soft_links`; and
+- missing or incorrect cross-domain relationships and `soft_links`;
+- stale dependent truth or an unacknowledged cross-domain authority impact; and
 - implementation detail, delivery history or actionable future work in normal
   content.
 
 Each finding names a path, governing policy rule, future-agent impact and
 actionable correction. Both passes must complete on the final head before an
 approving outcome is possible.
+
+### Calibrated final checklist
+
+Before choosing an outcome, classify each applicable focus area as `PASS`,
+`N/A` or `FINDING`; classify a finding as `Blocking` or `Advisory`:
+
+- **Content admission and current truth:** durable, current, supported and
+  internally consistent, with enough surviving rationale.
+- **Canonical structure and class:** edit/add choice, placement, duplication,
+  density and normal/member/archive roles follow the generated policy.
+- **Future-agent utility and authority:** a future reader can find and apply the
+  decision without crossing responsibility, ownership or lock boundaries.
+- **Cross-node/domain impact:** when triggered, outgoing and incoming
+  relationships, affected descendants/neighbours and cross-domain authority
+  remain coherent; otherwise mark `N/A`.
+- **Final-head convergence:** validation and checks apply to this head, and any
+  repair removed its target without creating a new blocker.
+
+`Blocking` means a material policy violation, contradiction, invalid or stale
+canonical truth, required relationship or evidence gap, authority violation,
+or incomplete final-head convergence. `Advisory` means a useful clarity,
+density, wording or optional discoverability improvement that would not cause a
+future agent to act incorrectly. Only an unresolved `Blocking` finding prevents
+`APPROVE`; `N/A` and `Advisory` do not. Do not manufacture a finding merely to
+demonstrate adversarial review.
+
+The checklist is an internal completeness tool, not a required review-body
+template or machine ledger. Report material evidence and findings concisely
+instead of pasting the checklist.
 
 ## Repair with the local identity
 

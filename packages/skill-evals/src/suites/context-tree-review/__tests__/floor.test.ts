@@ -84,6 +84,11 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("**Tree curator:**");
     expect(skill).toContain("**Future agent:**");
     expect(skill).toContain("not extra agents, outputs, votes or protocol\nstate");
+    expect(skill).toContain("### Calibrated final checklist");
+    expect(skill).toContain("`PASS`,\n`N/A` or `FINDING`");
+    expect(skill).toContain("Only an unresolved `Blocking` finding prevents\n`APPROVE`");
+    expect(skill).toMatch(/this is\s+focused PR review, not a\s+whole-tree audit/u);
+    expect(skill).toContain("Do not manufacture a finding merely to\ndemonstrate adversarial review");
     expect(skill).toContain("Both passes must complete on the final head");
     expect(skill).toContain("restart the full\nvalidator-first review on the resulting head");
     expect(skill).toMatch(/repair did\s+not introduce a new blocker/u);
