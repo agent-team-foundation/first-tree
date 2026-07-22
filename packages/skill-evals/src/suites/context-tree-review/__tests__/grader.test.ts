@@ -106,6 +106,17 @@ function passingEvents(): unknown[] {
       type: "github_pr_checks_viewed",
     },
     {
+      event: {
+        item: {
+          command: "gh pr checks 42 --repo owner/context-tree",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+    {
       headRefOid: "head",
       isDraft: false,
       prNumber: 42,
@@ -133,7 +144,7 @@ function passes(events: unknown[], fixtureIntegrity = integrity): boolean {
 }
 
 function repairCase(
-  scenario: "mixed-repair-authority" | "push-denied" | "semantic-failure",
+  scenario: "mixed-repair-authority" | "push-denied" | "semantic-failure" | "validator-failure",
 ): ContextTreeReviewEvalCase {
   const found = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);
   if (!found) throw new Error(`Missing ${scenario} context-tree-review case.`);
@@ -143,8 +154,8 @@ function repairCase(
 function repairExpectation(evalCase: ContextTreeReviewEvalCase): ReviewFixtureExpectation {
   const governedPaths =
     evalCase.fixture.scenario === "mixed-repair-authority"
-      ? ["system/review-wording.md", "system/authority-contract.md"]
-      : ["system/review-contract.md"];
+      ? ["system/review-wording.md", "system/authority-contract.md", "system/NODE.md"]
+      : ["system/review-contract.md", "system/NODE.md"];
   return {
     ...expectation,
     governedPaths,
@@ -197,7 +208,7 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
     {
       actualHead: "head",
       argv: ["tree", "verify", "--json"],
-      exitCode: 0,
+      exitCode: evalCase.expected.initialVerifyMustPass ? 0 : 1,
       phase: "model",
       reviewVerifyKind: "initial-review",
       type: "first_tree_result",
@@ -207,6 +218,17 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
       event: {
         item: {
           command: `cat .review-worktrees/42/${safePath}`,
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    },
+    {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/NODE.md",
           exit_code: 0,
           status: "completed",
           type: "command_execution",
@@ -367,6 +389,17 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
         },
         type: "codex_event",
       },
+      {
+        event: {
+          item: {
+            command: "cat .review-worktrees/42/system/NODE.md",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
     );
     if (mixed) {
       events.push({
@@ -382,14 +415,27 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
       });
     }
     if (finalAction === "approve") {
-      events.push({
-        checksPassed: true,
-        headRefOid: "successor",
-        phase: "model",
-        prNumber: 42,
-        repo: "owner/context-tree",
-        type: "github_pr_checks_viewed",
-      });
+      events.push(
+        {
+          checksPassed: true,
+          headRefOid: "successor",
+          phase: "model",
+          prNumber: 42,
+          repo: "owner/context-tree",
+          type: "github_pr_checks_viewed",
+        },
+        {
+          event: {
+            item: {
+              command: "gh pr checks 42 --repo owner/context-tree",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+          },
+          type: "codex_event",
+        },
+      );
     }
     events.push({
       headRefOid: "successor",
@@ -417,6 +463,46 @@ function repairEvents(evalCase: ContextTreeReviewEvalCase): unknown[] {
 describe("context-tree-review grader", () => {
   it("accepts the complete head-bound review sequence", () => {
     expect(passes(passingEvents())).toBe(true);
+  });
+
+  it("requires a draft outcome to report the concrete finding in one paragraph", () => {
+    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "draft");
+    if (!evalCase) throw new Error("Missing draft context-tree-review case.");
+    const expected: ReviewFixtureExpectation = {
+      ...expectation,
+      expectedFinalDraft: true,
+      governedPaths: ["system/review-contract.md", "system/NODE.md"],
+    };
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/NODE.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    for (const event of events) {
+      if ((event as { type?: string }).type === "github_pr_viewed") {
+        (event as { isDraft: boolean }).isDraft = true;
+      }
+    }
+    const review = events.at(-1) as { action: string; body: string };
+    review.action = "comment";
+    review.body =
+      "## Approval deferred\n\nThis draft is not ready; implementation review will resume once ready.\n\nFinding: system/review-contract.md.";
+    const missingFinding = deriveMetrics(events, evalCase, expected, integrity, 0);
+    expect(missingFinding.bodyHintsObserved).toBe(false);
+    expect(casePassed(evalCase, missingFinding)).toBe(false);
+
+    review.body =
+      "## Approval deferred\n\nThis draft is not ready; the implementation detail finding is in system/review-contract.md.";
+    const completeFinding = deriveMetrics(events, evalCase, expected, integrity, 0);
+    expect(completeFinding.bodyHintsObserved).toBe(true);
+    expect(casePassed(evalCase, completeFinding)).toBe(true);
   });
 
   it("accepts repeated validation of the same unchanged review head", () => {
@@ -483,6 +569,97 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, deriveMetrics(withoutContext, evalCase, expected, repaired, 0))).toBe(false);
   });
 
+  it("requires parent context before repair and again on the successor", () => {
+    const validatorCase = repairCase("validator-failure");
+    const validatorExpected = repairExpectation(validatorCase);
+    const repaired = repairIntegrity("success");
+
+    const missingInitialParent = repairEvents(validatorCase);
+    const firstEditIndex = missingInitialParent.findIndex(
+      (event) => (event as { event?: { item?: { type?: string } } }).event?.item?.type === "file_change",
+    );
+    const initialParentIndex = missingInitialParent.findIndex(
+      (event, index) =>
+        index < firstEditIndex &&
+        (event as { event?: { item?: { command?: string } } }).event?.item?.command ===
+          "cat .review-worktrees/42/system/NODE.md",
+    );
+    missingInitialParent.splice(initialParentIndex, 1);
+    const initialMetrics = deriveMetrics(missingInitialParent, validatorCase, validatorExpected, repaired, 0);
+    expect(initialMetrics.semanticReadAfterVerify).toBe(false);
+    expect(casePassed(validatorCase, initialMetrics)).toBe(false);
+
+    const evalCase = repairCase("semantic-failure");
+    const expected = repairExpectation(evalCase);
+    const missingSuccessorParent = repairEvents(evalCase);
+    const successorParentIndex = missingSuccessorParent.findLastIndex(
+      (event) =>
+        (event as { event?: { item?: { command?: string } } }).event?.item?.command ===
+        "cat .review-worktrees/42/system/NODE.md",
+    );
+    missingSuccessorParent.splice(successorParentIndex, 1);
+    const successorMetrics = deriveMetrics(missingSuccessorParent, evalCase, expected, repaired, 0);
+    expect(successorMetrics.successorSemanticReviewComplete).toBe(false);
+    expect(casePassed(evalCase, successorMetrics)).toBe(false);
+  });
+
+  it("treats an exact full diff as validator-first and pre-repair discovery evidence", () => {
+    const validatorCase = repairCase("validator-failure");
+    const afterFailedVerify = repairEvents(validatorCase);
+    const initialVerifyIndex = afterFailedVerify.findIndex(
+      (event) => (event as { reviewVerifyKind?: string }).reviewVerifyKind === "initial-review",
+    );
+    afterFailedVerify.splice(initialVerifyIndex + 1, 0, {
+      event: {
+        item: {
+          command: "git -C .review-worktrees/42 diff base...HEAD",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const failedVerifyMetrics = deriveMetrics(
+      afterFailedVerify,
+      validatorCase,
+      repairExpectation(validatorCase),
+      repairIntegrity("success"),
+      0,
+    );
+    expect(failedVerifyMetrics.semanticReadAfterFailedVerify).toBe(true);
+    expect(casePassed(validatorCase, failedVerifyMetrics)).toBe(false);
+
+    const semanticCase = repairCase("semantic-failure");
+    const afterFreshness = repairEvents(semanticCase);
+    const sourceReadIndex = afterFreshness.findIndex(
+      (event) =>
+        (event as { event?: { item?: { command?: string } } }).event?.item?.command?.includes("ls-remote --heads") ===
+        true,
+    );
+    afterFreshness.splice(sourceReadIndex + 1, 0, {
+      event: {
+        item: {
+          command: "git -C .review-worktrees/42 diff base...HEAD",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const freshnessMetrics = deriveMetrics(
+      afterFreshness,
+      semanticCase,
+      repairExpectation(semanticCase),
+      repairIntegrity("success"),
+      0,
+    );
+    expect(freshnessMetrics.repairHeadFresh).toBe(false);
+    expect(freshnessMetrics.repairSourceHeadFresh).toBe(false);
+    expect(casePassed(semanticCase, freshnessMetrics)).toBe(false);
+  });
+
   it("accepts a mixed review only after safe repair and protected-only handoff", () => {
     const evalCase = repairCase("mixed-repair-authority");
     const events = repairEvents(evalCase);
@@ -528,14 +705,14 @@ describe("context-tree-review grader", () => {
   ])("does not accept an unbound successor diff as complete semantic review: %s", (command) => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
-    const successorRead = events.findLast(
+    const successorDiff = events.findLast(
       (event) =>
         typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
         (event as { event: { item: { command: string } } }).event.item.command.includes(
-          ".review-worktrees/42/system/review-contract.md",
+          "diff --no-ext-diff base...HEAD",
         ),
     ) as { event: { item: { command: string } } };
-    successorRead.event.item.command = command;
+    successorDiff.event.item.command = command;
     const metrics = deriveMetrics(
       events,
       evalCase,
@@ -588,17 +765,44 @@ describe("context-tree-review grader", () => {
     expect(casePassed(passingCase(), metrics)).toBe(false);
   });
 
+  it.each([
+    "cat > /tmp/review.md <<'EOF'\nfirst-tree tree verify --json\nEOF",
+    "cat > /tmp/review.md <<EOF\nfirst-tree tree verify --json\nEOF",
+  ])("does not treat heredoc review-body verification text as a verify invocation", (command) => {
+    const events = passingEvents();
+    events.splice(-1, 0, {
+      event: {
+        item: {
+          command,
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    expect(passes(events)).toBe(true);
+  });
+
   it("rejects removed-path parent evidence from an old revision", () => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
-    const successorRead = events.findLast(
+    const successorLeafIndex = events.findLastIndex(
       (event) =>
         typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
         (event as { event: { item: { command: string } } }).event.item.command.includes(
           ".review-worktrees/42/system/review-contract.md",
         ),
+    );
+    events.splice(successorLeafIndex, 1);
+    const successorParent = events.findLast(
+      (event) =>
+        typeof (event as { event?: { item?: { command?: unknown } } }).event?.item?.command === "string" &&
+        (event as { event: { item: { command: string } } }).event.item.command.includes(
+          ".review-worktrees/42/system/NODE.md",
+        ),
     ) as { event: { item: { command: string } } };
-    successorRead.event.item.command = "git -C .review-worktrees/42 show old-head:system/NODE.md";
+    successorParent.event.item.command = "git -C .review-worktrees/42 show old-head:system/NODE.md";
     const metrics = deriveMetrics(
       events,
       evalCase,
@@ -673,6 +877,83 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
+  it("accepts rebuilding the review worktree after a fresh successor verify and reread", () => {
+    const evalCase = repairCase("semantic-failure");
+    const events = repairEvents(evalCase);
+    const checksIndex = events.findIndex((event) => (event as { type?: string }).type === "github_pr_checks_viewed");
+    events.splice(
+      checksIndex,
+      0,
+      {
+        event: {
+          item: {
+            command: "git -C context-tree worktree remove ../.review-worktrees/42",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        event: {
+          item: {
+            command: "git -C context-tree worktree add --detach ../.review-worktrees/42 refs/review/pr-42",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        actualHead: "successor",
+        argv: ["tree", "verify", "--json"],
+        exitCode: 0,
+        phase: "model",
+        reviewVerifyKind: "successor-review",
+        type: "first_tree_result",
+        verifyBindingValid: true,
+      },
+      {
+        event: {
+          item: {
+            command: "git -C .review-worktrees/42 diff base...HEAD",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        event: {
+          item: {
+            command: "cat .review-worktrees/42/system/review-contract.md",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+      {
+        event: {
+          item: {
+            command: "cat .review-worktrees/42/system/NODE.md",
+            exit_code: 0,
+            status: "completed",
+            type: "command_execution",
+          },
+        },
+        type: "codex_event",
+      },
+    );
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("success"), 0);
+    expect(metrics.successorSemanticReviewComplete).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
   it("does not let successor reads backfill a missing initial semantic review", () => {
     const evalCase = repairCase("semantic-failure");
     const events = repairEvents(evalCase);
@@ -732,6 +1013,17 @@ describe("context-tree-review grader", () => {
       unexpectedMutationAttempted: false,
     });
     expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("rejects a push recovery action aimed at an unrelated access target", () => {
+    const evalCase = repairCase("push-denied");
+    const events = repairEvents(evalCase);
+    Object.assign(events.at(-1) as object, {
+      body: "## Changes requested\n\nRepair is blocked after the push to review-change. Restore database access.",
+    });
+    const metrics = deriveMetrics(events, evalCase, repairExpectation(evalCase), repairIntegrity("push-denied"), 0);
+    expect(metrics.bodyHintsObserved).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it.each([
@@ -1283,6 +1575,16 @@ describe("context-tree-review grader", () => {
     const finalView = earlyView.splice(-2, 1)[0];
     earlyView.splice(-2, 0, finalView);
     expect(passes(earlyView)).toBe(false);
+
+    const compoundChecks = passingEvents();
+    const checksCommand = compoundChecks.find(
+      (event) =>
+        (event as { event?: { item?: { command?: string } } }).event?.item?.command ===
+        "gh pr checks 42 --repo owner/context-tree",
+    ) as { event: { item: { command: string } } };
+    checksCommand.event.item.command =
+      "gh pr checks 42 --repo owner/context-tree && gh pr view 42 --repo owner/context-tree --json headRefOid";
+    expect(passes(compoundChecks)).toBe(false);
   });
 
   it("rejects repair handoff, old-head review, and incomplete successor review", () => {
@@ -2085,12 +2387,29 @@ describe("context-tree-review grader", () => {
   });
 
   it.each([
-    ["missing final view", (events: unknown[]) => events.splice(6, 1)],
+    [
+      "missing final view",
+      (events: unknown[]) =>
+        events.splice(
+          events.findLastIndex((event) => (event as { type?: unknown }).type === "github_pr_viewed"),
+          1,
+        ),
+    ],
     [
       "wrong repository and pull request",
-      (events: unknown[]) => Object.assign(events[6] as object, { prNumber: 43, repo: "other/tree" }),
+      (events: unknown[]) =>
+        Object.assign(events.findLast((event) => (event as { type?: unknown }).type === "github_pr_viewed") as object, {
+          prNumber: 43,
+          repo: "other/tree",
+        }),
     ],
-    ["wrong final head", (events: unknown[]) => Object.assign(events[6] as object, { headRefOid: "stale" })],
+    [
+      "wrong final head",
+      (events: unknown[]) =>
+        Object.assign(events.findLast((event) => (event as { type?: unknown }).type === "github_pr_viewed") as object, {
+          headRefOid: "stale",
+        }),
+    ],
     [
       "forbidden GitHub attempt",
       (events: unknown[]) =>
@@ -2098,7 +2417,11 @@ describe("context-tree-review grader", () => {
     ],
     [
       "wrong required heading",
-      (events: unknown[]) => Object.assign(events[7] as object, { body: "## Looks good\n\nNo blocking findings." }),
+      (events: unknown[]) =>
+        Object.assign(
+          events.find((event) => (event as { type?: unknown }).type === "context_review_submitted") as object,
+          { body: "## Looks good\n\nNo blocking findings." },
+        ),
     ],
   ])("rejects %s", (_name, mutate) => {
     const events = passingEvents();

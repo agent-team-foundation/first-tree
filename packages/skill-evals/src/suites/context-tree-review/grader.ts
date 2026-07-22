@@ -1051,6 +1051,52 @@ function semanticReadAttempted(event: unknown, expectation: ReviewFixtureExpecta
   return shellSegments(command).some((segment) => !allowedPreVerifySegment(segment, expectation));
 }
 
+function firstTreeVerifyInvocation(segment: string): boolean {
+  const words = shellWords(segment);
+  let index = words[0] === "command" ? 1 : 0;
+  const executable = words[index]?.split("/").at(-1);
+  if (executable !== "first-tree" && executable !== "first-tree-staging") return false;
+  index += 1;
+  return words[index] === "tree" && words[index + 1] === "verify";
+}
+
+function withoutHeredocBodies(command: string): string {
+  const executableLines: string[] = [];
+  let delimiter: string | null = null;
+  for (const line of command.split("\n")) {
+    if (delimiter !== null) {
+      if (line.trim() === delimiter) delimiter = null;
+      continue;
+    }
+    executableLines.push(line);
+    const match = line.match(/<<-?\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][A-Za-z0-9_]*))/u);
+    delimiter = match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+  }
+  return executableLines.join("\n");
+}
+
+function successfulStandaloneChecksCommand(event: unknown, expectation: ReviewFixtureExpectation): boolean {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return false;
+  const item = event.event.item;
+  if (!isRecord(item) || item.status !== "completed" || item.exit_code !== 0) return false;
+  const command = commandFromCodexEvent(event);
+  if (!command) return false;
+  const structure = shellStructure(command);
+  if (structure.segments.length !== 1 || structure.operators.length !== 0) return false;
+  const words = shellWords(structure.segments[0] ?? "");
+  let index = words[0] === "command" ? 1 : 0;
+  if (words[index]?.split("/").at(-1) !== "gh") return false;
+  index += 1;
+  return (
+    words[index] === "pr" &&
+    words[index + 1] === "checks" &&
+    words[index + 2] === String(expectation.prNumber) &&
+    words[index + 3] === "--repo" &&
+    words[index + 4] === expectation.repo &&
+    words.length === index + 5
+  );
+}
+
 function mainTreeReadAttempted(event: unknown): boolean {
   if (isRecord(event) && event.type === "first_tree_result" && isStringArray(event.argv)) {
     return event.phase === "model" && event.argv[0] === "tree" && event.argv[1] === "tree";
@@ -1512,6 +1558,7 @@ export function deriveMetrics(
   const reviewEvents: ReviewEvent[] = [];
   const viewEvents: ViewEvent[] = [];
   const checkEvents: Array<{ headRefOid: string; order: number }> = [];
+  const standaloneCheckCommandOrders: number[] = [];
   let blockedGithubAttempts = 0;
   let identityIndex = -1;
   let invalidVerifyAttempts = 0;
@@ -1549,6 +1596,7 @@ export function deriveMetrics(
     if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     const order = eventOrder(event, index);
+    if (successfulStandaloneChecksCommand(event, expectation)) standaloneCheckCommandOrders.push(order);
     if (reviewWorktreeLifecycleAttempted(event, expectation)) reviewWorktreeLifecycleOrders.push(order);
     const sourceRefHead = observedSourceRefHead(event, expectation);
     if (sourceRefHead !== null) sourceRefReads.push({ headOid: sourceRefHead, order });
@@ -1586,7 +1634,7 @@ export function deriveMetrics(
     }
     if (
       command !== null &&
-      /\bfirst-tree(?:-staging)?\s+tree\s+verify\b/u.test(command) &&
+      shellStructure(withoutHeredocBodies(command)).segments.some((segment) => firstTreeVerifyInvocation(segment)) &&
       (shellStructure(command).segments.length !== 1 || shellStructure(command).operators.length !== 0)
     ) {
       invalidVerifyAttempts += 1;
@@ -1771,6 +1819,9 @@ export function deriveMetrics(
       order < failedVerifyWindowEnd &&
       !treeContentReads.some((read) => read.order === order),
   );
+  const fullDiffReadAfterFailure = reviewDiffReadOrders.some(
+    (order) => order > firstVerifyOrder && order < failedVerifyWindowEnd,
+  );
   const referenceSearchAfterVerify =
     expectation.requiredReferenceSearches.length === 0 ||
     expectation.requiredReferenceSearches.every((path) => {
@@ -1780,9 +1831,11 @@ export function deriveMetrics(
   const semanticReadAfterFailedVerify =
     verifyExitCodes[0] !== undefined &&
     verifyExitCodes[0] !== 0 &&
-    (prohibitedTreeReadAfterFailure || unscopedGitReadAfterFailure);
-  const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
-  const successorVerify = verifyEvents.find(
+    (prohibitedTreeReadAfterFailure || unscopedGitReadAfterFailure || fullDiffReadAfterFailure);
+  const semanticReadBeforeVerify =
+    (firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder) ||
+    reviewDiffReadOrders.some((order) => order < firstVerifyOrder);
+  const successorVerify = verifyEvents.findLast(
     (item) => item.kind === "successor-review" && item.exitCode === 0 && item.head === fixtureIntegrity.finalHeadOid,
   );
   const successorSemanticReviewComplete =
@@ -1819,11 +1872,16 @@ export function deriveMetrics(
     ...successfulGitSemanticReadOrders.filter((order) => order > finalVerifyOrder),
   ];
   const finalSemanticOrder = finalSemanticOrders.length > 0 ? Math.max(...finalSemanticOrders) : finalVerifyOrder;
-  const currentHeadChecks = checkEvents.filter(
+  const currentHeadCheckEvents = checkEvents.filter(
     (item) => item.headRefOid === fixtureIntegrity.finalHeadOid && item.order > finalSemanticOrder,
   );
-  const checksCurrentHead = review?.action !== "approve" || currentHeadChecks.length > 0;
-  const finalChecksOrder = currentHeadChecks.length > 0 ? Math.max(...currentHeadChecks.map((item) => item.order)) : 0;
+  const currentHeadCheckCommands = standaloneCheckCommandOrders.filter((order) => order > finalSemanticOrder);
+  const checksCurrentHead =
+    review?.action !== "approve" || (currentHeadCheckEvents.length > 0 && currentHeadCheckCommands.length > 0);
+  const finalChecksOrder =
+    currentHeadCheckEvents.length > 0 && currentHeadCheckCommands.length > 0
+      ? Math.max(...currentHeadCheckEvents.map((item) => item.order), ...currentHeadCheckCommands)
+      : 0;
   const lastRepairPushOrder = repairPushOrders.length > 0 ? Math.max(...repairPushOrders) : 0;
   const requiredFreshnessOrder = Math.max(finalVerifyOrder, finalSemanticOrder, finalChecksOrder, lastRepairPushOrder);
   const finalViewFresh =
@@ -1845,6 +1903,7 @@ export function deriveMetrics(
     ...successfulGitSemanticReadOrders.filter(
       (order) => firstRepairEditOrder !== undefined && order < firstRepairEditOrder,
     ),
+    ...reviewDiffReadOrders.filter((order) => firstRepairEditOrder !== undefined && order < firstRepairEditOrder),
   ];
   const lastDiscoveryOrder = discoveryOrders.length > 0 ? Math.max(...discoveryOrders) : firstVerifyOrder;
   const repairHeadFresh =
@@ -1893,6 +1952,21 @@ export function deriveMetrics(
         authorHandoffLanguage.test(paragraph) &&
         (evalCase.expected.repairableHandoffHints ?? []).some((hint) => paragraph.includes(hint.toLowerCase())),
     );
+  const paragraphs = body.split(/\n\s*\n/gu);
+  const draftFindingObserved =
+    evalCase.fixture.scenario !== "draft" ||
+    paragraphs.some(
+      (paragraph) => paragraph.includes("system/review-contract.md") && paragraph.includes("implementation"),
+    );
+  const pushRecoveryObserved =
+    evalCase.expected.repair !== "push-denied" ||
+    paragraphs.some(
+      (paragraph) =>
+        paragraph.includes(expectation.sourceBranch.toLowerCase()) &&
+        paragraph
+          .split(/(?<=[.!?])\s+/gu)
+          .some((sentence) => sentence.includes("restore") && sentence.includes("push") && sentence.includes("access")),
+    );
   const finalReviewBoundToSuccessorHead =
     reviewEvents.length > 0 &&
     reviewEvents.every(
@@ -1903,7 +1977,10 @@ export function deriveMetrics(
     authorHandoffForRepairableFinding,
     authorizedRepairObserved,
     blockedGithubAttempts,
-    bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
+    bodyHintsObserved:
+      evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())) &&
+      draftFindingObserved &&
+      pushRecoveryObserved,
     checksCurrentHead,
     expectedHeadingObserved:
       evalCase.expected.firstHeading === undefined || firstHeading?.startsWith(evalCase.expected.firstHeading) === true,
@@ -2014,9 +2091,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.verifyHeadBound &&
     !metrics.semanticReadBeforeVerify &&
     !metrics.semanticReadAfterFailedVerify &&
-    (!evalCase.expected.initialVerifyMustPass ||
-      evalCase.fixture.scenario === "archive-only" ||
-      metrics.semanticReadAfterVerify) &&
+    (evalCase.fixture.scenario === "archive-only" || metrics.semanticReadAfterVerify) &&
     verifyStatus &&
     metrics.finalViewFresh &&
     metrics.checksCurrentHead &&

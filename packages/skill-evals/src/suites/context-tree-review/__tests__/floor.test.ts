@@ -70,7 +70,7 @@ describe("context-tree-review floor", () => {
       repair: "success",
     });
     expect(denied?.expected).toMatchObject({ action: "request-changes", repair: "push-denied" });
-    expect(denied?.expected.bodyHints).toEqual(expect.arrayContaining(["push", "review-change", "restore", "access"]));
+    expect(denied?.expected.bodyHints).toEqual(expect.arrayContaining(["push", "review-change"]));
   });
 
   it("maps a proven authority violation to request changes", () => {

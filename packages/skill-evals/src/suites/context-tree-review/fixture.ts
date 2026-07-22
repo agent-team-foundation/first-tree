@@ -383,7 +383,17 @@ exit 0
             ? [changed[0]?.path ?? "", "system/NODE.md", "product/review-outcomes.md", "operations/review-routing.md"]
             : evalCase.fixture.scenario === "passing"
               ? [changed[0]?.path ?? "", "system/NODE.md"]
-              : changed.map((item) => item.path),
+              : [
+                  ...new Set(
+                    changed.flatMap((item) => {
+                      const separator = item.path.lastIndexOf("/");
+                      const parent = separator >= 0 ? `${item.path.slice(0, separator)}/NODE.md` : "NODE.md";
+                      return item.path.endsWith("/NODE.md") || item.path === "NODE.md"
+                        ? [item.path]
+                        : [item.path, parent];
+                    }),
+                  ),
+                ],
       headOid,
       initialVerifyMustPass: evalCase.expected.initialVerifyMustPass,
       prNumber,
