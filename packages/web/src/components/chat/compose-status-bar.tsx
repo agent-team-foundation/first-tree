@@ -226,7 +226,13 @@ export function ComposeStatusBar({
           </button>
 
           {expanded ? (
-            <CurrentOutputDetails id={detailsId} attention={attention} nameOf={nameOf} mounted={mounted} />
+            <CurrentOutputDetails
+              id={detailsId}
+              attention={attention}
+              nameOf={nameOf}
+              mounted={mounted}
+              onTimelineNavigate={() => setExpanded(false)}
+            />
           ) : null}
         </section>
       ) : null}
@@ -308,11 +314,13 @@ function CurrentOutputDetails({
   attention,
   nameOf,
   mounted,
+  onTimelineNavigate,
 }: {
   id: string;
   attention: AgentChatStatus[];
   nameOf: (agentId: string) => string;
   mounted: ReadonlySet<string>;
+  onTimelineNavigate: () => void;
 }) {
   const showIdentity = attention.length > 1;
   return (
@@ -336,6 +344,7 @@ function CurrentOutputDetails({
               name={nameOf(status.agentId)}
               mounted={mounted}
               showIdentity={showIdentity}
+              onTimelineNavigate={onTimelineNavigate}
             />
           </li>
         ))}
@@ -349,11 +358,13 @@ function CurrentOutputItem({
   name,
   mounted,
   showIdentity,
+  onTimelineNavigate,
 }: {
   status: AgentChatStatus;
   name: string;
   mounted: ReadonlySet<string>;
   showIdentity: boolean;
+  onTimelineNavigate: () => void;
 }) {
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
@@ -390,6 +401,7 @@ function CurrentOutputItem({
           target={jumpTarget}
           anchored
           ariaLabel={`View ${name} in the timeline`}
+          onNavigate={onTimelineNavigate}
           className="compose-status-jump"
           interactiveClassName="rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >

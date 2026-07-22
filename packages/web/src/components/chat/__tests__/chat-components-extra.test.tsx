@@ -23,7 +23,7 @@ const sessionApiMocks = vi.hoisted(() => ({
 }));
 
 const timelineMocks = vi.hoisted(() => ({
-  scrollToAgentTimeline: vi.fn(),
+  scrollToAgentTimeline: vi.fn(() => true),
 }));
 
 vi.mock("../../../api/agent-status.js", () => ({
@@ -398,7 +398,15 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
 
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const timelineTarget = h.container.querySelector<HTMLElement>('[data-working-agent="agent-nova"]');
+    if (!timelineTarget) throw new Error("Expected timeline target");
+    timelineTarget.tabIndex = -1;
+    timelineMocks.scrollToAgentTimeline.mockImplementationOnce(() => {
+      timelineTarget.focus();
+      return true;
+    });
+    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Expand current agent output"]');
+    await click(h, trigger);
     await waitForSettled(h, () =>
       expect(h.container.querySelector('.compose-status-jump[aria-label*="Nova"]')).not.toBeNull(),
     );
@@ -410,6 +418,34 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await click(h, jump);
 
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-nova", "working", { focus: true });
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(h.container.querySelector('[aria-label^="Expand current agent output"]')).toBe(trigger);
+    expect(document.activeElement).toBe(timelineTarget);
+  });
+
+  it("keeps the output expanded if its timeline target disappears before navigation", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-nova", {
+        working: true,
+        engagement: "active",
+        activity: activity("agent-nova", { turnText: "Inspect the current turn" }),
+      }),
+    ]);
+    timelineMocks.scrollToAgentTimeline.mockReturnValueOnce(false);
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+        </>,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await click(h, h.container.querySelector('.compose-status-jump[aria-label*="Nova"]'));
+
     expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
   });
 
@@ -604,13 +640,16 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(trigger?.getAttribute("aria-label")).toContain("3 status updates");
     expect(trigger?.textContent).not.toContain("needs attention");
 
-    for (const [agentId, name] of [
+    const providerAgents = [
       ["agent-waiting", "Waiting Agent"],
       ["agent-retrying", "Retrying Agent"],
       ["agent-warning", "Warning Agent"],
-    ]) {
+    ] as const;
+    for (const [index, [agentId, name]] of providerAgents.entries()) {
       await click(h, h.container.querySelector(`.compose-status-jump[aria-label*="${name}"][aria-label*="timeline"]`));
       expect(timelineMocks.scrollToAgentTimeline).toHaveBeenLastCalledWith(agentId, "reason", { focus: true });
+      expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+      if (index < providerAgents.length - 1) await click(h, trigger);
     }
   });
 

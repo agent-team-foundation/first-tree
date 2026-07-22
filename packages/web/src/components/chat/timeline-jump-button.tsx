@@ -34,7 +34,7 @@ export function TimelineJumpButton({
   /** Whether this agent's timeline anchor is currently mounted. */
   anchored: boolean;
   ariaLabel: string;
-  /** Runs immediately before the timeline scroll (for example, to close a popover). */
+  /** Runs after the timeline evidence was found and navigation succeeded. */
   onNavigate?: () => void;
   className?: string;
   /** Classes applied only when the element is an actionable button. */
@@ -55,8 +55,8 @@ export function TimelineJumpButton({
     <button
       type="button"
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
-        onNavigate?.();
-        scrollToAgentTimeline(agentId, target, { focus: event.detail === 0 });
+        const navigated = scrollToAgentTimeline(agentId, target, { focus: event.detail === 0 });
+        if (navigated) onNavigate?.();
       }}
       aria-label={ariaLabel}
       className={cn("group inline-flex min-w-0 items-center", className, interactiveClassName)}
