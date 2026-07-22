@@ -659,6 +659,58 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).not.toBe(fallbackRef.current);
   });
 
+  it("clears status focus ownership after a click-only outside activation", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") })],
+    );
+    const fallbackRef = createRef<HTMLButtonElement>();
+    const externalRef = createRef<HTMLButtonElement>();
+    const outsideAction = vi.fn(() => {
+      expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    });
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} fallbackFocusRef={fallbackRef} />
+          <button ref={externalRef} type="button" onClick={outsideAction}>
+            External action
+          </button>
+          <button ref={fallbackRef} type="button">
+            Composer fallback
+          </button>
+        </>,
+        queryClient,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const jump = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Nova"]');
+    if (!jump) throw new Error("Expected timeline jump");
+    jump.focus();
+
+    await act(async () => {
+      externalRef.current?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
+    });
+    await h.flush();
+    expect(outsideAction).toHaveBeenCalledTimes(1);
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    externalRef.current?.focus();
+    await act(async () => {
+      queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+    });
+    await h.flush();
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull());
+    expect(document.activeElement).toBe(externalRef.current);
+    expect(document.activeElement).not.toBe(fallbackRef.current);
+  });
+
   it("places inline output after its trigger and keeps focus on the disclosure", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
