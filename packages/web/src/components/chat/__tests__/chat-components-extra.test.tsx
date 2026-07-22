@@ -502,7 +502,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(document.activeElement).not.toBe(fallbackRef.current);
   });
 
-  it("collapses when the editable composer receives focus without moving focus away", async () => {
+  it("collapses when the user focuses or drops input into the editable composer", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -510,7 +510,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         activity: activity("agent-nova", { turnText: "Inspect the current turn" }),
       }),
     ]);
+    const composerSurfaceRef = createRef<HTMLDivElement>();
     const composerInputRef = createRef<HTMLTextAreaElement>();
+    const attachButtonRef = createRef<HTMLButtonElement>();
 
     h.render(
       withProviders(
@@ -518,9 +520,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
           <ComposeStatusBar
             chatId="chat-1"
             agents={[agent("agent-nova", "Nova")]}
-            composerInputRef={composerInputRef}
+            composerSurfaceRef={composerSurfaceRef}
           />
-          <textarea ref={composerInputRef} aria-label="Message composer" />
+          <div ref={composerSurfaceRef}>
+            <textarea ref={composerInputRef} aria-label="Message composer" />
+            <button ref={attachButtonRef} type="button">
+              Attach file
+            </button>
+          </div>
         </>,
       ),
     );
@@ -534,6 +541,19 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(composerInputRef.current);
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => attachButtonRef.current?.focus());
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(document.activeElement).toBe(attachButtonRef.current);
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => {
+      composerSurfaceRef.current?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
   });
 
   it("places inline output after its trigger and keeps focus on the disclosure", async () => {

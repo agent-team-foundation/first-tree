@@ -93,15 +93,15 @@ export function ComposeStatusBar({
   chatId,
   agents,
   fallbackFocusRef,
-  composerInputRef,
+  composerSurfaceRef,
 }: {
   chatId: string;
   /** Non-human agent participants, used for stable display-name lookup. */
   agents: ChatParticipantDetail[];
   /** Stable composer control that receives focus if the status surface vanishes. */
   fallbackFocusRef?: RefObject<HTMLElement | null>;
-  /** Editable composer input whose focus signals that monitoring is finished. */
-  composerInputRef?: RefObject<HTMLTextAreaElement | null>;
+  /** Editable composer surface whose use signals a switch from monitoring to composing. */
+  composerSurfaceRef?: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
@@ -144,13 +144,18 @@ export function ComposeStatusBar({
   }, [chatId]);
 
   useEffect(() => {
-    if (!composerInputRef) return;
-    const collapseForComposerFocus = (event: FocusEvent) => {
-      if (event.target === composerInputRef.current) setExpanded(false);
+    if (!composerSurfaceRef) return;
+    const collapseForComposerIntent = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && composerSurfaceRef.current?.contains(target)) setExpanded(false);
     };
-    document.addEventListener("focusin", collapseForComposerFocus);
-    return () => document.removeEventListener("focusin", collapseForComposerFocus);
-  }, [composerInputRef]);
+    document.addEventListener("focusin", collapseForComposerIntent);
+    document.addEventListener("drop", collapseForComposerIntent);
+    return () => {
+      document.removeEventListener("focusin", collapseForComposerIntent);
+      document.removeEventListener("drop", collapseForComposerIntent);
+    };
+  }, [composerSurfaceRef]);
 
   useEffect(() => {
     if (attention.length === 0) return;
