@@ -62,12 +62,16 @@ GitHub review and repository gate.
 - Exercise validation and semantic failures. Confirm the Reviewer uses
   `first-tree tree review --run ... --event REQUEST_CHANGES|COMMENT --body-file ...`;
   the removed GitHub command, `--head`, and `--agent` are unavailable.
-- Exercise a domain `NODE.md`, relationship/cross-domain constraint, and node
-  move/rename/delete change. Confirm the Reviewer expands only to affected
-  outgoing targets, incoming references, descendants/neighbours and ownership
-  context, while a leaf-local change with no relationship impact is `N/A` and
-  does not become a whole-tree audit. Confirm the internal checklist separates
-  `Blocking` from `Advisory`, and only unresolved blockers prevent approval.
+- Exercise a domain `NODE.md`, changed `soft_links`/Markdown link or explicit
+  cross-domain reference, and node add/move/rename/delete change. Confirm the
+  Reviewer expands only to affected outgoing targets, incoming references,
+  direct children, mechanically dependent deeper descendants/neighbours and
+  ownership context. A leaf-local body change with none of those observable
+  triggers is `N/A` and does not become a whole-tree audit. Confirm an otherwise
+  ready PR with only `Advisory` findings is approved with the advice in the
+  approval body. A proven authority violation requests changes; a case whose
+  authorized choice cannot yet be established comments with a human-decision
+  request.
 - Exercise a repair on a same-repository branch. Confirm local git/`gh`
   credentials create and push decision-preserving changes, never force-push,
   amend, rebase, edit protected ownership/decision-lock material without clear

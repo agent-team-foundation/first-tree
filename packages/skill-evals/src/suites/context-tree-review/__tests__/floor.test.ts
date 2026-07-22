@@ -19,6 +19,7 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "relationship-change",
       "draft",
       "archive-only",
       "authority",
@@ -28,6 +29,7 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "relationship-change",
       "draft",
       "archive-only",
       "authority",
@@ -87,6 +89,12 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("### Calibrated final checklist");
     expect(skill).toContain("`PASS`,\n`N/A` or `FINDING`");
     expect(skill).toContain("Only an unresolved `Blocking` finding prevents\n`APPROVE`");
+    expect(skill).toContain("only `Advisory` findings still receives\n`APPROVE`");
+    expect(skill).toContain("observable diff trigger");
+    expect(skill).toMatch(/leaf-local body change with none of these\s+observable triggers/u);
+    expect(skill).toContain("Do not\nrecursively read every descendant");
+    expect(skill).toContain("do not read unrelated domains merely because the tree is\nsmall");
+    expect(skill).toContain("A proven unauthorized ownership, lock or governance change");
     expect(skill).toMatch(/this is\s+focused PR review, not a\s+whole-tree audit/u);
     expect(skill).toContain("Do not manufacture a finding merely to\ndemonstrate adversarial review");
     expect(skill).toContain("Both passes must complete on the final head");

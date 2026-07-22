@@ -67,8 +67,9 @@ from GitHub before reviewing.
 ## Detached snapshot and validator-first review
 
 Fetch the base and `refs/pull/<number>/head` without switching the main Context
-Tree checkout. Create a unique agent-owned detached worktree at the fetched PR
-head. Never use `gh pr checkout` in the main checkout or reuse an unknown
+Tree checkout. Create a unique agent-owned detached worktree at the exact
+recorded `REVIEWED_HEAD`, not an ambiguous `FETCH_HEAD` or a persistent local
+review ref. Never use `gh pr checkout` in the main checkout or reuse an unknown
 worktree.
 
 Before semantic reads, inspect only the changed path list needed to classify
@@ -118,15 +119,22 @@ by policy:
 - ownership-adjacent member content when ownership or review routing matters;
 - a linked source artifact only when claim accuracy cannot otherwise be judged.
 
-Expand cross-node/domain review only when the change touches a domain
-`NODE.md`, relationship, cross-domain constraint or canonical decision, or
-moves, renames or deletes a node. Mechanically identify incoming references to
-the old and new changed paths, then read only the affected outgoing targets
-from the base and head, parent, children, siblings, neighbouring normal nodes
-and ownership context needed to judge propagation. Check whether a domain-level
-change leaves dependent truth stale or crosses another domain's authority. A
-leaf-local change with no relationship impact needs no expansion; this is
-focused PR review, not a whole-tree audit.
+Expand cross-node/domain review only for an observable diff trigger: a changed
+domain `NODE.md`; an added, removed or changed `soft_links` or Markdown link;
+an added, deleted, moved or renamed node; or a changed `Cross-Domain` section or
+explicit cross-domain reference. Also expand when a mechanical reference search
+shows that another normal node links to a changed path. Identify incoming
+references to the old and new paths, then read only the affected outgoing
+targets from the base and head, parent, direct children, siblings, neighbouring
+normal nodes and ownership context needed to judge propagation. Do not
+recursively read every descendant: read a deeper descendant only when a path,
+link, explicit reference or changed domain authority makes it dependent on the
+change. Check whether a domain-level change leaves dependent truth stale or
+crosses another domain's authority. A leaf-local body change with none of these
+observable triggers needs no expansion; this is focused PR review, not a
+whole-tree audit. A mechanical reference search may establish that no incoming
+dependency exists; do not read unrelated domains merely because the tree is
+small.
 
 Bind every read visibly to the detached worktree. Normal content is current
 durable truth, member content supplies Who, and archive/supporting material is
@@ -233,9 +241,19 @@ Choose exactly one outcome from the latest reviewed state:
 - `REQUEST_CHANGES` for structural or semantic blockers that were not safely
   repaired;
 - `COMMENT` for draft PRs, supporting-only changes, protected/human-authority
-  decisions or useful non-blocking feedback;
+  decisions or another explicitly non-approvable state without a repairable
+  blocker;
 - `APPROVE` only for a ready PR whose final head passed validation, both quality
   passes and acceptable checks with no unresolved blocker.
+
+A ready, otherwise safe PR with only `Advisory` findings still receives
+`APPROVE`; include the advice concisely in the approval body.
+
+A proven unauthorized ownership, lock or governance change is a `Blocking`
+authority violation and therefore receives `REQUEST_CHANGES`. Use `COMMENT`
+with a human-decision request only when the available evidence cannot establish
+which authorized choice is correct, so no concrete violation can yet be
+asserted.
 
 Keep the review body concise but evidence-based: identify the inspected head,
 verification result, material context checked, challenge result, any repair and

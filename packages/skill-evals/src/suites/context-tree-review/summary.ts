@@ -18,7 +18,7 @@ export function buildGrading(
       ),
       evidence(
         "process_pass",
-        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; semantic read after failed verify=${metrics.semanticReadAfterFailedVerify}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
+        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; prohibited expansion=${metrics.prohibitedExpansionObserved}; semantic read after failed verify=${metrics.semanticReadAfterFailedVerify}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
       ),
       evidence(
         "outcome_pass",
@@ -43,6 +43,7 @@ export function buildGrading(
         metrics.verifyHeadBound &&
         !metrics.semanticReadBeforeVerify &&
         !metrics.semanticReadAfterFailedVerify &&
+        !metrics.prohibitedExpansionObserved &&
         (!evalCase.expected.verifyMustPass ||
           evalCase.fixture.scenario === "archive-only" ||
           metrics.semanticReadAfterVerify) &&

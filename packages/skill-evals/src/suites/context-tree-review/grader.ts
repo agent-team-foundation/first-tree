@@ -34,7 +34,7 @@ function eventOrder(event: unknown, fallbackIndex: number): number {
 }
 
 function shellStructure(command: string): { operators: string[]; segments: string[] } {
-  let source = command.trim().replace(/^\/?(?:usr\/)?bin\/(?:ba)?sh\s+-lc\s+/u, "");
+  let source = command.trim().replace(/^\/?(?:usr\/)?bin\/(?:ba|z)?sh\s+-lc\s+/u, "");
   const outerQuote = source[0];
   if ((outerQuote === '"' || outerQuote === "'") && source.at(-1) === outerQuote) {
     source = source.slice(1, -1);
@@ -270,6 +270,13 @@ function readOnlyGitRevParse(segment: string): boolean {
   );
 }
 
+function readOnlyGitCatFileExistence(segment: string): boolean {
+  if (hasUnquotedRedirection(segment)) return false;
+  const invocation = gitInvocation(segment);
+  if (invocation?.command !== "cat-file" || invocation.args.length !== 2 || invocation.args[0] !== "-e") return false;
+  return /^[0-9a-f]{40}\^\{commit\}$/iu.test(invocation.args[1] ?? "");
+}
+
 function reviewRefNames(expectation: ReviewFixtureExpectation): string[] {
   return [`refs/review/pr-${expectation.prNumber}`, `refs/review/pr-${expectation.prNumber}-head`];
 }
@@ -315,9 +322,8 @@ function readOnlyGitBranch(segment: string): boolean {
   const invocation = gitInvocation(segment);
   return (
     invocation?.command === "branch" &&
-    invocation.args.length === 2 &&
-    invocation.args[0] === "-a" &&
-    invocation.args[1] === "-vv"
+    ((invocation.args.length === 1 && invocation.args[0] === "--show-current") ||
+      (invocation.args.length === 2 && invocation.args[0] === "-a" && invocation.args[1] === "-vv"))
   );
 }
 
@@ -339,6 +345,19 @@ function readOnlyGitWorktree(segment: string, expectation: ReviewFixtureExpectat
     args[1] === "--detach" &&
     reviewWorktreePathAllowed(args[2] ?? "", expectation) &&
     [expectation.headOid, ...reviewRefNames(expectation)].includes(args[3] ?? "")
+  );
+}
+
+function readOnlyReviewWorktreeProbe(segment: string, expectation: ReviewFixtureExpectation): boolean {
+  if (hasUnquotedRedirection(segment)) return false;
+  const words = shellWords(segment);
+  return (
+    words.length === 5 &&
+    words[0] === "find" &&
+    reviewWorktreePathAllowed(words[1] ?? "", expectation) &&
+    words[2] === "-maxdepth" &&
+    words[3] === "1" &&
+    words[4] === "-print"
   );
 }
 
@@ -451,6 +470,7 @@ function gitSemanticReadAttempted(event: unknown): boolean {
   if (!command) return false;
   return shellSegments(command).some((segment) => {
     const commandName = gitInvocation(segment)?.command;
+    if (commandName === "cat-file" && readOnlyGitCatFileExistence(segment)) return false;
     return commandName !== undefined && ["blame", "cat-file", "grep", "log", "show"].includes(commandName);
   });
 }
@@ -519,15 +539,14 @@ function snapshotReadPaths(
   const paths: string[] = [];
   const structure = shellStructure(command);
   let cwdIsReviewWorktree = false;
-  let segments = structure.segments;
+  const segments = structure.segments;
   if (requireSuccessfulCommand) {
     if (structure.operators.length === 0 && segments.length === 1) {
       // A single completed command is directly attributable to its reader.
-    } else if (structure.operators.length === 1 && structure.operators[0] === "&&" && segments.length === 2) {
-      const cdWords = shellWords(segments[0] ?? "");
-      if (cdWords[0] !== "cd" || !isReviewWorktreeOperand(cdWords[1] ?? "", expectation)) return [];
-      cwdIsReviewWorktree = true;
-      segments = segments.slice(1);
+    } else if (structure.operators.every((operator) => operator === "&&" || operator === ";" || operator === "\n")) {
+      // Every segment in an all-success chain or an unconditional sequence is
+      // executed. Fixture paths are known-readable, so their reader commands
+      // remain attributable even when Codex batches them under one shell.
     } else {
       return [];
     }
@@ -582,11 +601,14 @@ function allowedPreVerifySegment(segment: string, expectation: ReviewFixtureExpe
   }
 
   if (/^gh\s+pr\s+view\b/iu.test(segment) || /^gh\s+api\s+user\b/iu.test(segment)) return true;
+  if (/^first-tree(?:-staging)?\s+org\s+context-tree\s+review-config\b/iu.test(segment)) return true;
   if (/^first-tree(?:-staging)?\s+tree\s+verify\b/iu.test(segment)) return true;
+  if (readOnlyReviewWorktreeProbe(segment, expectation)) return true;
   const gitCommands = gitSubcommands(segment);
   if (gitCommands.length > 0) {
-    if (gitCommands.some((command) => ["show", "cat-file", "log", "blame", "grep"].includes(command))) return false;
+    if (gitCommands.some((command) => ["show", "log", "blame", "grep"].includes(command))) return false;
     return gitCommands.every((command) => {
+      if (command === "cat-file") return readOnlyGitCatFileExistence(segment);
       if (command === "fetch") return readOnlyGitFetch(segment, expectation);
       if (command === "rev-parse") return readOnlyGitRevParse(segment);
       if (command === "status") return readOnlyGitStatus(segment);
@@ -710,6 +732,7 @@ export function deriveMetrics(
   let invalidVerifyAttempts = 0;
   let mainTreeReadObserved = false;
   let mutationObserved = false;
+  let prohibitedExpansionObserved = false;
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
   let firstReviewIndex = -1;
@@ -726,6 +749,9 @@ export function deriveMetrics(
     if (mutationAttempted(event, expectation)) mutationObserved = true;
     const order = eventOrder(event, index);
     const observedPaths = snapshotReadPaths(event, expectation, true);
+    if (expectation.forbiddenPaths.some((path) => observedPaths.includes(path))) {
+      prohibitedExpansionObserved = true;
+    }
     for (const governedPath of expectation.governedPaths) {
       if (observedPaths.includes(governedPath) && !governedReadOrders.has(governedPath)) {
         governedReadOrders.set(governedPath, order);
@@ -851,6 +877,7 @@ export function deriveMetrics(
     initialViewObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
     mutationAttempted: mutationObserved,
+    prohibitedExpansionObserved,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
@@ -903,6 +930,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.targetMatches &&
     metrics.blockedGithubAttempts === 0 &&
     !metrics.mutationAttempted &&
+    !metrics.prohibitedExpansionObserved &&
     integrityPassed(metrics.fixtureIntegrity) &&
     outcomePass
   );

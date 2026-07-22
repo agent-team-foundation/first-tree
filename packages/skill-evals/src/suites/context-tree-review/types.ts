@@ -8,6 +8,7 @@ export type ReviewScenario =
   | "authority"
   | "draft"
   | "passing"
+  | "relationship-change"
   | "semantic-failure"
   | "validator-failure";
 
@@ -52,6 +53,7 @@ export type ReviewFixtureExpectation = {
   expectedFinalDraft: boolean;
   expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
+  forbiddenPaths: readonly string[];
   governedPaths: readonly string[];
   headOid: string;
   prNumber: number;
@@ -96,6 +98,7 @@ export type EvalMetrics = {
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
+  prohibitedExpansionObserved: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

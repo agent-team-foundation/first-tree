@@ -13,6 +13,7 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 describe("context-tree-review fixture", () => {
   it.each([
     ["passing", 0],
+    ["relationship-change", 0],
     ["validator-failure", 1],
   ] as const)("records the real source validator result for %s", (scenario, expectedExitCode) => {
     const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);

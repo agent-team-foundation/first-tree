@@ -10,6 +10,7 @@ const expectation: ReviewFixtureExpectation = {
   expectedFinalDraft: false,
   expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
+  forbiddenPaths: [],
   governedPaths: ["system/review-contract.md"],
   headOid: "head",
   prNumber: 42,
@@ -88,7 +89,7 @@ function passingEvents(): unknown[] {
     },
     {
       action: "approve",
-      body: "## Approved\n\nNo blocking findings.",
+      body: "## Approved\n\nAdvisory: the optional wording suggestion does not block this ready PR.",
       bodyFileUsed: true,
       commitOid: "head",
       currentHeadOid: "head",
@@ -233,6 +234,48 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(true);
   });
 
+  it("accepts successful zsh-batched detached reads", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command:
+            "/bin/zsh -lc \"sed -n '1,200p' .review-worktrees/42/system/review-contract.md; sed -n '1,120p' .review-worktrees/42/system/NODE.md\"",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(true);
+  });
+
+  it("rejects a prohibited leaf-local scope expansion", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/experience/navigation.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/navigation.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
   it("does not accept a governed read from a shell branch that never executes", () => {
     const events = passingEvents();
     events[4] = {
@@ -341,8 +384,11 @@ describe("context-tree-review grader", () => {
     "git -C context-tree remote -v",
     '/bin/bash -lc "pwd && sed -n \'1,240p\' .first-tree/workspace.json && rg -n \\"Tree Location|Context Tree\\" AGENTS.md CLAUDE.md 2>/dev/null || true && git -C context-tree remote -v"',
     "git -C context-tree config --list --show-origin && git -C context-tree branch -a -vv",
+    "git -C context-tree branch --show-current",
     "git -C context-tree remote get-url origin && sed -n '1,120p' ../context-tree-origin.git/config && sed -n '1,80p' ../context-tree-origin.git/description",
     'test ! -e .review-worktrees/42 && git -C context-tree worktree list --porcelain && test "$(git -C context-tree rev-parse FETCH_HEAD)" = head',
+    "git -C context-tree cat-file -e 0123456789abcdef0123456789abcdef01234567^{commit}",
+    "git -C context-tree worktree list --porcelain && if [ -e .review-worktrees/42 ]; then find .review-worktrees/42 -maxdepth 1 -print; fi",
   ])("allows an observed repository-identity preflight: %s", (command) => {
     const events = passingEvents();
     events.splice(3, 0, {
