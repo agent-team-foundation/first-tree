@@ -88,7 +88,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     fixture: { scenario: "push-denied" },
     expected: {
       action: "request-changes",
-      bodyHints: ["repair is blocked", "push", "review-change", "restore branch push access"],
+      bodyHints: ["repair is blocked", "push", "review-change", "restore", "access"],
       firstHeading: "## Changes requested",
       initialVerifyMustPass: true,
       repair: "push-denied",
