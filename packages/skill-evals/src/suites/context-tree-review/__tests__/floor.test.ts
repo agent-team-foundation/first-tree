@@ -43,7 +43,7 @@ describe("context-tree-review floor", () => {
   it("makes approval mandatory for the passing ready case", () => {
     const passing = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "passing");
     expect(passing?.expected.action).toBe("approve");
-    expect(passing?.prompt).toContain("gh pr checks 42 --repo owner/context-tree");
+    expect(passing?.prompt).toContain("current checks and freshness");
   });
 
   it("keeps draft findings read-only and deferred", () => {
@@ -108,14 +108,16 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("No PR-body consent\n  block or task packet is required");
     expect(skill).toContain("`SAFE_REPAIR` is an obligation, not an option");
     expect(skill).toContain("A mixed review must repair all");
-    expect(skill).toContain("Never ask the author to perform a\n  `SAFE_REPAIR`");
+    expect(skill).toMatch(/Never ask the author\s+to perform a `SAFE_REPAIR`/u);
     expect(skill).toContain("same-repository and non-fork");
     expect(skill).toContain("ready for review, same-repository and non-fork");
     expect(skill).toContain("`PROTECTED_DECISION`");
     expect(skill).toContain("`REPAIR_BLOCKED`");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
-    expect(skill).toContain("Immediately before mutation, re-read the live PR and source ref");
+    expect(skill).toContain("Immediately before mutation, re-read the complete live PR identity and source");
+    expect(skill).toContain("Immediately before push, repeat the\nsame complete live PR and source-ref check");
+    expect(skill).toContain("Untouched protected residuals retain\ntheir original classification");
     expect(skill).toContain('staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`');
     expect(skill).toContain("A draft PR is read-only even when its findings would be mechanically");
     expect(skill).toContain("After check polling completes, repeat the final `gh pr view` freshness read");
@@ -150,7 +152,7 @@ describe("context-tree-review floor", () => {
     expect(skill).toMatch(/leaf-local body change with none of these\s+observable triggers/u);
     expect(skill).toContain("Do not\nrecursively read every descendant");
     expect(skill).toContain("do not read unrelated domains merely because the tree is\nsmall");
-    expect(skill).toContain("A proven unauthorized ownership, lock or governance change");
+    expect(skill).toContain("proven unauthorized ownership, lock or governance");
     expect(skill).toMatch(/this is\s+focused PR review, not a\s+whole-tree audit/u);
     expect(skill).toContain("Do not manufacture a finding merely to\ndemonstrate adversarial review");
     expect(skill).toContain("Both passes must complete on the final head");

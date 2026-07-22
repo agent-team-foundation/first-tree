@@ -62,7 +62,6 @@ export type ReviewFixtureExpectation = {
   baseOid: string;
   chatId: string;
   expectedFinalDraft: boolean;
-  expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
   forbiddenPaths: readonly string[];
   governedPaths: readonly string[];
@@ -106,7 +105,6 @@ export type ViewEvent = {
   eventIndex: number;
   headRefOid: string;
   isDraft: boolean;
-  order: number;
   prNumber: number;
   repo: string;
   state: string;
@@ -114,7 +112,6 @@ export type ViewEvent = {
 
 export type EvalMetrics = {
   authorHandoffForRepairableFinding: boolean;
-  authorizedRepairObserved: boolean;
   bodyHintsObserved: boolean;
   blockedGithubAttempts: number;
   checksCurrentHead: boolean;
@@ -126,16 +123,8 @@ export type EvalMetrics = {
   ghReviewCalls: number;
   identityReadObserved: boolean;
   initialViewObserved: boolean;
-  invalidReviewSemanticReadObserved: boolean;
   mainTreeReadAttempted: boolean;
-  repairCommitObserved: boolean;
-  repairDiffObserved: boolean;
-  repairHeadFresh: boolean;
-  repairPathsExact: boolean;
   repairPushDenied: boolean;
-  repairPushObserved: boolean;
-  repairSequenceValid: boolean;
-  repairSourceHeadFresh: boolean;
   mutationAttempted: boolean;
   prohibitedExpansionObserved: boolean;
   referenceSearchAfterVerify: boolean;
@@ -147,11 +136,11 @@ export type EvalMetrics = {
   semanticReadAfterVerify: boolean;
   semanticReadAfterFailedVerify: boolean;
   semanticReadBeforeVerify: boolean;
+  successorDiffReviewed: boolean;
   successorSemanticReviewComplete: boolean;
   successorVerifyPassed: boolean;
   targetMatches: boolean;
   finalReviewBoundToSuccessorHead: boolean;
-  unexpectedMutationAttempted: boolean;
   verifyExitCodes: readonly number[];
   verifyFirst: boolean;
   verifyHeadBound: boolean;

@@ -252,19 +252,24 @@ fully determines the correction. Any `owners` edit remains a protected
 ownership decision, including filling a missing or empty value; parent or
 member ownership does not implicitly assign ownership to another node.
 
-Immediately before mutation, re-read the live PR and source ref and require both
-to equal `REVIEWED_HEAD`. If either moved, discard every finding and restart the
-validator-first review at the successor head. Attach a unique agent-owned
-worktree to that unchanged live source ref and make the repair. Stage only the
-exact repair paths, including additions, moves and deletions, then run
+Immediately before mutation, re-read the complete live PR identity and source
+ref. Require the PR to remain open and ready, bound to the reviewed repository,
+base ref/OID, head repository/ref/OID and `REVIEWED_HEAD`, and require the source
+ref to resolve to that same head. If any fact changed, discard every finding and
+restart at the successor state or report the specific missing/retargeted ref as
+`REPAIR_BLOCKED`. Attach a unique agent-owned worktree to that unchanged live
+source ref and make the repair. Stage only the exact repair paths, including
+additions, moves and deletions, then run
 `first-tree tree verify --json`. Inspect `git status --short` and the complete
 staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`; require the
 staged path set to equal the repair scope and no unstaged or untracked Tree
 content to remain. Make no further content or index mutation before committing.
-Commit normally with the host git identity and push with the host git/`gh`
-credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
-base branch or retarget the PR. If a remote write result is unknown, fetch and
-inspect before retrying.
+Commit normally with the host git identity. Immediately before push, repeat the
+same complete live PR and source-ref check against `REVIEWED_HEAD`; never push if
+the PR became draft or closed, was retargeted, changed head identity, or the
+source ref disappeared or moved. Push with the host git/`gh` credential only
+while that authority remains current. Never force-push, use
+`--force-with-lease`, amend, rebase, merge the base branch or retarget the PR.
 
 After a successful repair push, fetch the latest live PR state and restart the full
 validator-first review on the resulting head. Repeat the semantic Evidence and
@@ -272,9 +277,11 @@ Challenge passes, re-read the required surrounding context, inspect the complete
 base-to-head diff and rerun checks. Do not reuse findings, reads, outcomes or
 check conclusions from the predecessor head.
 
-Use the stable finding key `path + policy rule + issue` to prove convergence.
-Do not impose an arbitrary repair-attempt count, but stop as `REPAIR_BLOCKED`
-when the same key survives a repair or the blocker set has no net reduction.
+Use the stable finding key `path + policy rule + issue` to prove convergence for
+the keys targeted by one repair batch. Do not impose an arbitrary attempt count,
+but stop as `REPAIR_BLOCKED` when a targeted key survives its own repair or the
+targeted blocker set has no net reduction. Untouched protected residuals retain
+their original classification.
 Confirm that every repaired blocker is actually gone and that the repair did
 not introduce a new blocker, change the author's durable intent or cross an
 authority boundary. If a blocker survives or recurs, the repair creates a new
@@ -294,27 +301,21 @@ validator-first review against the successor head before publishing.
 
 Choose exactly one outcome from the latest reviewed state:
 
-- `REQUEST_CHANGES` only for a blocker that remains after repair or is
-  specifically `REPAIR_BLOCKED`; name the concrete blocked category and the
-  one action needed to recover. Never ask the author to perform a
-  `SAFE_REPAIR`. Start the body with `## Changes requested`;
-- `COMMENT` for draft PRs, supporting-only changes, protected/human-authority
-  decisions or another explicitly non-approvable state without a repairable
-  blocker. For a protected residual, name the exact authority boundary and ask
-  only its author or owner to decide it. Start a protected-residual body with
-  `## Human decision required`, a draft body with `## Approval deferred`, and a
-  supporting-only body with a direct content-class summary;
+- `REQUEST_CHANGES` for a blocker that remains after repair, is specifically
+  `REPAIR_BLOCKED`, or is a proven unauthorized ownership, lock or governance
+  change. Name the concrete blocker and recovery action. Never ask the author
+  to perform a `SAFE_REPAIR`. Start the body with `## Changes requested`;
+- `COMMENT` for draft PRs, supporting-only changes, or a protected decision
+  whose available evidence cannot establish the authorized choice. Name the
+  exact authority boundary and ask only its author or owner to decide it. Start
+  a protected-residual body with `## Human decision required`, a draft body
+  with `## Approval deferred`, and a supporting-only body with a direct
+  content-class summary;
 - `APPROVE` only for a ready PR whose final head passed validation, both quality
   passes and acceptable checks with no unresolved blocker.
 
 A ready, otherwise safe PR with only `Advisory` findings still receives
 `APPROVE`; include the advice concisely in the approval body.
-
-A proven unauthorized ownership, lock or governance change is a `Blocking`
-authority violation and therefore receives `REQUEST_CHANGES`. Use `COMMENT`
-with a human-decision request only when the available evidence cannot establish
-which authorized choice is correct, so no concrete violation can yet be
-asserted.
 
 Keep the review body concise but evidence-based: identify the inspected head,
 verification result, material context checked, challenge result, any repair and

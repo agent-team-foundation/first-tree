@@ -286,6 +286,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       `#!/bin/sh
 while read old_oid new_oid ref_name; do
   if [ "$ref_name" = "refs/heads/review-change" ]; then
+    printf '{"type":"context_review_push_denied","result":"denied","sourceRef":"%s","oldOid":"%s","newOid":"%s"}\\n' "$ref_name" "$old_oid" "$new_oid" >> ${JSON.stringify(paths.eventsPath)}
     echo "review-change push denied by eval fixture" >&2
     exit 1
   fi
@@ -370,7 +371,6 @@ exit 0
       baseOid,
       chatId,
       expectedFinalDraft: view.isDraft,
-      expectedFinalHeadOid: headOid,
       expectedFinalState: "OPEN",
       forbiddenPaths:
         evalCase.fixture.scenario === "passing" || evalCase.fixture.scenario === "relationship-change"

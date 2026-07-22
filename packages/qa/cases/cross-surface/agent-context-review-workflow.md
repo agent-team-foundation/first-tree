@@ -64,8 +64,9 @@ GitHub review and repository gate.
 - Exercise repairable validator and semantic failures on a same-repository
   branch. Confirm local git/`gh` credentials repair, commit, and push every
   objectively determined, decision-preserving finding before the agent chooses
-  an App outcome. Immediately before mutation, confirm the live PR and source
-  branch still equal the reviewed head. Confirm the exact repair paths,
+  an App outcome. Immediately before mutation and again immediately before
+  push, confirm the complete live PR identity and source branch still equal the
+  reviewed state. Confirm the exact repair paths,
   including additions, moves and deletions, are staged before repair
   validation; then confirm status and the complete cached base-to-result diff
   are inspected with no later content/index mutation before the normal commit

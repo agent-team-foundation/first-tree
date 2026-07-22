@@ -139,16 +139,19 @@ mirrors that push to the local PR ref so the gate can require a dynamic
 successor-head validation and complete re-review. A separate hook supplies the
 push-denied case. The deterministic GitHub shim still permits only PR state
 reads, identity lookup, and one body-file review submission, so no external
-GitHub side effect is possible. Cases require validator-first ordering, a
-fresh unchanged PR and remote source head before mutation, exact scoped staging,
-repair verification, status inspection, and a complete cached base-to-result
-diff with no later mutation before commit/push, safe repair before escalation,
-protected-only mixed handoff, exact successor-head binding, current-head check
-evidence before the final freshness read, ready approval, draft deferral,
-archive-only scope, human authority, self-approval, and stale-head suppression.
-The fixture runs the real
-source-tree validator for both review and repair worktrees without contacting
-GitHub.
+GitHub side effect is possible. Four repair scenarios cover validator repair,
+semantic repair, mixed safe/protected findings, and push denial. The grader
+uses structured shim events plus final Git/ref/content integrity to require one
+decision-preserving scoped repair commit, the expected source-branch result,
+successor validation and context review, current-head checks, and a verdict
+that does not hand a safe repair back to the author. Existing cases retain
+ready approval, draft deferral, archive-only scope, relationship expansion,
+human authority, and stale-head suppression. The gate deliberately does not
+interpret arbitrary shell wrappers or environment variants as a security
+boundary; the production Skill carries the exact repair procedure, and formal
+cross-surface QA owns the real GitHub/App/governance/merge chain. The fixture
+runs the real source-tree validator for review and repair worktrees without
+contacting GitHub.
 
 `eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
 against deterministic local default-branch fixtures. It requires the Audit

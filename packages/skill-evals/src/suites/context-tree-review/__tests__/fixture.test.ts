@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { runCommand } from "../../../core/commands.js";
+import { readEvents } from "../../../core/events.js";
 import { createRunPaths } from "../../../core/paths.js";
 import { createGhShim } from "../../../core/shims/gh.js";
 import { CONTEXT_TREE_REVIEW_GATE_CASES } from "../cases.js";
 import { inspectFixtureIntegrity, type ReviewFixture, setupFixture } from "../fixture.js";
+import { createContextTreeReviewGitShim } from "../git-shim.js";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
@@ -108,6 +110,27 @@ describe("context-tree-review fixture", () => {
       expect(
         git(fixture, ["push", "origin", "HEAD:refs/heads/review-change"], fixture.repairWorktreePath).exitCode,
       ).toBe(0);
+      const successorHead = git(fixture, ["rev-parse", "HEAD"], fixture.repairWorktreePath).stdout.trim();
+      expect(git(fixture, ["worktree", "add", "--detach", fixture.reviewWorktreePath, successorHead]).exitCode).toBe(0);
+      createContextTreeReviewGitShim(paths, { reviewFixturePath: fixture.fixturePath });
+      const diff = spawnSync(
+        join(paths.binDir, "git"),
+        ["-C", fixture.reviewWorktreePath, "diff", `${fixture.expectation.baseOid}...HEAD`],
+        {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath, FIRST_TREE_EVAL_PHASE: "model" },
+        },
+      );
+      expect(diff.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toContainEqual(
+        expect.objectContaining({
+          baseOid: fixture.expectation.baseOid,
+          headOid: successorHead,
+          type: "context_review_successor_diff_viewed",
+        }),
+      );
+      expect(git(fixture, ["worktree", "remove", fixture.reviewWorktreePath]).exitCode).toBe(0);
       createGhShim(paths, { reviewFixturePath: fixture.fixturePath });
       const viewed = spawnSync(
         join(paths.binDir, "gh"),
@@ -199,6 +222,14 @@ describe("context-tree-review fixture", () => {
       const pushed = git(fixture, ["push", "origin", "HEAD:refs/heads/review-change"], fixture.repairWorktreePath);
       expect(pushed.exitCode).not.toBe(0);
       expect(pushed.stderr).toContain("review-change push denied by eval fixture");
+      expect(readEvents(paths.eventsPath)).toContainEqual(
+        expect.objectContaining({
+          newOid: expect.any(String),
+          oldOid: fixture.expectation.headOid,
+          sourceRef: "refs/heads/review-change",
+          type: "context_review_push_denied",
+        }),
+      );
       expect(git(fixture, ["worktree", "remove", fixture.repairWorktreePath]).exitCode).toBe(0);
       const inspected = inspectFixtureIntegrity(fixture);
       expect(inspected.finalHeadOid).toBe(fixture.expectation.headOid);

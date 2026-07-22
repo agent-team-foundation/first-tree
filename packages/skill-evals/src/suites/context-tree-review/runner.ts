@@ -9,6 +9,7 @@ import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { createGhShim } from "../../core/shims/gh.js";
 import { inspectFixtureIntegrity, setupFixture } from "./fixture.js";
+import { createContextTreeReviewGitShim } from "./git-shim.js";
 import { casePassed, deriveMetrics } from "./grader.js";
 import { buildGrading, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, ContextTreeReviewEvalCase } from "./types.js";
@@ -27,6 +28,7 @@ export async function runContextTreeReviewCase(
   const fixture = setupFixture(evalCase, paths);
   const modelPaths = { ...paths, binDir: join(paths.workspacePath, ".first-tree-eval", "bin") };
   mkdirSync(modelPaths.binDir, { recursive: true });
+  createContextTreeReviewGitShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
   createFirstTreeShim(modelPaths, {
     modelVerifyMode: "real",
     reviewFixturePath: fixture.fixturePath,
