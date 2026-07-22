@@ -221,7 +221,7 @@ export function ComposeStatusBar({
             <ChevronDown
               aria-hidden="true"
               className="h-3.5 w-3.5 shrink-0 transition-transform"
-              style={{ color: "var(--fg-3)", transform: expanded ? "rotate(180deg)" : "none" }}
+              style={{ color: "var(--fg-3)", transform: expanded ? "none" : "rotate(180deg)" }}
             />
           </button>
 
