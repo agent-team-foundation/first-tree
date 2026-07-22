@@ -49,15 +49,28 @@ legacy port 7878. Current CLI versions retire it automatically — on `npm`
 upgrade and on the first run of any command, the stranded job is booted out
 and its plist under `~/.first-tree/github-scan/runner/launchd/` removed —
 and `first-tree daemon doctor` reports any residue it can still see. To clean
-up by hand instead:
+up by hand instead, boot out and remove each retired-namespace plist
+individually — a machine can hold one plist per profile, and a plist must
+only be deleted after its own job is confirmed gone, otherwise a still-loaded
+job is stranded with no retry artifact:
 
 ```bash
-launchctl bootout "gui/$(id -u)/com.first-tree.github-scan.runner.<user>.<profile>"
-rm -rf ~/.first-tree/github-scan/runner/launchd
+uid="$(id -u)"
+find ~/.first-tree/github-scan/runner/launchd -maxdepth 1 \
+  -name 'com.first-tree.github-scan.runner.*.plist' 2>/dev/null |
+while IFS= read -r plist; do
+  label="$(basename "$plist" .plist)"
+  launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+  # Delete the plist only once launchd no longer knows the job.
+  launchctl print "gui/$uid/$label" >/dev/null 2>&1 || rm -- "$plist"
+done
+rmdir ~/.first-tree/github-scan/runner/launchd 2>/dev/null || true
 ```
 
-Legacy configuration and logs under `~/.first-tree/github-scan/` are left in
-place either way; delete them yourself if you no longer want them.
+Files outside that label namespace are left alone, and `rmdir` removes the
+directory only once it is empty — the same guarantees the automatic sweep
+gives. Legacy configuration and logs under `~/.first-tree/github-scan/` are
+left in place either way; delete them yourself if you no longer want them.
 
 ## What's new in v1.0.0
 

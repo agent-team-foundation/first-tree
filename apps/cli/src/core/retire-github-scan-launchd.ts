@@ -52,7 +52,7 @@ import { basename, dirname, join } from "node:path";
 export const LEGACY_GITHUB_SCAN_LABEL_PREFIX = "com.first-tree.github-scan.runner.";
 
 export type RetireGithubScanResult = {
-  /** Labels booted out (or confirmed not loaded) whose plist we then removed. */
+  /** Labels booted out (or confirmed not loaded); plist removal is then attempted (see `removedPlists`). */
   bootedOut: string[];
   /** Number of plist files removed from disk. */
   removedPlists: number;
