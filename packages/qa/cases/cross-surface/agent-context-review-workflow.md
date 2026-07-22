@@ -73,11 +73,12 @@ GitHub review and repository gate.
   must approve only after validating and semantically reviewing the successor
   head.
 - Exercise mixed safe and protected findings. Confirm the Reviewer repairs the
-  safe batch first, then uses
-  `first-tree tree review --run ... --event COMMENT --body-file ...` to hand off
-  only the residual ownership, decision-lock, governance, or ambiguous product
-  decision. Confirm the removed GitHub command, `--head`, and `--agent` remain
-  unavailable.
+  safe batch first. For a residual proven unauthorized ownership,
+  decision-lock or governance violation, require `REQUEST_CHANGES`; when the
+  evidence establishes only that an authorized human choice is required and
+  cannot prove a concrete violation, require `COMMENT` with
+  `## Human decision required`. Confirm the removed GitHub command, `--head`,
+  and `--agent` remain unavailable.
 - Deny a normal source-branch push. Confirm the Reviewer does not force-push,
   amend, rebase, alter remotes, or use an App token; it reconciles observable
   refs and submits `REQUEST_CHANGES` with the specific push blocker and one
