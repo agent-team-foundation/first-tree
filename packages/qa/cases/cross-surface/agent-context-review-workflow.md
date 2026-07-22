@@ -113,12 +113,24 @@ GitHub review and repository gate.
 - Confirm the App approval satisfies the generic one-approval gate. Push a new
   commit and verify GitHub dismisses the stale approval, so the old approval no
   longer satisfies the gate.
-- After approval, confirm the Reviewer uses only local
-  `gh pr merge <number> --repo <repo> --squash`. Reject `--admin`, `--auto`,
-  force push, App-token merge and alternate merge methods.
-- Force local merge permission, ruleset, check and transient provider failures.
-  Confirm the agent reports approval plus the merge error, does not duplicate
-  or roll back the App review, and does not claim success.
+- After approval, capture the successful `tree review` response and confirm the
+  Reviewer takes the merge SHA only from its full `data.reviewedHead`. With the
+  PR still on X, confirm one local `gh api --method PUT
+  repos/<repo>/pulls/<number>/merge` sends `sha=X` and
+  `merge_method=squash` and merges immediately. Push Y after the App approves X
+  but before the merge attempt; confirm the same request still sends X, fails
+  closed and leaves the PR open.
+- Exercise a real queue-protected disposable branch, plus permission, ruleset,
+  check, unsupported-endpoint and transport failures. Confirm the direct REST
+  attempt creates no merge-queue/auto state, never uses `gh pr merge`,
+  `--admin`, `--auto`, force push, an App token, another head or another merge
+  method, and never retries the merge mutation. An unconfirmed delivery may
+  make one read-only PR GET; confirm the final report says merged, open or
+  unknown only from that evidence and does not duplicate or roll back the App
+  review.
+- Treat these queue and provider results as live GitHub evidence. Controlled
+  command stubs verify only the documented request/response contract and are
+  not evidence of real merge-queue, ruleset, permission or transport behavior.
 - Confirm every known clean Reviewer-owned detached review worktree and
   branch-attached repair worktree is removed normally. Dirty or unknown paths
   must remain fail-closed for manual recovery.
@@ -128,16 +140,18 @@ GitHub review and repository gate.
 PASS: the App webhook owns review dispatch; the Reviewer repairs every safely
 determined finding with its local identity before escalating only residual
 protected or blocked findings; the App alone publishes the PR review; the
-repository requires a current approval and dismisses it after push; and local
-squash merge does not bypass the gate.
+repository requires a current approval and dismisses it after push; and one
+local REST squash merge uses only the successful App response head without
+retry, deferred state or bypass.
 
 FAIL: a writer can create review authority; a task packet or legacy marker
 changes routing; a fork/draft run mutates or approves; a safely repairable
 finding goes directly to `REQUEST_CHANGES`; a mixed review returns its safe and
 protected findings together to the author; a repair push is not followed by a
 complete successor-head review; the App merges; the local identity publishes
-the review; an old approval survives a push; or a bypass, force push, `--admin`,
-or `--auto` path is used.
+the review; an old approval survives a push; the local merge uses another head,
+retries or creates deferred state; or a bypass, force push, `gh pr merge`,
+`--admin`, or `--auto` path is used.
 
 BLOCKED: the isolated cell cannot provide the candidate surfaces, disposable
 GitHub repository, real accepted App installation, eligible runtime or

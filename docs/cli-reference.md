@@ -1068,9 +1068,16 @@ does not accept a head or alternate agent. The Server re-resolves the live
 installation, bound repository, pull request, run, configured Reviewer and
 current PR head before the GitHub App creates the review. Unauthorized
 submissions fail closed. The command never merges. After a successful
-`APPROVE`, the Reviewer uses its local GitHub identity to run
-`gh pr merge <number> --repo <owner/repo> --squash`; it never uses `--admin`
-or `--auto`. The repository's stale-review dismissal protects a newer commit.
+`APPROVE`, the Reviewer takes the exact full SHA only from that response's
+`data.reviewedHead` and uses its local GitHub identity for one immediate REST
+squash-merge compare-and-set: `PUT repos/<owner/repo>/pulls/<number>/merge`
+with `sha=<reviewedHead>` and `merge_method=squash`. It does not use
+`gh pr merge`, `--admin`, `--auto`, a substitute head, a fallback merge path or
+a mutation retry. An unconfirmed mutation permits at most one read-only pull
+request `GET`; the Reviewer reports merged, open or unknown only from the
+resulting evidence. Real merge-queue, ruleset, permission and transport
+behavior remains a live GitHub QA boundary rather than a deterministic-stub
+security claim.
 
 Existing Context Tree repositories should require pull requests, at least one
 current approval, and stale-review dismissal after every push. An administrator
