@@ -118,6 +118,7 @@ export function ComposeStatusBar({
   // must never resurrect Working after runtime freshness has expired.
   const statuses = rawStatuses ?? [];
   const attention = useMemo(() => selectAttention(statuses), [statuses]);
+  const hasAttention = attention.length > 0;
   const mounted = useMountedAnchors();
   const nameOf = useMemo(() => nameFor(agents), [agents]);
   const announcement = useMemo(() => activityAnnouncement(attention, nameOf), [attention, nameOf]);
@@ -141,8 +142,10 @@ export function ComposeStatusBar({
     setExpanded(false);
   }, [chatId]);
 
+  // Keep the listener lifetime stable while the actionable set changes so a
+  // live 1 -> 2 agent update cannot erase an in-flight pointer origin.
   useEffect(() => {
-    if (attention.length === 0) return;
+    if (!hasAttention) return;
     const isOutside = (event: Event) => {
       const target = event.target;
       return target instanceof Node && !surfaceRef.current?.contains(target);
@@ -189,21 +192,32 @@ export function ComposeStatusBar({
     const onOutsideIntent = (event: Event) => {
       if (isOutside(event)) collapse();
     };
-    const onClick = (event: MouseEvent) => {
+    const onClickCapture = (event: MouseEvent) => {
       const pointerOriginOutside = pointerOriginOutsideRef.current;
-      pointerOriginOutsideRef.current = null;
       if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
       pointerCompletionFrame = null;
-      if (pointerOriginOutside === false) return;
-      if (pointerOriginOutside === true || isOutside(event)) collapse();
+      if (pointerOriginOutside === false) {
+        pointerOriginOutsideRef.current = null;
+        return;
+      }
+      if (pointerOriginOutside !== true && !isOutside(event)) return;
+      focusWithinRef.current = false;
+      // Capture sees Workspace controls that stop click propagation; defer the
+      // layout change until their target action has completed.
+      pointerCompletionFrame = requestAnimationFrame(() => {
+        pointerCompletionFrame = null;
+        pointerOriginOutsideRef.current = null;
+        collapse();
+      });
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("pointerup", onPointerUp, true);
     document.addEventListener("pointercancel", onPointerCancel, true);
     document.addEventListener("focusin", onFocusIn, true);
-    document.addEventListener("click", onClick);
+    document.addEventListener("click", onClickCapture, true);
     document.addEventListener("keydown", onOutsideIntent);
     document.addEventListener("beforeinput", onOutsideIntent);
+    document.addEventListener("paste", onOutsideIntent, true);
     document.addEventListener("wheel", onOutsideIntent, true);
     document.addEventListener("drop", onOutsideIntent, true);
     return () => {
@@ -213,13 +227,14 @@ export function ComposeStatusBar({
       document.removeEventListener("pointerup", onPointerUp, true);
       document.removeEventListener("pointercancel", onPointerCancel, true);
       document.removeEventListener("focusin", onFocusIn, true);
-      document.removeEventListener("click", onClick);
+      document.removeEventListener("click", onClickCapture, true);
       document.removeEventListener("keydown", onOutsideIntent);
       document.removeEventListener("beforeinput", onOutsideIntent);
+      document.removeEventListener("paste", onOutsideIntent, true);
       document.removeEventListener("wheel", onOutsideIntent, true);
       document.removeEventListener("drop", onOutsideIntent, true);
     };
-  }, [attention.length, expanded]);
+  }, [expanded, hasAttention]);
 
   useEffect(() => {
     if (attention.length === 0) {

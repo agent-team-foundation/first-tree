@@ -499,16 +499,18 @@ describe("ComposeStatusBar extra DOM coverage", () => {
   });
 
   it("collapses for outside interaction intent while keeping internal scrolling open", async () => {
-    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
-      status("agent-nova", {
-        working: true,
-        engagement: "active",
-        activity: activity("agent-nova", { turnText: "Inspect the current turn" }),
-      }),
-    ]);
+    const queryClient = createQueryClient();
+    const novaStatus = status("agent-nova", {
+      working: true,
+      engagement: "active",
+      activity: activity("agent-nova", { turnText: "Inspect the current turn" }),
+    });
+    queryClient.setQueryData(["chat-agent-status", "chat-1"], [novaStatus]);
     const composerInputRef = createRef<HTMLTextAreaElement>();
     const attachButtonRef = createRef<HTMLButtonElement>();
     const externalSurfaceRef = createRef<HTMLDivElement>();
+    const clipboardFile = new File(["image"], "evidence.png", { type: "image/png" });
+    const pasteAction = vi.fn();
     const outsideAction = vi.fn(() => {
       expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
     });
@@ -516,14 +518,24 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     h.render(
       withProviders(
         <>
-          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova"), agent("agent-atlas", "Atlas")]} />
           <div ref={externalSurfaceRef}>
-            <textarea ref={composerInputRef} aria-label="Message composer" />
+            <textarea
+              ref={composerInputRef}
+              aria-label="Message composer"
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                if (files.length === 0) return;
+                event.preventDefault();
+                pasteAction(files);
+              }}
+            />
             <button ref={attachButtonRef} type="button" onClick={outsideAction}>
               Timeline action
             </button>
           </div>
         </>,
+        queryClient,
       ),
     );
 
@@ -551,6 +563,17 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       composerInputRef.current?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     });
     await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { configurable: true, value: { files: [clipboardFile] } });
+      composerInputRef.current?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    });
+    await h.flush();
+    expect(pasteAction).toHaveBeenCalledWith([clipboardFile]);
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
 
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
@@ -602,6 +625,22 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await act(async () => {
       details?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [
+          novaStatus,
+          status("agent-atlas", {
+            working: true,
+            engagement: "active",
+            activity: activity("agent-atlas", { turnText: "Review the current turn" }),
+          }),
+        ],
+      );
+    });
+    await h.flush();
+    await waitForSettled(h, () => expect(h.container.querySelectorAll("[data-current-output-agent]")).toHaveLength(2));
+
+    await act(async () => {
       externalSurfaceRef.current?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
       document.body.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
     });
@@ -676,7 +715,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         <>
           <div data-working-agent="agent-nova" />
           <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} fallbackFocusRef={fallbackRef} />
-          <button ref={externalRef} type="button" onClick={outsideAction}>
+          <button
+            ref={externalRef}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              outsideAction();
+            }}
+          >
             External action
           </button>
           <button ref={fallbackRef} type="button">
