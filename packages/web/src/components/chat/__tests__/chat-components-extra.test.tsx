@@ -509,7 +509,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     const composerInputRef = createRef<HTMLTextAreaElement>();
     const attachButtonRef = createRef<HTMLButtonElement>();
     const externalSurfaceRef = createRef<HTMLDivElement>();
-    const outsideAction = vi.fn();
+    const outsideAction = vi.fn(() => {
+      expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
+    });
 
     h.render(
       withProviders(
@@ -561,11 +563,20 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await act(async () => {
       attachButtonRef.current?.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      attachButtonRef.current?.focus();
       attachButtonRef.current?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
     });
     await h.flush();
     expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(outsideAction).toHaveBeenCalledTimes(1);
+
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await act(async () => {
+      attachButtonRef.current?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
+    });
+    await h.flush();
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(outsideAction).toHaveBeenCalledTimes(2);
 
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await act(async () => {

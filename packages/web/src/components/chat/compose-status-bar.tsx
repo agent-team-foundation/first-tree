@@ -159,27 +159,29 @@ export function ComposeStatusBar({
       return () => document.removeEventListener("pointerdown", clearOutsidePointerFocus, true);
     }
 
-    let collapseFrame: number | null = null;
-    const collapseAfterPointerActivation = () => {
-      if (collapseFrame !== null) return;
-      collapseFrame = requestAnimationFrame(() => {
-        collapseFrame = null;
-        collapse();
+    let pointerCompletionFrame: number | null = null;
+    const settlePointerAfterActivation = (startedOutside: boolean) => {
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = requestAnimationFrame(() => {
+        pointerCompletionFrame = null;
+        if (pointerOriginOutsideRef.current !== startedOutside) return;
+        pointerOriginOutsideRef.current = null;
+        if (startedOutside) collapse();
       });
     };
     const onPointerDown = (event: PointerEvent) => {
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = null;
       pointerOriginOutsideRef.current = isOutside(event);
       if (pointerOriginOutsideRef.current) focusWithinRef.current = false;
     };
     const onPointerUp = () => {
       const startedOutside = pointerOriginOutsideRef.current;
-      pointerOriginOutsideRef.current = null;
-      if (startedOutside) collapseAfterPointerActivation();
+      if (startedOutside !== null) settlePointerAfterActivation(startedOutside);
     };
     const onPointerCancel = () => {
       const startedOutside = pointerOriginOutsideRef.current;
-      pointerOriginOutsideRef.current = null;
-      if (startedOutside) collapseAfterPointerActivation();
+      if (startedOutside !== null) settlePointerAfterActivation(startedOutside);
     };
     const onFocusIn = (event: FocusEvent) => {
       if (pointerOriginOutsideRef.current === null && isOutside(event)) collapse();
@@ -187,21 +189,31 @@ export function ComposeStatusBar({
     const onOutsideIntent = (event: Event) => {
       if (isOutside(event)) collapse();
     };
+    const onClick = (event: MouseEvent) => {
+      const pointerOriginOutside = pointerOriginOutsideRef.current;
+      pointerOriginOutsideRef.current = null;
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
+      pointerCompletionFrame = null;
+      if (pointerOriginOutside === false) return;
+      if (pointerOriginOutside === true || isOutside(event)) collapse();
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("pointerup", onPointerUp, true);
     document.addEventListener("pointercancel", onPointerCancel, true);
     document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("click", onClick);
     document.addEventListener("keydown", onOutsideIntent);
     document.addEventListener("beforeinput", onOutsideIntent);
     document.addEventListener("wheel", onOutsideIntent, true);
     document.addEventListener("drop", onOutsideIntent, true);
     return () => {
       pointerOriginOutsideRef.current = null;
-      if (collapseFrame !== null) cancelAnimationFrame(collapseFrame);
+      if (pointerCompletionFrame !== null) cancelAnimationFrame(pointerCompletionFrame);
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("pointerup", onPointerUp, true);
       document.removeEventListener("pointercancel", onPointerCancel, true);
       document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("click", onClick);
       document.removeEventListener("keydown", onOutsideIntent);
       document.removeEventListener("beforeinput", onOutsideIntent);
       document.removeEventListener("wheel", onOutsideIntent, true);
