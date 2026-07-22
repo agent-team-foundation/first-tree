@@ -55,7 +55,11 @@ from GitHub before reviewing.
    `gh` or substitute `glab`. A local filesystem mirror is not provider
    authority. For a GitHub upstream, verify an existing checkout's normalized
    `origin` or follow the generated clone command when missing. Never delete,
-   re-point or overwrite a mismatched checkout.
+   re-point or overwrite a mismatched checkout. Discovery is metadata-only:
+   do not use `rg`, `grep`, `find`, `cat`, `sed`, Git object readers, or another
+   content scan against the bound main Context Tree. Its normal, member and
+   archive content is not review input until the detached PR snapshot passes
+   validation.
 2. Use `gh pr view` to read the live repository, number, state, draft flag,
    author, base ref/OID, head repository/ref/OID, URL, title, body, changed
    files, discussion and checks. Require the returned live URL and repository
