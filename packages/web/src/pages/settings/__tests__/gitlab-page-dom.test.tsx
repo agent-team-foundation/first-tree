@@ -14,6 +14,7 @@ const authMock = vi.hoisted(() => ({
   value: { role: "admin" as string | null, organizationId: "org-1" as string | null },
 }));
 const apiMocks = vi.hoisted(() => ({
+  gitlabConnectionsQueryKey: (organizationId: string | null) => ["gitlab-connections", organizationId] as const,
   listGitlabConnections: vi.fn(),
   createGitlabConnection: vi.fn(),
   regenerateGitlabBearer: vi.fn(),

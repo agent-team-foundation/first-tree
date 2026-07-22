@@ -81,6 +81,7 @@ const authMock = vi.hoisted(() => ({
   value: {
     agentId: "human-agent-self",
     memberId: "member-self",
+    organizationId: "org-1",
     role: "admin",
   },
 }));
@@ -481,6 +482,7 @@ function createClient(): QueryClient {
     },
   });
   queryClient.setQueryData(["agents", "org-list"], { items: ORG_AGENTS, nextCursor: null });
+  queryClient.setQueryData(["gitlab-connections", "org-1"], []);
   queryClient.setQueryData(
     ["chat-agent-status", "chat-1"],
     [
@@ -654,7 +656,12 @@ beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { agentId: "human-agent-self", memberId: "member-self", role: "admin" };
+  authMock.value = {
+    agentId: "human-agent-self",
+    memberId: "member-self",
+    organizationId: "org-1",
+    role: "admin",
+  };
   activityMocks.listClients.mockResolvedValue([
     {
       id: "client-1",
@@ -2363,6 +2370,128 @@ describe("ChatView", () => {
     expect(container.textContent).toContain("worktrees/build-tree");
     // A genuine external link in the same message still renders as an anchor.
     expect(anchorHrefs).toContain("https://example.com/guide");
+
+    await act(async () => root.unmount());
+  });
+
+  it("shortens only bare entity links from the Team's connected GitLab instance", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const canonical = "https://gitlab.internal/acme/web/-/merge_requests/42";
+    const legacy = "https://gitlab.internal/acme/web/issues/7";
+    const otherOrigin = "https://gitlab.example/acme/web/-/merge_requests/9";
+    const page = messages([
+      message({
+        id: "msg-gitlab-links",
+        senderId: "agent-1",
+        source: "api",
+        content: [canonical, legacy, otherOrigin, `[Review the MR](${canonical})`].join("\n\n"),
+        createdAt: "2026-05-28T11:59:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail(), page);
+        queryClient.setQueryData(["gitlab-connections", "org-1"], [{ instanceOrigin: "https://gitlab.internal" }]);
+      },
+      "/",
+    );
+
+    await waitForText(container, "acme/web!42");
+
+    const anchors = [...container.querySelectorAll<HTMLAnchorElement>("a")];
+    const compactMr = anchors.find((anchor) => anchor.textContent === "acme/web!42");
+    expect(compactMr?.getAttribute("href")).toBe(canonical);
+    expect(compactMr?.title).toBe(canonical);
+    expect(anchors.find((anchor) => anchor.textContent === "acme/web#7")?.getAttribute("href")).toBe(legacy);
+    expect(anchors.find((anchor) => anchor.textContent === otherOrigin)?.getAttribute("href")).toBe(otherOrigin);
+    expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
+
+    await act(async () => root.unmount());
+  });
+
+  it("binds compact GitLab links to the rendered chat Team while the shell still points elsewhere", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    authMock.value = {
+      agentId: "human-agent-self",
+      memberId: "member-self",
+      organizationId: "shell-org",
+      role: "admin",
+    };
+    const chatOriginUrl = "https://chat-gitlab.example/acme/web/-/merge_requests/42";
+    const shellOriginUrl = "https://shell-gitlab.example/acme/web/-/merge_requests/9";
+    const page = messages([
+      message({
+        id: "msg-cross-org-gitlab",
+        senderId: "agent-1",
+        source: "api",
+        content: [chatOriginUrl, shellOriginUrl].join("\n\n"),
+        createdAt: "2026-05-28T11:59:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail({ organizationId: "chat-org" }), page);
+        queryClient.setQueryData(
+          ["gitlab-connections", "shell-org"],
+          [{ instanceOrigin: "https://shell-gitlab.example" }],
+        );
+        queryClient.setQueryData(
+          ["gitlab-connections", "chat-org"],
+          [{ instanceOrigin: "https://chat-gitlab.example" }],
+        );
+      },
+      "/",
+    );
+
+    await waitForText(container, "acme/web!42");
+    const anchors = [...container.querySelectorAll<HTMLAnchorElement>("a")];
+    expect(anchors.find((anchor) => anchor.textContent === "acme/web!42")?.href).toBe(chatOriginUrl);
+    expect(anchors.find((anchor) => anchor.textContent === shellOriginUrl)?.href).toBe(shellOriginUrl);
+
+    await act(async () => root.unmount());
+  });
+
+  it("uses the same compact GitLab presentation in the blocking request body", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const canonical = "https://gitlab.internal/acme/web/-/merge_requests/42";
+    const request = message({
+      id: "req-gitlab-link",
+      senderId: "agent-1",
+      format: "request",
+      content: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
+      metadata: {
+        mentions: ["human-agent-self"],
+        request: {
+          options: [
+            { label: "Approve", description: "ship it" },
+            { label: "Hold", description: "wait" },
+          ],
+        },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:59:00.000Z",
+    });
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail(), messages([request]));
+        queryClient.setQueryData(["gitlab-connections", "org-1"], [{ instanceOrigin: "https://gitlab.internal" }]);
+      },
+      "/",
+    );
+
+    await waitForCondition(
+      () => container.querySelector('[role="dialog"] a') !== null,
+      "Expected the blocking request body links",
+    );
+    const dialog = container.querySelector('[role="dialog"]');
+    const anchors = [...(dialog?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+    const compact = anchors.find((anchor) => anchor.textContent === "acme/web!42");
+    expect(compact?.getAttribute("href")).toBe(canonical);
+    expect(compact?.title).toBe(canonical);
+    expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
 
     await act(async () => root.unmount());
   });

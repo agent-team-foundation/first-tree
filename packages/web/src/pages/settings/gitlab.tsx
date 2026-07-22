@@ -7,6 +7,7 @@ import {
   createGitlabConnection,
   createGitlabIdentityLink,
   deleteGitlabConnection,
+  gitlabConnectionsQueryKey,
   listGitlabConnections,
   listGitlabIdentityLinks,
   reconfirmGitlabIdentityLink,
@@ -30,7 +31,6 @@ import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { useToast } from "../../components/ui/toast.js";
 
-const connectionKey = (organizationId: string | null) => ["gitlab-connections", organizationId] as const;
 const identityKey = (organizationId: string | null) => ["gitlab-identity-links", organizationId] as const;
 
 type ConnectionDialog = "create" | "replace" | null;
@@ -64,7 +64,7 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
   const [secretActionError, setSecretActionError] = useState<unknown>(null);
 
   const connections = useQuery({
-    queryKey: connectionKey(organizationId),
+    queryKey: gitlabConnectionsQueryKey(organizationId),
     queryFn: listGitlabConnections,
     enabled: !!organizationId,
   });
@@ -81,7 +81,7 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
   });
   const refresh = async (): Promise<void> => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: connectionKey(organizationId) }),
+      queryClient.invalidateQueries({ queryKey: gitlabConnectionsQueryKey(organizationId) }),
       queryClient.invalidateQueries({ queryKey: identityKey(organizationId) }),
     ]);
   };

@@ -24,10 +24,15 @@ const chatMocks = vi.hoisted(() => ({
   sendFileMessageBatch: vi.fn(),
   patchChatEngagement: vi.fn(),
 }));
+const gitlabMocks = vi.hoisted(() => ({ listGitlabConnectionsAt: vi.fn() }));
 
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => ({ agentId: "human-agent-self" }) }));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
 vi.mock("../../../api/chats.js", () => chatMocks);
+vi.mock("../../../api/gitlab-connections.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../api/gitlab-connections.js")>()),
+  listGitlabConnectionsAt: gitlabMocks.listGitlabConnectionsAt,
+}));
 
 const row: MeChatRow = {
   chatId: "question",
@@ -217,6 +222,7 @@ describe("mobile card behavior", () => {
     currentLocation = "";
     for (const mock of Object.values(meChatMocks)) mock.mockReset();
     for (const mock of Object.values(chatMocks)) mock.mockReset();
+    gitlabMocks.listGitlabConnectionsAt.mockReset();
     listResponse = {
       rows: [row],
       priorityRows: { attention: [], pinned: [] },
@@ -225,6 +231,7 @@ describe("mobile card behavior", () => {
     meChatMocks.listMeChats.mockResolvedValue(listResponse);
     chatMocks.listChatOpenRequests.mockResolvedValue({ items: [request] });
     chatMocks.getChat.mockResolvedValue(detail);
+    gitlabMocks.listGitlabConnectionsAt.mockResolvedValue([]);
     chatMocks.sendChatMessage.mockResolvedValue({ ...request, id: "answer-1", format: "text", content: "Ship now" });
     chatMocks.sendFileMessageBatch.mockResolvedValue({ ...request, id: "answer-file-1", format: "file" });
     chatMocks.patchChatEngagement.mockImplementation(async (chatId: string, engagementStatus: string) => ({
@@ -413,6 +420,29 @@ describe("mobile card behavior", () => {
     );
     expect(document.body.textContent).toContain("Question already handled");
     expect(chatMocks.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("compacts trusted bare GitLab links in the Mobile Now ask sheet", async () => {
+    const canonical = "https://gitlab.internal/acme/web/-/merge_requests/42";
+    const customLabel = `[Review the MR](${canonical})`;
+    const queryClient = renderPage(harness, "now");
+    queryClient.setQueryData(["chat-open-requests", row.chatId], {
+      items: [{ ...request, content: [canonical, customLabel].join("\n\n") }],
+    });
+    queryClient.setQueryData(
+      ["gitlab-connections", detail.organizationId],
+      [{ instanceOrigin: "https://gitlab.internal" }],
+    );
+
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    await click(harness.container.querySelector("[data-mobile-primary-action]"));
+    await harness.waitFor(() => expect(document.body.querySelector('[role="dialog"] a')).not.toBeNull());
+
+    const anchors = [...document.body.querySelectorAll<HTMLAnchorElement>('[role="dialog"] a')];
+    const compact = anchors.find((anchor) => anchor.textContent === "acme/web!42");
+    expect(compact?.getAttribute("href")).toBe(canonical);
+    expect(compact?.title).toBe(canonical);
+    expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
   });
 
   it("lets the feed sheet close without resolving the question", async () => {

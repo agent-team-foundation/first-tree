@@ -5,7 +5,7 @@ import type {
   ScmEntityState,
   UnfollowChatGitlabEntityResponse,
 } from "@first-tree/shared";
-import { chatMetadataSchema, normalizeScmEntityState } from "@first-tree/shared";
+import { chatMetadataSchema, normalizeScmEntityState, parseGitlabEntityPath } from "@first-tree/shared";
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
@@ -50,24 +50,22 @@ export function parseGitlabEntityUrl(
   }
   // GitLab instances and clients emit both route shapes. Treat them as the
   // same identity, but preserve the submitted shape for the user-facing link.
-  const match = /^\/(.+?)\/(?:-\/)?(issues|merge_requests)\/(\d+)\/?$/.exec(url.pathname);
-  if (!match) throw new BadRequestError("GitLab entity URL must point to an issue or merge request");
-  let projectPath: string;
-  try {
-    projectPath = decodeURIComponent(match[1] ?? "");
-  } catch {
-    throw new BadRequestError("Invalid GitLab entity URL encoding");
-  }
-  if (/\p{Cc}/u.test(projectPath)) {
-    throw new BadRequestError("GitLab entity URL project path must not contain control characters");
-  }
-  const entityIid = Number(match[3]);
-  if (!projectPath || !Number.isSafeInteger(entityIid) || entityIid <= 0)
+  const parsedPath = parseGitlabEntityPath(url.pathname);
+  if (!parsedPath.ok) {
+    if (parsedPath.reason === "encoding") throw new BadRequestError("Invalid GitLab entity URL encoding");
+    if (parsedPath.reason === "control_character") {
+      throw new BadRequestError("GitLab entity URL project path must not contain control characters");
+    }
+    if (parsedPath.reason === "bidi_control") {
+      throw new BadRequestError("GitLab entity URL project path must not contain bidirectional control characters");
+    }
+    if (parsedPath.reason === "route") {
+      throw new BadRequestError("GitLab entity URL must point to an issue or merge request");
+    }
     throw new BadRequestError("Invalid GitLab entity URL");
+  }
   return {
-    entityType: match[2] === "issues" ? "issue" : "pull_request",
-    entityIid,
-    projectPath,
+    ...parsedPath.value,
     entityUrl: url.toString().replace(/\/$/, ""),
   };
 }
