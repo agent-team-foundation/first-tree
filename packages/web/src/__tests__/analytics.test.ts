@@ -2,12 +2,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
 
-const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+// The bootstrap moved from an inline <script> in index.html to
+// public/analytics-init.js (issue 1541 — the enforced CSP forbids inline
+// scripts). The Arguments-queue contract it guards is unchanged.
+const analyticsInit = readFileSync(new URL("../../public/analytics-init.js", import.meta.url), "utf8");
 
 describe("production gtag bootstrap", () => {
   it("queues the official Arguments object so gtag.js processes commands", () => {
-    expect(indexHtml).toContain("window.dataLayer.push(arguments)");
-    expect(indexHtml).not.toContain("window.dataLayer.push(args)");
+    expect(analyticsInit).toContain("window.dataLayer.push(arguments)");
+    expect(analyticsInit).not.toContain("window.dataLayer.push(args)");
   });
 });
 

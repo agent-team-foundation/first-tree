@@ -278,6 +278,35 @@ export const serverConfigSchema = defineConfig({
     origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),
   }),
   /**
+   * App-wide browser security headers: CSP origin tuning only. The enforced
+   * header set itself (CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy,
+   * frame protection) is always emitted — see packages/server/src/security-headers.ts.
+   * These knobs widen the CSP for environment-specific origins so a new
+   * legitimate origin (analytics host, avatar/CDN host, object storage) is a
+   * config change, not a code edit. Values are space- or comma-separated
+   * origin lists; invalid origins fail fast at boot.
+   */
+  security: optional({
+    /**
+     * Analytics origins added to `script-src`, `connect-src`, and `img-src`
+     * (e.g. "https://www.googletagmanager.com https://www.clarity.ms
+     * https://www.google-analytics.com"). Analytics scripts are only loaded on
+     * the production hostname, so non-production deployments leave this unset.
+     */
+    cspAnalyticsOrigins: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_CSP_ANALYTICS_ORIGINS" }),
+    /**
+     * Avatar image origins added to `img-src`. Replaces the built-in default
+     * (GitHub/Google OAuth avatar hosts) when set — include those hosts in the
+     * value if OAuth avatars should keep loading.
+     */
+    cspAvatarOrigins: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_CSP_AVATAR_ORIGINS" }),
+    /**
+     * Extra `connect-src` origins for environment services (e.g. the Sentry
+     * ingest host matching VITE_SENTRY_DSN, or an object-storage host).
+     */
+    cspExtraConnectSrcOrigins: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_CSP_EXTRA_CONNECT_SRC" }),
+  }),
+  /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
    * in production where First Tree sits behind Cloudflare / a reverse proxy — otherwise
    * unauthenticated rate-limit fallback keys resolve to the proxy. Default false;
