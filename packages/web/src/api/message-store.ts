@@ -140,6 +140,21 @@ export function closeDbForPurge(): void {
   dbPromises.clear();
 }
 
+// `db.transaction()` throws InvalidStateError synchronously once this
+// connection has been closed — by the logout purge's `closeDbForPurge`, or
+// by a versionchange from another context — in the window between
+// `openDb()` resolving and the transaction starting. The store is being
+// torn down at that point, so operations treat it exactly like the
+// unavailable-database case instead of leaking a rejection into
+// fire-and-forget call sites (`void cacheMessages(...)`).
+function beginTransaction(db: IDBDatabase, mode: IDBTransactionMode): IDBTransaction | null {
+  try {
+    return db.transaction(STORE, mode);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read all cached messages for `chatId`, ordered ascending by `createdAt`
  * (oldest first, matching the timeline render order). Returns an empty
@@ -149,7 +164,11 @@ export async function getCachedMessages(chatId: string): Promise<MessageWithDeli
   const db = await openDb();
   if (!db) return [];
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE, "readonly");
+    const tx = beginTransaction(db, "readonly");
+    if (!tx) {
+      resolve([]);
+      return;
+    }
     const store = tx.objectStore(STORE);
     const index = store.index(INDEX_BY_CHAT_CREATED);
     // Range over the composite index from [chatId, ""] to [chatId, "￿"]
@@ -184,7 +203,11 @@ export async function cacheMessages(chatId: string, messages: readonly MessageWi
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
-    const tx = db.transaction(STORE, "readwrite");
+    const tx = beginTransaction(db, "readwrite");
+    if (!tx) {
+      resolve();
+      return;
+    }
     const store = tx.objectStore(STORE);
     const now = Date.now();
     for (const m of messages) {
@@ -213,7 +236,11 @@ export async function clearChatCache(chatId: string): Promise<void> {
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
-    const tx = db.transaction(STORE, "readwrite");
+    const tx = beginTransaction(db, "readwrite");
+    if (!tx) {
+      resolve();
+      return;
+    }
     const store = tx.objectStore(STORE);
     const index = store.index(INDEX_BY_CHAT_CREATED);
     const range = IDBKeyRange.bound([chatId, ""], [chatId, "￿"]);

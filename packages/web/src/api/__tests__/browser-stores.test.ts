@@ -373,3 +373,71 @@ describe("per-account namespacing (SEC-042)", () => {
     await expect(deleteDb("first-tree-chat-cache:u:user-1")).resolves.toBe("success");
   });
 });
+
+/** Simulate the narrow window where the logout purge (or a versionchange)
+ *  closed the connection after `openDb()` resolved but before the operation
+ *  called `db.transaction()` — per spec that call then throws
+ *  InvalidStateError synchronously. */
+function makeTransactionThrow(request: OpenRequestStub): void {
+  request.result.transaction = () => {
+    throw new DOMException(
+      "An attempt was made to use an object that is not, or is no longer, usable",
+      "InvalidStateError",
+    );
+  };
+}
+
+describe("tolerance of a connection closed mid-operation by the purge (SEC-042)", () => {
+  it("message-store ops resolve silently instead of rejecting", async () => {
+    vi.resetModules();
+    const db = installControllableIndexedDb();
+    makeTransactionThrow(db.request);
+    const { cacheMessages, clearChatCache, getCachedMessages } = await import("../message-store.js");
+
+    const message: MessageWithDelivery = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "user-1",
+      format: "text",
+      content: { text: "hello" },
+      metadata: {},
+      inReplyTo: null,
+      source: "web",
+      createdAt: new Date(2026, 0, 1).toISOString(),
+    };
+    const write = cacheMessages("chat-1", [message]);
+    await settleOpen(db.request);
+    await expect(write).resolves.toBeUndefined();
+    await expect(getCachedMessages("chat-1")).resolves.toEqual([]);
+    await expect(clearChatCache("chat-1")).resolves.toBeUndefined();
+  });
+
+  it("read-state ops resolve silently instead of rejecting", async () => {
+    vi.resetModules();
+    const db = installControllableIndexedDb();
+    makeTransactionThrow(db.request);
+    const { clearReadState, getReadState, setReadState } = await import("../read-state-store.js");
+
+    const write = setReadState("chat-1", "m1", "m2");
+    await settleOpen(db.request);
+    await expect(write).resolves.toBeUndefined();
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+    await expect(clearReadState("chat-1")).resolves.toBeUndefined();
+  });
+
+  it("image-store getImage reports a miss while putImage keeps its reject contract", async () => {
+    vi.resetModules();
+    const db = installControllableIndexedDb();
+    makeTransactionThrow(db.request);
+    const { getImage, putImage } = await import("../image-store.js");
+
+    const read = getImage("img-1");
+    await settleOpen(db.request);
+    await expect(read).resolves.toBeNull();
+    // putImage is the one store operation whose contract already includes
+    // rejection; the closed-connection throw surfaces through it unchanged.
+    await expect(putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" })).rejects.toThrow(
+      "no longer, usable",
+    );
+  });
+});

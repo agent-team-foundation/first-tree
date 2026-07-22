@@ -139,6 +139,18 @@ export function closeDbForPurge(): void {
   dbPromises.clear();
 }
 
+// A connection closed by the logout purge (or a versionchange) makes
+// `db.transaction()` throw InvalidStateError synchronously; treat it like
+// the unavailable-database case. See message-store.ts `beginTransaction`
+// for the full rationale.
+function beginTransaction(db: IDBDatabase, mode: IDBTransactionMode): IDBTransaction | null {
+  try {
+    return db.transaction(READ_STATE_STORE, mode);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read the scroll-position snapshot for `chatId`. Returns `null` on
  * cache miss, on IndexedDB unavailability, or on any read error —
@@ -148,7 +160,11 @@ export async function getReadState(chatId: string): Promise<ReadState | null> {
   const db = await openDb();
   if (!db) return null;
   return new Promise((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readonly");
+    const tx = beginTransaction(db, "readonly");
+    if (!tx) {
+      resolve(null);
+      return;
+    }
     const store = tx.objectStore(READ_STATE_STORE);
     const req = store.get(chatId);
     req.onsuccess = () => {
@@ -178,7 +194,11 @@ export async function setReadState(
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readwrite");
+    const tx = beginTransaction(db, "readwrite");
+    if (!tx) {
+      resolve();
+      return;
+    }
     const store = tx.objectStore(READ_STATE_STORE);
     const entry: ReadState = {
       chatId,
@@ -202,7 +222,11 @@ export async function clearReadState(chatId: string): Promise<void> {
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
-    const tx = db.transaction(READ_STATE_STORE, "readwrite");
+    const tx = beginTransaction(db, "readwrite");
+    if (!tx) {
+      resolve();
+      return;
+    }
     const store = tx.objectStore(READ_STATE_STORE);
     store.delete(chatId);
     tx.oncomplete = () => resolve();

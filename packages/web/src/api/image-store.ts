@@ -120,7 +120,19 @@ export async function getImage(imageId: string): Promise<{ base64: string; mimeT
   const db = await openDb();
   if (!db) return null;
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE, "readonly");
+    let tx: IDBTransaction;
+    try {
+      tx = db.transaction(STORE, "readonly");
+    } catch {
+      // The logout purge (or a versionchange from another context) closed
+      // this connection between `openDb()` and here, which makes
+      // `transaction()` throw synchronously. The cache is being torn down —
+      // report a miss and let the render path re-fetch from the server.
+      // `putImage` deliberately has no such guard: rejecting is already part
+      // of its contract, and callers swallow the rejection.
+      resolve(null);
+      return;
+    }
     const store = tx.objectStore(STORE);
     const req = store.get(imageId);
     req.onsuccess = () => {
