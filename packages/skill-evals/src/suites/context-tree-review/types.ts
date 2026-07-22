@@ -62,6 +62,7 @@ export type ReviewFixtureExpectation = {
   runId: string;
   runtimeSessionToken: string;
   runtimeSessionTokenFile: string;
+  requiredReferenceSearches: readonly string[];
   submissionHeadOid: string;
   workspacePath: string;
 };
@@ -99,6 +100,7 @@ export type EvalMetrics = {
   mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
   prohibitedExpansionObserved: boolean;
+  referenceSearchAfterVerify: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

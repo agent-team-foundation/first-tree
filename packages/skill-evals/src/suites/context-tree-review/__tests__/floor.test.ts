@@ -41,6 +41,11 @@ describe("context-tree-review floor", () => {
     expect(passing?.expected.action).toBe("approve");
   });
 
+  it("maps a proven authority violation to request changes", () => {
+    const authority = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "authority");
+    expect(authority?.expected.action).toBe("request-changes");
+  });
+
   it("uses one trusted App-run publication path", () => {
     const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
     const cloud = readFileSync(

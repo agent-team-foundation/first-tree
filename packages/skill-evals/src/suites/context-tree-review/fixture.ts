@@ -236,13 +236,18 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       expectedFinalDraft: view.isDraft,
       expectedFinalHeadOid: secondView.headRefOid,
       expectedFinalState: "OPEN",
-      forbiddenPaths: evalCase.fixture.scenario === "passing" ? ["experience/navigation.md"] : [],
+      forbiddenPaths:
+        evalCase.fixture.scenario === "passing" || evalCase.fixture.scenario === "relationship-change"
+          ? ["experience/NODE.md", "experience/navigation.md"]
+          : [],
       governedPaths:
         evalCase.fixture.scenario === "archive-only"
           ? []
           : evalCase.fixture.scenario === "relationship-change"
             ? [changed.path, "system/NODE.md", "product/review-outcomes.md", "operations/review-routing.md"]
-            : [changed.path],
+            : evalCase.fixture.scenario === "passing"
+              ? [changed.path, "system/NODE.md"]
+              : [changed.path],
       headOid,
       prNumber,
       repo,
@@ -250,6 +255,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       runId,
       runtimeSessionToken,
       runtimeSessionTokenFile,
+      requiredReferenceSearches: evalCase.fixture.scenario === "passing" ? [changed.path] : [],
       submissionHeadOid,
       workspacePath: paths.workspacePath,
     },

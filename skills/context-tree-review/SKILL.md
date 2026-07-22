@@ -132,8 +132,9 @@ link, explicit reference or changed domain authority makes it dependent on the
 change. Check whether a domain-level change leaves dependent truth stale or
 crosses another domain's authority. A leaf-local body change with none of these
 observable triggers needs no expansion; this is focused PR review, not a
-whole-tree audit. A mechanical reference search may establish that no incoming
-dependency exists; do not read unrelated domains merely because the tree is
+whole-tree audit. Before classifying that branch as `N/A`, mechanically search
+the old and new changed paths for incoming references. A no-match search is
+sufficient evidence; do not read unrelated domains merely because the tree is
 small.
 
 Bind every read visibly to the detached worktree. Normal content is current

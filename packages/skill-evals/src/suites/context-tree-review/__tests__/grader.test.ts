@@ -19,6 +19,7 @@ const expectation: ReviewFixtureExpectation = {
   runId: "019review-run",
   runtimeSessionToken: "runtime-session-token",
   runtimeSessionTokenFile: "/workspace/.first-tree-eval/runtime-session.token",
+  requiredReferenceSearches: [],
   submissionHeadOid: "head",
   workspacePath: "/workspace",
 };
@@ -234,7 +235,7 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(true);
   });
 
-  it("accepts successful zsh-batched detached reads", () => {
+  it("does not credit successful zsh-batched detached reads", () => {
     const events = passingEvents();
     events[4] = {
       event: {
@@ -248,7 +249,38 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
-    expect(passes(events)).toBe(true);
+    expect(passes(events)).toBe(false);
+  });
+
+  it.each([
+    "/bin/zsh -lc 'if false; then cat .review-worktrees/42/system/review-contract.md; fi'",
+    "/bin/zsh -lc 'exit 0; cat .review-worktrees/42/system/review-contract.md'",
+  ])("does not credit an unexecuted reader in control flow: %s", (command) => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: { command, exit_code: 0, status: "completed", type: "command_execution" },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not credit an empty git diff as governed content", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "",
+          command: "git -C .review-worktrees/42 diff -- system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
   });
 
   it("rejects a prohibited leaf-local scope expansion", () => {
@@ -274,6 +306,33 @@ describe("context-tree-review grader", () => {
     );
     expect(metrics.prohibitedExpansionObserved).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("requires an attributable incoming-reference search for the leaf-local branch", () => {
+    const evalCase = passingCase();
+    const requiredExpectation = {
+      ...expectation,
+      requiredReferenceSearches: ["system/review-contract.md"],
+    };
+    const missing = deriveMetrics(passingEvents(), evalCase, requiredExpectation, integrity, 0);
+    expect(missing.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, missing)).toBe(false);
+
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n 'system/review-contract\\\\.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const observed = deriveMetrics(events, evalCase, requiredExpectation, integrity, 0);
+    expect(observed.referenceSearchAfterVerify).toBe(true);
+    expect(casePassed(evalCase, observed)).toBe(true);
   });
 
   it("does not accept a governed read from a shell branch that never executes", () => {
@@ -389,6 +448,9 @@ describe("context-tree-review grader", () => {
     'test ! -e .review-worktrees/42 && git -C context-tree worktree list --porcelain && test "$(git -C context-tree rev-parse FETCH_HEAD)" = head',
     "git -C context-tree cat-file -e 0123456789abcdef0123456789abcdef01234567^{commit}",
     "git -C context-tree worktree list --porcelain && if [ -e .review-worktrees/42 ]; then find .review-worktrees/42 -maxdepth 1 -print; fi",
+    "git -C context-tree worktree list --porcelain && if [ -e .review-worktrees/42 ]; then find .review-worktrees/42 -maxdepth 2 -mindepth 1 -print; fi",
+    "git -C context-tree diff --name-status base head",
+    "git -C context-tree rev-parse 0123456789abcdef0123456789abcdef01234567^{commit}",
   ])("allows an observed repository-identity preflight: %s", (command) => {
     const events = passingEvents();
     events.splice(3, 0, {

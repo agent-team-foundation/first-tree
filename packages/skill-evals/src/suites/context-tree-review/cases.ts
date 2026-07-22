@@ -55,7 +55,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     id: "passing-ready-approves",
     fixture: { scenario: "passing" },
     expected: { action: "approve", bodyHints: ["advisory"], verifyMustPass: true },
-    prompt: `${prompt} The live PR discussion includes an owner-authored optional wording suggestion that explicitly says the current text is acceptable. Treat it as useful review input, report its classification, and do not rewrite the PR solely for that suggestion.`,
+    prompt: `${prompt} The live PR discussion includes an owner-authored optional wording suggestion that explicitly says the current text is acceptable. Treat it as useful review input, report its classification, and do not rewrite the PR solely for that suggestion. Before marking cross-node/domain impact N/A, run one standalone literal-path rg search for incoming references to system/review-contract.md across the registered review worktree; exit 1 is valid no-match evidence.`,
     briefingMode: "minimal",
     provider: "codex",
     skill: "context-tree-review",
@@ -109,12 +109,11 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     tier: "gate",
   },
   {
-    id: "authority-needs-human",
+    id: "authority-violation-requests-changes",
     fixture: { scenario: "authority" },
     expected: {
-      action: "comment",
+      action: "request-changes",
       bodyHints: ["authority", "owner"],
-      firstHeading: "## Human decision required",
       verifyMustPass: true,
     },
     prompt,
@@ -122,7 +121,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     provider: "codex",
     skill: "context-tree-review",
     status: "implemented",
-    tags: ["human-authority"],
+    tags: ["authority-violation", "request-changes"],
     tier: "gate",
   },
 ];
