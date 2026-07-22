@@ -262,9 +262,9 @@ describe("Context Tree setup preview handoff", () => {
     expect(container.textContent).toContain("FT-PREVIEW-STAGING-MEMBER");
     expect(container.textContent).not.toContain("FT-PREVIEW-STAGING-1-MEMBER");
 
-    const adminLink = [...container.querySelectorAll("a")].find(
-      (link) => link.textContent === "Admin",
-    ) as HTMLAnchorElement | undefined;
+    const adminLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Admin") as
+      | HTMLAnchorElement
+      | undefined;
     adminLink?.focus();
     await act(async () => adminLink?.click());
     await flush();

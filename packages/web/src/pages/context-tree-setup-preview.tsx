@@ -227,7 +227,7 @@ function HandoffPage({
     if (!focusAfterRegenerationRef.current || expired) return;
     copyButtonRef.current?.focus();
     focusAfterRegenerationRef.current = false;
-  }, [expired, version]);
+  }, [expired]);
 
   const regenerate = (): void => {
     setStatusMessage("New preview fixture generated · simulated expiry 9:42");
