@@ -75,6 +75,18 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("do not copy the\nGitHub verdict into a second canonical comment/status/receipt");
   });
 
+  it("requires two-pass final-head review and full repair re-review without a ledger protocol", () => {
+    const skill = readFileSync(join(repoRoot, "skills", "context-tree-review", "SKILL.md"), "utf8");
+
+    expect(skill).toContain("### Evidence pass");
+    expect(skill).toContain("### Challenge pass");
+    expect(skill).toContain("Both passes must complete on the final head");
+    expect(skill).toContain("restart the full\nvalidator-first review on the resulting head");
+    expect(skill).toMatch(/repair did\s+not introduce a new blocker/u);
+    expect(skill).toContain("not a required machine-formatted\nledger");
+    expect(skill).not.toContain("reviewPacketV1");
+  });
+
   it("keeps Context Tree review GitHub-only and fails closed for GitLab", () => {
     const skillDir = join(repoRoot, "skills", "context-tree-review");
     const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");

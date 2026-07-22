@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.0
+version: 0.3.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
@@ -85,8 +85,14 @@ workflow only when every repair gate below passes; otherwise stop semantic
 review and prepare `REQUEST_CHANGES`. Unreadable validator output or unavailable
 CLI is an execution failure and publishes no content verdict.
 
-After validation passes, read every changed normal/member file and only the
-surrounding context required by policy:
+After validation passes, complete two distinct reasoning passes on the same
+`REVIEWED_HEAD`. They are quality checks, not a required machine-formatted
+ledger.
+
+### Evidence pass
+
+Read every changed normal/member file and only the surrounding context required
+by policy:
 
 - each changed file parent `NODE.md`;
 - changed or newly referenced `soft_links` targets;
@@ -96,8 +102,28 @@ surrounding context required by policy:
 
 Bind every read visibly to the detached worktree. Normal content is current
 durable truth, member content supplies Who, and archive/supporting material is
-evidence rather than canonical truth. Each finding names a path, governing
-policy rule, future-agent impact and actionable correction.
+evidence rather than canonical truth. For each changed durable claim, establish
+its source support, content class, canonical placement and surviving rationale.
+An unread required path, unavailable source or unresolved placement leaves the
+pass incomplete; absence of evidence is not evidence that the change is safe.
+
+### Challenge pass
+
+After the Evidence pass, assume that approving the pull request would be wrong
+and try to disprove its safety. Challenge the complete head for:
+
+- contradiction with current normal truth or a `decisionLocksCode` node;
+- duplicated canonical truth or placement in the wrong node;
+- incorrect normal/member/archive classification;
+- missing rationale or unsupported durable claims;
+- unauthorized ownership, locked-decision, top-level or governance changes;
+- missing or incorrect cross-domain relationships and `soft_links`; and
+- implementation detail, delivery history or actionable future work in normal
+  content.
+
+Each finding names a path, governing policy rule, future-agent impact and
+actionable correction. Both passes must complete on the final head before an
+approving outcome is possible.
 
 ## Repair with the local identity
 
@@ -127,10 +153,18 @@ credential. Never force-push, use `--force-with-lease`, amend, rebase, merge the
 base branch or retarget the PR. If a remote write result is unknown, fetch and
 inspect before retrying.
 
-After a successful repair push, fetch the latest PR state and repeat the full
-validator-first and semantic review. The synchronize webhook may also create
-another run; an occasional duplicate wake-up is harmless. Do not reuse findings
-or check conclusions without reviewing the resulting latest diff.
+After a successful repair push, fetch the latest PR state and restart the full
+validator-first review on the resulting head. Repeat both the Evidence and
+Challenge passes, re-read the required surrounding context, inspect the complete
+base-to-head diff and rerun checks. Do not reuse findings, reads or check
+conclusions from the predecessor head.
+
+Confirm that every repaired blocker is actually gone and that the repair did
+not introduce a new blocker, change the author's durable intent or cross an
+authority boundary. If a blocker survives or recurs, the repair creates a new
+blocker, or the evidence becomes ambiguous, stop repairing and choose a
+non-approving outcome. The synchronize webhook may also create another run; an
+occasional duplicate wake-up is harmless.
 
 ## Choose one App review outcome
 
@@ -140,8 +174,13 @@ Choose exactly one outcome from the latest reviewed state:
   repaired;
 - `COMMENT` for draft PRs, supporting-only changes, protected/human-authority
   decisions or useful non-blocking feedback;
-- `APPROVE` only for a ready, fully validated, semantically safe PR with
-  acceptable checks.
+- `APPROVE` only for a ready PR whose final head passed validation, both quality
+  passes and acceptable checks with no unresolved blocker.
+
+Keep the review body concise but evidence-based: identify the inspected head,
+verification result, material context checked, challenge result, any repair and
+every unresolved blocker. Do not paste an internal checklist or manufacture an
+empty ledger merely to signal completion.
 
 Write the review body to a temporary file and submit only through:
 

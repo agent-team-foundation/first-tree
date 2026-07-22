@@ -66,8 +66,11 @@ GitHub review and repository gate.
   credentials create and push decision-preserving changes, never force-push,
   amend, rebase, edit protected ownership/decision-lock material without clear
   authority, or use an App token. After push, confirm the agent fetches and
-  fully checks the latest resulting PR state. A synchronize-triggered duplicate
-  run is acceptable.
+  fully checks the latest resulting PR state. On that successor head, confirm it
+  reruns validation, the complete Evidence pass, the complete Challenge pass and
+  required checks instead of reusing predecessor reads or conclusions. Confirm
+  the original blocker is gone and the repair introduced no new blocker before
+  approval. A synchronize-triggered duplicate run is acceptable.
 - For a clean ready PR, wait for required checks and invoke `tree review` with
   run, `APPROVE`, and body-file arguments. Confirm the Server re-resolves the
   live installation, binding, PR, configured Reviewer and current head, then
