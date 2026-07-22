@@ -283,6 +283,58 @@ describe("context-tree-review grader", () => {
     expect(passes(events)).toBe(false);
   });
 
+  it("does not credit every pathspec in a multi-path git diff", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "diff --git a/system/review-contract.md b/system/review-contract.md\n+updated\n",
+          command:
+            "git -C .review-worktrees/42 diff HEAD^ -- system/review-contract.md system/NODE.md product/review-outcomes.md operations/review-routing.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      {
+        ...expectation,
+        governedPaths: [
+          "system/review-contract.md",
+          "system/NODE.md",
+          "product/review-outcomes.md",
+          "operations/review-routing.md",
+        ],
+      },
+      integrity,
+      0,
+    );
+    expect(metrics.semanticReadAfterVerify).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("does not credit git show content from the base revision as a final-head read", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          aggregated_output: "base content\n",
+          command: "git -C .review-worktrees/42 show base:system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
   it("rejects a prohibited leaf-local scope expansion", () => {
     const evalCase = passingCase();
     const events = passingEvents();
@@ -308,6 +360,31 @@ describe("context-tree-review grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
+  it("detects a forbidden read inside a successful shell batch", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/experience/NODE.md; true",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, forbiddenPaths: ["experience/NODE.md"] },
+      integrity,
+      0,
+    );
+    expect(metrics.prohibitedExpansionObserved).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
   it("requires an attributable incoming-reference search for the leaf-local branch", () => {
     const evalCase = passingCase();
     const requiredExpectation = {
@@ -322,7 +399,7 @@ describe("context-tree-review grader", () => {
     events.splice(5, 0, {
       event: {
         item: {
-          command: "rg -n 'system/review-contract\\\\.md' .review-worktrees/42",
+          command: "rg -n -F 'system/review-contract.md' .review-worktrees/42",
           exit_code: 1,
           status: "failed",
           type: "command_execution",
@@ -333,6 +410,47 @@ describe("context-tree-review grader", () => {
     const observed = deriveMetrics(events, evalCase, requiredExpectation, integrity, 0);
     expect(observed.referenceSearchAfterVerify).toBe(true);
     expect(casePassed(evalCase, observed)).toBe(true);
+
+    const falsePass = passingEvents();
+    falsePass.splice(5, 0, {
+      event: {
+        item: {
+          command: "rg -n 'definitely-absent' .review-worktrees/42/system/review-contract.md",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const rejected = deriveMetrics(falsePass, evalCase, requiredExpectation, integrity, 0);
+    expect(rejected.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, rejected)).toBe(false);
+  });
+
+  it("requires governed reads and reference search before the final view and verdict", () => {
+    const evalCase = passingCase();
+    const requiredExpectation = {
+      ...expectation,
+      requiredReferenceSearches: ["system/review-contract.md"],
+    };
+    const events = passingEvents();
+    const [governedRead] = events.splice(4, 1);
+    events.push(governedRead, {
+      event: {
+        item: {
+          command: "rg -n -F 'system/review-contract.md' .review-worktrees/42",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const metrics = deriveMetrics(events, evalCase, requiredExpectation, integrity, 0);
+    expect(metrics.semanticReadAfterVerify).toBe(false);
+    expect(metrics.referenceSearchAfterVerify).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it("does not accept a governed read from a shell branch that never executes", () => {

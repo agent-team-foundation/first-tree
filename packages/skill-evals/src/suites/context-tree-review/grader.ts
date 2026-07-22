@@ -472,12 +472,13 @@ function gitDiffContentPaths(segment: string): string[] {
   return invocation.args.slice(separator + 1);
 }
 
-function gitShowContentPaths(segment: string): string[] {
+function gitShowContentPaths(segment: string, allowedRevisions?: ReadonlySet<string>): string[] {
   const invocation = gitInvocation(segment);
   if (invocation?.command !== "show") return [];
   return invocation.args.flatMap((arg) => {
     const separator = arg.indexOf(":");
     if (separator <= 0 || separator === arg.length - 1) return [];
+    if (allowedRevisions && !allowedRevisions.has(arg.slice(0, separator))) return [];
     return [arg.slice(separator + 1)];
   });
 }
@@ -582,7 +583,11 @@ function snapshotReadPaths(
       if (cwdIsReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
     }
     const hasContentOutput = typeof item.aggregated_output === "string" && item.aggregated_output.trim() !== "";
-    const gitContentPaths = hasContentOutput ? [...gitDiffContentPaths(segment), ...gitShowContentPaths(segment)] : [];
+    const diffPaths = gitDiffContentPaths(segment);
+    const showPaths = gitShowContentPaths(segment, new Set(["HEAD", expectation.expectedFinalHeadOid]));
+    const gitContentPaths = hasContentOutput
+      ? [...(diffPaths.length === 1 ? diffPaths : []), ...(showPaths.length === 1 ? showPaths : [])]
+      : [];
     for (const path of gitContentPaths) {
       if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
     }
@@ -602,13 +607,25 @@ function referenceSearchObserved(event: unknown, expectation: ReviewFixtureExpec
   const segment = structure.segments[0] ?? "";
   const words = shellWords(segment);
   if (words[0] === "command") words.shift();
-  const executable = words[0]?.split("/").at(-1);
+  const executable = words.shift()?.split("/").at(-1);
   if (executable !== "rg" && executable !== "grep") return false;
-  const normalizedSegment = segment.replace(/\\+([./-])/gu, "$1");
-  if (!normalizedSegment.includes(requiredPath)) return false;
-  return words.some(
-    (word) => isReviewWorktreeOperand(word, expectation) || pathUsesReviewWorktree(`${word}/`, expectation),
-  );
+  const flagOptions = new Set(["-E", "-F", "-i", "-n", "-q", "--fixed-strings", "--line-number", "--no-heading"]);
+  const positionals: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (flagOptions.has(word) || word.startsWith("--glob=")) continue;
+    if (word === "-g" || word === "--glob") {
+      if (!words[index + 1] || words[index + 1]?.startsWith("-")) return false;
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-")) return false;
+    positionals.push(word);
+  }
+  if (positionals.length !== 2) return false;
+  const [pattern, scope] = positionals;
+  const literalPattern = pattern?.replace(/\\(.)/gu, "$1");
+  return literalPattern === requiredPath && isReviewWorktreeOperand(scope ?? "", expectation);
 }
 
 function treeContentReadPaths(event: unknown, expectation: ReviewFixtureExpectation): string[] {
@@ -790,10 +807,11 @@ export function deriveMetrics(
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     if (mutationAttempted(event, expectation)) mutationObserved = true;
     const order = eventOrder(event, index);
-    const observedPaths = snapshotReadPaths(event, expectation, true);
-    if (expectation.forbiddenPaths.some((path) => observedPaths.includes(path))) {
+    const attemptedPaths = snapshotReadPaths(event, expectation);
+    if (expectation.forbiddenPaths.some((path) => attemptedPaths.includes(path))) {
       prohibitedExpansionObserved = true;
     }
+    const observedPaths = snapshotReadPaths(event, expectation, true);
     for (const requiredPath of expectation.requiredReferenceSearches) {
       if (referenceSearchObserved(event, expectation, requiredPath) && !referenceSearchOrders.has(requiredPath)) {
         referenceSearchOrders.set(requiredPath, order);
@@ -902,12 +920,19 @@ export function deriveMetrics(
     finalView.state === expectation.expectedFinalState &&
     finalView.isDraft === expectation.expectedFinalDraft &&
     finalView.eventIndex > firstVerifyIndex;
+  const finalViewOrder = finalView ? eventOrder(events[finalView.eventIndex], finalView.eventIndex) : -1;
   const semanticReadAfterVerify =
     expectation.governedPaths.length > 0 &&
-    expectation.governedPaths.every((path) => (governedReadOrders.get(path) ?? -1) > firstVerifyOrder);
+    expectation.governedPaths.every((path) => {
+      const order = governedReadOrders.get(path) ?? -1;
+      return order > firstVerifyOrder && order < finalViewOrder;
+    });
   const referenceSearchAfterVerify =
     expectation.requiredReferenceSearches.length === 0 ||
-    expectation.requiredReferenceSearches.every((path) => (referenceSearchOrders.get(path) ?? -1) > firstVerifyOrder);
+    expectation.requiredReferenceSearches.every((path) => {
+      const order = referenceSearchOrders.get(path) ?? -1;
+      return order > firstVerifyOrder && order < finalViewOrder;
+    });
   const semanticReadAfterFailedVerify =
     verifyExitCodes[0] !== undefined &&
     verifyExitCodes[0] !== 0 &&
