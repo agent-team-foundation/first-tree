@@ -122,6 +122,7 @@ export {
   checkAgentConfigs,
   checkBackgroundService,
   checkClientConfig,
+  checkLegacyGithubScanRunner,
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
@@ -171,6 +172,15 @@ export {
 export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
+// Legacy github-scan launchd retirement (startup migration + doctor scan)
+export type { RetireGithubScanResult } from "./retire-github-scan-launchd.js";
+export {
+  LEGACY_GITHUB_SCAN_LABEL_PREFIX,
+  legacyGithubScanLaunchdDir,
+  retireLegacyGithubScanLaunchd,
+  runLegacyGithubScanMigration,
+  scanLegacyGithubScanPlists,
+} from "./retire-github-scan-launchd.js";
 // Runtime-auth login orchestrator (browser-OAuth provider login)
 export { type RuntimeAuthLoginDeps, runRuntimeAuthLogin } from "./runtime-auth-login.js";
 export type { PinnedAgentRuntimeRecord } from "./runtime-provider-reconcile.js";

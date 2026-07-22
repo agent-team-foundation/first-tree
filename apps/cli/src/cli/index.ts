@@ -27,6 +27,7 @@ import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
 import { channelConfig } from "../core/channel.js";
 import { setJsonMode } from "../core/output.js";
+import { runLegacyGithubScanMigration } from "../core/retire-github-scan-launchd.js";
 import { COMMAND_VERSION } from "../core/version.js";
 
 const program = new Command();
@@ -38,6 +39,19 @@ program
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")
   .hook("preAction", (thisCommand) => {
+    // Single automatic boundary for the legacy github-scan launchd sweep:
+    // every real command of the release that ships this code passes through
+    // here (daemon start via the service wrapper included), while Commander
+    // keeps help/version rendering — positional `help` included — outside
+    // preAction. Silent by contract: no log sink is passed because this also
+    // wraps `--json` commands, and it runs before setJsonMode on purpose so
+    // no output-mode state is consulted at all.
+    try {
+      runLegacyGithubScanMigration();
+    } catch {
+      // Best-effort sweep of a dead subsystem must never block the command.
+    }
+
     const opts = thisCommand.optsWithGlobals<{ json?: boolean; verbose?: boolean }>();
     const json = opts.json === true || process.env.FIRST_TREE_JSON === "1";
     setJsonMode(json);

@@ -42,6 +42,23 @@ If your scripts call any of the deleted commands, replace them with:
 
 GitHub Scan is no longer part of the current CLI.
 
+On macOS, a pre-retirement install may have left the background runner behind
+as a launchd job (label `com.first-tree.github-scan.runner.<user>.<profile>`)
+that crash-loops once the old entrypoint is gone and keeps re-binding its
+legacy port 7878. Current CLI versions retire it automatically — on `npm`
+upgrade and on the first run of any command, the stranded job is booted out
+and its plist under `~/.first-tree/github-scan/runner/launchd/` removed —
+and `first-tree daemon doctor` reports any residue it can still see. To clean
+up by hand instead:
+
+```bash
+launchctl bootout "gui/$(id -u)/com.first-tree.github-scan.runner.<user>.<profile>"
+rm -rf ~/.first-tree/github-scan/runner/launchd
+```
+
+Legacy configuration and logs under `~/.first-tree/github-scan/` are left in
+place either way; delete them yourself if you no longer want them.
+
 ## What's new in v1.0.0
 
 * Single CLI binary covers Context Tree and agent collaboration.
