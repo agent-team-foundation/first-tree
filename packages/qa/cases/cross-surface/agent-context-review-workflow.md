@@ -65,8 +65,9 @@ GitHub review and repository gate.
   branch. Confirm local git/`gh` credentials repair, commit, and push every
   objectively determined, decision-preserving finding before the agent chooses
   an App outcome. Immediately before mutation and again immediately before
-  push, confirm the complete live PR identity and source branch still equal the
-  reviewed state. Confirm the exact repair paths,
+  push, confirm the live binding, enabled Reviewer and assigned Agent still
+  match the trusted run, and the complete live PR identity and source branch
+  still equal the reviewed state. Confirm the exact repair paths,
   including additions, moves and deletions, are staged before repair
   validation; then confirm status and the complete cached base-to-result diff
   are inspected with no later content/index mutation before the normal commit
@@ -108,7 +109,8 @@ GitHub review and repository gate.
   creates exactly one App review for that head. Confirm missing or revoked
   `pull_requests: write` fails closed. Confirm the final PR freshness read
   happens after validation, the complete semantic/content review and
-  current-head checks.
+  current-head checks, and compares repository, base ref/OID and head
+  repository/ref/OID.
 - Simulate an uncertain GitHub review write. Confirm the existing
   pending/submitting/unknown/failed/submitted publication state and hidden run
   marker reconcile the same run without a duplicate POST.

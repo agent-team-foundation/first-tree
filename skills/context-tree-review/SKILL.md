@@ -252,23 +252,26 @@ fully determines the correction. Any `owners` edit remains a protected
 ownership decision, including filling a missing or empty value; parent or
 member ownership does not implicitly assign ownership to another node.
 
-Immediately before mutation, re-read the complete live PR identity and source
-ref. Require the PR to remain open and ready, bound to the reviewed repository,
-base ref/OID, head repository/ref/OID and `REVIEWED_HEAD`, and require the source
-ref to resolve to that same head. If any fact changed, discard every finding and
-restart at the successor state or report the specific missing/retargeted ref as
-`REPAIR_BLOCKED`. Attach a unique agent-owned worktree to that unchanged live
-source ref and make the repair. Stage only the exact repair paths, including
+Immediately before mutation, rerun
+`first-tree org context-tree review-config --json`; require the live binding,
+enabled Reviewer and assigned Agent to still match the trusted run. Re-read the
+complete PR identity and source ref; require open/ready state, the reviewed
+repository, base ref/OID, head repository/ref/OID and `REVIEWED_HEAD`, with the
+source ref at that same head. On change, discard the findings and restart or
+report the authority, binding or ref failure as `REPAIR_BLOCKED`. Attach a unique
+agent-owned worktree to the unchanged source ref. Stage only the repair paths,
+including
 additions, moves and deletions, then run
 `first-tree tree verify --json`. Inspect `git status --short` and the complete
 staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`; require the
 staged path set to equal the repair scope and no unstaged or untracked Tree
 content to remain. Make no further content or index mutation before committing.
-Commit normally with the host git identity. Immediately before push, repeat the
-same complete live PR and source-ref check against `REVIEWED_HEAD`; never push if
-the PR became draft or closed, was retargeted, changed head identity, or the
-source ref disappeared or moved. Push with the host git/`gh` credential only
-while that authority remains current. Never force-push, use
+Commit normally with the host git identity. Immediately before push, rerun
+`first-tree org context-tree review-config --json` and repeat the complete PR
+identity and source-ref checks against `REVIEWED_HEAD`; never push after any
+authority, binding, state or ref change.
+Push with the host git/`gh` credential only while that authority remains current.
+Never force-push, use
 `--force-with-lease`, amend, rebase, merge the base branch or retarget the PR.
 
 After a successful repair push, fetch the latest live PR state and restart the full
@@ -294,10 +297,11 @@ whether it landed; never retry blindly.
 ## Choose one App review outcome
 
 Immediately before submitting any outcome, use `gh pr view` again and require
-the live state, draft flag, base and head OIDs to still match the reviewed
-snapshot. This freshness check applies to `COMMENT` and `REQUEST_CHANGES` as
-well as `APPROVE`. If the head moved, discard the old conclusion and repeat the
-validator-first review against the successor head before publishing.
+the live repository, state, draft flag, base ref/OID and head repository/ref/OID
+to still match the reviewed snapshot. This freshness check applies to `COMMENT`
+and `REQUEST_CHANGES` as well as `APPROVE`. If any identity or state fact moved,
+discard the old conclusion and repeat the validator-first review against the
+successor state before publishing.
 
 Choose exactly one outcome from the latest reviewed state:
 
@@ -358,7 +362,6 @@ After the App approval command succeeds, the exact full SHA in that command's
 `data.reviewedHead` is the only merge authority. Do not use the earlier local
 snapshot head, webhook data or another `gh pr view`. Run this sequence once
 with the host local `gh` identity:
-
 <!-- context-review-merge-contract:start -->
 ```sh
 APPROVAL_RESPONSE="$(
@@ -447,6 +450,11 @@ evidence; a merged reconciliation is valid only when its PR head is the exact
 `reviewedHead`. On mismatch, unsupported API, permission, checks, ruleset,
 queue or transport failure, leave the App approval intact and do not attempt
 another merge. Never use `--admin` or `--auto`.
+
+GitHub exposes a head SHA compare-and-set but no base-ref compare-and-set for
+this merge request. The final complete-identity read is a freshness check, not
+an atomic base guard; the current small live-state design accepts that narrow
+read-to-merge retarget race instead of adding a queue or disabling local merge.
 
 ## Recovery and reporting
 
