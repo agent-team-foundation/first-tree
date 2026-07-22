@@ -18,9 +18,6 @@
   "engines": {
     "node": ">=22.16.0"
   },
-  "dependencies": {
-    "@first-tree/shared": "workspace:*"
-  },
   "devDependencies": {
     "@types/node": "^22.16.0",
     "tsx": "^4.21.0",

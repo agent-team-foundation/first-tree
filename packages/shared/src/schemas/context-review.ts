@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "./context-review-constants.js";
 
 export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
-export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
-export const CONTEXT_REVIEW_RUN_MARKER_PREFIX = "<!-- first-tree-context-review-run:";
+export { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "./context-review-constants.js";
 
 export const contextReviewEventSchema = z.enum(CONTEXT_REVIEW_EVENTS);
 export type ContextReviewEvent = z.infer<typeof contextReviewEventSchema>;

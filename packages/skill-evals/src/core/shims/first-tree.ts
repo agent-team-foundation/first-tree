@@ -1,7 +1,10 @@
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
 
-import { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "@first-tree/shared";
+import {
+  CONTEXT_REVIEW_BODY_MAX_BYTES,
+  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
+} from "../../../../shared/src/schemas/context-review-constants.js";
 
 import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
