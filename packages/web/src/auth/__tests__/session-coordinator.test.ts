@@ -500,6 +500,48 @@ describe("AuthSessionCoordinator", () => {
     ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
   });
 
+  it("snapshots the original candidate signal across request settlement", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const candidateAttempt = attempt("signal-snapshot", "generation-0");
+    await coordinator.putAttempt(candidateAttempt);
+    const target = activation("a", "generation-a");
+    const targetCredential = await credential(target);
+    const originalController = new AbortController();
+    const replacementController = new AbortController();
+    let markStarted = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let resolveRequest = (_response: Response): void => undefined;
+    const fetchMock = vi.fn(
+      (_url: string, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+          markStarted();
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const mutableInput = {
+      candidate: targetCredential,
+      attempt: candidateAttempt,
+      serverAuthority: target.serverAuthority,
+      signal: originalController.signal,
+    };
+
+    const verification = coordinator.requestCandidateMe(mutableInput);
+    await started;
+    mutableInput.signal = replacementController.signal;
+    originalController.abort();
+    resolveRequest(jsonResponse({ user: { id: target.accountId } }));
+
+    await expect(verification).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(originalController.signal);
+    await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
+  });
+
   it("cannot mint a coordinator proof from caller-shaped dispatch callbacks", async () => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });

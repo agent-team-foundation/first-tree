@@ -839,29 +839,32 @@ export class AuthSessionCoordinator {
    */
   public async requestCandidateMe(input: CandidateMeRequest): Promise<VerifiedCandidateMeResult> {
     const lifecycleGeneration = coordinatorLifecycleGeneration;
-    if (input.signal.aborted) {
+    const signal = input.signal;
+    const attemptValue = input.attempt;
+    const serverAuthority = input.serverAuthority;
+    const accessToken = input.candidate.accessToken;
+    const refreshToken = input.candidate.refreshToken;
+    const suppliedFingerprint = input.candidate.credentialFingerprint;
+    if (signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Candidate request was cancelled");
     }
-    const validatedAttempt = validateSessionAttempt(input.attempt);
-    if (validatedAttempt.kind !== "acquisition" || validatedAttempt.serverAuthority !== input.serverAuthority) {
+    const validatedAttempt = validateSessionAttempt(attemptValue);
+    if (validatedAttempt.kind !== "acquisition" || validatedAttempt.serverAuthority !== serverAuthority) {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate attempt has another capability domain");
     }
     const candidate = createCandidateTokenSnapshot({
-      accessToken: input.candidate.accessToken,
-      refreshToken: input.candidate.refreshToken,
+      accessToken,
+      refreshToken,
     });
     const fingerprinted = await fingerprintCandidateTokenSnapshot(candidate, validatedAttempt.serverAuthority);
-    if (
-      input.candidate.credentialFingerprint !== undefined &&
-      input.candidate.credentialFingerprint !== fingerprinted.credentialFingerprint
-    ) {
+    if (suppliedFingerprint !== undefined && suppliedFingerprint !== fingerprinted.credentialFingerprint) {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate fingerprint does not match its bytes");
     }
     const dispatchTime = Date.now();
     if (
       fingerprinted.accessExpiresAt <= dispatchTime ||
       fingerprinted.refreshExpiresAt <= dispatchTime ||
-      input.signal.aborted ||
+      signal.aborted ||
       lifecycleGeneration !== coordinatorLifecycleGeneration
     ) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Candidate request is expired or cancelled");
@@ -887,7 +890,7 @@ export class AuthSessionCoordinator {
           ),
         );
       },
-      input.signal,
+      signal,
     );
 
     let result: CandidateMeResult | undefined;
@@ -897,12 +900,12 @@ export class AuthSessionCoordinator {
         candidate: fingerprinted,
         attempt: validatedAttempt,
         serverAuthority: validatedAttempt.serverAuthority,
-        signal: input.signal,
+        signal,
       });
     } catch (error) {
       requestFailure = error;
     }
-    if (input.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+    if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Candidate response crossed a lifecycle fence");
     }
 
@@ -930,11 +933,11 @@ export class AuthSessionCoordinator {
           ),
         );
       },
-      input.signal,
+      signal,
     );
     if (
       !sameCandidateAdmissionCursor(before, after) ||
-      input.signal.aborted ||
+      signal.aborted ||
       lifecycleGeneration !== coordinatorLifecycleGeneration
     ) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Candidate authority changed during verification");
@@ -948,7 +951,7 @@ export class AuthSessionCoordinator {
         serverAuthority: result.serverAuthority,
         accountId: result.accountId,
         attempt: result.attempt,
-        signal: input.signal,
+        signal,
         lifecycleGeneration,
       }),
     );
