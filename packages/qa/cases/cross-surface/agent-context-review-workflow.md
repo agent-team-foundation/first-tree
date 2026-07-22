@@ -80,18 +80,26 @@ GitHub review and repository gate.
   commit and verify GitHub dismisses the stale approval, so the old approval no
   longer satisfies the gate.
 - After approval, confirm the Reviewer uses only local
-  `gh pr merge <number> --repo <repo> --squash`. Reject `--admin`, `--auto`,
-  force push, App-token merge and alternate merge methods.
+  `gh pr merge <number> --repo <repo> --squash --match-head-commit
+  <reviewedHead>`, where the exact SHA comes from the immediately successful
+  `tree review` response. Reject local snapshot, webhook, dispatch-time, branch,
+  or newly queried current-head substitution; a missing/wrong match value;
+  `--admin`; `--auto`; force push; App-token merge; and alternate merge methods.
+- Approve head X, then push Y before local merge. Confirm the X-bound merge
+  attempt fails, Y remains open, and the Reviewer does not retry, drop the
+  match flag, substitute Y, add a bypass option, or schedule an automatic
+  merge. Repeat with a local `gh` that rejects `--match-head-commit` and confirm
+  the same approved-but-open, zero-fallback result.
 - Force local merge permission, ruleset, check and transient provider failures.
   Confirm the agent reports approval plus the merge error, does not duplicate
-  or roll back the App review, and does not claim success.
+  or roll back the App review, does not retry, and does not claim success.
 
 ## Expected Result
 
 PASS: the App webhook owns review dispatch; the Reviewer can repair with its
 local identity; the App alone publishes the PR review; the repository requires
 a current approval and dismisses it after push; and local squash merge does not
-bypass the gate.
+bypass the gate and is CAS-bound to the App response's reviewed head.
 
 FAIL: a writer can create review authority; a task packet or legacy marker
 changes routing; a fork/draft run mutates or approves; the App merges; the local
@@ -112,5 +120,7 @@ Keep target refs; redacted permission and binding/assignment summaries;
 webhook delivery ids; stable Chat and run ids; validation output; repair diff;
 GitHub App review actor/event/commit id; ruleset and stale-dismissal evidence;
 check and merge records; and proof that no removed dispatch or bypass path was
-used. Never retain credentials, installation tokens, private sessions, hidden
-prompts or unrelated content.
+used. For merge failures, retain the App response head, attempted match head,
+live PR head, error, open-PR state, and proof of zero fallback/retry. Never
+retain credentials, installation tokens, private sessions, hidden prompts or
+unrelated content.

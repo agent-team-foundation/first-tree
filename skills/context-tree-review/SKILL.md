@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.3.0
+version: 0.3.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer may repair with its local git/gh identity, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
@@ -60,7 +60,7 @@ from GitHub before reviewing.
    identity to prove a GitHub pull request before any fetch or semantic read.
 3. Require the PR repository and base branch to equal the live Context Tree
    binding. Closed or merged PRs receive no new review. Fork PRs are read-only.
-4. Record the current full lowercase head OID as `REVIEWED_HEAD` for the local
+4. Record the current full lowercase head OID as `INSPECTED_HEAD` for the local
    snapshot and report. The server will independently read the live head when
    publishing the App review.
 
@@ -146,16 +146,33 @@ Choose exactly one outcome from the latest reviewed state:
 Write the review body to a temporary file and submit only through:
 
 ```bash
-first-tree tree review \
-  --run "$CONTEXT_REVIEW_RUN_ID" \
-  --event "$REVIEW_EVENT" \
-  --body-file "$REVIEW_BODY"
+REVIEW_RESPONSE="$(
+  first-tree tree review \
+    --run "$CONTEXT_REVIEW_RUN_ID" \
+    --event "$REVIEW_EVENT" \
+    --body-file "$REVIEW_BODY"
+)"
 ```
 
 The command derives the repository, PR, reviewer and active Chat from the
 trusted run and runtime. The server reads the current PR head and publishes the
 App review for that commit. Do not fall back to `gh pr review`, the GitHub
 review API, a top-level comment or a status. Do not invent a run id.
+
+Retain the successful command's JSON response. For `APPROVE`, require its
+`data.reviewedHead` to be one full commit OID and preserve that exact value as
+`REVIEWED_HEAD`. The immediately successful Server response is the only merge
+head authority. Never substitute `INSPECTED_HEAD`, webhook data, the detached
+worktree head, a branch ref, or a new `gh pr view` result.
+
+```bash
+REVIEWED_HEAD="$(
+  printf '%s\n' "$REVIEW_RESPONSE" |
+    jq -er '.data.reviewedHead | select(test("^[0-9a-fA-F]{40}$"))'
+)"
+```
+
+If either the review command or this extraction fails, do not attempt a merge.
 
 If delivery is reported unknown, retain that fail-closed remote truth and use
 the same command only as its documented reconciliation path; never post a
@@ -169,21 +186,24 @@ Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 produces a non-approving outcome. If checks remain pending at the deadline,
 submit no approval and report the wait state without creating a watcher or job.
 
-After `tree review --event APPROVE` succeeds, merge only with the host local
-`gh` identity:
+After `tree review --event APPROVE` succeeds and `REVIEWED_HEAD` has been
+extracted from that response, merge only with the host local `gh` identity:
 
 ```bash
-gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash
+gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash --match-head-commit "$REVIEWED_HEAD"
 ```
 
 Never use `--admin`, `--auto`, another merge method or an App credential. The
 repository gate must require at least one approval and dismiss stale approvals
-after a push. That gate, rather than a second CLI head argument, prevents an old
-approval from merging a newer commit.
+after a push. Preserve that governance: merge CAS is defense in depth and does
+not replace required approval or stale-review dismissal.
 
 If App approval succeeds but local merge fails, report the review URL and merge
-error. Do not roll back or duplicate the approval and do not claim the PR
-merged.
+error as approved-but-not-merged. A head mismatch, unsupported local `gh` flag,
+permission denial, failed check, ruleset rejection, merge-queue requirement or
+provider error all fail closed. Do not retry the merge automatically, drop
+`--match-head-commit`, substitute another head, add a bypass flag or claim the
+PR merged. Do not roll back or duplicate the approval.
 
 ## Recovery and reporting
 

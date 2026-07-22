@@ -94,9 +94,29 @@ function passingEvents(): unknown[] {
       currentHeadOid: "head",
       prNumber: 42,
       repo: "owner/context-tree",
+      reviewedHead: "head",
       runId: expectation.runId,
       type: "context_review_submitted",
     },
+    {
+      argv: ["tree", "review", "--run", expectation.runId, "--event", "APPROVE", "--body-file", "/tmp/review.md"],
+      exitCode: 0,
+      phase: "model",
+      stdoutPreview: `${JSON.stringify({ data: { action: "APPROVE", reviewedHead: "head" }, ok: true })}\n`,
+      type: "first_tree_result",
+    },
+    {
+      approvedHeadOid: "head",
+      argv: ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--match-head-commit", "head"],
+      currentHeadOid: "head",
+      exitCode: 0,
+      matchHeadCommit: "head",
+      mergeAttempt: true,
+      mergeOutcome: "success",
+      reviewFixture: true,
+      type: "gh_result",
+    },
+    { commitOid: "head", prNumber: 42, repo: "owner/context-tree", type: "github_pr_merged" },
   ];
 }
 
@@ -108,6 +128,21 @@ function passes(events: unknown[], fixtureIntegrity = integrity): boolean {
 describe("context-tree-review grader", () => {
   it("accepts the complete head-bound review sequence", () => {
     expect(passes(passingEvents())).toBe(true);
+  });
+
+  it.each([
+    ["merge-head-race", "head-mismatch", "new-current-head"],
+    ["merge-flag-unsupported", "unsupported-flag", "head"],
+  ] as const)("accepts one fail-closed %s merge result", (scenario, outcome, currentHeadOid) => {
+    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);
+    if (!evalCase) throw new Error(`Missing ${scenario} case.`);
+    const events = passingEvents();
+    Object.assign(events[8] as object, { currentHeadOid, exitCode: 1, mergeOutcome: outcome });
+    events.splice(9, 1);
+    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(metrics.mergeOutcomeObserved).toBe(outcome);
+    expect(metrics.pullRequestMerged).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(true);
   });
 
   it("requires an exact skill read from tool input rather than command output", () => {
@@ -270,10 +305,11 @@ describe("context-tree-review grader", () => {
     if (!evalCase) throw new Error("Missing validator-failure case.");
     const events = passingEvents();
     Object.assign(events[3] as object, { exitCode: 1 });
-    Object.assign(events.at(-1) as object, {
+    Object.assign(events[6] as object, {
       action: "request-changes",
       body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
     });
+    events.splice(7);
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.semanticReadAfterFailedVerify).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(false);
@@ -300,10 +336,11 @@ describe("context-tree-review grader", () => {
       },
       type: "codex_event",
     };
-    Object.assign(events.at(-1) as object, {
+    Object.assign(events[6] as object, {
       action: "request-changes",
       body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
     });
+    events.splice(7);
     const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
     expect(metrics.semanticReadAfterFailedVerify).toBe(true);
     expect(casePassed(evalCase, metrics)).toBe(false);
@@ -426,8 +463,86 @@ describe("context-tree-review grader", () => {
     const events = passingEvents();
     const semanticRead = events.splice(4, 1)[0];
     events.splice(3, 0, semanticRead);
-    Object.assign(events.at(-1) as object, { commitOid: "other-head" });
+    Object.assign(events[6] as object, { commitOid: "other-head", reviewedHead: "other-head" });
     expect(passes(events)).toBe(false);
+  });
+
+  it("requires the merge head to come from the successful review response", () => {
+    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find(
+      (item) => item.fixture.scenario === "merge-response-provenance",
+    );
+    if (!evalCase) throw new Error("Missing merge-response-provenance case.");
+    const reviewedHead = "server-approved-head";
+    const provenanceEvents = passingEvents();
+    Object.assign(provenanceEvents[6] as object, { commitOid: reviewedHead, reviewedHead });
+    Object.assign(provenanceEvents[7] as object, {
+      stdoutPreview: `${JSON.stringify({ data: { action: "APPROVE", reviewedHead }, ok: true })}\n`,
+    });
+    Object.assign(provenanceEvents[8] as object, {
+      approvedHeadOid: reviewedHead,
+      currentHeadOid: reviewedHead,
+      matchHeadCommit: reviewedHead,
+    });
+    const merge = provenanceEvents[8] as { argv: string[] };
+    merge.argv = ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--match-head-commit", reviewedHead];
+    Object.assign(provenanceEvents[9] as object, { commitOid: reviewedHead });
+    const provenanceExpectation = { ...expectation, submissionHeadOid: reviewedHead };
+    const sourcedMetrics = deriveMetrics(provenanceEvents, evalCase, provenanceExpectation, integrity, 0);
+    expect(sourcedMetrics.mergeHeadFromReviewResponse).toBe(true);
+    expect(casePassed(evalCase, sourcedMetrics)).toBe(true);
+
+    const missingResponse = provenanceEvents.filter((_, index) => index !== 7);
+    const missingResponseMetrics = deriveMetrics(missingResponse, evalCase, provenanceExpectation, integrity, 0);
+    expect(missingResponseMetrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, missingResponseMetrics)).toBe(false);
+
+    Object.assign(provenanceEvents[7] as object, {
+      stdoutPreview: `${JSON.stringify({ data: { action: "APPROVE", reviewedHead: expectation.headOid }, ok: true })}\n`,
+    });
+    const localHeadResponseMetrics = deriveMetrics(provenanceEvents, evalCase, provenanceExpectation, integrity, 0);
+    expect(localHeadResponseMetrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, localHeadResponseMetrics)).toBe(false);
+
+    Object.assign(provenanceEvents[7] as object, {
+      stdoutPreview: `${JSON.stringify({ data: { action: "APPROVE", reviewedHead }, ok: true })}\n`,
+    });
+    Object.assign(provenanceEvents[8] as object, { matchHeadCommit: expectation.headOid });
+    merge.argv[7] = expectation.headOid;
+    const substitutedMetrics = deriveMetrics(provenanceEvents, evalCase, provenanceExpectation, integrity, 0);
+    expect(substitutedMetrics.mergeHeadFromReviewResponse).toBe(false);
+    expect(casePassed(evalCase, substitutedMetrics)).toBe(false);
+
+    const currentHead = passingEvents();
+    Object.assign(currentHead[8] as object, {
+      approvedHeadOid: "head",
+      currentHeadOid: "new-current-head",
+      matchHeadCommit: "new-current-head",
+      mergeOutcome: "head-mismatch",
+    });
+    expect(passes(currentHead)).toBe(false);
+  });
+
+  it("rejects a missing, forbidden, fallback, or repeated merge attempt", () => {
+    const missing = passingEvents();
+    missing.splice(8);
+    expect(passes(missing)).toBe(false);
+
+    const forbidden = passingEvents();
+    const merge = forbidden[8] as { argv: string[] };
+    merge.argv = [...merge.argv, "--admin"];
+    expect(passes(forbidden)).toBe(false);
+
+    const retried = passingEvents();
+    retried.splice(9, 0, { ...(retried[8] as object) });
+    expect(passes(retried)).toBe(false);
+
+    const fallback = passingEvents();
+    fallback.splice(9, 0, {
+      argv: ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash"],
+      reviewFixtureViolation: true,
+      type: "gh_result",
+    });
+    expect(passes(fallback)).toBe(false);
   });
 
   it.each([

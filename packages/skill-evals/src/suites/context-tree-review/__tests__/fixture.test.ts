@@ -13,6 +13,9 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 describe("context-tree-review fixture", () => {
   it.each([
     ["passing", 0],
+    ["merge-response-provenance", 0],
+    ["merge-head-race", 0],
+    ["merge-flag-unsupported", 0],
     ["validator-failure", 1],
   ] as const)("records the real source validator result for %s", (scenario, expectedExitCode) => {
     const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);
@@ -62,6 +65,29 @@ describe("context-tree-review fixture", () => {
       expect(summary.ok).toBe(expectedExitCode === 0);
       if (scenario === "validator-failure") {
         expect(summary.findings.map((finding) => finding.code)).toContain("TREE_OWNERS_INVALID");
+      }
+      const reviewFixture = JSON.parse(readFileSync(fixture.fixturePath, "utf8")) as {
+        mergeCurrentHeadOid: string | null;
+        mergeOutcome: string;
+      };
+      const privateFixture = JSON.parse(readFileSync(fixture.privateFixturePath, "utf8")) as {
+        submissionHeadOid: string;
+      };
+      expect(reviewFixture.mergeOutcome).toBe(
+        scenario === "merge-head-race"
+          ? "head-mismatch"
+          : scenario === "merge-flag-unsupported"
+            ? "unsupported-flag"
+            : "success",
+      );
+      expect(reviewFixture).not.toHaveProperty("submissionHeadOid");
+      expect(reviewFixture).not.toHaveProperty("reviewHeadOid");
+      expect(reviewFixture.mergeCurrentHeadOid).toBe(scenario === "merge-head-race" ? "f".repeat(40) : null);
+      expect(privateFixture.submissionHeadOid === fixture.expectation.headOid).toBe(
+        scenario !== "merge-response-provenance",
+      );
+      if (scenario === "merge-response-provenance") {
+        expect(readFileSync(fixture.fixturePath, "utf8")).not.toContain(privateFixture.submissionHeadOid);
       }
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

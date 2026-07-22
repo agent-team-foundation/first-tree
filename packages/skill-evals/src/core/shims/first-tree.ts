@@ -19,6 +19,8 @@ export function createFirstTreeShim(
     recordedModelVerifyPath?: string;
     auditFixturePath?: string;
     reviewFixturePath?: string;
+    reviewPrivateFixturePath?: string;
+    reviewStatePath?: string;
     seedPreflight?: {
       branch: string;
       outcome: "bound" | "needs-admin" | "unbound";
@@ -56,6 +58,8 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
+const REVIEW_PRIVATE_FIXTURE_PATH = ${JSON.stringify(options.reviewPrivateFixturePath ?? null)};
+const REVIEW_STATE_PATH = ${JSON.stringify(options.reviewStatePath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
 const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
@@ -495,10 +499,17 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
   );
 }
 
-if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
+if (
+  argv[0] === "tree" &&
+  argv[1] === "review" &&
+  REVIEW_FIXTURE_PATH &&
+  REVIEW_PRIVATE_FIXTURE_PATH &&
+  REVIEW_STATE_PATH
+) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const privateFixture = JSON.parse(readFileSync(REVIEW_PRIVATE_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
-  const commitOid = fixture.submissionHeadOid;
+  const commitOid = privateFixture.submissionHeadOid;
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
   const exactOptions = argv.length === 8 && !argv.includes("--head") && !argv.includes("--agent");
@@ -536,24 +547,24 @@ if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
     body,
     bodyFileUsed: true,
     commitOid,
-    currentHeadOid: fixture.submissionHeadOid,
+    currentHeadOid: commitOid,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
+    reviewedHead: commitOid,
     runId,
   });
   if (action === "approve") {
-    const statePath = REVIEW_FIXTURE_PATH + ".state";
     let state = { views: 0 };
     try {
-      state = JSON.parse(readFileSync(statePath, "utf8"));
+      state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
     } catch {}
-    writeFileSync(statePath, JSON.stringify({ ...state, approvedHead: commitOid }), "utf8");
+    writeFileSync(REVIEW_STATE_PATH, JSON.stringify({ ...state, approvedHead: commitOid }), "utf8");
   }
   finish(
     argv,
     phase,
     0,
-    JSON.stringify({ action: event, reviewedHead: commitOid, reviewId: 4242, reviewUrl: "https://github.com/owner/context-tree/pull/42#pullrequestreview-4242", appActor: "first-tree-eval[bot]" }) + "\\n",
+    JSON.stringify({ ok: true, data: { action: event, reviewedHead: commitOid, reviewId: 4242, reviewUrl: "https://github.com/owner/context-tree/pull/42#pullrequestreview-4242", appActor: "first-tree-eval[bot]" } }) + "\\n",
     "",
     { recordedOnly: true },
   );

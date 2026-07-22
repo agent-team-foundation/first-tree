@@ -8,14 +8,16 @@ const prompt =
 
 /**
  * Workflow scenarios pinned by the static floor and exercised across the live
- * gate plus the formal cross-surface QA case. Repair/merge provider effects are
- * intentionally not simulated as successful GitHub mutations outside their
- * narrow deterministic shims.
+ * gate plus the formal cross-surface QA case. Merge effects remain recorded
+ * inside the deterministic GitHub shim; no real provider mutation occurs.
  */
 export const CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS = [
   "validator-failure",
   "semantic-failure",
   "passing",
+  "merge-response-provenance",
+  "merge-head-race",
+  "merge-flag-unsupported",
   "draft",
   "archive-only",
   "authority",
@@ -28,6 +30,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     expected: {
       action: "request-changes",
       bodyHints: ["TREE_OWNERS_INVALID", "system/review-contract.md"],
+      mergeOutcome: "not-attempted",
       verifyMustPass: false,
     },
     prompt,
@@ -41,7 +44,12 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
   {
     id: "semantic-failure-requests-changes",
     fixture: { scenario: "semantic-failure" },
-    expected: { action: "request-changes", bodyHints: ["implementation", "source"], verifyMustPass: true },
+    expected: {
+      action: "request-changes",
+      bodyHints: ["implementation", "source"],
+      mergeOutcome: "not-attempted",
+      verifyMustPass: true,
+    },
     prompt,
     briefingMode: "minimal",
     provider: "codex",
@@ -53,7 +61,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
   {
     id: "passing-ready-approves",
     fixture: { scenario: "passing" },
-    expected: { action: "approve", bodyHints: [], verifyMustPass: true },
+    expected: { action: "approve", bodyHints: [], mergeOutcome: "merged", verifyMustPass: true },
     prompt,
     briefingMode: "minimal",
     provider: "codex",
@@ -63,12 +71,49 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     tier: "gate",
   },
   {
+    id: "merge-head-comes-from-review-response",
+    fixture: { scenario: "merge-response-provenance" },
+    expected: { action: "approve", bodyHints: [], mergeOutcome: "merged", verifyMustPass: true },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["approve", "merge-cas", "response-provenance"],
+    tier: "gate",
+  },
+  {
+    id: "approved-head-race-stays-open",
+    fixture: { scenario: "merge-head-race" },
+    expected: { action: "approve", bodyHints: [], mergeOutcome: "head-mismatch", verifyMustPass: true },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["approve", "merge-cas", "head-race"],
+    tier: "gate",
+  },
+  {
+    id: "unsupported-merge-cas-stays-open",
+    fixture: { scenario: "merge-flag-unsupported" },
+    expected: { action: "approve", bodyHints: [], mergeOutcome: "unsupported-flag", verifyMustPass: true },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["approve", "merge-cas", "unsupported-gh"],
+    tier: "gate",
+  },
+  {
     id: "passing-draft-defers",
     fixture: { scenario: "draft" },
     expected: {
       action: "comment",
       bodyHints: ["draft", "ready"],
       firstHeading: "## Approval deferred",
+      mergeOutcome: "not-attempted",
       verifyMustPass: true,
     },
     prompt,
@@ -85,6 +130,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     expected: {
       action: "comment",
       bodyHints: ["archive/supporting", "out of scope"],
+      mergeOutcome: "not-attempted",
       verifyMustPass: true,
     },
     prompt,
@@ -102,6 +148,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
       action: "comment",
       bodyHints: ["authority", "owner"],
       firstHeading: "## Human decision required",
+      mergeOutcome: "not-attempted",
       verifyMustPass: true,
     },
     prompt,

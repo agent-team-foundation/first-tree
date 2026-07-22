@@ -19,6 +19,9 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "merge-response-provenance",
+      "merge-head-race",
+      "merge-flag-unsupported",
       "draft",
       "archive-only",
       "authority",
@@ -28,6 +31,9 @@ describe("context-tree-review floor", () => {
       "validator-failure",
       "semantic-failure",
       "passing",
+      "merge-response-provenance",
+      "merge-head-race",
+      "merge-flag-unsupported",
       "draft",
       "archive-only",
       "authority",
@@ -67,8 +73,11 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("same-repository, non-fork PR");
     expect(skill).toContain("top-level domain structure");
     expect(skill).toContain("`owners` or `decisionLocksCode` metadata");
-    expect(skill).toContain('gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash');
-    expect(skill).not.toContain("--match-head-commit");
+    expect(skill).toContain(
+      'gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --squash --match-head-commit "$REVIEWED_HEAD"',
+    );
+    expect(skill).toContain("The immediately successful Server response");
+    expect(skill).toContain("Do not retry the merge automatically");
     expect(skill).not.toContain("parse-repair-scope");
     expect(skill).toContain("Never use `--admin`");
     expect(skill).toContain("App-authored PR review is the only GitHub verdict");

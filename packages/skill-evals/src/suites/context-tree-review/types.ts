@@ -7,13 +7,24 @@ export type ReviewScenario =
   | "archive-only"
   | "authority"
   | "draft"
+  | "merge-flag-unsupported"
+  | "merge-head-race"
+  | "merge-response-provenance"
   | "passing"
   | "semantic-failure"
   | "validator-failure";
+export type ExpectedMergeOutcome = "head-mismatch" | "merged" | "not-attempted" | "unsupported-flag";
+export type MergeAttemptOutcome = "head-mismatch" | "success" | "unsupported-flag";
 
 export type ContextTreeReviewEvalCase = {
   briefingMode: "minimal";
-  expected: { action: ReviewAction; bodyHints: readonly string[]; firstHeading?: string; verifyMustPass: boolean };
+  expected: {
+    action: ReviewAction;
+    bodyHints: readonly string[];
+    firstHeading?: string;
+    mergeOutcome: ExpectedMergeOutcome;
+    verifyMustPass: boolean;
+  };
   fixture: { scenario: ReviewScenario };
   id: string;
   prompt: string;
@@ -43,7 +54,18 @@ export type ReviewEvent = {
   eventIndex: number;
   prNumber: number;
   repo: string;
+  reviewedHead: string;
   runId: string;
+};
+
+export type MergeEvent = {
+  approvedHeadOid: string;
+  argv: readonly string[];
+  currentHeadOid: string;
+  eventIndex: number;
+  exitCode: number;
+  matchHeadCommit: string;
+  outcome: MergeAttemptOutcome;
 };
 
 export type ReviewFixtureExpectation = {
@@ -96,6 +118,13 @@ export type EvalMetrics = {
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
+  mergeAfterApproval: boolean;
+  mergeAttempts: readonly MergeEvent[];
+  mergeContractExact: boolean;
+  mergeHeadFromReviewResponse: boolean;
+  mergeOutcomeObserved: ExpectedMergeOutcome;
+  mergeRetryAttempted: boolean;
+  pullRequestMerged: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];

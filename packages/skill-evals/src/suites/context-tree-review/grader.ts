@@ -4,6 +4,7 @@ import { isRecord, isStringArray } from "../../core/events.js";
 import type {
   ContextTreeReviewEvalCase,
   EvalMetrics,
+  MergeEvent,
   ReviewEvent,
   ReviewFixtureExpectation,
   ReviewFixtureIntegrity,
@@ -693,6 +694,20 @@ function integrityPassed(integrity: ReviewFixtureIntegrity): boolean {
   return Object.values(integrity).every(Boolean);
 }
 
+function exactMergeContract(merge: MergeEvent, expectation: ReviewFixtureExpectation): boolean {
+  return (
+    merge.argv.length === 8 &&
+    merge.argv[0] === "pr" &&
+    merge.argv[1] === "merge" &&
+    merge.argv[2] === String(expectation.prNumber) &&
+    merge.argv[3] === "--repo" &&
+    merge.argv[4] === expectation.repo &&
+    merge.argv[5] === "--squash" &&
+    merge.argv[6] === "--match-head-commit" &&
+    merge.argv[7] === merge.matchHeadCommit
+  );
+}
+
 export function deriveMetrics(
   events: readonly unknown[],
   evalCase: ContextTreeReviewEvalCase,
@@ -704,12 +719,15 @@ export function deriveMetrics(
   let firstTreeReadLoaded = false;
   const verifyExitCodes: number[] = [];
   const reviewEvents: ReviewEvent[] = [];
+  const reviewResponses: Array<{ action: string; eventIndex: number; reviewedHead: string }> = [];
+  const mergeAttempts: MergeEvent[] = [];
   const viewEvents: ViewEvent[] = [];
   let blockedGithubAttempts = 0;
   let identityIndex = -1;
   let invalidVerifyAttempts = 0;
   let mainTreeReadObserved = false;
   let mutationObserved = false;
+  let pullRequestMerged = false;
   let firstVerifyIndex = -1;
   let firstVerifyOrder = -1;
   let firstReviewIndex = -1;
@@ -738,8 +756,31 @@ export function deriveMetrics(
       firstSemanticReadOrder = order;
     }
     if (!isRecord(event)) return;
+    if (event.type === "github_pr_merged") pullRequestMerged = true;
     if (event.type === "gh_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) {
       blockedGithubAttempts += 1;
+    }
+    if (
+      event.type === "gh_result" &&
+      event.mergeAttempt === true &&
+      typeof event.approvedHeadOid === "string" &&
+      isStringArray(event.argv) &&
+      typeof event.currentHeadOid === "string" &&
+      typeof event.exitCode === "number" &&
+      typeof event.matchHeadCommit === "string" &&
+      (event.mergeOutcome === "success" ||
+        event.mergeOutcome === "head-mismatch" ||
+        event.mergeOutcome === "unsupported-flag")
+    ) {
+      mergeAttempts.push({
+        approvedHeadOid: event.approvedHeadOid,
+        argv: event.argv,
+        currentHeadOid: event.currentHeadOid,
+        eventIndex: index,
+        exitCode: event.exitCode,
+        matchHeadCommit: event.matchHeadCommit,
+        outcome: event.mergeOutcome,
+      });
     }
     if (event.type === "github_identity_read") {
       if (identityIndex < 0) identityIndex = index;
@@ -778,6 +819,33 @@ export function deriveMetrics(
       }
       if (typeof event.exitCode === "number") verifyExitCodes.push(event.exitCode);
     }
+    if (
+      event.type === "first_tree_result" &&
+      event.phase === "model" &&
+      event.exitCode === 0 &&
+      isStringArray(event.argv) &&
+      event.argv[0] === "tree" &&
+      event.argv[1] === "review" &&
+      typeof event.stdoutPreview === "string"
+    ) {
+      try {
+        const response = JSON.parse(event.stdoutPreview) as {
+          data?: { action?: unknown; reviewedHead?: unknown };
+          ok?: unknown;
+        };
+        if (
+          response.ok === true &&
+          typeof response.data?.action === "string" &&
+          typeof response.data.reviewedHead === "string"
+        ) {
+          reviewResponses.push({
+            action: response.data.action,
+            eventIndex: index,
+            reviewedHead: response.data.reviewedHead,
+          });
+        }
+      } catch {}
+    }
     if (event.type === "context_review_submitted") {
       if (firstReviewIndex < 0) firstReviewIndex = index;
       if (
@@ -787,6 +855,7 @@ export function deriveMetrics(
         typeof event.currentHeadOid === "string" &&
         typeof event.prNumber === "number" &&
         typeof event.repo === "string" &&
+        typeof event.reviewedHead === "string" &&
         typeof event.runId === "string"
       ) {
         reviewEvents.push({
@@ -798,6 +867,7 @@ export function deriveMetrics(
           eventIndex: index,
           prNumber: event.prNumber,
           repo: event.repo,
+          reviewedHead: event.reviewedHead,
           runId: event.runId,
         });
       }
@@ -837,6 +907,10 @@ export function deriveMetrics(
     verifyExitCodes[0] !== 0 &&
     [...treeContentReadOrders, ...gitSemanticReadOrders].some((order) => order > firstVerifyOrder);
   const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
+  const merge = mergeAttempts[0];
+  const reviewResponse = reviewResponses[0];
+  const mergeOutcomeObserved =
+    merge === undefined ? "not-attempted" : merge.outcome === "success" ? "merged" : merge.outcome;
   return {
     blockedGithubAttempts,
     bodyHintsObserved: evalCase.expected.bodyHints.every((hint) => body.includes(hint.toLowerCase())),
@@ -851,11 +925,32 @@ export function deriveMetrics(
     initialViewObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
     mutationAttempted: mutationObserved,
+    mergeAfterApproval: merge !== undefined && review?.action === "approve" && merge.eventIndex > review.eventIndex,
+    mergeAttempts,
+    mergeContractExact: merge !== undefined && exactMergeContract(merge, expectation),
+    mergeHeadFromReviewResponse:
+      merge !== undefined &&
+      review !== undefined &&
+      reviewResponse !== undefined &&
+      review.action === "approve" &&
+      reviewResponse.action === "APPROVE" &&
+      reviewResponse.eventIndex === review.eventIndex + 1 &&
+      merge.eventIndex > reviewResponse.eventIndex &&
+      reviewResponse.reviewedHead === review.reviewedHead &&
+      merge.matchHeadCommit === reviewResponse.reviewedHead &&
+      merge.approvedHeadOid === reviewResponse.reviewedHead,
+    mergeOutcomeObserved,
+    mergeRetryAttempted: mergeAttempts.length > 1,
+    pullRequestMerged,
     reviewAfterFinalView:
       review === undefined
         ? evalCase.expected.action === "none"
         : finalView !== undefined && review.eventIndex > finalView.eventIndex,
-    reviewCommitBound: reviewEvents.length > 0 && reviewEvents.every((item) => item.commitOid === expectation.headOid),
+    reviewCommitBound:
+      reviewEvents.length > 0 &&
+      reviewEvents.every(
+        (item) => item.commitOid === expectation.submissionHeadOid && item.reviewedHead === item.commitOid,
+      ),
     reviewEvents,
     runnerExitCode,
     skillFileReadObserved,
@@ -885,6 +980,18 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
         metrics.bodyHintsObserved &&
         metrics.expectedHeadingObserved &&
         metrics.reviewAfterFinalView;
+  const mergePass =
+    evalCase.expected.mergeOutcome === "not-attempted"
+      ? metrics.mergeAttempts.length === 0 && !metrics.pullRequestMerged
+      : metrics.mergeAttempts.length === 1 &&
+        metrics.mergeAfterApproval &&
+        metrics.mergeContractExact &&
+        metrics.mergeHeadFromReviewResponse &&
+        !metrics.mergeRetryAttempted &&
+        metrics.mergeOutcomeObserved === evalCase.expected.mergeOutcome &&
+        (evalCase.expected.mergeOutcome === "merged"
+          ? metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode === 0
+          : !metrics.pullRequestMerged && metrics.mergeAttempts[0]?.exitCode !== 0);
   return (
     metrics.runnerExitCode === 0 &&
     metrics.skillFileReadObserved &&
@@ -904,6 +1011,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.blockedGithubAttempts === 0 &&
     !metrics.mutationAttempted &&
     integrityPassed(metrics.fixtureIntegrity) &&
-    outcomePass
+    outcomePass &&
+    mergePass
   );
 }

@@ -134,12 +134,15 @@ live First Tree runtime E2E remain outside skill evals.
 
 `eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
 request review gate. Its deterministic GitHub shim permits only PR state reads,
-identity lookup, and one body-file review submission; all other `gh` commands
+identity lookup, one body-file review submission, and—after a successful App
+approval—one exact-head local squash-merge attempt; all other `gh` commands
 remain blocked. The cases require validator-first ordering and cover structural
-failure, semantic failure, ready approval, draft deferral, archive-only scope,
-human authority, self-approval, and stale-head suppression. The fixture records
-the real source-tree validator result before the sandboxed model run so the
-agent receives the exact structural verdict without contacting GitHub.
+failure, semantic failure, ready approval, response-head provenance, a head
+race, unsupported merge-CAS flags, draft deferral, archive-only scope, human
+authority, self-approval, and stale-head suppression. The fixture records the
+real source-tree validator result before the sandboxed model run so the agent
+receives the exact structural verdict without contacting GitHub. Merge effects
+are recorded by the shim only; the gate never mutates a real pull request.
 
 `eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
 against deterministic local default-branch fixtures. It requires the Audit

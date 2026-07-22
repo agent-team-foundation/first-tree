@@ -1068,9 +1068,15 @@ does not accept a head or alternate agent. The Server re-resolves the live
 installation, bound repository, pull request, run, configured Reviewer and
 current PR head before the GitHub App creates the review. Unauthorized
 submissions fail closed. The command never merges. After a successful
-`APPROVE`, the Reviewer uses its local GitHub identity to run
-`gh pr merge <number> --repo <owner/repo> --squash`; it never uses `--admin`
-or `--auto`. The repository's stale-review dismissal protects a newer commit.
+`APPROVE`, the Reviewer takes the merge head only from that successful
+response's `reviewedHead` and uses its local GitHub identity to run
+`gh pr merge <number> --repo <owner/repo> --squash --match-head-commit
+<reviewedHead>`. It never uses `--admin` or `--auto`, substitutes a webhook,
+local, or newly queried head, drops the match flag, or retries automatically.
+A head race, unsupported local `gh`, permission/check/ruleset/queue failure, or
+provider error leaves the pull request approved but open. The repository's
+required approval and stale-review dismissal remain mandatory; merge CAS is
+defense in depth, not a replacement for repository governance.
 
 Existing Context Tree repositories should require pull requests, at least one
 current approval, and stale-review dismissal after every push. An administrator

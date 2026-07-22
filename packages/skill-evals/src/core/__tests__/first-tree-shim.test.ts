@@ -20,6 +20,8 @@ describe("first-tree eval shim", () => {
         startedAt: "2026-07-21T00:00:00.000Z",
       });
       const fixturePath = join(paths.workspacePath, ".first-tree-eval", "review-fixture.json");
+      const privateFixturePath = join(paths.runRoot, "review-private-fixture.json");
+      const reviewStatePath = join(paths.runRoot, "review-state.json");
       const bodyPath = join(paths.workspacePath, "review.md");
       const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
       const fixture = {
@@ -29,12 +31,18 @@ describe("first-tree eval shim", () => {
         reviewerAgentUuid: "reviewer-agent",
         runId: "01900000-0000-7000-8000-000000000042",
         runtimeSessionToken: "runtime-session-token",
-        submissionHeadOid: "a".repeat(40),
       };
+      const submissionHeadOid = "a".repeat(40);
       writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
+      writeFileSync(privateFixturePath, `${JSON.stringify({ submissionHeadOid })}\n`, "utf8");
+      writeFileSync(reviewStatePath, `${JSON.stringify({ views: 0 })}\n`, "utf8");
       writeFileSync(bodyPath, "## Approved\n", "utf8");
       writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
-      createFirstTreeShim(paths, { reviewFixturePath: fixturePath });
+      createFirstTreeShim(paths, {
+        reviewFixturePath: fixturePath,
+        reviewPrivateFixturePath: privateFixturePath,
+        reviewStatePath,
+      });
       const argv = ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath];
       const baseEnv = {
         ...process.env,
@@ -60,6 +68,10 @@ describe("first-tree eval shim", () => {
         },
       });
       expect(trusted.status).toBe(0);
+      expect(JSON.parse(trusted.stdout)).toMatchObject({
+        data: { action: "APPROVE", reviewedHead: submissionHeadOid },
+        ok: true,
+      });
       expect(readEvents(paths.eventsPath)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

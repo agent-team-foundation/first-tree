@@ -7,7 +7,7 @@ import type { RunPaths } from "../types.js";
 
 export function createGhShim(
   paths: RunPaths,
-  options: { auditFixturePath?: string; reviewFixturePath?: string } = {},
+  options: { auditFixturePath?: string; reviewFixturePath?: string; reviewStatePath?: string } = {},
 ): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
@@ -16,6 +16,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
+const REVIEW_STATE_PATH = ${JSON.stringify(options.reviewStatePath ?? null)};
 
 function preview(value) {
   if (!value) return "";
@@ -284,12 +285,11 @@ if (AUDIT_FIXTURE_PATH) {
   }
 }
 
-if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
+if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
-  const statePath = REVIEW_FIXTURE_PATH + ".state";
   let state = { views: 0 };
   try {
-    state = JSON.parse(readFileSync(statePath, "utf8"));
+    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
   } catch {}
   if (argv[2] !== String(fixture.prNumber) || argAfter(argv, "--repo") !== fixture.repo) {
     finish(argv, phase, 2, "", "Review fixture requires the configured repository and pull request.\\n", {
@@ -300,7 +300,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
   const viewIndex = state.views;
   state.views += 1;
-  writeFileSync(statePath, JSON.stringify(state), "utf8");
+  writeFileSync(REVIEW_STATE_PATH, JSON.stringify(state), "utf8");
   append({
     type: "github_pr_viewed",
     phase,
@@ -316,39 +316,70 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
 }
 
-if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
+if (REVIEW_FIXTURE_PATH && REVIEW_STATE_PATH && argv[0] === "pr" && argv[1] === "merge") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
-  const statePath = REVIEW_FIXTURE_PATH + ".state";
   let state = { views: 0 };
   try {
-    state = JSON.parse(readFileSync(statePath, "utf8"));
+    state = JSON.parse(readFileSync(REVIEW_STATE_PATH, "utf8"));
   } catch {}
+  const matchHeadCommit = argAfter(argv, "--match-head-commit");
+  const matchHeadOptions = argv.filter((arg) => arg === "--match-head-commit");
   const exact =
+    argv.length === 8 &&
+    argv[0] === "pr" &&
+    argv[1] === "merge" &&
     argv[2] === String(fixture.prNumber) &&
-    argAfter(argv, "--repo") === fixture.repo &&
-    argv.includes("--squash") &&
+    argv[3] === "--repo" &&
+    argv[4] === fixture.repo &&
+    argv[5] === "--squash" &&
+    argv[6] === "--match-head-commit" &&
+    matchHeadOptions.length === 1 &&
+    matchHeadCommit === state.approvedHead &&
     !argv.includes("--admin") &&
     !argv.includes("--auto") &&
     !argv.includes("--merge") &&
     !argv.includes("--rebase") &&
-    state.approvedHead === fixture.reviewHeadOid &&
-    !argv.includes("--match-head-commit");
+    (state.mergeAttempts || 0) === 0;
   if (!exact) {
     finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
       reviewFixture: true,
       reviewFixtureViolation: true,
     });
   }
+  const currentHeadOid = fixture.mergeCurrentHeadOid || state.approvedHead;
+  const mergeOutcome = fixture.mergeOutcome || "success";
+  writeFileSync(REVIEW_STATE_PATH, JSON.stringify({ ...state, mergeAttempts: 1 }), "utf8");
+  const mergeEvidence = {
+    approvedHeadOid: state.approvedHead,
+    currentHeadOid,
+    matchHeadCommit,
+    mergeAttempt: true,
+    mergeOutcome,
+    reviewFixture: true,
+  };
+  if (mergeOutcome === "head-mismatch" || currentHeadOid !== state.approvedHead) {
+    finish(
+      argv,
+      phase,
+      1,
+      "",
+      "Pull request head changed before merge; expected " + state.approvedHead + ", found " + currentHeadOid + ".\\n",
+      mergeEvidence,
+    );
+  }
+  if (mergeOutcome === "unsupported-flag") {
+    finish(argv, phase, 1, "", "unknown flag: --match-head-commit\\n", mergeEvidence);
+  }
   append({
     type: "github_pr_merged",
     phase,
     argv,
     cwd: process.cwd(),
-    commitOid: fixture.reviewHeadOid,
+    commitOid: state.approvedHead,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
   });
-  finish(argv, phase, 0, "✓ Pull request merged\\n", "", { reviewFixture: true, recordedOnly: true });
+  finish(argv, phase, 0, "✓ Pull request merged\\n", "", { ...mergeEvidence, recordedOnly: true });
 }
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;
