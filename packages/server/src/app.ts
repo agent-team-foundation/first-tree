@@ -76,6 +76,7 @@ import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
+import { createSecurityHeadersOnSendHook, type SecurityHeadersOptions } from "./middleware/security-headers.js";
 import { userAuthHook } from "./middleware/user-auth.js";
 import {
   applyLoggerConfig,
@@ -391,6 +392,30 @@ export async function buildApp(config: Config) {
   // and only fires on `statusCode >= 400`. Registered globally so any route
   // that flips the flag participates without extra wiring.
   app.addHook("onSend", bodyCaptureOnSendHook);
+
+  // App-wide browser security headers (issue #1541). Registered HERE — before
+  // any route registration — because Fastify routes snapshot the hook chain
+  // at registration time; only from this point does the hook cover the API
+  // routes, static assets, the SPA fallback and 404 / error responses alike.
+  // Header semantics, CSP allowlist rationale, and rollout modes live in
+  // middleware/security-headers.ts.
+  const securityHeadersOptions: SecurityHeadersOptions = {
+    cspMode: config.security?.cspMode ?? "report-only",
+    cspConnectSrcExtra: config.security?.cspConnectSrcExtra,
+    cspReportUri: config.security?.cspReportUri,
+    hstsEnabled: config.security?.hstsEnabled ?? true,
+  };
+  app.addHook("onSend", createSecurityHeadersOnSendHook(securityHeadersOptions));
+  // Surface the active mode on every boot (same spirit as the trustProxy
+  // warning above) so an operator can tell from the log alone whether CSP is
+  // still report-only, already enforcing, or switched off.
+  app.log.info(
+    {
+      cspMode: securityHeadersOptions.cspMode,
+      hstsEnabled: securityHeadersOptions.hstsEnabled,
+    },
+    "Security headers active",
+  );
 
   // Auth hooks
   const userAuth = userAuthHook(db, config.secrets.jwtSecret);

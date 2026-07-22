@@ -297,6 +297,45 @@ export const serverConfigSchema = defineConfig({
     /** Actor-aware global safety cap. High enough to avoid normal-use 429s. */
     max: field(z.number().default(3000), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
   }),
+  security: optional({
+    /**
+     * Content-Security-Policy mode for HTML responses (the SPA shell).
+     * `report-only` (default) delivers the full policy as
+     * `Content-Security-Policy-Report-Only` plus a small always-enforced
+     * subset (`frame-ancestors` / `object-src` / `base-uri` — the spec
+     * ignores `frame-ancestors` in a report-only header, so anti-embedding
+     * only works enforced). `enforce` delivers the full policy as
+     * `Content-Security-Policy`. `off` sends no CSP header — an emergency
+     * escape hatch that leaves the other security headers untouched.
+     */
+    cspMode: field(z.enum(["report-only", "enforce", "off"]).default("report-only"), {
+      env: "FIRST_TREE_SECURITY_CSP_MODE",
+    }),
+    /**
+     * Extra `connect-src` origins appended to the built-in CSP allowlist,
+     * space- or comma-separated. Needed when a deployment reports to a
+     * Sentry region not covered by the defaults (`*.ingest.sentry.io`,
+     * `*.ingest.us.sentry.io`) or talks to another cross-origin endpoint.
+     */
+    cspConnectSrcExtra: field(z.string().optional(), {
+      env: "FIRST_TREE_SECURITY_CSP_CONNECT_SRC_EXTRA",
+    }),
+    /**
+     * CSP violation report endpoint (`report-uri` directive) — e.g. a
+     * Sentry security endpoint derived from the web DSN. Reports fire for
+     * report-only AND enforced policies, which is what makes the
+     * report-only rollout phase observable beyond browser consoles.
+     */
+    cspReportUri: field(z.string().url().optional(), { env: "FIRST_TREE_SECURITY_CSP_REPORT_URI" }),
+    /**
+     * Send `Strict-Transport-Security` on https responses. TLS terminates
+     * at the edge, so production needs the existing FIRST_TREE_TRUST_PROXY=true
+     * for `request.protocol` to reflect `X-Forwarded-Proto`; plain-HTTP
+     * traffic (local dev, container healthcheck) never receives the header.
+     * Set false as an escape hatch for a host that must return to HTTP.
+     */
+    hstsEnabled: field(z.boolean().default(true), { env: "FIRST_TREE_SECURITY_HSTS_ENABLED" }),
+  }),
   ws: optional({
     /**
      * Maximum payload size (bytes) for a single WebSocket frame on the

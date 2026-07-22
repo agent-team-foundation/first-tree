@@ -2,12 +2,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
 
-const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+// The gtag bootstrap lives in public/init.js — external rather than inline
+// so the CSP can enforce script-src without 'unsafe-inline' (issue 1541).
+const initJs = readFileSync(new URL("../../public/init.js", import.meta.url), "utf8");
 
 describe("production gtag bootstrap", () => {
   it("queues the official Arguments object so gtag.js processes commands", () => {
-    expect(indexHtml).toContain("window.dataLayer.push(arguments)");
-    expect(indexHtml).not.toContain("window.dataLayer.push(args)");
+    expect(initJs).toContain("window.dataLayer.push(arguments)");
+    expect(initJs).not.toContain("window.dataLayer.push(args)");
   });
 });
 
