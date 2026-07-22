@@ -1,8 +1,9 @@
 import {
-  claimVerifiedCandidateProof,
-  readVerifiedCandidateProof,
-  type VerifiedCandidateProof,
+  type CandidateMeRequest,
+  type CandidateMeResult,
+  requestCandidateMe as fetchCandidateMe,
 } from "../../api/candidate-client.js";
+import { expectedAuthorityHeaders, readBoundedResponseText } from "../../api/server-authority.js";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "./candidate-tokens.js";
 import { claimVerifiedPurgeCompletion, type VerifiedPurgeCompletion } from "./content-barrier.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
@@ -19,7 +20,6 @@ import {
   type CredentialRecord,
   createCredentialRecord,
   credentialCursor,
-  type RetirementCause,
   sameActivation,
   sameCredentialCursor,
   type ViewLease,
@@ -27,7 +27,6 @@ import {
   validateActivationCertificate,
   validateCoordinatorSnapshot,
   validateCredentialCursor,
-  validateCredentialRecord,
   validateSessionAttempt,
   validateViewLease,
 } from "./types.js";
@@ -59,44 +58,88 @@ export type AuthorityCursor = Readonly<{
 
 export type RetirementResult = "retired" | "already_retiring" | "superseded";
 
+export type TransitionCancellationResult =
+  | Readonly<{ kind: "anonymous"; authority: AuthAuthority }>
+  | Readonly<{ kind: "retiring"; authority: AuthAuthority; source: ActivationCertificate }>
+  | Readonly<{ kind: "superseded"; authority: AuthAuthority }>;
+
 export type ActiveSessionProjection = Readonly<{
   authority: ActiveAuthority;
   credential: CredentialCursor;
 }>;
 
-const activeDispatchAdmissionBrand: unique symbol = Symbol("first-tree.active-dispatch-admission");
+export type VerifiedCandidateMeResult = Readonly<{
+  accountId: string;
+  payload: Readonly<Record<string, unknown>>;
+  proof: VerifiedCandidateProof;
+}>;
 
-export type ActiveDispatchAdmission = Readonly<{
-  kind: "active_dispatch";
-  tokenKind: ActiveDispatchToken["kind"];
+const REFRESH_ENDPOINT = "/api/v1/auth/refresh";
+const MAX_REFRESH_RESPONSE_BYTES = 64 * 1024;
+
+declare const activeDispatchAdmissionType: unique symbol;
+declare const verifiedCandidateProofType: unique symbol;
+declare const refreshResponseProofType: unique symbol;
+
+export type ActiveDispatchAdmission = Readonly<{ [activeDispatchAdmissionType]: never }>;
+
+export type VerifiedCandidateProof = Readonly<{ [verifiedCandidateProofType]: never }>;
+
+type ActiveDispatchState = Readonly<{
   activation: ActivationCertificate;
   credential: CredentialCursor;
-  organizationId: string;
-  orgRevision: string;
-  ownerTabId: string;
-  documentId: string;
-  [activeDispatchAdmissionBrand]: true;
+  capturedCredential: CredentialRecord;
+  view: ViewLease;
+  lifecycleGeneration: number;
 }>;
+
+type VerifiedCandidateEvidence = Readonly<{
+  candidate: CandidateMeResult["candidate"];
+  serverAuthority: string;
+  accountId: string;
+  attempt: AcquisitionSessionAttempt;
+  signal: AbortSignal;
+  lifecycleGeneration: number;
+}>;
+
+type CandidateProofState = {
+  evidence: VerifiedCandidateEvidence;
+  state: "available" | "claimed" | "consumed";
+};
+
+type RefreshResponseProof = Readonly<{ [refreshResponseProofType]: never }>;
+
+type RefreshResponseState = {
+  activation: ActivationCertificate;
+  expectedCredential: CredentialCursor;
+  capturedCredential: CredentialRecord;
+  replacement: CredentialRecord;
+  view: ViewLease;
+  lifecycleGeneration: number;
+  state: "available" | "claimed" | "consumed";
+};
+
+const activeDispatchAdmissions = new WeakMap<ActiveDispatchAdmission, ActiveDispatchState>();
+const verifiedCandidateProofs = new WeakMap<VerifiedCandidateProof, CandidateProofState>();
+const refreshResponseProofs = new WeakMap<RefreshResponseProof, RefreshResponseState>();
 
 export type ActiveDispatch<T> = Readonly<{
   admission: ActiveDispatchAdmission;
   request: T;
 }>;
 
-export type ActiveDispatchToken =
-  | Readonly<{ kind: "access"; token: string }>
-  | Readonly<{ kind: "refresh"; token: string }>;
+export type ActiveDispatchToken = Readonly<{ kind: "access"; token: string }>;
 
-function validateActiveDispatchAdmission(value: unknown): ActiveDispatchAdmission {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !(activeDispatchAdmissionBrand in value) ||
-    (value as ActiveDispatchAdmission)[activeDispatchAdmissionBrand] !== true
-  ) {
+function readActiveDispatchAdmission(value: unknown): ActiveDispatchState {
+  if (typeof value !== "object" || value === null) {
     throw new SessionError(sessionErrorCodes.invalidState, "Dispatch admission is malformed");
   }
-  return value as ActiveDispatchAdmission;
+  const state = activeDispatchAdmissions.get(value as ActiveDispatchAdmission);
+  if (!state) throw new SessionError(sessionErrorCodes.invalidState, "Dispatch admission is malformed");
+  if (state.view.signal.aborted || state.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch admission crossed a lifecycle fence");
+  }
+  return state;
 }
 
 export type CoordinatorOptions = Readonly<{
@@ -106,6 +149,82 @@ export type CoordinatorOptions = Readonly<{
 
 const coordinatorConnections = new Set<IDBDatabase>();
 let coordinatorLifecycleGeneration = 0;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function createVerifiedCandidateProof(evidence: VerifiedCandidateEvidence): VerifiedCandidateProof {
+  const proof = Object.freeze({}) as VerifiedCandidateProof;
+  verifiedCandidateProofs.set(proof, { evidence, state: "available" });
+  return proof;
+}
+
+function readVerifiedCandidateProof(value: unknown): VerifiedCandidateEvidence {
+  if (typeof value !== "object" || value === null) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate proof is unavailable");
+  }
+  const state = verifiedCandidateProofs.get(value as VerifiedCandidateProof);
+  if (!state || state.state !== "available") {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate proof is unavailable");
+  }
+  if (state.evidence.signal.aborted || state.evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate proof crossed a lifecycle fence");
+  }
+  return state.evidence;
+}
+
+function claimVerifiedCandidateProof(value: unknown): Readonly<{
+  evidence: VerifiedCandidateEvidence;
+  settle: (committed: boolean) => void;
+}> {
+  const evidence = readVerifiedCandidateProof(value);
+  const proof = value as VerifiedCandidateProof;
+  const state = verifiedCandidateProofs.get(proof);
+  if (!state) throw invariantFailure("Verified candidate proof state disappeared");
+  state.state = "claimed";
+  let settled = false;
+  return Object.freeze({
+    evidence,
+    settle: (committed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      state.state = committed ? "consumed" : "available";
+    },
+  });
+}
+
+function createRefreshResponseProof(state: Omit<RefreshResponseState, "state">): RefreshResponseProof {
+  const proof = Object.freeze({}) as RefreshResponseProof;
+  refreshResponseProofs.set(proof, { ...state, state: "available" });
+  return proof;
+}
+
+function claimRefreshResponseProof(value: unknown): Readonly<{
+  state: RefreshResponseState;
+  settle: (committed: boolean) => void;
+}> {
+  if (typeof value !== "object" || value === null) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Refresh response proof is malformed");
+  }
+  const state = refreshResponseProofs.get(value as RefreshResponseProof);
+  if (!state || state.state !== "available") {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response proof is unavailable");
+  }
+  if (state.view.signal.aborted || state.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Refresh response proof crossed a lifecycle fence");
+  }
+  state.state = "claimed";
+  let settled = false;
+  return Object.freeze({
+    state,
+    settle: (committed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      state.state = committed ? "consumed" : "available";
+    },
+  });
+}
 
 function invariantFailure(message: string): SessionError {
   return new SessionError(sessionErrorCodes.recoveryRequired, message);
@@ -478,6 +597,63 @@ function sameAcquisitionAttempt(left: AcquisitionSessionAttempt, right: Acquisit
   );
 }
 
+type CandidateAdmissionCursor = Readonly<{
+  generation: string;
+  revision: number;
+  mode: "none" | "active" | "transition";
+  permit: AcquisitionTransitionPermit | null;
+}>;
+
+function admitCandidateAttempt(
+  snapshot: CoordinatorSnapshot,
+  attempt: AcquisitionSessionAttempt,
+  candidateFingerprint: string,
+  accountId: string,
+  now: number,
+): CandidateAdmissionCursor {
+  const stored = snapshot.attempts.find((item) => item.attemptId === attempt.attemptId);
+  if (!stored || stored.kind !== "acquisition" || !sameAcquisitionAttempt(stored, attempt) || stored.expiresAt <= now) {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate attempt is missing, expired, or stale");
+  }
+  const authority = snapshot.authority;
+  if (authority.mode === "none") {
+    if (attempt.baselineGeneration !== authority.generation || attempt.sourceEpoch !== null) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate attempt has another anonymous baseline");
+    }
+  } else if (authority.mode === "active") {
+    if (attempt.baselineGeneration !== authority.generation || attempt.sourceEpoch !== authority.session.sessionEpoch) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate attempt has another active baseline");
+    }
+  } else if (authority.mode === "transition") {
+    if (
+      authority.permit.attemptId !== attempt.attemptId ||
+      authority.permit.targetCredentialFingerprint !== candidateFingerprint ||
+      authority.permit.target.accountId !== accountId ||
+      authority.permit.target.serverAuthority !== attempt.serverAuthority ||
+      authority.permit.expiresAt <= now ||
+      attempt.sourceEpoch !== (authority.source?.sessionEpoch ?? null)
+    ) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate does not own the pending transition");
+    }
+  } else {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate dispatch is blocked by retirement");
+  }
+  return Object.freeze({
+    generation: authority.generation,
+    revision: authority.revision,
+    mode: authority.mode,
+    permit: authority.mode === "transition" ? authority.permit : null,
+  });
+}
+
+function sameCandidateAdmissionCursor(left: CandidateAdmissionCursor, right: CandidateAdmissionCursor): boolean {
+  if (left.generation !== right.generation || left.mode !== right.mode) return false;
+  if (left.mode === "transition" && right.mode === "transition") {
+    return left.permit !== null && right.permit !== null && sameTransitionPermit(left.permit, right.permit);
+  }
+  return left.revision === right.revision;
+}
+
 function activeProjection(snapshot: CoordinatorSnapshot, activation?: ActivationCertificate): ActiveSessionProjection {
   const authority = snapshot.authority;
   if (authority.mode !== "active" || (activation && !sameActivation(authority.session, activation))) {
@@ -657,6 +833,129 @@ export class AuthSessionCoordinator {
   }
 
   /**
+   * Performs candidate `/me` behind two fresh coordinator admissions. The API
+   * client owns the physical fetch; callers can neither substitute a response
+   * nor bypass the post-response authority transaction.
+   */
+  public async requestCandidateMe(input: CandidateMeRequest): Promise<VerifiedCandidateMeResult> {
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
+    if (input.signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Candidate request was cancelled");
+    }
+    const validatedAttempt = validateSessionAttempt(input.attempt);
+    if (validatedAttempt.kind !== "acquisition" || validatedAttempt.serverAuthority !== input.serverAuthority) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate attempt has another capability domain");
+    }
+    const candidate = createCandidateTokenSnapshot({
+      accessToken: input.candidate.accessToken,
+      refreshToken: input.candidate.refreshToken,
+    });
+    const fingerprinted = await fingerprintCandidateTokenSnapshot(candidate, validatedAttempt.serverAuthority);
+    if (
+      input.candidate.credentialFingerprint !== undefined &&
+      input.candidate.credentialFingerprint !== fingerprinted.credentialFingerprint
+    ) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate fingerprint does not match its bytes");
+    }
+    const dispatchTime = Date.now();
+    if (
+      fingerprinted.accessExpiresAt <= dispatchTime ||
+      fingerprinted.refreshExpiresAt <= dispatchTime ||
+      input.signal.aborted ||
+      lifecycleGeneration !== coordinatorLifecycleGeneration
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Candidate request is expired or cancelled");
+    }
+
+    const before = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<CandidateAdmissionCursor> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        if (lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Candidate dispatch crossed a lifecycle fence");
+        }
+        return keepCoordinatorSnapshot(
+          admitCandidateAttempt(
+            snapshot,
+            validatedAttempt,
+            fingerprinted.credentialFingerprint,
+            fingerprinted.accountIdCandidate,
+            dispatchTime,
+          ),
+        );
+      },
+      input.signal,
+    );
+
+    let result: CandidateMeResult | undefined;
+    let requestFailure: unknown;
+    try {
+      result = await fetchCandidateMe({
+        candidate: fingerprinted,
+        attempt: validatedAttempt,
+        serverAuthority: validatedAttempt.serverAuthority,
+        signal: input.signal,
+      });
+    } catch (error) {
+      requestFailure = error;
+    }
+    if (input.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Candidate response crossed a lifecycle fence");
+    }
+
+    const completionTime = Date.now();
+    if (fingerprinted.accessExpiresAt <= completionTime || fingerprinted.refreshExpiresAt <= completionTime) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Candidate expired before verification completed");
+    }
+    const after = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<CandidateAdmissionCursor> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        if (lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Candidate response crossed a lifecycle fence");
+        }
+        return keepCoordinatorSnapshot(
+          admitCandidateAttempt(
+            snapshot,
+            validatedAttempt,
+            fingerprinted.credentialFingerprint,
+            fingerprinted.accountIdCandidate,
+            completionTime,
+          ),
+        );
+      },
+      input.signal,
+    );
+    if (
+      !sameCandidateAdmissionCursor(before, after) ||
+      input.signal.aborted ||
+      lifecycleGeneration !== coordinatorLifecycleGeneration
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Candidate authority changed during verification");
+    }
+    if (requestFailure !== undefined) throw requestFailure;
+    if (!result) throw invariantFailure("Candidate request settled without a result");
+
+    const proof = createVerifiedCandidateProof(
+      Object.freeze({
+        candidate: result.candidate,
+        serverAuthority: result.serverAuthority,
+        accountId: result.accountId,
+        attempt: result.attempt,
+        signal: input.signal,
+        lifecycleGeneration,
+      }),
+    );
+    return Object.freeze({ accountId: result.accountId, payload: result.payload, proof });
+  }
+
+  /**
    * Orders dispatch behind every earlier retirement writer. `start` is called
    * synchronously while the fresh readonly authority transaction is live; its
    * return value is deliberately wrapped so a network promise is never awaited
@@ -668,16 +967,20 @@ export class AuthSessionCoordinator {
     tokenKind: ActiveDispatchToken["kind"],
     start: (credential: ActiveDispatchToken) => T,
   ): Promise<ActiveDispatch<T>> {
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
+    if (tokenKind !== "access") {
+      throw new SessionError(sessionErrorCodes.invalidState, "Generic dispatch may use only an access credential");
+    }
     const view = validateViewLease(viewValue);
     const expectedCredential = validateCredentialCursor(expectedCredentialValue);
-    if (tokenKind !== "access" && tokenKind !== "refresh") {
-      throw new SessionError(sessionErrorCodes.invalidState, "Dispatch token kind is unsupported");
-    }
     if (view.signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Captured view has been invalidated");
     }
     const captured = await this.captureVerifiedCredential(view.activation, view.signal);
-    if (!sameCredentialCursor(credentialCursor(captured), expectedCredential)) {
+    if (
+      lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameCredentialCursor(credentialCursor(captured), expectedCredential)
+    ) {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Captured credential revision is stale");
     }
 
@@ -688,7 +991,7 @@ export class AuthSessionCoordinator {
       this.onBlocked,
       (snapshot): CoordinatorDecision<ActiveDispatch<T>> => {
         if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
-        if (view.signal.aborted) {
+        if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
           throw new SessionError(sessionErrorCodes.staleOperation, "Captured view has been invalidated");
         }
         const projection = activeProjection(snapshot, view.activation);
@@ -700,26 +1003,22 @@ export class AuthSessionCoordinator {
         if (!sameCredentialRecord(record, captured)) {
           throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before dispatch");
         }
-        const token: ActiveDispatchToken = Object.freeze(
-          tokenKind === "access"
-            ? { kind: "access" as const, token: record.accessToken }
-            : { kind: "refresh" as const, token: record.refreshToken },
-        );
+        const token: ActiveDispatchToken = Object.freeze({ kind: "access", token: record.accessToken });
         const request = start(token);
-        if (view.signal.aborted) {
+        if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
           throw new SessionError(sessionErrorCodes.staleOperation, "Captured view was invalidated during dispatch");
         }
-        const admission: ActiveDispatchAdmission = Object.freeze({
-          kind: "active_dispatch",
-          tokenKind,
-          activation: view.activation,
-          credential: projection.credential,
-          organizationId: view.organizationId,
-          orgRevision: view.orgRevision,
-          ownerTabId: view.ownerTabId,
-          documentId: view.documentId,
-          [activeDispatchAdmissionBrand]: true as const,
-        });
+        const admission = Object.freeze({}) as ActiveDispatchAdmission;
+        activeDispatchAdmissions.set(
+          admission,
+          Object.freeze({
+            activation: view.activation,
+            credential: projection.credential,
+            capturedCredential: captured,
+            view,
+            lifecycleGeneration,
+          }),
+        );
         return keepCoordinatorSnapshot(Object.freeze({ admission, request }));
       },
       view.signal,
@@ -728,88 +1027,199 @@ export class AuthSessionCoordinator {
 
   /** Fresh post-response authority gate. It intentionally tolerates a routine credential rotation. */
   public async assertActiveDispatchResponse(admissionValue: unknown, viewValue: unknown): Promise<void> {
-    const admission = validateActiveDispatchAdmission(admissionValue);
+    const admission = readActiveDispatchAdmission(admissionValue);
     const view = validateViewLease(viewValue);
     if (
       view.signal.aborted ||
-      !sameView(view, {
-        activation: admission.activation,
-        organizationId: admission.organizationId,
-        orgRevision: admission.orgRevision,
-        ownerTabId: admission.ownerTabId,
-        documentId: admission.documentId,
-        signal: view.signal,
-      })
+      admission.lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameView(view, admission.view)
     ) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch view is no longer current");
     }
     await this.admitView(view);
-    if (view.signal.aborted) {
+    if (view.signal.aborted || admission.lifecycleGeneration !== coordinatorLifecycleGeneration) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch view was invalidated after authority check");
     }
   }
 
-  /** Exact credential revision CAS that preserves the activation and every view lease. */
-  public async replaceActiveCredential(
-    admissionValue: unknown,
+  private async commitRefreshResponse(proofValue: unknown): Promise<CredentialCursor> {
+    const claim = claimRefreshResponseProof(proofValue);
+    const { activation, expectedCredential, capturedCredential, replacement, view } = claim.state;
+    let committed = false;
+    try {
+      const result = await this.commit((snapshot): CoordinatorDecision<CredentialCursor> => {
+        if (view.signal.aborted || claim.state.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(
+            sessionErrorCodes.staleOperation,
+            "Refresh delivery view was invalidated before commit",
+          );
+        }
+        const projection = activeProjection(snapshot, activation);
+        if (!sameCredentialCursor(projection.credential, expectedCredential)) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh commit");
+        }
+        const current = matchingCredential(snapshot, activation);
+        if (!current || !sameCredentialRecord(current, capturedCredential)) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh commit");
+        }
+        const nextAuthority: ActiveAuthority = {
+          ...projection.authority,
+          revision: projection.authority.revision + 1,
+        };
+        const nextCredential = credentialCursor(replacement);
+        return replaceCoordinatorSnapshot(nextSnapshot(snapshot, nextAuthority, [replacement]), nextCredential);
+      }, view.signal);
+      committed = true;
+      return result;
+    } finally {
+      claim.settle(committed);
+    }
+  }
+
+  /**
+   * Refresh is one coordinator-owned request/parse/commit operation. No
+   * pre-response admission or caller-provided token pair can authorize a
+   * credential replacement.
+   */
+  public async refreshActiveCredential(
     viewValue: unknown,
-    replacementValue: unknown,
+    expectedCredentialValue: unknown,
   ): Promise<CredentialCursor> {
-    const admission = validateActiveDispatchAdmission(admissionValue);
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
     const view = validateViewLease(viewValue);
-    if (admission.tokenKind !== "refresh") {
-      throw new SessionError(sessionErrorCodes.admissionDenied, "Only an admitted refresh may replace credentials");
-    }
-    if (
-      view.signal.aborted ||
-      !sameActivation(view.activation, admission.activation) ||
-      view.organizationId !== admission.organizationId ||
-      view.orgRevision !== admission.orgRevision ||
-      view.ownerTabId !== admission.ownerTabId ||
-      view.documentId !== admission.documentId
-    ) {
-      throw new SessionError(sessionErrorCodes.staleOperation, "Refresh delivery view is no longer current");
-    }
-    await this.assertActiveDispatchResponse(admission, view);
-    const activation = admission.activation;
-    const expectedCredential = admission.credential;
-    const replacement = validateCredentialRecord(replacementValue);
-    if (
-      !sameActivation(replacement.activation, activation) ||
-      replacement.sessionEpoch !== activation.sessionEpoch ||
-      replacement.credentialRevision !== expectedCredential.credentialRevision + 1
-    ) {
-      throw new SessionError(sessionErrorCodes.invalidState, "Replacement credential does not advance this activation");
-    }
-    await verifyCredentialBytes(replacement);
+    const expectedCredential = validateCredentialCursor(expectedCredentialValue);
     if (view.signal.aborted) {
-      throw new SessionError(sessionErrorCodes.staleOperation, "Refresh delivery view was invalidated while verifying");
+      throw new SessionError(sessionErrorCodes.staleOperation, "Refresh view has been invalidated");
     }
-    const captured = await this.captureVerifiedCredential(activation, view.signal);
-    if (!sameCredentialCursor(credentialCursor(captured), expectedCredential)) {
-      throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh verification");
+    const captured = await this.captureVerifiedCredential(view.activation, view.signal);
+    if (
+      lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameCredentialCursor(credentialCursor(captured), expectedCredential)
+    ) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Captured refresh credential is stale");
     }
 
-    return this.commit((snapshot): CoordinatorDecision<CredentialCursor> => {
-      if (view.signal.aborted) {
-        throw new SessionError(sessionErrorCodes.staleOperation, "Refresh delivery view was invalidated before commit");
+    const dispatch = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<Readonly<{ request: Promise<Response> }>> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        const projection = activeProjection(snapshot, view.activation);
+        const current = matchingCredential(snapshot, view.activation);
+        if (
+          view.signal.aborted ||
+          lifecycleGeneration !== coordinatorLifecycleGeneration ||
+          !sameCredentialCursor(projection.credential, expectedCredential) ||
+          !current ||
+          !sameCredentialRecord(current, captured)
+        ) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh dispatch credential is stale");
+        }
+        let response: Promise<Response>;
+        try {
+          response = fetch(REFRESH_ENDPOINT, {
+            method: "POST",
+            cache: "no-store",
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
+            redirect: "error",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              ...expectedAuthorityHeaders(view.activation.serverAuthority),
+            },
+            body: JSON.stringify({ refreshToken: current.refreshToken }),
+            signal: view.signal,
+          });
+        } catch (error) {
+          response = Promise.reject(error);
+        }
+        return keepCoordinatorSnapshot(Object.freeze({ request: response }));
+      },
+      view.signal,
+    );
+
+    const assertResponseCurrent = async (): Promise<void> => {
+      if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Refresh response crossed a lifecycle fence");
       }
-      const projection = activeProjection(snapshot, activation);
-      if (!sameCredentialCursor(projection.credential, expectedCredential)) {
-        throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh commit");
+      const current = await this.captureVerifiedCredential(view.activation, view.signal);
+      if (!sameCredentialRecord(current, captured) || view.signal.aborted) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh delivery");
       }
-      const current = matchingCredential(snapshot, activation);
-      if (!current) throw invariantFailure("Active activation does not own its exact credential");
-      if (!sameCredentialRecord(current, captured)) {
-        throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before refresh commit");
+      await this.finishCredentialAdmission(current, view.activation, view.signal);
+      if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Refresh response crossed a lifecycle fence");
       }
-      const nextAuthority: ActiveAuthority = {
-        ...projection.authority,
-        revision: projection.authority.revision + 1,
-      };
-      const nextCredential = credentialCursor(replacement);
-      return replaceCoordinatorSnapshot(nextSnapshot(snapshot, nextAuthority, [replacement]), nextCredential);
-    }, view.signal);
+    };
+
+    let response: Response;
+    try {
+      response = await dispatch.request;
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh request is unavailable");
+    }
+    if (!response.ok) {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, `Refresh request failed (${response.status})`);
+    }
+    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBoundedResponseText(response, MAX_REFRESH_RESPONSE_BYTES));
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+    if (!isRecord(body) || typeof body.accessToken !== "string" || typeof body.refreshToken !== "string") {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+    let fingerprinted: Awaited<ReturnType<typeof fingerprintCandidateTokenSnapshot>>;
+    try {
+      const tokenSnapshot = createCandidateTokenSnapshot({
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken,
+      });
+      fingerprinted = await fingerprintCandidateTokenSnapshot(tokenSnapshot, view.activation.serverAuthority);
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+    if (
+      fingerprinted.accountIdCandidate !== view.activation.accountId ||
+      fingerprinted.accessExpiresAt <= Date.now() ||
+      fingerprinted.refreshExpiresAt <= Date.now() ||
+      view.signal.aborted
+    ) {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh credential is invalid or expired");
+    }
+    const replacement = createCredentialRecord({
+      activation: view.activation,
+      credentialRevision: expectedCredential.credentialRevision + 1,
+      credentialFingerprint: fingerprinted.credentialFingerprint,
+      accessToken: fingerprinted.accessToken,
+      refreshToken: fingerprinted.refreshToken,
+    });
+    await verifyCredentialBytes(replacement);
+    await assertResponseCurrent();
+    const proof = createRefreshResponseProof({
+      activation: view.activation,
+      expectedCredential,
+      capturedCredential: captured,
+      replacement,
+      view,
+      lifecycleGeneration,
+    });
+    return this.commitRefreshResponse(proof);
   }
 
   public async reserveAcquisitionTransition(
@@ -820,28 +1230,12 @@ export class AuthSessionCoordinator {
     anonymousScrubValue?: LegacyScrubCompletion,
     now = Date.now(),
   ): Promise<AcquisitionTransitionPermit> {
-    let evidence: ReturnType<typeof readVerifiedCandidateProof>;
-    try {
-      evidence = readVerifiedCandidateProof(proofValue);
-    } catch {
-      throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate proof is unavailable");
-    }
+    const evidence = readVerifiedCandidateProof(proofValue);
     const target = createVerifiedTransitionTarget(targetValue, evidence.serverAuthority, evidence.accountId);
     const source = sourceValue === null ? null : validateActivationCertificate(sourceValue);
-    let scrubClaim: ReturnType<typeof claimLegacyScrubCompletion> | undefined;
-    if (source === null) {
-      try {
-        scrubClaim = claimLegacyScrubCompletion(anonymousScrubValue);
-      } catch {
-        throw new SessionError(
-          sessionErrorCodes.admissionDenied,
-          "Verified legacy scrub is required before activation",
-        );
-      }
-    } else if (anonymousScrubValue !== undefined) {
+    if (source !== null && anonymousScrubValue !== undefined) {
       throw new SessionError(sessionErrorCodes.invalidState, "Account replacement cannot consume an anonymous scrub");
     }
-    const cleanupReceipt = scrubClaim?.receipt;
     if (
       target.serverAuthority !== evidence.serverAuthority ||
       target.accountId !== evidence.accountId ||
@@ -870,9 +1264,25 @@ export class AuthSessionCoordinator {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate is expired");
     }
 
-    let committed = false;
+    let scrubClaim: ReturnType<typeof claimLegacyScrubCompletion> | undefined;
+    if (source === null) {
+      try {
+        scrubClaim = claimLegacyScrubCompletion(anonymousScrubValue);
+      } catch {
+        throw new SessionError(
+          sessionErrorCodes.admissionDenied,
+          "Verified legacy scrub is required before activation",
+        );
+      }
+    }
+    const cleanupReceipt = scrubClaim?.receipt;
+
     try {
       const result = await this.commit((snapshot): CoordinatorDecision<AcquisitionTransitionPermit> => {
+        const commitTime = Math.max(now, Date.now());
+        if (evidence.signal.aborted || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate crossed a lifecycle fence");
+        }
         const authority = snapshot.authority;
         if (authority.generation !== expected.generation || authority.revision !== expected.revision) {
           throw new SessionError(
@@ -895,8 +1305,8 @@ export class AuthSessionCoordinator {
           !attempt ||
           attempt.kind !== "acquisition" ||
           !sameAcquisitionAttempt(attempt, evidence.attempt) ||
-          attempt.expiresAt <= now ||
-          permit.expiresAt <= now ||
+          attempt.expiresAt <= commitTime ||
+          permit.expiresAt <= commitTime ||
           attempt.baselineGeneration !== authority.generation ||
           attempt.serverAuthority !== permit.target.serverAuthority ||
           attempt.sourceEpoch !== (source?.sessionEpoch ?? null)
@@ -914,11 +1324,13 @@ export class AuthSessionCoordinator {
           ...(cleanupReceipt === undefined ? {} : { cleanupReceipt }),
         };
         return replaceCoordinatorSnapshot(nextSnapshot(snapshot, transition, [], [attempt]), permit);
-      });
-      committed = true;
+      }, evidence.signal);
       return result;
     } finally {
-      scrubClaim?.settle(committed);
+      // A transaction may commit durably and then lose its realm-local result
+      // to pagehide/freeze. Treat every dispatched reservation as consuming
+      // the scrub proof so an ambiguous commit can never reuse it.
+      scrubClaim?.settle(true);
     }
   }
 
@@ -930,12 +1342,7 @@ export class AuthSessionCoordinator {
   ): Promise<void> {
     const permit = validateAcquisitionTransitionPermit(permitValue);
     const cleanupReceipt = cleanupReceiptValue === undefined ? undefined : requireCleanupReceipt(cleanupReceiptValue);
-    let proofClaim: ReturnType<typeof claimVerifiedCandidateProof>;
-    try {
-      proofClaim = claimVerifiedCandidateProof(proofValue);
-    } catch {
-      throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate proof is unavailable");
-    }
+    const proofClaim = claimVerifiedCandidateProof(proofValue);
     const evidence = proofClaim.evidence;
     const credential = createCredentialRecord({
       activation: permit.target,
@@ -959,8 +1366,15 @@ export class AuthSessionCoordinator {
         throw new SessionError(sessionErrorCodes.invalidState, "Transition credential does not match its target");
       }
       await verifyCredentialBytes(credential);
+      if (evidence.signal.aborted || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate crossed a lifecycle fence");
+      }
 
       await this.commit((snapshot): CoordinatorDecision<void> => {
+        const commitTime = Math.max(now, Date.now());
+        if (evidence.signal.aborted || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate crossed a lifecycle fence");
+        }
         const authority = snapshot.authority;
         if (
           authority.mode !== "transition" ||
@@ -970,7 +1384,7 @@ export class AuthSessionCoordinator {
             ? cleanupReceipt !== undefined
             : cleanupReceipt === undefined || authority.cleanupReceipt !== cleanupReceipt) ||
           authority.generation !== permit.target.authGeneration ||
-          permit.expiresAt <= now
+          permit.expiresAt <= commitTime
         ) {
           throw new SessionError(sessionErrorCodes.admissionDenied, "Transition is not ready for activation");
         }
@@ -979,7 +1393,7 @@ export class AuthSessionCoordinator {
           !attempt ||
           attempt.kind !== "acquisition" ||
           !sameAcquisitionAttempt(attempt, evidence.attempt) ||
-          attempt.expiresAt <= now ||
+          attempt.expiresAt <= commitTime ||
           attempt.serverAuthority !== permit.target.serverAuthority
         ) {
           throw new SessionError(sessionErrorCodes.admissionDenied, "Transition attempt is missing, expired, or stale");
@@ -992,16 +1406,74 @@ export class AuthSessionCoordinator {
           session: permit.target,
         };
         return replaceCoordinatorSnapshot(nextSnapshot(snapshot, active, [credential], []), undefined);
-      });
+      }, evidence.signal);
       committed = true;
     } finally {
       proofClaim.settle(committed);
     }
   }
 
+  /**
+   * Deterministically abandons one exact persisted transition. Anonymous
+   * transitions converge directly to a fresh `none`; a transition that
+   * retired a source session becomes an ordinary retirement so its physical
+   * scope must still pass the verified purge barrier.
+   */
+  public async cancelAcquisitionTransition(
+    permitValue: unknown,
+    nextGeneration: string,
+  ): Promise<TransitionCancellationResult> {
+    const permit = validateAcquisitionTransitionPermit(permitValue);
+    const generation = requireGeneration(nextGeneration);
+    return this.commit((snapshot): CoordinatorDecision<TransitionCancellationResult> => {
+      const authority = snapshot.authority;
+      if (authority.mode !== "transition" || !sameTransitionPermit(authority.permit, permit)) {
+        return keepCoordinatorSnapshot(Object.freeze({ kind: "superseded", authority }));
+      }
+      const attempt = snapshot.attempts.find((item) => item.attemptId === permit.attemptId);
+      if (!attempt || attempt.kind !== "acquisition") {
+        throw invariantFailure("Transition cancellation lost its exact acquisition attempt");
+      }
+      if (
+        generation === authority.generation ||
+        generation === permit.target.authGeneration ||
+        generation === attempt.baselineGeneration ||
+        (authority.source !== null && generation === authority.source.authGeneration)
+      ) {
+        throw new SessionError(sessionErrorCodes.invalidState, "Transition cancellation must rotate generation");
+      }
+      if (authority.source === null) {
+        const anonymous: AuthAuthority = {
+          v: 6,
+          mode: "none",
+          generation,
+          revision: authority.revision + 1,
+        };
+        return replaceCoordinatorSnapshot(
+          nextSnapshot(snapshot, anonymous, [], []),
+          Object.freeze({ kind: "anonymous", authority: anonymous }),
+        );
+      }
+      const retiring: AuthAuthority = {
+        v: 6,
+        mode: "retiring",
+        generation,
+        revision: authority.revision + 1,
+        source: authority.source,
+        cause: "transition_cancelled",
+        phase: authority.phase,
+        ...(authority.cleanupReceipt === undefined ? {} : { cleanupReceipt: authority.cleanupReceipt }),
+      };
+      return replaceCoordinatorSnapshot(
+        nextSnapshot(snapshot, retiring, [], []),
+        Object.freeze({ kind: "retiring", authority: retiring, source: authority.source }),
+      );
+    });
+  }
+
   public async beginRetirement(
     capturedValue: unknown,
-    cause: Exclude<RetirementCause, "owned_401">,
+    cause: "logout" | "server_mismatch",
     nextGeneration: string,
   ): Promise<RetirementResult> {
     const captured = validateActivationCertificate(capturedValue);
@@ -1041,22 +1513,21 @@ export class AuthSessionCoordinator {
     viewValue: unknown,
     nextGeneration: string,
   ): Promise<RetirementResult> {
-    const admission = validateActiveDispatchAdmission(admissionValue);
+    const admission = readActiveDispatchAdmission(admissionValue);
     const view = validateViewLease(viewValue);
     const generation = requireGeneration(nextGeneration);
-    if (
-      view.signal.aborted ||
-      !sameActivation(view.activation, admission.activation) ||
-      view.organizationId !== admission.organizationId ||
-      view.orgRevision !== admission.orgRevision ||
-      view.ownerTabId !== admission.ownerTabId ||
-      view.documentId !== admission.documentId
-    ) {
+    if (view.signal.aborted || !sameView(view, admission.view)) {
       return "superseded";
     }
 
     return this.commit((snapshot): CoordinatorDecision<RetirementResult> => {
-      if (view.signal.aborted) return keepCoordinatorSnapshot("superseded");
+      if (
+        view.signal.aborted ||
+        admission.view.signal.aborted ||
+        admission.lifecycleGeneration !== coordinatorLifecycleGeneration
+      ) {
+        return keepCoordinatorSnapshot("superseded");
+      }
       const authority = snapshot.authority;
       if (authority.mode !== "active" || !sameActivation(authority.session, admission.activation)) {
         return keepCoordinatorSnapshot("superseded");
@@ -1078,7 +1549,7 @@ export class AuthSessionCoordinator {
         phase: "revoked",
       };
       return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
-    });
+    }, admission.view.signal);
   }
 
   public async assertPurgeSource(capturedValue: unknown, signal?: AbortSignal): Promise<AuthAuthority> {
@@ -1194,6 +1665,9 @@ export class AuthSessionCoordinator {
   public async putAttempt(attemptValue: unknown): Promise<void> {
     const attempt = validateSessionAttempt(attemptValue);
     await this.commit((snapshot): CoordinatorDecision<void> => {
+      if (snapshot.authority.mode === "transition" || snapshot.authority.mode === "retiring") {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Attempt writes are blocked during retirement");
+      }
       if (attempt.baselineGeneration !== snapshot.authority.generation) {
         throw new SessionError(sessionErrorCodes.admissionDenied, "Attempt baseline generation is stale");
       }
@@ -1208,6 +1682,9 @@ export class AuthSessionCoordinator {
       throw new SessionError(sessionErrorCodes.invalidState, "Attempt id must not be empty");
     }
     return this.commit((snapshot): CoordinatorDecision<boolean> => {
+      if (snapshot.authority.mode === "transition" || snapshot.authority.mode === "retiring") {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Attempt deletion is blocked during retirement");
+      }
       if (!snapshot.attempts.some((attempt) => attempt.attemptId === attemptId)) {
         return keepCoordinatorSnapshot(false);
       }

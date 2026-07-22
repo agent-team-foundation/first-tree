@@ -115,7 +115,7 @@ export type CredentialCursor = Readonly<{
 }>;
 
 export type AuthorityPhase = "revoked" | "purging" | "source_purged";
-export type RetirementCause = "logout" | "owned_401" | "server_mismatch";
+export type RetirementCause = "logout" | "owned_401" | "server_mismatch" | "transition_cancelled";
 
 export type AnonymousAuthority = Readonly<{
   v: 6;
@@ -440,7 +440,9 @@ function validatePhase(value: unknown): AuthorityPhase {
 }
 
 function validateRetirementCause(value: unknown): RetirementCause {
-  if (value === "logout" || value === "owned_401" || value === "server_mismatch") return value;
+  if (value === "logout" || value === "owned_401" || value === "server_mismatch" || value === "transition_cancelled") {
+    return value;
+  }
   throw new SessionError(sessionErrorCodes.invalidState, "Retirement cause is malformed");
 }
 

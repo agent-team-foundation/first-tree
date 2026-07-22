@@ -21,6 +21,9 @@ export {
   type CoordinatorOptions,
   closeCoordinatorConnections,
   type RetirementResult,
+  type TransitionCancellationResult,
+  type VerifiedCandidateMeResult,
+  type VerifiedCandidateProof,
 } from "./coordinator.js";
 export { SessionError, type SessionErrorCode, sessionErrorCodes, toSessionError } from "./errors.js";
 export {

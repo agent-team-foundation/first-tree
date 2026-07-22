@@ -1,7 +1,6 @@
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestCandidateMe } from "../../api/candidate-client.js";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
 import { deleteDatabaseBarrier } from "../session/idb-delete-barrier.js";
 import {
@@ -240,13 +239,11 @@ async function activeFixture() {
     ),
   );
   const proof = (
-    await requestCandidateMe({
+    await coordinator.requestCandidateMe({
       candidate: targetCredential,
       attempt,
       serverAuthority: certificate.serverAuthority,
       signal: new AbortController().signal,
-      dispatch: (start) => start(),
-      assertResponseCurrent: async () => undefined,
     })
   ).proof;
   const scrub = await scrubLegacyPersistence({
@@ -559,13 +556,11 @@ describe("ContentScopeBarrier", () => {
       ),
     );
     const nextProof = (
-      await requestCandidateMe({
+      await fixture.coordinator.requestCandidateMe({
         candidate: nextCredential,
         attempt: nextAttempt,
         serverAuthority: next.serverAuthority,
         signal: new AbortController().signal,
-        dispatch: (start) => start(),
-        assertResponseCurrent: async () => undefined,
       })
     ).proof;
     const scrub = await scrubLegacyPersistence({

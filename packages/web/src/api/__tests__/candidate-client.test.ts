@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("candidate client", () => {
-  it("uses only the explicit candidate bearer and both dispatch/delivery fences", async () => {
+  it("owns the physical fetch and uses only the explicit candidate bearer", async () => {
     const events: string[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       events.push("fetch");
@@ -65,19 +65,32 @@ describe("candidate client", () => {
       attempt: attempt(),
       serverAuthority: "https://s1.example/api/v1",
       signal: new AbortController().signal,
-      dispatch: async (start) => {
-        events.push("admit");
-        const response = start();
-        events.push("dispatched");
-        return response;
-      },
-      assertResponseCurrent: async () => {
-        events.push("response-gate");
-      },
     });
 
-    expect(events).toEqual(["admit", "fetch", "dispatched", "response-gate"]);
+    expect(events).toEqual(["fetch"]);
     expect(result.accountId).toBe("account-a");
+  });
+
+  it("ignores caller-shaped dispatch callbacks and always uses the owned fetch", async () => {
+    const forgedDispatch = vi.fn(async () => jsonResponse({ user: { id: "account-forged" } }));
+    const fetchMock = vi.fn(async () => {
+      throw new Error("owned fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const input = {
+      candidate: candidate(),
+      attempt: attempt(),
+      serverAuthority: "https://s1.example/api/v1",
+      signal: new AbortController().signal,
+      dispatch: forgedDispatch,
+      assertResponseCurrent: vi.fn(),
+    };
+    const result = await requestCandidateMe(input).catch((error: unknown) => error);
+
+    expect(result).toEqual(new CandidateApiError(503, "Candidate identity request is unavailable"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(forgedDispatch).not.toHaveBeenCalled();
   });
 
   it("rejects a server-verified identity that differs from the decoded candidate subject", async () => {
@@ -91,8 +104,6 @@ describe("candidate client", () => {
         attempt: attempt(),
         serverAuthority: "https://s1.example/api/v1",
         signal: new AbortController().signal,
-        dispatch: (start) => start(),
-        assertResponseCurrent: async () => undefined,
       }),
     ).rejects.toMatchObject({ status: 409 });
   });
@@ -107,35 +118,12 @@ describe("candidate client", () => {
         attempt: attempt(),
         serverAuthority: "https://s1.example/api/v1",
         signal: new AbortController().signal,
-        dispatch: (start) => start(),
-        assertResponseCurrent: async () => undefined,
       }),
     ).rejects.toEqual(new CandidateApiError(400, "Candidate fingerprint does not match its token bytes"));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("drops a late response when the post-response authority fence fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ user: { id: "account-a" } })),
-    );
-    const stale = new Error("stale lease");
-    await expect(
-      requestCandidateMe({
-        candidate: candidate(),
-        attempt: attempt(),
-        serverAuthority: "https://s1.example/api/v1",
-        signal: new AbortController().signal,
-        dispatch: (start) => start(),
-        assertResponseCurrent: async () => {
-          throw stale;
-        },
-      }),
-    ).rejects.toBe(stale);
-  });
-
-  it("rechecks authority and replaces unknown network errors with a fixed safe error", async () => {
-    const gate = vi.fn(async () => undefined);
+  it("replaces unknown network errors with a fixed safe error", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -148,11 +136,8 @@ describe("candidate client", () => {
       attempt: attempt(),
       serverAuthority: "https://s1.example/api/v1",
       signal: new AbortController().signal,
-      dispatch: (start) => start(),
-      assertResponseCurrent: gate,
     }).catch((error: unknown) => error);
 
-    expect(gate).toHaveBeenCalledTimes(1);
     expect(failure).toEqual(new CandidateApiError(503, "Candidate identity request is unavailable"));
     expect(String((failure as Error).message)).not.toContain("secret.example");
     expect(String((failure as Error).stack)).not.toContain("secret.example");
@@ -172,8 +157,6 @@ describe("candidate client", () => {
           attempt: attempt(),
           serverAuthority: "https://s1.example/api/v1",
           signal: new AbortController().signal,
-          dispatch: (start) => start(),
-          assertResponseCurrent: async () => undefined,
         }),
       ).rejects.toEqual(new CandidateApiError(401, "Candidate identity request failed (401)"));
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -189,8 +172,6 @@ describe("candidate client", () => {
       attempt: attempt(),
       serverAuthority: "https://s1.example/api/v1",
       signal: new AbortController().signal,
-      dispatch: (start: () => Promise<Response>) => start(),
-      assertResponseCurrent: async () => undefined,
     };
 
     vi.stubGlobal(

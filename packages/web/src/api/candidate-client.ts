@@ -20,12 +20,12 @@ export class CandidateApiError extends Error {
   }
 }
 
-export type CandidateDispatch = (start: () => Promise<Response>) => Promise<Response>;
-
 export type CandidateMeResult = Readonly<{
   accountId: string;
   payload: Readonly<Record<string, unknown>>;
-  proof: VerifiedCandidateProof;
+  candidate: FingerprintedCandidateTokenSnapshot;
+  attempt: CandidateAttemptBinding;
+  serverAuthority: string;
 }>;
 
 export type CandidateAttemptBinding = AcquisitionSessionAttempt;
@@ -35,64 +35,7 @@ export type CandidateMeRequest = Readonly<{
   attempt: CandidateAttemptBinding;
   serverAuthority: string;
   signal: AbortSignal;
-  /** Starts the request only after a fresh authoritative dispatch admission. */
-  dispatch: CandidateDispatch;
-  /** Rechecks the exact attempt/lease/authority after bytes are parsed. */
-  assertResponseCurrent: () => Promise<void>;
 }>;
-
-const verifiedCandidateProofBrand: unique symbol = Symbol("first-tree.verified-candidate-proof");
-
-export type VerifiedCandidateProof = Readonly<{
-  [verifiedCandidateProofBrand]: true;
-}>;
-
-export type VerifiedCandidateEvidence = Readonly<{
-  candidate: FingerprintedCandidateTokenSnapshot;
-  serverAuthority: string;
-  accountId: string;
-  attempt: CandidateAttemptBinding;
-}>;
-
-type ProofState = {
-  evidence: VerifiedCandidateEvidence;
-  state: "available" | "claimed" | "consumed";
-};
-
-const verifiedCandidateProofs = new WeakMap<VerifiedCandidateProof, ProofState>();
-
-function createVerifiedCandidateProof(evidence: VerifiedCandidateEvidence): VerifiedCandidateProof {
-  const proof = Object.freeze({ [verifiedCandidateProofBrand]: true as const });
-  verifiedCandidateProofs.set(proof, { evidence, state: "available" });
-  return proof;
-}
-
-export function readVerifiedCandidateProof(value: unknown): VerifiedCandidateEvidence {
-  if (typeof value !== "object" || value === null) throw new CandidateApiError(400, "Candidate proof is malformed");
-  const state = verifiedCandidateProofs.get(value as VerifiedCandidateProof);
-  if (!state || state.state !== "available") throw new CandidateApiError(409, "Candidate proof is unavailable");
-  return state.evidence;
-}
-
-export function claimVerifiedCandidateProof(value: unknown): Readonly<{
-  evidence: VerifiedCandidateEvidence;
-  settle: (committed: boolean) => void;
-}> {
-  if (typeof value !== "object" || value === null) throw new CandidateApiError(400, "Candidate proof is malformed");
-  const proof = value as VerifiedCandidateProof;
-  const state = verifiedCandidateProofs.get(proof);
-  if (!state || state.state !== "available") throw new CandidateApiError(409, "Candidate proof is unavailable");
-  state.state = "claimed";
-  let settled = false;
-  return Object.freeze({
-    evidence: state.evidence,
-    settle: (committed: boolean): void => {
-      if (settled) return;
-      settled = true;
-      state.state = committed ? "consumed" : "available";
-    },
-  });
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -143,40 +86,33 @@ export async function requestCandidateMe(input: CandidateMeRequest): Promise<Can
     throw new CandidateApiError(401, "Candidate credential is expired");
   }
 
-  const assertResponseCurrent = async (): Promise<void> => {
-    await input.assertResponseCurrent();
-    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
-  };
-
   let response: Response;
   try {
-    response = await input.dispatch(() =>
-      fetch(`${BASE_URL}/me`, {
-        method: "GET",
-        cache: "no-store",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        redirect: "error",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${candidate.accessToken}`,
-          ...expectedAuthorityHeaders(serverAuthority),
-        },
-        signal: input.signal,
-      }),
-    );
+    response = await fetch(`${BASE_URL}/me`, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${candidate.accessToken}`,
+        ...expectedAuthorityHeaders(serverAuthority),
+      },
+      signal: input.signal,
+    });
   } catch {
-    await assertResponseCurrent();
+    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(503, "Candidate identity request is unavailable");
   }
 
   if (!response.ok) {
-    await assertResponseCurrent();
+    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(response.status, `Candidate identity request failed (${response.status})`);
   }
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
-    await assertResponseCurrent();
+    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(502, "Candidate identity response is malformed");
   }
 
@@ -184,13 +120,11 @@ export async function requestCandidateMe(input: CandidateMeRequest): Promise<Can
   try {
     payload = JSON.parse(await readBoundedResponseText(response, MAX_ME_RESPONSE_BYTES));
   } catch {
-    await assertResponseCurrent();
+    if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
     throw new CandidateApiError(502, "Candidate identity response is malformed");
   }
 
-  // A physically dispatched request may finish after logout, generation
-  // rotation, or lease takeover. Its bytes stay quarantined until this gate.
-  await assertResponseCurrent();
+  if (input.signal.aborted) throw new DOMException("Candidate request was aborted", "AbortError");
 
   if (!isRecord(payload) || !isRecord(payload.user) || typeof payload.user.id !== "string") {
     throw new CandidateApiError(502, "Candidate identity response is malformed");
@@ -199,15 +133,11 @@ export async function requestCandidateMe(input: CandidateMeRequest): Promise<Can
     throw new CandidateApiError(409, "Candidate identity does not match its token subject");
   }
 
-  const evidence: VerifiedCandidateEvidence = Object.freeze({
-    candidate,
-    serverAuthority,
-    accountId: payload.user.id,
-    attempt,
-  });
   return Object.freeze({
     accountId: payload.user.id,
     payload: Object.freeze(payload),
-    proof: createVerifiedCandidateProof(evidence),
+    candidate,
+    attempt,
+    serverAuthority,
   });
 }

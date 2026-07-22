@@ -1,8 +1,8 @@
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestCandidateMe, type VerifiedCandidateProof } from "../../api/candidate-client.js";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
+import type { VerifiedCandidateProof } from "../session/coordinator.js";
 import {
   type AcquisitionSessionAttempt,
   type ActivationCertificate,
@@ -83,15 +83,17 @@ function jsonResponse(body: unknown): Response {
 }
 
 async function candidateProof(
+  coordinator: AuthSessionCoordinator,
   candidateAttempt: AcquisitionSessionAttempt,
   targetCredential: Awaited<ReturnType<typeof credential>>,
+  signal = new AbortController().signal,
 ): Promise<VerifiedCandidateProof> {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => jsonResponse({ user: { id: targetCredential.activation.accountId } })),
   );
   return (
-    await requestCandidateMe({
+    await coordinator.requestCandidateMe({
       candidate: {
         accessToken: targetCredential.accessToken,
         refreshToken: targetCredential.refreshToken,
@@ -99,9 +101,7 @@ async function candidateProof(
       },
       attempt: candidateAttempt,
       serverAuthority: targetCredential.activation.serverAuthority,
-      signal: new AbortController().signal,
-      dispatch: (start) => start(),
-      assertResponseCurrent: async () => undefined,
+      signal,
     })
   ).proof;
 }
@@ -117,7 +117,7 @@ async function activateAnonymous(
   await coordinator.putAttempt(candidateAttempt);
   const beforeReservation = await coordinator.readAuthority();
   const targetCredential = await credential(certificate);
-  const proof = await candidateProof(candidateAttempt, targetCredential);
+  const proof = await candidateProof(coordinator, candidateAttempt, targetCredential);
   const legacyScrub = await scrubLegacyPersistence({
     localStorage: memoryStorage(),
     sessionStorage: memoryStorage(),
@@ -367,7 +367,7 @@ describe("AuthSessionCoordinator", () => {
     const before = await readCoordinatorSnapshot(factory);
     const target = activation("a", "generation-a");
     const targetCredential = await credential(target);
-    const proof = await candidateProof(candidateAttempt, targetCredential);
+    const proof = await candidateProof(coordinator, candidateAttempt, targetCredential);
 
     await expect(
       coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null),
@@ -399,7 +399,7 @@ describe("AuthSessionCoordinator", () => {
     await coordinator.putAttempt(attempt("x-2", "generation-0"));
     const next = activation("a", "generation-a");
     const nextCredential = await credential(next);
-    const proof = await candidateProof(candidateAttempt, nextCredential);
+    const proof = await candidateProof(coordinator, candidateAttempt, nextCredential);
     const scrub = await scrubLegacyPersistence({
       localStorage: memoryStorage(),
       sessionStorage: memoryStorage(),
@@ -428,8 +428,7 @@ describe("AuthSessionCoordinator", () => {
     await coordinator.putAttempt(candidateAttempt);
     const target = activation("a", "generation-a");
     const firstCredential = await credential(target, 0, "pair-one");
-    const firstProof = await candidateProof(candidateAttempt, firstCredential);
-    const recoveryProof = await candidateProof(candidateAttempt, firstCredential);
+    const firstProof = await candidateProof(coordinator, candidateAttempt, firstCredential);
     const scrub = await scrubLegacyPersistence({
       localStorage: memoryStorage(),
       sessionStorage: memoryStorage(),
@@ -444,14 +443,14 @@ describe("AuthSessionCoordinator", () => {
     );
 
     const secondCredential = await credential(target, 0, "pair-two");
-    const secondProof = await candidateProof(candidateAttempt, secondCredential);
-    await expect(coordinator.completeAcquisitionTransition(transition, secondProof)).rejects.toMatchObject({
-      code: sessionErrorCodes.invalidState,
+    await expect(candidateProof(coordinator, candidateAttempt, secondCredential)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
     });
     await expect(
       coordinator.completeAcquisitionTransition(transition, Object.freeze({}) as VerifiedCandidateProof),
     ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
 
+    const recoveryProof = await candidateProof(coordinator, candidateAttempt, firstCredential);
     await coordinator.completeAcquisitionTransition(transition, recoveryProof);
     await expect(coordinator.admitActivation(target)).resolves.toMatchObject({
       credential: { credentialFingerprint: firstCredential.credentialFingerprint },
@@ -459,6 +458,276 @@ describe("AuthSessionCoordinator", () => {
     await expect(coordinator.completeAcquisitionTransition(transition, recoveryProof)).rejects.toMatchObject({
       code: sessionErrorCodes.admissionDenied,
     });
+    const beforeLateCancel = await readCoordinatorSnapshot(factory);
+    await expect(coordinator.cancelAcquisitionTransition(transition, "generation-late-cancel")).resolves.toMatchObject({
+      kind: "superseded",
+    });
+    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeLateCancel);
+  });
+
+  it("rejects candidate proofs after their original lifecycle is invalidated", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const candidateAttempt = attempt("lifecycle-bound", "generation-0");
+    await coordinator.putAttempt(candidateAttempt);
+    const target = activation("a", "generation-a");
+    const targetCredential = await credential(target);
+    const controller = new AbortController();
+    const proof = await candidateProof(coordinator, candidateAttempt, targetCredential, controller.signal);
+    const scrub = await scrubLegacyPersistence({
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+      indexedDB: factory,
+    });
+    controller.abort();
+    await expect(
+      coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null, scrub),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
+
+    const secondController = new AbortController();
+    const secondProof = await candidateProof(coordinator, candidateAttempt, targetCredential, secondController.signal);
+    closeCoordinatorConnections();
+    await expect(
+      coordinator.reserveAcquisitionTransition(
+        { generation: "generation-0", revision: 1 },
+        secondProof,
+        target,
+        null,
+        scrub,
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+  });
+
+  it("cannot mint a coordinator proof from caller-shaped dispatch callbacks", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const candidateAttempt = attempt("forged-dispatch", "generation-0");
+    await coordinator.putAttempt(candidateAttempt);
+    const target = activation("a", "generation-a");
+    const targetCredential = await credential(target);
+    const forgedDispatch = vi.fn(async () => jsonResponse({ user: { id: target.accountId } }));
+    const fetchMock = vi.fn(async () => {
+      throw new Error("owned candidate fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const attackerShapedInput = {
+      candidate: targetCredential,
+      attempt: candidateAttempt,
+      serverAuthority: target.serverAuthority,
+      signal: new AbortController().signal,
+      dispatch: forgedDispatch,
+      assertResponseCurrent: vi.fn(),
+    };
+
+    await expect(coordinator.requestCandidateMe(attackerShapedInput)).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(forgedDispatch).not.toHaveBeenCalled();
+    await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
+  });
+
+  it("consumes a legacy scrub proof when reservation commits but pagehide loses its result", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const candidateAttempt = attempt("ambiguous-reserve", "generation-0");
+    await coordinator.putAttempt(candidateAttempt);
+    const target = activation("a", "generation-a");
+    const targetCredential = await credential(target);
+    const proof = await candidateProof(coordinator, candidateAttempt, targetCredential);
+    const scrub = await scrubLegacyPersistence({
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+      indexedDB: factory,
+    });
+
+    const prototype = IDBObjectStore.prototype;
+    const originalPut = prototype.put;
+    let transitionWriteResolve = (): void => undefined;
+    const transitionWrite = new Promise<void>((resolve) => {
+      transitionWriteResolve = resolve;
+    });
+    const putSpy = vi.spyOn(prototype, "put").mockImplementation(function (
+      this: IDBObjectStore,
+      ...args: Parameters<IDBObjectStore["put"]>
+    ) {
+      const request = originalPut.apply(this, args);
+      const value = args[0] as { authority?: { mode?: string } };
+      if (this.name === "authority" && value.authority?.mode === "transition") {
+        request.addEventListener("success", transitionWriteResolve, { once: true });
+      }
+      return request;
+    });
+
+    const reservation = coordinator.reserveAcquisitionTransition(
+      { generation: "generation-0", revision: 1 },
+      proof,
+      target,
+      null,
+      scrub,
+    );
+    await transitionWrite;
+    closeCoordinatorConnections();
+    await expect(reservation).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    putSpy.mockRestore();
+
+    const reloaded = new AuthSessionCoordinator({ indexedDB: factory });
+    const persisted = await reloaded.readAuthority();
+    expect(persisted).toMatchObject({ mode: "transition", generation: "generation-a" });
+    if (persisted.mode !== "transition") throw new Error("expected committed transition fixture");
+    await reloaded.cancelAcquisitionTransition(persisted.permit, "generation-recovered");
+
+    const nextAttempt = attempt("after-ambiguous-reserve", "generation-recovered");
+    await reloaded.putAttempt(nextAttempt);
+    const nextTarget = activation("b", "generation-b");
+    const nextProof = await candidateProof(reloaded, nextAttempt, await credential(nextTarget));
+    const cursor = await reloaded.readAuthority();
+    await expect(
+      reloaded.reserveAcquisitionTransition(
+        { generation: cursor.generation, revision: cursor.revision },
+        nextProof,
+        nextTarget,
+        null,
+        scrub,
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+  });
+
+  it("cancels an anonymous transition after proof loss or expiry and preserves a later authority", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const candidateAttempt = attempt("anonymous-recovery", "generation-0");
+    await coordinator.putAttempt(candidateAttempt);
+    const target = activation("a", "generation-a");
+    const targetCredential = await credential(target);
+    const controller = new AbortController();
+    const proof = await candidateProof(coordinator, candidateAttempt, targetCredential, controller.signal);
+    const scrub = await scrubLegacyPersistence({
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+      indexedDB: factory,
+    });
+    const permit = await coordinator.reserveAcquisitionTransition(
+      { generation: "generation-0", revision: 1 },
+      proof,
+      target,
+      null,
+      scrub,
+    );
+    const expiryProof = await candidateProof(coordinator, candidateAttempt, targetCredential);
+    await expect(
+      coordinator.completeAcquisitionTransition(permit, expiryProof, undefined, permit.expiresAt + 1),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+
+    const originalCrypto = globalThis.crypto;
+    let digestStartedResolve = (): void => undefined;
+    let releaseDigestResolve = (): void => undefined;
+    const digestStarted = new Promise<void>((resolve) => {
+      digestStartedResolve = resolve;
+    });
+    const releaseDigest = new Promise<void>((resolve) => {
+      releaseDigestResolve = resolve;
+    });
+    vi.stubGlobal("crypto", {
+      ...originalCrypto,
+      randomUUID: originalCrypto.randomUUID.bind(originalCrypto),
+      subtle: {
+        digest: async (...args: Parameters<SubtleCrypto["digest"]>) => {
+          digestStartedResolve();
+          await releaseDigest;
+          return originalCrypto.subtle.digest(...args);
+        },
+      },
+    } as Crypto);
+    const lateCompletion = coordinator.completeAcquisitionTransition(permit, proof);
+    await digestStarted;
+    closeCoordinatorConnections();
+    releaseDigestResolve();
+    await expect(lateCompletion).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+
+    const reloaded = new AuthSessionCoordinator({ indexedDB: factory });
+    await expect(reloaded.cancelAcquisitionTransition(permit, "generation-recovered")).resolves.toMatchObject({
+      kind: "anonymous",
+      authority: { mode: "none", generation: "generation-recovered" },
+    });
+    const recovered = await readCoordinatorSnapshot(factory);
+    expect(recovered.credentials).toEqual([]);
+    expect(recovered.attempts).toEqual([]);
+
+    const next = activation("b", "generation-b");
+    await activateAnonymous(factory, reloaded, next, "attempt-b");
+    const beforeLateCancel = await readCoordinatorSnapshot(factory);
+    await expect(reloaded.cancelAcquisitionTransition(permit, "generation-late")).resolves.toMatchObject({
+      kind: "superseded",
+    });
+    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeLateCancel);
+  });
+
+  it("converts source transitions into recoverable retirement before and after purge", async () => {
+    for (const purgeBeforeCancel of [false, true]) {
+      const factory = new IDBFactory();
+      const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+      await coordinator.bootstrapAnonymous("generation-0");
+      const source = activation(`source-${purgeBeforeCancel}`, `generation-source-${purgeBeforeCancel}`);
+      await activateAnonymous(factory, coordinator, source, `source-attempt-${purgeBeforeCancel}`);
+      const target = activation(`target-${purgeBeforeCancel}`, `generation-target-${purgeBeforeCancel}`);
+      const targetAttempt = attempt(`target-attempt-${purgeBeforeCancel}`, source.authGeneration, source.sessionEpoch);
+      await coordinator.putAttempt(targetAttempt);
+      const targetCredential = await credential(target);
+      const proof = await candidateProof(coordinator, targetAttempt, targetCredential);
+      const before = await coordinator.readAuthority();
+      const permit = await coordinator.reserveAcquisitionTransition(
+        { generation: before.generation, revision: before.revision },
+        proof,
+        target,
+        source,
+      );
+      await expect(coordinator.putAttempt(attempt("blocked-transition", target.authGeneration))).rejects.toMatchObject({
+        code: sessionErrorCodes.admissionDenied,
+      });
+      await expect(coordinator.deleteAttempt(targetAttempt.attemptId)).rejects.toMatchObject({
+        code: sessionErrorCodes.admissionDenied,
+      });
+      const receipt = purgeBeforeCancel ? await purge(factory, coordinator, source) : undefined;
+      closeCoordinatorConnections();
+      const recovering = new AuthSessionCoordinator({ indexedDB: factory });
+      const cancelled = await recovering.cancelAcquisitionTransition(
+        permit,
+        `generation-cancelled-${purgeBeforeCancel}`,
+      );
+      expect(cancelled).toMatchObject({
+        kind: "retiring",
+        authority: {
+          mode: "retiring",
+          cause: "transition_cancelled",
+          phase: purgeBeforeCancel ? "source_purged" : "revoked",
+        },
+      });
+      if (receipt !== undefined && cancelled.kind === "retiring") {
+        expect(cancelled.authority).toMatchObject({ cleanupReceipt: receipt });
+      }
+      await expect(recovering.completeAcquisitionTransition(permit, proof, receipt)).rejects.toMatchObject({
+        code: sessionErrorCodes.staleOperation,
+      });
+      await expect(
+        recovering.putAttempt(attempt("blocked", `generation-cancelled-${purgeBeforeCancel}`)),
+      ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+      await expect(recovering.deleteAttempt(targetAttempt.attemptId)).rejects.toMatchObject({
+        code: sessionErrorCodes.admissionDenied,
+      });
+
+      const finalReceipt = receipt ?? (await purge(factory, recovering, source));
+      await recovering.completeRetirement(source, finalReceipt, `generation-none-${purgeBeforeCancel}`);
+      await expect(recovering.readAuthority()).resolves.toMatchObject({
+        mode: "none",
+        generation: `generation-none-${purgeBeforeCancel}`,
+      });
+    }
   });
 
   it("rejects a verified proof whose mapped attempt payload differs from stored X", async () => {
@@ -475,16 +744,9 @@ describe("AuthSessionCoordinator", () => {
     if (remapped.kind !== "acquisition") throw new Error("expected acquisition attempt fixture");
     const target = activation("a", "generation-a");
     const targetCredential = await credential(target);
-    const proof = await candidateProof(remapped, targetCredential);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
+    await expect(candidateProof(coordinator, remapped, targetCredential)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
     });
-
-    await expect(
-      coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null, scrub),
-    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
     await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
   });
 
@@ -526,7 +788,7 @@ describe("AuthSessionCoordinator", () => {
     const targetAttempt = attempt("attempt-b", "generation-a", departing.sessionEpoch);
     await coordinator.putAttempt(targetAttempt);
     const beforeReservation = await coordinator.readAuthority();
-    const proof = await candidateProof(targetAttempt, targetCredential);
+    const proof = await candidateProof(coordinator, targetAttempt, targetCredential);
     const targetPermit = await coordinator.reserveAcquisitionTransition(
       { generation: beforeReservation.generation, revision: beforeReservation.revision },
       proof,
@@ -572,15 +834,19 @@ describe("AuthSessionCoordinator", () => {
     expect(view.ownerTabId).toBe("owner-tab-a");
     const before = await coordinator.readActiveSession();
     const replacement = await credential(certificate, 1, "rotated-a");
-    const refreshDispatch = await coordinator.startActiveDispatch(view, before.credential, "refresh", () =>
-      Promise.resolve("refresh-response"),
-    );
+    const original = await credential(certificate);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ refreshToken: original.refreshToken });
+      return jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken });
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    await expect(coordinator.replaceActiveCredential(refreshDispatch.admission, view, replacement)).resolves.toEqual({
+    await expect(coordinator.refreshActiveCredential(view, before.credential)).resolves.toEqual({
       sessionEpoch: certificate.sessionEpoch,
       credentialRevision: 1,
       credentialFingerprint: replacement.credentialFingerprint,
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const after = await coordinator.admitView(view);
     expect(after.authority.session).toEqual(certificate);
@@ -588,10 +854,11 @@ describe("AuthSessionCoordinator", () => {
       credentialRevision: 1,
       credentialFingerprint: replacement.credentialFingerprint,
     });
-    const staleReplacement = await credential(certificate, 1, "stale");
-    await expect(
-      coordinator.replaceActiveCredential(refreshDispatch.admission, view, staleReplacement),
-    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    fetchMock.mockClear();
+    await expect(coordinator.refreshActiveCredential(view, before.credential)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("drops a refresh replacement when its exact view aborts during credential hashing", async () => {
@@ -611,8 +878,9 @@ describe("AuthSessionCoordinator", () => {
     });
     const before = await coordinator.readActiveSession();
     const replacement = await credential(certificate, 1, "late-refresh");
-    const refreshDispatch = await coordinator.startActiveDispatch(view, before.credential, "refresh", () =>
-      Promise.resolve("late-response"),
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken })),
     );
     const originalCrypto = globalThis.crypto;
     let digestStartedResolve = (): void => undefined;
@@ -623,23 +891,126 @@ describe("AuthSessionCoordinator", () => {
     const releaseDigest = new Promise<void>((resolve) => {
       releaseDigestResolve = resolve;
     });
+    let digestCalls = 0;
     vi.stubGlobal("crypto", {
       ...originalCrypto,
       randomUUID: originalCrypto.randomUUID.bind(originalCrypto),
       subtle: {
         digest: async (...args: Parameters<SubtleCrypto["digest"]>) => {
-          digestStartedResolve();
-          await releaseDigest;
+          digestCalls += 1;
+          if (digestCalls === 2) {
+            digestStartedResolve();
+            await releaseDigest;
+          }
           return originalCrypto.subtle.digest(...args);
         },
       },
     } as Crypto);
 
-    const update = coordinator.replaceActiveCredential(refreshDispatch.admission, view, replacement);
+    const update = coordinator.refreshActiveCredential(view, before.credential);
     await digestStarted;
     controller.abort();
     releaseDigestResolve();
     await expect(update).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+  });
+
+  it("does not let a copied access admission or replacement signal cross capability domains", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("a", "generation-a");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
+    const controller = new AbortController();
+    const view = createViewLease({
+      activation: certificate,
+      organizationId: "org-a",
+      orgRevision: "org-revision-a",
+      ownerTabId: "owner-tab-a",
+      documentId: "document-a",
+      signal: controller.signal,
+    });
+    const before = await coordinator.readActiveSession();
+    const access = await coordinator.startActiveDispatch(view, before.credential, "access", () => Promise.resolve(401));
+    const copied = { ...access.admission, tokenKind: "refresh" };
+    await expect(coordinator.beginOwned401Retirement(copied, view, "generation-copied")).rejects.toMatchObject({
+      code: sessionErrorCodes.invalidState,
+    });
+
+    const replacementView = createViewLease({ ...view, signal: new AbortController().signal });
+    controller.abort();
+    await expect(coordinator.assertActiveDispatchResponse(access.admission, replacementView)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+  });
+
+  it.each([
+    ["network", () => Promise.reject(new Error("secret refresh failure"))],
+    ["401", async () => new Response("unauthorized", { status: 401 })],
+    ["malformed", async () => new Response("not-json", { headers: { "Content-Type": "application/json" } })],
+    ["missing refresh token", async () => jsonResponse({ accessToken: "not-used" })],
+  ])("does not replace credentials after a %s refresh outcome", async (_label, responseFactory) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("a", "generation-a");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
+    const view = createViewLease({
+      activation: certificate,
+      organizationId: "org-a",
+      orgRevision: "org-revision-a",
+      ownerTabId: "owner-tab-a",
+      documentId: "document-a",
+      signal: new AbortController().signal,
+    });
+    const before = await coordinator.readActiveSession();
+    vi.stubGlobal("fetch", vi.fn(responseFactory));
+
+    await expect(coordinator.refreshActiveCredential(view, before.credential)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+  });
+
+  it("keeps the current credential unchanged while a refresh is pending and after it is aborted", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("a", "generation-a");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
+    const controller = new AbortController();
+    const view = createViewLease({
+      activation: certificate,
+      organizationId: "org-a",
+      orgRevision: "org-revision-a",
+      ownerTabId: "owner-tab-a",
+      documentId: "document-a",
+      signal: controller.signal,
+    });
+    const before = await coordinator.readActiveSession();
+    let startedResolve = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            startedResolve();
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+              once: true,
+            });
+          }),
+      ),
+    );
+
+    const refresh = coordinator.refreshActiveCredential(view, before.credential);
+    await started;
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+    controller.abort();
+    await expect(refresh).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
     expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
   });
 
@@ -662,15 +1033,13 @@ describe("AuthSessionCoordinator", () => {
     const targetCredential = await credential(target);
 
     await expect(
-      requestCandidateMe({
+      coordinator.requestCandidateMe({
         candidate: targetCredential,
         attempt: managementAttempt as unknown as AcquisitionSessionAttempt,
         serverAuthority: SERVER_AUTHORITY,
         signal: new AbortController().signal,
-        dispatch: (start) => start(),
-        assertResponseCurrent: async () => undefined,
       }),
-    ).rejects.toMatchObject({ status: 400 });
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
 
     await expect(
       coordinator.reserveAcquisitionTransition(
@@ -817,11 +1186,12 @@ describe("AuthSessionCoordinator", () => {
     });
     const before = await first.readActiveSession();
     const oldDispatch = await first.startActiveDispatch(view, before.credential, "access", () => Promise.resolve(401));
-    const refreshDispatch = await first.startActiveDispatch(view, before.credential, "refresh", () =>
-      Promise.resolve("refresh-response"),
-    );
     const refreshed = await credential(certificate, 1, "refreshed-a");
-    await first.replaceActiveCredential(refreshDispatch.admission, view, refreshed);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken })),
+    );
+    await first.refreshActiveCredential(view, before.credential);
 
     await expect(first.beginOwned401Retirement(oldDispatch.admission, view, "generation-old-401")).resolves.toBe(
       "superseded",
