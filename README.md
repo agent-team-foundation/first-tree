@@ -40,6 +40,7 @@ before they work; useful outcomes can flow back into it after the work is done.
 
 The result is a human-agent work loop where every task can start with more team
 context, and every useful outcome can make the next task smarter.
+![Uploading Screenshot 2026-07-22 at 13.04.00.png…]()
 
 <div align="center">
 <table>
