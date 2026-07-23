@@ -59,6 +59,7 @@ export function SetupContextTreeControls({
     mutationFn: () => {
       if (!organizationId) throw new Error("organization not loaded");
       return saveSetting(organizationId, {
+        provider: null,
         repo: repo.trim() || null,
         branch: branch.trim() || null,
       });

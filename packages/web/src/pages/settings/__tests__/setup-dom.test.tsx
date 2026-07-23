@@ -902,12 +902,83 @@ describe("Settings Setup overview", () => {
     await flush();
 
     expect(orgSettingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", {
+      provider: null,
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
     });
     expect(controls.textContent).toContain("release branch");
     expect(controls.textContent).toContain("Saved");
     expect(controls.querySelector('button[aria-label="Save"]')).not.toBeNull();
+    await act(async () => view.root.unmount());
+  });
+
+  it.each([
+    [
+      "GitHub to GitLab",
+      "github",
+      "https://github.com/acme/context-tree.git",
+      "https://gitlab.com/acme/context-tree.git",
+      "gitlab",
+    ],
+    [
+      "GitLab to GitHub",
+      "gitlab",
+      "https://gitlab.com/acme/context-tree.git",
+      "https://github.com/acme/context-tree.git",
+      "github",
+    ],
+  ] as const)("clears the stale provider declaration when rebinding %s", async (_name, previousProvider, previousRepo, nextRepo, nextProvider) => {
+    orgSettingsMocks.getRawContextTreeSetting.mockResolvedValue({
+      repo: previousRepo,
+      branch: "main",
+      provider: previousProvider,
+    });
+    orgSettingsMocks.putContextTreeSetting.mockResolvedValue({
+      repo: nextRepo,
+      branch: "main",
+      provider: nextProvider,
+    });
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
+      capabilityFixture({
+        binding: {
+          state: "bound",
+          provider: previousProvider,
+          repo: previousRepo,
+          branch: "main",
+        },
+      }),
+    );
+
+    const view = await renderSettingsSetupPage();
+    const tree = await waitForRowText(view.host, "context-tree", "Available");
+    const manage = [...tree.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(tree, '[data-setup-owner-controls="context-tree"]');
+    const edit = [...controls.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Change repository or branch",
+    );
+    await act(async () => edit?.click());
+    const repoInput = await waitForSelector<HTMLInputElement>(controls, 'input[placeholder*="github.com"]');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(repoInput, nextRepo);
+      repoInput.dispatchEvent(new InputEvent("input", { bubbles: true, data: nextRepo, inputType: "insertText" }));
+      repoInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    const save = await waitForSelector<HTMLButtonElement>(controls, 'button[aria-label="Save"]');
+    await act(async () => save.click());
+    await flush();
+
+    expect(orgSettingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", {
+      provider: null,
+      repo: nextRepo,
+      branch: "main",
+    });
+    expect(controls.textContent).toContain(`main branch · ${nextProvider}`);
+    expect(controls.textContent).toContain("Saved");
     await act(async () => view.root.unmount());
   });
 
