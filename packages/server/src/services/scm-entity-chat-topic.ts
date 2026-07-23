@@ -33,12 +33,26 @@ export type GitlabTopicEntity = {
   title: string | null;
 };
 
-function gitlabProjectSegment(projectPath: string): string {
-  return projectPath.split("/").filter(Boolean).at(-1) ?? projectPath;
+export type ContextReviewTopicEntity = {
+  provider: "github" | "gitlab";
+  repositoryPath: string;
+  /** GitHub PR number or project-scoped GitLab MR IID. */
+  changeNumber: number;
+};
+
+function repositorySegment(repositoryPath: string): string {
+  return repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath;
+}
+
+/** Stable provider-neutral topic for one retained Context Reviewer chat. */
+export function formatContextReviewTopic(entity: ContextReviewTopicEntity): string {
+  const repository = repositorySegment(entity.repositoryPath);
+  const referencePrefix = entity.provider === "github" ? "#" : "!";
+  return `Context Review · ${repository}${referencePrefix}${entity.changeNumber}`;
 }
 
 export function formatGitlabEntityTopic(entity: GitlabTopicEntity, reviewFirstTouch = false): string {
-  const project = gitlabProjectSegment(entity.projectPath);
+  const project = repositorySegment(entity.projectPath);
   const head =
     entity.entityType === "pull_request"
       ? `${reviewFirstTouch ? "MR Review" : "MR"} ${project}!${entity.entityIid}`
@@ -47,7 +61,7 @@ export function formatGitlabEntityTopic(entity: GitlabTopicEntity, reviewFirstTo
 }
 
 export function refreshGitlabEntityTopic(storedTopic: string, entity: GitlabTopicEntity): string | null {
-  const project = gitlabProjectSegment(entity.projectPath);
+  const project = repositorySegment(entity.projectPath);
   const iid = String(entity.entityIid);
   if (entity.entityType === "pull_request") {
     return refreshScmAutoTopic(storedTopic, entity.title, [

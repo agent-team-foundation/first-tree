@@ -33,6 +33,14 @@ export const contextTreeSeedPreflightResponseSchema = z
   .object({
     organizationId: z.string().min(1),
     state: contextTreeSeedPreflightStateSchema,
+    gitlabConnection: z
+      .object({
+        id: z.string().min(1),
+        instanceOrigin: z.string().url(),
+      })
+      .strict()
+      .nullable()
+      .default(null),
   })
   .strict();
 export type ContextTreeSeedPreflightResponse = z.infer<typeof contextTreeSeedPreflightResponseSchema>;

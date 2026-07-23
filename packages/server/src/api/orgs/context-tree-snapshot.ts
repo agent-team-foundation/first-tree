@@ -16,7 +16,7 @@ import {
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../../services/github-app-token.js";
-import { getOrgContextTreeBinding } from "../../services/org-settings.js";
+import { getOrgContextReviewRuntime, isOrgContextReviewRuntimeCurrent } from "../../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../../services/session-event.js";
 
 const querySchema = z
@@ -30,8 +30,14 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     const timing = createTimingCollector();
     const query = timing.timeSync("parse_query", () => querySchema.parse(request.query));
     const scope = await timing.time("auth", () => requireOrgMembership(request, app.db));
-    const binding: ContextTreeBinding =
-      (await timing.time("binding", () => getOrgContextTreeBinding(app.db, scope.organizationId))) ?? {};
+    const reviewRuntime = await timing.time("context_tree_runtime", () =>
+      getOrgContextReviewRuntime(app.db, scope.organizationId),
+    );
+    const binding: ContextTreeBinding = {
+      ...(reviewRuntime.provider ? { provider: reviewRuntime.provider } : {}),
+      ...(reviewRuntime.repo ? { repo: reviewRuntime.repo } : {}),
+      ...(reviewRuntime.branch ? { branch: reviewRuntime.branch } : {}),
+    };
     let mintResult: ContextTreeInstallationTokenResult | null = null;
     if (isGithubRemoteBinding(binding)) {
       mintResult = await timing.time("github_token", async () => {
@@ -42,7 +48,15 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
     const window = query.window ?? "7d";
     const snapshot = await timing.time("snapshot_build", () =>
-      getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
+      getContextTreeSnapshot({ ...binding, githubToken }, window, {
+        timing: timing.add,
+        gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+        gitlabExecutionGuard:
+          reviewRuntime.provider === "gitlab"
+            ? () => isOrgContextReviewRuntimeCurrent(app.db, scope.organizationId, reviewRuntime)
+            : undefined,
+      }),
     );
     // Probe (only on the unavailable + GitHub-remote + minted path) whether the
     // App genuinely cannot read the repo. Keep the structured diagnosis for API

@@ -2,6 +2,7 @@ import {
   AGENT_STATUSES,
   AGENT_TYPES,
   type ContextTreeActiveBinding,
+  type ContextTreeProvider,
   type ContextTreeWritePreflightErrorCode,
   canonicalGitRepoUrl,
   contextTreeActiveBindingSchema,
@@ -22,9 +23,11 @@ type RequesterIdentity = {
 };
 
 export type ContextTreeWritePreflightAuthority = {
+  provider: ContextTreeProvider;
   binding: ContextTreeActiveBinding;
+  gitlabInstanceOrigin: string | null;
   reviewerAgentUuid: string;
-  requesterGithubLogin: string;
+  requesterGithubLogin: string | null;
 };
 
 export class ContextTreeWritePreflightError extends Error {
@@ -131,7 +134,7 @@ export async function preflightContextTreeWriteAuthority(
   input: {
     organizationId: string;
     requester: RequesterIdentity;
-    requesterGithubLogin: string;
+    requesterGithubLogin?: string;
   },
 ): Promise<ContextTreeWritePreflightAuthority> {
   try {
@@ -169,11 +172,22 @@ export async function preflightContextTreeWriteAuthority(
       "The selected Team does not have a valid current Context Tree binding.",
     );
   }
-  if (canonicalBoundGithubRepository(binding.data.repo) === null) {
+  if (!runtime.provider || !runtime.providerMatchesRepository) {
     throw new ContextTreeWritePreflightError(
       "CONTEXT_TREE_WRITE_BINDING_UNSUPPORTED",
       409,
-      "GitHub App Context Review requires the selected Team's Context Tree binding to be on GitHub.",
+      "The selected Team's Context Tree provider cannot be resolved safely.",
+    );
+  }
+  const resolvedBinding: ContextTreeActiveBinding = {
+    ...binding.data,
+    provider: runtime.provider,
+  };
+  if (runtime.provider === "gitlab" && !runtime.gitlabConnection) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_GITLAB_CONNECTION_MISMATCH",
+      409,
+      "The current GitLab connection origin does not match the Context Tree repository.",
     );
   }
   if (!runtime.contextReviewer.enabled || !runtime.contextReviewer.agentUuid) {
@@ -193,8 +207,25 @@ export async function preflightContextTreeWriteAuthority(
     );
   }
 
+  if (runtime.provider === "gitlab") {
+    return {
+      provider: "gitlab",
+      binding: resolvedBinding,
+      gitlabInstanceOrigin: runtime.gitlabConnection?.instanceOrigin ?? null,
+      reviewerAgentUuid,
+      requesterGithubLogin: null,
+    };
+  }
+
+  if (canonicalBoundGithubRepository(binding.data.repo) === null) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_BINDING_UNSUPPORTED",
+      409,
+      "GitHub Context Review requires the selected Team's Context Tree binding to be on GitHub.",
+    );
+  }
   const linkedGithubLogin = await readGithubIdentityLogin(db, input.requester);
-  if (!linkedGithubLogin) {
+  if (!linkedGithubLogin || !input.requesterGithubLogin) {
     throw new ContextTreeWritePreflightError(
       "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED",
       403,
@@ -209,5 +240,11 @@ export async function preflightContextTreeWriteAuthority(
     );
   }
 
-  return { binding: binding.data, reviewerAgentUuid, requesterGithubLogin: linkedGithubLogin };
+  return {
+    provider: "github",
+    binding: resolvedBinding,
+    gitlabInstanceOrigin: null,
+    reviewerAgentUuid,
+    requesterGithubLogin: linkedGithubLogin,
+  };
 }

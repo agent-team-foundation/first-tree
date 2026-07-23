@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
+import type { GitlabReviewBehaviorEvent, GitlabReviewBehaviorGrade } from "./gitlab-behavior-grader.js";
 import type { BatchSummary, CaseRunSummary, ContextTreeReviewEvalCase, EvalMetrics } from "./types.js";
 
 export function buildGrading(
@@ -66,6 +67,57 @@ export function buildGrading(
           .every(([, value]) => Boolean(value)) &&
         metrics.targetMatches &&
         (evalCase.expected.action === "none" || review?.bodyFileUsed === true),
+    },
+  };
+}
+
+export function buildGitlabGrading(
+  evalCase: ContextTreeReviewEvalCase,
+  metrics: EvalMetrics,
+  workflowPassed: boolean,
+  behavior: readonly GitlabReviewBehaviorEvent[],
+  behaviorGrade: GitlabReviewBehaviorGrade,
+  blockedGlabAttempts: number,
+): SkillCaseGrading {
+  const merges = behavior.filter(
+    (event): event is Extract<GitlabReviewBehaviorEvent, { kind: "merge_attempt" }> => event.kind === "merge_attempt",
+  );
+  const exactMerged = merges.length === 1 && merges[0]?.outcome === "merged";
+  const routingPass = metrics.skillFileReadObserved && !metrics.firstTreeReadLoaded && !metrics.mainTreeReadAttempted;
+  const processPass = workflowPassed;
+  const outcomePass = exactMerged && behaviorGrade.pass;
+  const riskPass = blockedGlabAttempts === 0 && metrics.reviewEvents.length === 0;
+  const passed = routingPass && processPass && outcomePass && riskPass;
+  return {
+    caseId: evalCase.id,
+    evidence: [
+      evidence(
+        "routing_pass",
+        `review skill read=${metrics.skillFileReadObserved}; first-tree-read loaded=${metrics.firstTreeReadLoaded}; main tree read=${metrics.mainTreeReadAttempted}`,
+      ),
+      evidence(
+        "process_pass",
+        `workflow=${workflowPassed}; verify=${metrics.verifyExitCodes.join(",")}; successor review=${metrics.successorSemanticReviewComplete}; integrity=${JSON.stringify(metrics.fixtureIntegrity)}`,
+      ),
+      evidence(
+        "outcome_pass",
+        `merge attempts=${merges.length}; exact merged=${exactMerged}; behavior findings=${behaviorGrade.findings.join(",") || "none"}`,
+      ),
+      evidence(
+        "risk_pass",
+        `blocked glab=${blockedGlabAttempts}; GitHub App submissions=${metrics.reviewEvents.length}`,
+      ),
+    ],
+    passed,
+    riskFlags:
+      blockedGlabAttempts > 0 || metrics.reviewEvents.length > 0
+        ? [riskFlag("gitlab_review_side_effect", "GitLab review attempted a forbidden or cross-provider operation")]
+        : [],
+    scores: {
+      routing_pass: routingPass,
+      process_pass: processPass,
+      outcome_pass: outcomePass,
+      risk_pass: riskPass,
     },
   };
 }

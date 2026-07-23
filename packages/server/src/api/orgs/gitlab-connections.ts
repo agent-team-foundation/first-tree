@@ -7,6 +7,7 @@ import {
   getGitlabConnectionSummary,
   listGitlabConnections,
 } from "../../services/gitlab-connections.js";
+import { isGitlabOriginAuthorized } from "../../services/gitlab-egress-policy.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
 
 export async function orgGitlabConnectionRoutes(app: FastifyInstance): Promise<void> {
@@ -15,26 +16,33 @@ export async function orgGitlabConnectionRoutes(app: FastifyInstance): Promise<v
     return { connections: await listGitlabConnections(app.db, scope.organizationId) };
   });
 
-  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
-    const scope = await requireOrgAdmin(request, app.db);
-    const body = gitlabConnectionCreateSchema.parse(request.body);
-    let created: Awaited<ReturnType<typeof createGitlabConnection>>;
-    try {
-      created = await createGitlabConnection(app.db, {
-        organizationId: scope.organizationId,
-        memberId: scope.memberId,
-        displayName: body.displayName,
-        instanceOrigin: body.instanceOrigin,
-      });
-    } catch (err) {
-      if (err instanceof TypeError || (err instanceof Error && err.message.startsWith("GitLab origin"))) {
-        throw new BadRequestError(err.message);
+  app.post<{ Params: { orgId: string } }>(
+    "/",
+    { config: { otelRecordBody: true, rateLimit: undefined } },
+    async (request, reply) => {
+      const scope = await requireOrgAdmin(request, app.db);
+      const body = gitlabConnectionCreateSchema.parse(request.body);
+      if (!isGitlabOriginAuthorized(app.config.gitlab?.egressAllowlist ?? [], body.instanceOrigin)) {
+        throw new BadRequestError("GitLab origin is not authorized by the deployment egress allowlist");
       }
-      throw err;
-    }
-    return reply.status(201).send({
-      connection: await getGitlabConnectionSummary(app.db, created.connectionId),
-      webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${created.bearer}`,
-    });
-  });
+      let created: Awaited<ReturnType<typeof createGitlabConnection>>;
+      try {
+        created = await createGitlabConnection(app.db, {
+          organizationId: scope.organizationId,
+          memberId: scope.memberId,
+          displayName: body.displayName,
+          instanceOrigin: body.instanceOrigin,
+        });
+      } catch (err) {
+        if (err instanceof TypeError || (err instanceof Error && err.message.startsWith("GitLab origin"))) {
+          throw new BadRequestError(err.message);
+        }
+        throw err;
+      }
+      return reply.status(201).send({
+        connection: await getGitlabConnectionSummary(app.db, created.connectionId),
+        webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${created.bearer}`,
+      });
+    },
+  );
 }

@@ -15,6 +15,7 @@ import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
+import { agentCronJobRoutes } from "./api/agent/cron-jobs.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
@@ -34,6 +35,7 @@ import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
+import { chatCronJobRoutes, cronJobRoutes } from "./api/cron-jobs.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { gitlabConnectionRoutes } from "./api/gitlab-connections.js";
 import { gitlabIdentityLinkRoutes } from "./api/gitlab-identity-links.js";
@@ -447,7 +449,11 @@ export async function buildApp(config: Config) {
         [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
-      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
+      return reply.status(error.statusCode).send({
+        error: error.message,
+        ...(typeof error.attrs?.code === "string" ? { code: error.attrs.code } : {}),
+        ...traceField,
+      });
     }
 
     if (error instanceof ZodError) {
@@ -587,6 +593,8 @@ export async function buildApp(config: Config) {
           await scope.register(agentUsageRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
+          await scope.register(chatCronJobRoutes, { prefix: "/chats" });
+          await scope.register(cronJobRoutes, { prefix: "/cron-jobs" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
           await scope.register(gitlabConnectionRoutes, { prefix: "/gitlab-connections" });
@@ -606,6 +614,7 @@ export async function buildApp(config: Config) {
           await scope.register(agentChatRoutes, { prefix: "/chats" });
           await scope.register(agentContextReviewRunRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
+          await scope.register(agentCronJobRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
@@ -708,7 +717,7 @@ export async function buildApp(config: Config) {
   app.addHook("onClose", async () => {
     commandVersionPoller.stop();
     pulseAggregator.stop();
-    backgroundTasks.stop();
+    await backgroundTasks.stop();
     await notifier.stop();
     await listenClient.end();
     await db.end();

@@ -88,11 +88,12 @@ async function activateSnapshot(
   remote: RemoteFixture,
   runGit: ContextTreeReadGitRunner,
   teamId = "team-a",
+  bindingRepo = remote.bindingRepo,
 ): Promise<string> {
   const snapshotPath = join(root, "snapshot");
   await activateContextTreeRead(
     {
-      getMemberContextTreeSetting: async () => ({ repo: remote.bindingRepo, branch: "main" }),
+      getMemberContextTreeSetting: async () => ({ repo: bindingRepo, branch: "main" }),
     },
     { teamId, snapshotPath },
     runGit,
@@ -114,7 +115,9 @@ function authorityReader(
 function currentAuthority(remote: RemoteFixture, overrides: Record<string, unknown> = {}) {
   return {
     organizationId: "team-a",
+    provider: "github",
     binding: { repo: remote.bindingRepo, branch: "main" },
+    gitlabInstanceOrigin: null,
     reviewerAgentUuid: "reviewer-a",
     requesterGithubLogin: "writer",
     ...overrides,
@@ -144,12 +147,14 @@ describe("clean BYO Context Tree Write preflight", () => {
     );
 
     expect(result).toEqual({
+      provider: "github",
       teamId: "team-a",
       binding: { repo: sshBinding, branch: "main" },
       baseCommit: git(remote.seed, "rev-parse", "HEAD"),
       snapshotPath: realpathSync(snapshotPath),
       reviewerAgentUuid: "reviewer-a",
       requesterGithubLogin: "writer",
+      gitlabInstanceOrigin: null,
     });
     expect(preflight).toHaveBeenCalledWith("team-a", { requesterGithubLogin: "writer" }, { retry: false });
     expect(events.filter((args) => args[0] === "fetch")).toHaveLength(2);
@@ -202,6 +207,27 @@ describe("clean BYO Context Tree Write preflight", () => {
 
     await expect(
       preflightContextTreeWrite(reader, { teamId: "team-a", snapshotPath, requesterGithubLogin: "writer" }, runGit),
+    ).rejects.toMatchObject({ code: "CONTEXT_TREE_WRITE_BINDING_CHANGED", stage: "binding" });
+  });
+
+  it("treats a GitLab HTTPS web-port change as a different live binding", async () => {
+    const root = tempRoot("ft-byo-write-gitlab-port-");
+    const remote = createRemote(root);
+    const snapshotRepo = "https://gitlab.internal:8443/acme/context-tree.git";
+    const liveRepo = "https://gitlab.internal:9443/acme/context-tree.git";
+    const runGit = createRunner(remote, [], [snapshotRepo, liveRepo]);
+    const snapshotPath = await activateSnapshot(root, remote, runGit, "team-a", snapshotRepo);
+    const { reader } = authorityReader(
+      currentAuthority(remote, {
+        provider: "gitlab",
+        binding: { provider: "gitlab", repo: liveRepo, branch: "main" },
+        gitlabInstanceOrigin: "https://gitlab.internal:9443",
+        requesterGithubLogin: null,
+      }),
+    );
+
+    await expect(
+      preflightContextTreeWrite(reader, { teamId: "team-a", snapshotPath }, runGit, () => undefined),
     ).rejects.toMatchObject({ code: "CONTEXT_TREE_WRITE_BINDING_CHANGED", stage: "binding" });
   });
 

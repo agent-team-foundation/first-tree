@@ -7,20 +7,44 @@ import { promisify } from "node:util";
 import type {
   ContextTreeChange,
   ContextTreeChangeType,
+  ContextTreeContentAvailability,
   ContextTreeEdge,
   ContextTreeIoSummary,
   ContextTreeNode,
   ContextTreeNodeKind,
+  ContextTreeProvider,
   ContextTreeSnapshot,
   ContextTreeSummary,
   ContextTreeUpdate,
   ContextTreeUsageSummary,
   ContextTreeWriteEvent,
 } from "@first-tree/shared";
-import { contextTreeBranchSchema } from "@first-tree/shared";
+import {
+  contextTreeBranchSchema,
+  resolveContextTreeProvider,
+  resolveGitLabRepositoryWebIdentity,
+} from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import matter from "gray-matter";
 import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
+import {
+  anonymousGitEnv,
+  assertAnonymousLocalConfigSafe,
+  GitLabAnonymousAuthenticationRequiredError,
+  GitLabSnapshotAuthorityChangedError,
+  gitlabAnonymousGitConfig,
+  isGitlabAnonymousAuthenticationFailure,
+  isGitlabRedirectFailure,
+  revalidateGitlabDestination,
+  revalidateGitlabSnapshotPublication,
+} from "./gitlab-anonymous-snapshot.js";
+import {
+  type GitlabDnsLookup,
+  type GitlabEgressAllowlistEntry,
+  GitlabEgressPolicyError,
+  type GitlabPinnedDestination,
+  resolveAuthorizedGitlabDestination,
+} from "./gitlab-egress-policy.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT_NODE_ID = "root";
@@ -100,6 +124,8 @@ type ResolvedContextTreeRoot = {
   root: string | null;
   reason: string;
   staleReason: string | null;
+  contentAvailability: ContextTreeContentAvailability;
+  publicationGuard?: () => Promise<void>;
 };
 
 type RemoteSyncResult = {
@@ -115,6 +141,8 @@ type GitOutputOptions = {
   timeout?: number;
   env?: NodeJS.ProcessEnv;
   disableHooks?: boolean;
+  disableCredentials?: boolean;
+  extraConfig?: string[];
 };
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
@@ -129,6 +157,7 @@ const remoteLastFailures = new Map<string, RemoteSyncFailure>();
  * global config so each org gets its own tree.
  */
 export type ContextTreeBinding = {
+  provider?: ContextTreeProvider;
   repo?: string;
   branch?: string;
   localPath?: string;
@@ -137,6 +166,10 @@ export type ContextTreeBinding = {
 
 export type ContextTreeSnapshotOptions = {
   timing?: TimingSink;
+  gitlabInstanceOrigin?: string | null;
+  gitlabEgressAllowlist?: readonly GitlabEgressAllowlistEntry[];
+  gitlabDnsLookup?: GitlabDnsLookup;
+  gitlabExecutionGuard?: () => Promise<boolean>;
 };
 
 export async function getContextTreeSnapshot(
@@ -147,12 +180,27 @@ export async function getContextTreeSnapshot(
   const repo = binding.repo ?? null;
   const branch = binding.branch ?? null;
   const timing = options.timing;
+  const providerResolution = resolveContextTreeProvider({
+    repo,
+    declaredProvider: binding.provider,
+    gitlabInstanceOrigin: options.gitlabInstanceOrigin,
+  });
+  const provider = providerResolution.provider;
   const resolved = await timeWithSink(timing, "resolve_root", () =>
-    resolveContextTreeRoot(repo, binding.localPath, branch, binding.githubToken, timing),
+    resolveContextTreeRoot(
+      repo,
+      binding.localPath,
+      branch,
+      provider,
+      providerResolution.declaredProviderMatches,
+      binding.githubToken,
+      timing,
+      options,
+    ),
   );
 
   if (!resolved.root) {
-    return unavailableSnapshot(repo, branch, resolved.reason);
+    return unavailableSnapshot(repo, branch, resolved.reason, provider, resolved.contentAvailability);
   }
 
   const now = new Date().toISOString();
@@ -166,6 +214,8 @@ export async function getContextTreeSnapshot(
         repo,
         actualBranch,
         `Context Tree checkout is on branch "${actualBranch}", but the configured Context Tree branch is "${branch}".`,
+        provider,
+        { status: "unavailable", accessMode: accessModeForBinding(binding, provider), reason: "invalid_binding" },
       );
     }
 
@@ -178,6 +228,7 @@ export async function getContextTreeSnapshot(
     if (cached && cached.expiresAt > Date.now()) {
       const staleCacheRecovered = cached.snapshot.snapshotStatus === "stale" && !resolved.staleReason;
       if (!staleCacheRecovered) {
+        await timeWithSink(timing, "publication_guard", () => resolved.publicationGuard?.() ?? Promise.resolve());
         return withSnapshotStatus(cached.snapshot, now, statusWarningFromResolved(resolved.staleReason, null));
       }
     }
@@ -206,6 +257,8 @@ export async function getContextTreeSnapshot(
       const statusWarning = statusWarningFromResolved(resolved.staleReason, diffResult.truncated);
 
       return {
+        provider,
+        contentAvailability: resolved.contentAvailability,
         repo,
         branch: actualBranch ?? branch,
         headCommit,
@@ -221,11 +274,36 @@ export async function getContextTreeSnapshot(
         changes,
       } satisfies ContextTreeSnapshot;
     });
+    await timeWithSink(timing, "publication_guard", () => resolved.publicationGuard?.() ?? Promise.resolve());
     snapshotCache.set(cacheKey, { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL_MS, snapshot });
     return snapshot;
   } catch (error) {
+    if (provider === "gitlab" && error instanceof GitLabSnapshotAuthorityChangedError) {
+      return unavailableSnapshot(repo, branch, error.message, provider, {
+        status: "unavailable",
+        accessMode: "anonymous",
+        reason: "invalid_binding",
+      });
+    }
+    if (provider === "gitlab" && error instanceof GitlabEgressPolicyError) {
+      return unavailableSnapshot(
+        repo,
+        branch,
+        "GitLab Web Context origin or resolved address changed before snapshot publication.",
+        provider,
+        {
+          status: "unavailable",
+          accessMode: "anonymous",
+          reason: error.reason === "origin_not_authorized" ? "gitlab_origin_not_authorized" : "gitlab_egress_denied",
+        },
+      );
+    }
     const message = error instanceof Error ? error.message : "Unable to read Context Tree snapshot";
-    return unavailableSnapshot(repo, branch, message);
+    return unavailableSnapshot(repo, branch, message, provider, {
+      status: "unavailable",
+      accessMode: accessModeForBinding(binding, provider),
+      reason: "sync_failed",
+    });
   }
 }
 
@@ -255,46 +333,228 @@ async function resolveContextTreeRoot(
   repo: string | null,
   localPath: string | null | undefined,
   branch: string | null,
+  provider: ContextTreeProvider | null = resolveContextTreeProvider({ repo }).provider,
+  providerMatchesRepository = true,
   githubToken?: string | null,
   timing?: TimingSink,
+  options: ContextTreeSnapshotOptions = {},
 ): Promise<ResolvedContextTreeRoot> {
   if (localPath && localPath.trim().length > 0) {
     const root = resolveLocalPath(localPath);
-    if (existsSync(root)) return { root, reason: "ok", staleReason: null };
-    return { root: null, reason: `Context Tree checkout not found at ${root}.`, staleReason: null };
+    if (existsSync(root)) {
+      return {
+        root,
+        reason: "ok",
+        staleReason: null,
+        contentAvailability: { status: "available", accessMode: "local" },
+      };
+    }
+    return {
+      root: null,
+      reason: `Context Tree checkout not found at ${root}.`,
+      staleReason: null,
+      contentAvailability: { status: "unavailable", accessMode: "local", reason: "sync_failed" },
+    };
   }
 
   if (!repo) {
-    return { root: null, reason: "Context Tree is not configured.", staleReason: null };
+    return {
+      root: null,
+      reason: "Context Tree is not configured.",
+      staleReason: null,
+      contentAvailability: { status: "unavailable", accessMode: null, reason: "not_configured" },
+    };
   }
 
-  if (isRemoteRepo(repo)) {
+  if (!providerMatchesRepository) {
+    return {
+      root: null,
+      reason: "The configured Context Tree provider does not match its repository URL.",
+      staleReason: null,
+      contentAvailability: {
+        status: "unavailable",
+        accessMode: accessModeForProvider(provider, false),
+        reason: "invalid_binding",
+      },
+    };
+  }
+
+  if (!provider && isNetworkRepository(repo)) {
+    return {
+      root: null,
+      reason: "The configured Context Tree repository provider could not be resolved.",
+      staleReason: null,
+      contentAvailability: {
+        status: "unavailable",
+        accessMode: "anonymous",
+        reason: "invalid_binding",
+      },
+    };
+  }
+
+  let gitlabDestination: GitlabPinnedDestination | null = null;
+  let anonymousGitlabRepo: string | null = null;
+  if (provider === "gitlab") {
+    if (options.gitlabExecutionGuard && !(await options.gitlabExecutionGuard())) {
+      return gitlabUnavailable(
+        "The GitLab Context Tree binding or connection changed before snapshot execution.",
+        "invalid_binding",
+      );
+    }
+    const gitlabIdentity = resolveGitLabRepositoryWebIdentity(repo, options.gitlabInstanceOrigin);
+    if (!gitlabIdentity?.originMatchesConnection) {
+      return gitlabUnavailable(
+        "The GitLab Context Tree repository origin does not match the current GitLab connection.",
+        "invalid_binding",
+      );
+    }
+    if (!gitlabIdentity.origin.startsWith("https://")) {
+      return gitlabUnavailable(
+        "GitLab Web Context requires an HTTPS instance origin; Agent-local workflows remain available.",
+        "gitlab_origin_not_authorized",
+      );
+    }
+    try {
+      gitlabDestination = await resolveAuthorizedGitlabDestination(
+        options.gitlabEgressAllowlist ?? [],
+        gitlabIdentity.origin,
+        options.gitlabDnsLookup,
+      );
+    } catch (error) {
+      const reason =
+        error instanceof GitlabEgressPolicyError && error.reason === "origin_not_authorized"
+          ? "gitlab_origin_not_authorized"
+          : "gitlab_egress_denied";
+      return gitlabUnavailable(
+        "GitLab Web Context origin or resolved address is not authorized by this First Tree deployment.",
+        reason,
+      );
+    }
+    anonymousGitlabRepo = gitlabIdentity.cloneUrl;
+  }
+  const remoteRepo = anonymousGitlabRepo ?? repo;
+  if (isRemoteRepo(remoteRepo)) {
     const resolvedBranch = branch ?? "main";
     if (!contextTreeBranchSchema.safeParse(resolvedBranch).success) {
       return {
         root: null,
         reason: `Configured Context Tree branch "${resolvedBranch}" is invalid.`,
         staleReason: null,
+        contentAvailability: {
+          status: "unavailable",
+          accessMode: accessModeForProvider(provider, !!githubToken),
+          reason: "invalid_binding",
+        },
       };
     }
     try {
-      const materialized = await materializeRemoteContextTree(repo, resolvedBranch, undefined, githubToken, timing);
-      return { root: materialized.root, reason: "ok", staleReason: materialized.staleReason };
+      const materialized = await materializeRemoteContextTree(
+        remoteRepo,
+        resolvedBranch,
+        undefined,
+        provider === "github" ? githubToken : undefined,
+        timing,
+        provider,
+        gitlabDestination,
+        options.gitlabEgressAllowlist ?? [],
+        options.gitlabDnsLookup,
+        options.gitlabExecutionGuard,
+      );
+      return {
+        root: materialized.root,
+        reason: "ok",
+        staleReason: materialized.staleReason,
+        contentAvailability: {
+          status: "available",
+          accessMode: accessModeForProvider(provider, !!githubToken),
+        },
+        ...(provider === "gitlab" && gitlabDestination
+          ? {
+              publicationGuard: () =>
+                revalidateGitlabSnapshotPublication(
+                  gitlabDestination,
+                  options.gitlabEgressAllowlist ?? [],
+                  options.gitlabDnsLookup,
+                  options.gitlabExecutionGuard,
+                ),
+            }
+          : {}),
+      };
     } catch (error) {
+      if (provider === "gitlab" && isGitlabAnonymousAuthenticationFailure(error)) {
+        return {
+          root: null,
+          reason:
+            "Private GitLab Context Tree content is unavailable in First Tree Cloud. Cloud only performs anonymous GitLab reads; use an Agent with local git/glab credentials to read this tree.",
+          staleReason: null,
+          contentAvailability: {
+            status: "unavailable",
+            accessMode: "anonymous",
+            reason: "gitlab_authentication_required",
+          },
+        };
+      }
+      if (provider === "gitlab" && isGitlabRedirectFailure(error)) {
+        return gitlabUnavailable(
+          "GitLab Web Context does not follow repository redirects.",
+          "gitlab_redirect_forbidden",
+        );
+      }
+      if (provider === "gitlab" && error instanceof GitlabEgressPolicyError) {
+        return gitlabUnavailable(
+          "GitLab Web Context origin or resolved address is no longer authorized.",
+          error.reason === "origin_not_authorized" ? "gitlab_origin_not_authorized" : "gitlab_egress_denied",
+        );
+      }
       return {
         root: null,
         reason: `First Tree could not sync the configured Context Tree repo. Check repo access and branch "${resolvedBranch}". ${errorMessage(error)}`,
         staleReason: null,
+        contentAvailability: {
+          status: "unavailable",
+          accessMode: accessModeForProvider(provider, !!githubToken),
+          reason: "sync_failed",
+        },
       };
     }
   }
 
   const root = resolveLocalPath(repo);
   if (existsSync(root)) {
-    return { root, reason: "ok", staleReason: null };
+    return {
+      root,
+      reason: "ok",
+      staleReason: null,
+      contentAvailability: { status: "available", accessMode: "local" },
+    };
   }
 
-  return { root: null, reason: `Context Tree checkout not found at ${root}.`, staleReason: null };
+  return {
+    root: null,
+    reason: `Context Tree checkout not found at ${root}.`,
+    staleReason: null,
+    contentAvailability: { status: "unavailable", accessMode: "local", reason: "sync_failed" },
+  };
+}
+
+function gitlabUnavailable(
+  reason: string,
+  availabilityReason:
+    | "invalid_binding"
+    | "gitlab_origin_not_authorized"
+    | "gitlab_egress_denied"
+    | "gitlab_redirect_forbidden",
+): ResolvedContextTreeRoot {
+  return {
+    root: null,
+    reason,
+    staleReason: null,
+    contentAvailability: {
+      status: "unavailable",
+      accessMode: "anonymous",
+      reason: availabilityReason,
+    },
+  };
 }
 
 function resolveLocalPath(value: string): string {
@@ -313,6 +573,32 @@ function normalizeRemoteRepoUrl(value: string): string {
     return `https://github.com/${value}`;
   }
   return value;
+}
+
+function isNetworkRepository(repo: string): boolean {
+  if (/^file:\/\//i.test(repo)) {
+    return false;
+  }
+  return (
+    /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(repo) ||
+    /^(?:[^@\s/:]+@)?[^/\s:]+:.+/.test(repo) ||
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(repo)
+  );
+}
+
+function accessModeForProvider(
+  provider: ContextTreeProvider | null,
+  hasGithubToken: boolean,
+): "anonymous" | "github_app" {
+  return provider === "github" && hasGithubToken ? "github_app" : "anonymous";
+}
+
+function accessModeForBinding(
+  binding: ContextTreeBinding,
+  provider: ContextTreeProvider | null,
+): "local" | "anonymous" | "github_app" {
+  if (binding.localPath) return "local";
+  return accessModeForProvider(provider, !!binding.githubToken);
 }
 
 /**
@@ -351,6 +637,11 @@ async function materializeRemoteContextTree(
   cacheRoot = managedContextTreeCacheRoot(),
   githubToken?: string | null,
   timing?: TimingSink,
+  provider: ContextTreeProvider | null = resolveContextTreeProvider({ repo }).provider,
+  gitlabDestination?: GitlabPinnedDestination | null,
+  gitlabEgressAllowlist: readonly GitlabEgressAllowlistEntry[] = [],
+  gitlabDnsLookup?: GitlabDnsLookup,
+  gitlabExecutionGuard?: () => Promise<boolean>,
 ): Promise<{ root: string; staleReason: string | null }> {
   const repoUrl = normalizeRemoteRepoUrl(repo);
   const root = managedContextTreePath(repoUrl, branch, cacheRoot);
@@ -370,7 +661,19 @@ async function materializeRemoteContextTree(
     return { root, staleReason: result.staleReason };
   }
 
-  const syncPromise = syncRemoteContextTree(repoUrl, branch, root, cacheRoot, githubToken, timing);
+  const syncPromise = syncRemoteContextTree(
+    repoUrl,
+    branch,
+    root,
+    cacheRoot,
+    githubToken,
+    timing,
+    provider,
+    gitlabDestination,
+    gitlabEgressAllowlist,
+    gitlabDnsLookup,
+    gitlabExecutionGuard,
+  );
   remoteSyncPromises.set(root, syncPromise);
   try {
     const syncResult = await syncPromise;
@@ -402,26 +705,50 @@ async function syncRemoteContextTree(
   cacheRoot: string,
   githubToken?: string | null,
   timing?: TimingSink,
+  provider: ContextTreeProvider | null = resolveContextTreeProvider({ repo: repoUrl }).provider,
+  gitlabDestination?: GitlabPinnedDestination | null,
+  gitlabEgressAllowlist: readonly GitlabEgressAllowlistEntry[] = [],
+  gitlabDnsLookup?: GitlabDnsLookup,
+  gitlabExecutionGuard?: () => Promise<boolean>,
 ): Promise<RemoteSyncResult> {
   await mkdir(cacheRoot, { recursive: true });
-  const env = await gitAuthEnv(repoUrl, cacheRoot, githubToken);
+  const anonymousGitlab = provider === "gitlab";
+  const env = anonymousGitlab ? await anonymousGitEnv(cacheRoot) : await gitAuthEnv(repoUrl, cacheRoot, githubToken);
+  const anonymousConfig = anonymousGitlab ? gitlabAnonymousGitConfig(gitlabDestination) : [];
   if (!existsSync(join(root, ".git"))) {
     await rm(root, { recursive: true, force: true });
-    await timeWithSink(
-      timing,
-      "remote_clone",
-      () =>
-        gitOutput(cacheRoot, ["clone", "--branch", branch, "--single-branch", repoUrl, root], {
-          timeout: GIT_SYNC_TIMEOUT_MS,
-          env,
-          disableHooks: true,
-        }),
-      { branch },
+    try {
+      await timeWithSink(
+        timing,
+        "remote_clone",
+        () =>
+          gitOutput(cacheRoot, ["clone", "--branch", branch, "--single-branch", repoUrl, root], {
+            timeout: GIT_SYNC_TIMEOUT_MS,
+            env,
+            disableHooks: true,
+            disableCredentials: anonymousGitlab,
+            extraConfig: anonymousConfig,
+          }),
+        { branch },
+      );
+    } catch (error) {
+      if (anonymousGitlab && isGitlabAnonymousAuthenticationFailure(error)) {
+        throw new GitLabAnonymousAuthenticationRequiredError();
+      }
+      throw error;
+    }
+    await revalidateGitlabDestination(
+      anonymousGitlab,
+      gitlabDestination,
+      gitlabEgressAllowlist,
+      gitlabDnsLookup,
+      gitlabExecutionGuard,
     );
     return { staleReason: null };
   }
 
   try {
+    if (anonymousGitlab) await assertAnonymousLocalConfigSafe(root);
     await gitOutput(root, ["remote", "set-url", "origin", repoUrl], {
       timeout: GIT_TIMEOUT_MS,
       disableHooks: true,
@@ -434,16 +761,45 @@ async function syncRemoteContextTree(
           timeout: GIT_SYNC_TIMEOUT_MS,
           env,
           disableHooks: true,
+          disableCredentials: anonymousGitlab,
+          extraConfig: anonymousConfig,
         });
         await gitOutput(root, ["checkout", "-B", branch, `origin/${branch}`], {
           timeout: GIT_TIMEOUT_MS,
+          env,
           disableHooks: true,
+          disableCredentials: anonymousGitlab,
+          extraConfig: anonymousConfig,
         });
       },
       { branch },
     );
+    await revalidateGitlabDestination(
+      anonymousGitlab,
+      gitlabDestination,
+      gitlabEgressAllowlist,
+      gitlabDnsLookup,
+      gitlabExecutionGuard,
+    );
     return { staleReason: null };
   } catch (error) {
+    if (anonymousGitlab && isGitlabAnonymousAuthenticationFailure(error)) {
+      // Never serve a cached private tree after anonymous access is revoked;
+      // doing so would blur the explicit content-availability boundary.
+      throw new GitLabAnonymousAuthenticationRequiredError();
+    }
+    if (anonymousGitlab && isGitlabRedirectFailure(error)) {
+      // A moved repository is an authorization-boundary change, not a
+      // transient refresh failure. Never publish stale cached content after a
+      // redirect response.
+      throw error;
+    }
+    if (anonymousGitlab && error instanceof GitlabEgressPolicyError) {
+      // Policy, DNS-pin, and live-binding failures are authorization failures,
+      // not transient refresh errors. Serving the cached tree would bypass the
+      // deployment operator's current egress boundary.
+      throw error;
+    }
     if (existsSync(join(root, ".git"))) {
       timing?.("remote_sync_stale_fallback", 0);
       return {
@@ -562,8 +918,20 @@ function redactSecret(message: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "[redacted]");
 }
 
-function unavailableSnapshot(repo: string | null, branch: string | null, detail: string): ContextTreeSnapshot {
+function unavailableSnapshot(
+  repo: string | null,
+  branch: string | null,
+  detail: string,
+  provider: ContextTreeProvider | null = null,
+  contentAvailability: ContextTreeContentAvailability = {
+    status: "unavailable",
+    accessMode: null,
+    reason: repo ? "sync_failed" : "not_configured",
+  },
+): ContextTreeSnapshot {
   return {
+    provider,
+    contentAvailability,
     repo,
     branch,
     headCommit: null,
@@ -585,7 +953,12 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
 }
 
 async function gitOutput(cwd: string, args: string[], options?: GitOutputOptions): Promise<string> {
-  const gitArgs = options?.disableHooks ? ["-c", "core.hooksPath=/dev/null", ...args] : args;
+  const gitConfigArgs = [
+    ...(options?.disableHooks ? ["-c", "core.hooksPath=/dev/null"] : []),
+    ...(options?.disableCredentials ? ["-c", "credential.helper="] : []),
+    ...(options?.extraConfig?.flatMap((entry) => ["-c", entry]) ?? []),
+  ];
+  const gitArgs = [...gitConfigArgs, ...args];
   const { stdout } = await execFileAsync("git", gitArgs, {
     cwd,
     timeout: options?.timeout ?? GIT_TIMEOUT_MS,

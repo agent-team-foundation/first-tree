@@ -48,10 +48,11 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       return orgSettingsService.putInitializedOrgContextTreeBinding(
         app.db,
         scope.organizationId,
-        { repo: input.repo, branch: input.branch },
+        { provider: input.provider, repo: input.repo, branch: input.branch },
         {
           updatedBy: scope.userId,
           expectedUnboundBranch: input.expectedUnboundBranch,
+          gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
         },
       );
     },
@@ -64,9 +65,15 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
     if (namespace === "context_tree") {
-      const state = await orgSettingsService.getOrgContextTreeSettingState(app.db, scope.organizationId);
-      if (state.kind === "bound") return state.binding;
-      if (state.kind === "unbound") return { branch: state.branch };
+      const runtime = await orgSettingsService.getOrgContextReviewRuntime(app.db, scope.organizationId);
+      if (runtime.bindingState === "bound" && runtime.repo && runtime.branch) {
+        return {
+          repo: runtime.repo,
+          branch: runtime.branch,
+          ...(runtime.provider && runtime.providerMatchesRepository ? { provider: runtime.provider } : {}),
+        };
+      }
+      if (runtime.bindingState === "unbound") return { branch: runtime.branch ?? "main" };
       throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
@@ -87,6 +94,7 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
         memberId: scope.memberId,
         updatedBy: scope.userId,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       });
     },
   );

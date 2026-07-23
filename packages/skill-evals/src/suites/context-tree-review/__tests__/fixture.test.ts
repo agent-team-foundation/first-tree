@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "../../../core/commands.js";
 import { readEvents } from "../../../core/events.js";
 import { createRunPaths } from "../../../core/paths.js";
+import { createFirstTreeShim } from "../../../core/shims/first-tree.js";
 import { createGhShim } from "../../../core/shims/gh.js";
+import { createGlabShim } from "../../../core/shims/glab.js";
 import { CONTEXT_TREE_REVIEW_GATE_CASES } from "../cases.js";
 import { inspectFixtureIntegrity, type ReviewFixture, setupFixture } from "../fixture.js";
 import { createContextTreeReviewGitShim } from "../git-shim.js";
@@ -19,6 +21,13 @@ function fixtureCase(scenario: string) {
   const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === scenario);
   expect(evalCase).toBeDefined();
   if (!evalCase) throw new Error(`Missing context-tree-review eval case for '${scenario}'.`);
+  return evalCase;
+}
+
+function fixtureCaseById(id: string) {
+  const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.id === id);
+  expect(evalCase).toBeDefined();
+  if (!evalCase) throw new Error(`Missing context-tree-review eval case '${id}'.`);
   return evalCase;
 }
 
@@ -263,6 +272,86 @@ describe("context-tree-review fixture", () => {
       const pushed = git(fixture, ["push", "origin", "HEAD:refs/heads/review-change"], fixture.repairWorktreePath);
       expect(pushed.exitCode).not.toBe(0);
       expect(pushed.stderr).toContain("review-change push denied by eval fixture");
+    } finally {
+      rmSync(paths.runRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("runs the GitLab fixture through exact-origin config, live MR read, and exact-SHA merge shims", () => {
+    const paths = createRunPaths({
+      caseId: "review-gitlab-exact-sha",
+      packageRoot,
+      startedAt: "2026-07-23T00:00:00.000Z",
+    });
+    try {
+      const fixture = setupFixture(fixtureCaseById("gitlab-passing-exact-sha-merges"), paths);
+      expect(fixture.expectation.changeRef).toBe("refs/merge-requests/42/head");
+      expect(fixture.expectation.forgeProvider).toBe("gitlab");
+      createFirstTreeShim(paths, {
+        modelVerifyMode: "real",
+        reviewFixturePath: fixture.fixturePath,
+        reviewVerifyRunnerPath: fixture.verifyRunnerPath,
+      });
+      createGlabShim(paths, { reviewFixturePath: fixture.fixturePath });
+
+      const reviewConfig = spawnSync(
+        join(paths.binDir, "first-tree"),
+        ["org", "context-tree", "review-config", "--json"],
+        { cwd: paths.workspacePath, encoding: "utf8" },
+      );
+      expect(reviewConfig.status).toBe(0);
+      expect(JSON.parse(reviewConfig.stdout)).toMatchObject({
+        provider: "gitlab",
+        providerMatchesRepository: true,
+        gitlabConnection: {
+          id: "gitlab-connection-eval",
+          instanceOrigin: "https://gitlab.example:8443",
+        },
+      });
+
+      const viewed = spawnSync(
+        join(paths.binDir, "glab"),
+        ["mr", "view", "42", "--repo", fixture.expectation.repo, "--output", "json"],
+        { cwd: paths.workspacePath, encoding: "utf8" },
+      );
+      expect(viewed.status).toBe(0);
+      expect(JSON.parse(viewed.stdout)).toMatchObject({
+        iid: 42,
+        sha: fixture.expectation.headOid,
+        pipeline: { status: "success", sha: fixture.expectation.headOid },
+      });
+
+      const merged = spawnSync(
+        join(paths.binDir, "glab"),
+        [
+          "mr",
+          "merge",
+          "42",
+          "--repo",
+          fixture.expectation.repo,
+          "--sha",
+          fixture.expectation.headOid,
+          "--squash",
+          "--yes",
+          "--auto-merge=false",
+        ],
+        { cwd: paths.workspacePath, encoding: "utf8" },
+      );
+      expect(merged.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "gitlab_mr_viewed",
+            headRefOid: fixture.expectation.headOid,
+            pipelineAcceptable: true,
+          }),
+          expect.objectContaining({
+            type: "gitlab_merge_attempt",
+            sha: fixture.expectation.headOid,
+            outcome: "merged",
+          }),
+        ]),
+      );
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }

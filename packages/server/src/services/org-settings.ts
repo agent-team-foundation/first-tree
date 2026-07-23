@@ -1,5 +1,6 @@
 import {
   type ContextTreeActiveBinding,
+  type ContextTreeProvider,
   type ContextTreeSettingState,
   classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
@@ -12,16 +13,20 @@ import {
   type OrgSettingNamespace,
   type OrgSettingOutput,
   type OrgSettingStorage,
+  resolveContextTreeProvider,
+  resolveGitLabRepositoryWebIdentity,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
+import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
+import { type GitlabEgressAllowlistEntry, isGitlabOriginAuthorized } from "./gitlab-egress-policy.js";
 
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
@@ -105,6 +110,7 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     const cur = current as OrgSettingStorage<"context_tree">;
     const inp = input as OrgSettingInput<"context_tree">;
     const next: OrgSettingStorage<"context_tree"> = {
+      provider: inp.provider === undefined ? cur.provider : (inp.provider ?? undefined),
       repo: inp.repo === undefined ? cur.repo : (inp.repo ?? undefined),
       branch: inp.branch === undefined ? cur.branch : (inp.branch ?? "main"),
     };
@@ -146,6 +152,7 @@ async function toOutput<K extends OrgSettingNamespace>(
   if (namespace === "context_tree") {
     const s = storage as OrgSettingStorage<"context_tree">;
     const out: OrgSettingOutput<"context_tree"> = {
+      provider: s.provider,
       repo: s.repo,
       branch: s.branch,
     };
@@ -204,37 +211,113 @@ export async function getOrgContextTreeBinding(db: Database, orgId: string): Pro
  * statement. Review mutations use this tuple so they never combine a binding
  * from one settings snapshot with an assignment from another.
  */
-export async function getOrgContextReviewRuntime(
-  db: Database,
-  orgId: string,
-): Promise<{
-  repo: string | null;
-  branch: string | null;
-  contextReviewer: { enabled: boolean; agentUuid: string | null };
-}> {
+export async function getOrgContextReviewRuntime(db: Database, orgId: string): Promise<OrgContextReviewRuntime> {
   const rows = await db
-    .select({ namespace: organizationSettings.namespace, value: organizationSettings.value })
-    .from(organizationSettings)
-    .where(
+    .select({
+      namespace: organizationSettings.namespace,
+      value: organizationSettings.value,
+      gitlabConnectionId: gitlabConnections.id,
+      gitlabInstanceOrigin: gitlabConnections.instanceOrigin,
+      gitlabEndpointFirstSeenAt: gitlabConnections.endpointFirstSeenAt,
+      gitlabLastValidInboundAt: gitlabConnections.lastValidInboundAt,
+    })
+    .from(organizations)
+    .leftJoin(
+      organizationSettings,
       and(
-        eq(organizationSettings.organizationId, orgId),
+        eq(organizationSettings.organizationId, organizations.id),
         inArray(organizationSettings.namespace, ["context_tree", "context_tree_features"]),
       ),
-    );
-  const values = new Map(rows.map((row) => [row.namespace, row.value]));
-  const tree = classifyContextTreeSetting(values.get("context_tree") ?? {});
+    )
+    .leftJoin(gitlabConnections, eq(gitlabConnections.organizationId, organizations.id))
+    .where(eq(organizations.id, orgId));
+  const values = new Map(rows.flatMap((row) => (row.namespace === null ? [] : [[row.namespace, row.value] as const])));
+  const connectionRow = rows.find((row) => row.gitlabConnectionId !== null);
+  const gitlabConnection =
+    connectionRow?.gitlabConnectionId && connectionRow.gitlabInstanceOrigin
+      ? {
+          id: connectionRow.gitlabConnectionId,
+          instanceOrigin: connectionRow.gitlabInstanceOrigin,
+          endpointFirstSeenAt: connectionRow.gitlabEndpointFirstSeenAt,
+          lastValidInboundAt: connectionRow.gitlabLastValidInboundAt,
+        }
+      : null;
+  const tree = classifyContextTreeSetting(values.has("context_tree") ? values.get("context_tree") : {});
   const features = ORG_SETTINGS_NAMESPACES.context_tree_features.storage.parse(
     values.get("context_tree_features") ?? {},
   );
+  const repo = tree.kind === "bound" ? tree.binding.repo : null;
+  const resolution =
+    tree.kind === "bound"
+      ? resolveContextTreeProvider({
+          repo,
+          declaredProvider: tree.binding.provider,
+          gitlabInstanceOrigin: gitlabConnection?.instanceOrigin,
+        })
+      : resolveContextTreeProvider({ repo: null });
+  const gitlabIdentity =
+    resolution.provider === "gitlab" && gitlabConnection
+      ? resolveGitLabRepositoryWebIdentity(repo, gitlabConnection.instanceOrigin)
+      : null;
+  const providerMatchesRepository =
+    tree.kind !== "invalid" &&
+    resolution.provider !== null &&
+    resolution.declaredProviderMatches &&
+    (resolution.provider !== "gitlab" || gitlabIdentity?.originMatchesConnection === true);
 
   return {
-    repo: tree.kind === "bound" ? tree.binding.repo : null,
-    branch: tree.kind === "bound" ? tree.binding.branch : null,
+    bindingState: tree.kind,
+    provider: resolution.provider,
+    repo,
+    branch: tree.kind === "bound" ? tree.binding.branch : tree.kind === "unbound" ? tree.branch : null,
+    providerSource: resolution.source,
+    providerMatchesRepository,
+    gitlabConnection: gitlabConnection
+      ? {
+          id: gitlabConnection.id,
+          instanceOrigin: gitlabConnection.instanceOrigin,
+          endpointSeen: gitlabConnection.endpointFirstSeenAt !== null,
+          lastValidInboundAt: gitlabConnection.lastValidInboundAt,
+        }
+      : null,
     contextReviewer: {
       enabled: features.contextReviewer.enabled,
       agentUuid: features.contextReviewer.agentUuid,
     },
   };
+}
+
+export type OrgContextReviewRuntime = {
+  bindingState: "bound" | "unbound" | "invalid";
+  provider: ContextTreeProvider | null;
+  repo: string | null;
+  branch: string | null;
+  providerSource: "declared" | "github_host" | "gitlab_connection" | "unknown";
+  providerMatchesRepository: boolean;
+  gitlabConnection: {
+    id: string;
+    instanceOrigin: string;
+    endpointSeen: boolean;
+    lastValidInboundAt: Date | null;
+  } | null;
+  contextReviewer: { enabled: boolean; agentUuid: string | null };
+};
+
+export async function isOrgContextReviewRuntimeCurrent(
+  db: Database,
+  orgId: string,
+  expected: OrgContextReviewRuntime,
+): Promise<boolean> {
+  const current = await getOrgContextReviewRuntime(db, orgId);
+  return (
+    current.bindingState === expected.bindingState &&
+    current.provider === expected.provider &&
+    current.repo === expected.repo &&
+    current.branch === expected.branch &&
+    current.providerMatchesRepository === expected.providerMatchesRepository &&
+    current.gitlabConnection?.id === expected.gitlabConnection?.id &&
+    current.gitlabConnection?.instanceOrigin === expected.gitlabConnection?.instanceOrigin
+  );
 }
 
 /**
@@ -282,7 +365,11 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
   orgId: string,
   namespace: K,
   rawInput: unknown,
-  options: { updatedBy: string; memberId?: string },
+  options: {
+    updatedBy: string;
+    memberId?: string;
+    gitlabEgressAllowlist?: readonly GitlabEgressAllowlistEntry[];
+  },
 ): Promise<OrgSettingOutput<K>> {
   assertNamespace(namespace);
 
@@ -307,7 +394,23 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
     } else {
       current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
     }
-    const merged = applyInputDelta(namespace, current, input);
+    let merged = applyInputDelta(namespace, current, input);
+    if (namespace === "context_tree") {
+      const contextTreeInput = input as OrgSettingInput<"context_tree">;
+      const contextTree = merged as OrgSettingStorage<"context_tree">;
+      merged = (await resolveStoredContextTreeProvider(
+        txDb,
+        orgId,
+        contextTree,
+        contextTreeInput,
+      )) as OrgSettingStorage<K>;
+      await assertContextTreeBindingTargetAuthorized(
+        txDb,
+        orgId,
+        merged as OrgSettingStorage<"context_tree">,
+        options.gitlabEgressAllowlist ?? [],
+      );
+    }
     if (namespace === "context_tree_features") {
       await assertContextReviewerAgentAllowed(txDb, orgId, input as OrgContextTreeFeaturesInput, options.memberId);
     }
@@ -363,11 +466,19 @@ export async function putInitializedOrgContextTreeBinding(
   db: Database,
   orgId: string,
   rawInput: unknown,
-  options: { updatedBy: string; expectedUnboundBranch: string },
+  options: {
+    updatedBy: string;
+    expectedUnboundBranch: string;
+    gitlabEgressAllowlist?: readonly GitlabEgressAllowlistEntry[];
+  },
 ): Promise<ContextTreeActiveBinding> {
   const binding = contextTreeActiveBindingSchema.parse(rawInput);
   const expectedUnboundBranch = contextTreeBranchSchema.parse(options.expectedUnboundBranch);
-  const value: Record<string, unknown> = { repo: binding.repo, branch: binding.branch };
+  const value: Record<string, unknown> = {
+    provider: binding.provider,
+    repo: binding.repo,
+    branch: binding.branch,
+  };
 
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
@@ -376,6 +487,7 @@ export async function putInitializedOrgContextTreeBinding(
     if (current.kind !== "unbound" || current.branch !== expectedUnboundBranch) {
       throw new ConflictError("Context Tree setting changed after tree initialization began");
     }
+    await assertContextTreeBindingTargetAuthorized(txDb, orgId, binding, options.gitlabEgressAllowlist ?? []);
     const now = new Date();
 
     const [row] = await tx
@@ -468,6 +580,37 @@ async function assertContextReviewerAgentAllowed(
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
   }
 
+  const runtime = await getOrgContextReviewRuntime(db, orgId);
+  if (
+    runtime.bindingState !== "bound" ||
+    !runtime.provider ||
+    !runtime.providerMatchesRepository ||
+    !runtime.repo ||
+    !runtime.branch
+  ) {
+    throw new BadRequestError(
+      "Context Reviewer requires a valid Context Tree binding with a resolved GitHub or GitLab provider",
+    );
+  }
+  if (runtime.provider === "gitlab") {
+    if (
+      !runtime.providerMatchesRepository ||
+      !runtime.gitlabConnection ||
+      !resolveContextTreeProvider({
+        repo: runtime.repo,
+        declaredProvider: "gitlab",
+        gitlabInstanceOrigin: runtime.gitlabConnection.instanceOrigin,
+      }).gitlabConnectionMatches
+    ) {
+      throw new BadRequestError(
+        "Context Reviewer for GitLab requires the current GitLab connection origin to match the Context Tree repository",
+      );
+    }
+    return;
+  }
+  if (runtime.provider !== "github") {
+    throw new BadRequestError("Context Reviewer requires a supported Context Tree provider");
+  }
   const [installation] = await db
     .select({ permissions: githubAppInstallations.permissions, suspendedAt: githubAppInstallations.suspendedAt })
     .from(githubAppInstallations)
@@ -476,6 +619,64 @@ async function assertContextReviewerAgentAllowed(
   if (!installation || installation.suspendedAt || installation.permissions.pull_requests !== "write") {
     throw new BadRequestError(
       "Context Reviewer requires an active GitHub App installation with Pull requests: write permission accepted",
+    );
+  }
+}
+
+async function resolveStoredContextTreeProvider(
+  db: Database,
+  orgId: string,
+  storage: OrgSettingStorage<"context_tree">,
+  input: OrgSettingInput<"context_tree">,
+): Promise<OrgSettingStorage<"context_tree">> {
+  if (!storage.repo) return { ...storage, provider: undefined };
+  if (input.repo === undefined && input.provider === undefined) return storage;
+
+  const [connection] = await db
+    .select({ instanceOrigin: gitlabConnections.instanceOrigin })
+    .from(gitlabConnections)
+    .where(eq(gitlabConnections.organizationId, orgId))
+    .limit(1);
+  const directlyResolved = resolveContextTreeProvider({
+    repo: storage.repo,
+    declaredProvider: input.provider ?? undefined,
+    gitlabInstanceOrigin: connection?.instanceOrigin,
+  });
+  if (directlyResolved.provider) return { ...storage, provider: directlyResolved.provider };
+
+  return { ...storage, provider: undefined };
+}
+
+export async function assertContextTreeBindingTargetAuthorized(
+  db: Database,
+  orgId: string,
+  binding: OrgSettingStorage<"context_tree">,
+  allowlist: readonly GitlabEgressAllowlistEntry[],
+): Promise<void> {
+  if (!binding.provider || !binding.repo) return;
+  const resolution = resolveContextTreeProvider({
+    repo: binding.repo,
+    declaredProvider: binding.provider,
+  });
+  if (!resolution.declaredProviderMatches) {
+    throw new BadRequestError("Context Tree provider does not match the repository origin");
+  }
+  if (binding.provider !== "gitlab") return;
+  const [connection] = await db
+    .select({ instanceOrigin: gitlabConnections.instanceOrigin })
+    .from(gitlabConnections)
+    .where(eq(gitlabConnections.organizationId, orgId))
+    .limit(1);
+  if (!connection) {
+    throw new BadRequestError("GitLab Context Tree repository requires a current GitLab connection");
+  }
+  const identity = resolveGitLabRepositoryWebIdentity(binding.repo, connection.instanceOrigin);
+  if (!identity?.originMatchesConnection) {
+    throw new BadRequestError("GitLab Context Tree repository origin must match the current GitLab connection origin");
+  }
+  if (!isGitlabOriginAuthorized(allowlist, identity.origin)) {
+    throw new BadRequestError(
+      "GitLab Context Tree repository origin is not authorized by the deployment egress allowlist",
     );
   }
 }

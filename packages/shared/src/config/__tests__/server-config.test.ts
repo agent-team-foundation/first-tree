@@ -86,6 +86,53 @@ describe("server config", () => {
     });
   });
 
+  it("loads the deployment GitLab egress allowlist from operator JSON and defaults to deny", async () => {
+    const defaultDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    const denied = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultDir,
+    });
+    expect(denied.gitlab).toBeUndefined();
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv(
+      "FIRST_TREE_GITLAB_EGRESS_ALLOWLIST",
+      JSON.stringify([
+        {
+          origin: "https://GITLAB.COMPANY.LOCAL:8443",
+          addressPolicy: { kind: "cidrs", cidrs: ["10.20.0.0/16"] },
+        },
+      ]),
+    );
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+    expect(configured.gitlab?.egressAllowlist).toEqual([
+      {
+        origin: "https://gitlab.company.local:8443",
+        addressPolicy: { kind: "cidrs", cidrs: ["10.20.0.0/16"] },
+      },
+    ]);
+  });
+
+  it("rejects malformed GitLab egress allowlist JSON during config initialization", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_GITLAB_EGRESS_ALLOWLIST", "not-json");
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/gitlab|array/iu);
+  });
+
   it("rejects partial Google OAuth configuration", async () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();

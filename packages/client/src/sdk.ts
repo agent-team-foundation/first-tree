@@ -19,12 +19,17 @@ import {
   type ContextTreeSeedPreflightResponse,
   type ContextTreeWritePreflightRequest,
   type ContextTreeWritePreflightResponse,
+  type CreateCronJobRequest,
   type CreateDocCommentRequest,
   type CreateTaskChat,
+  type CronJob,
+  type CronPreviewRequest,
+  type CronPreviewResponse,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
   contextTreeWritePreflightRequestSchema,
   contextTreeWritePreflightResponseSchema,
+  type DeleteCronJobResponse,
   type DocComment,
   type DocCommentStatus,
   type DocStatus,
@@ -35,6 +40,7 @@ import {
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
+  type ListCronJobsResponse,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
@@ -49,6 +55,7 @@ import {
   type SendMessage,
   type UnfollowChatGitlabEntityResponse,
   type UnfollowGithubEntityResponse,
+  type UpdateCronJobRequest,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
@@ -121,6 +128,7 @@ export type RegisterResult = {
 };
 
 export type ContextTreeConfig = {
+  provider?: "github" | "gitlab";
   repo: string | null;
   branch: string | null;
 };
@@ -593,6 +601,53 @@ export class FirstTreeHubSDK {
     return this.requestJson<UnfollowChatGitlabEntityResponse>(
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
       { method: "DELETE" },
+    );
+  }
+
+  /** Preview a five-field cron schedule without side effects. */
+  async previewCronJob(chatId: string, body: CronPreviewRequest): Promise<CronPreviewResponse> {
+    return this.requestJson<CronPreviewResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs/preview`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async listCronJobs(chatId: string): Promise<ListCronJobsResponse> {
+    return this.requestJson<ListCronJobsResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs`);
+  }
+
+  async createCronJob(chatId: string, body: CreateCronJobRequest): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getCronJob(chatId: string, jobId: string): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async updateCronJob(chatId: string, jobId: string, body: UpdateCronJobRequest, revision: number): Promise<CronJob> {
+    return this.requestJson<CronJob>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+        headers: { "If-Match": String(revision) },
+      },
+      // Revisioned mutations are not safe to replay after a lost response.
+      { retry: false },
+    );
+  }
+
+  async deleteCronJob(chatId: string, jobId: string, revision: number): Promise<DeleteCronJobResponse> {
+    return this.requestJson<DeleteCronJobResponse>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+        headers: { "If-Match": String(revision) },
+      },
+      { retry: false },
     );
   }
 

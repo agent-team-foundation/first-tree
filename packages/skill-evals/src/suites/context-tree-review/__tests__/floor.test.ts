@@ -25,6 +25,8 @@ describe("context-tree-review floor", () => {
       "draft",
       "archive-only",
       "authority",
+      "passing",
+      "semantic-failure",
     ]);
     expect(CONTEXT_TREE_REVIEW_SUITE.coverage.tiers.map((item) => item.tier)).toEqual(["floor", "gate"]);
     expect(CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS).toEqual([
@@ -38,6 +40,9 @@ describe("context-tree-review floor", () => {
       "archive-only",
       "authority",
     ]);
+    expect(
+      CONTEXT_TREE_REVIEW_GATE_CASES.filter((item) => item.forgeProvider === "gitlab").map((item) => item.id),
+    ).toEqual(["gitlab-passing-exact-sha-merges", "gitlab-semantic-repair-rereviews-and-merges"]);
   });
 
   it("makes approval mandatory for the passing ready case", () => {
@@ -121,9 +126,9 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain('staged base-to-result diff with `git diff --cached --no-ext-diff "$BASE_OID"`');
     expect(skill).toContain("A draft PR is read-only even when its findings would be mechanically");
     expect(skill).toContain("Immediately before submitting any outcome, rerun");
-    expect(skill).toContain("its base ref to equal that live\nbinding branch");
+    expect(skill).toContain("base/target ref\nto equal that live binding branch");
     expect(skill).toContain("After check polling completes, rerun the same live Reviewer configuration check");
-    expect(skill).toContain("its repository, state, draft flag, base ref/OID and head\nrepository/ref/OID");
+    expect(skill).toContain("its repository, state, draft flag,\nbase/target ref/OID and head repository/ref/OID");
     expect(skill).toContain("branch-attached repair worktree through normal `git worktree remove`");
     expect(skill).toContain("`data.reviewedHead` is the only merge authority");
     expect(skill).toMatch(/gh api \\\s+--method PUT/u);
@@ -165,23 +170,29 @@ describe("context-tree-review floor", () => {
     expect(skill).not.toContain("reviewPacketV1");
   });
 
-  it("keeps Context Tree review GitHub-only and fails closed for GitLab", () => {
+  it("routes trusted Context Tree review through distinct GitHub and GitLab contracts", () => {
     const skillDir = join(repoRoot, "skills", "context-tree-review");
     const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");
     const description = skill.split("\n").find((line) => line.startsWith("description:"));
     const openai = readFileSync(join(skillDir, "agents", "openai.yaml"), "utf8");
 
-    expect(description).toMatch(/Review a GitHub pull request/);
-    expect(description).toMatch(/do not use it for GitLab Merge Requests/);
-    expect(skill).toContain("This workflow is GitHub-only");
-    expect(skill).toContain("ordinary independent GitLab MR review path");
-    expect(skill).toContain("A GitLab URL, Merge Request identifier, or bound GitLab upstream");
-    expect(skill).toContain("A local mirror cannot override this exclusion");
-    expect(skill).toContain("classify the upstream before any clone");
-    expect(skill).toContain("stop before any Reviewer configuration\n   lookup, clone");
-    expect(skill).toContain("never fall back to\n   `gh` or substitute `glab`");
-    expect(skill).toContain("A local filesystem mirror is not provider\n   authority");
-    expect(skill).toContain("prove a GitHub pull request before any fetch");
-    expect(openai).toContain("trusted GitHub App Context Reviewer run");
+    expect(description).toMatch(/Review a GitHub pull request or GitLab merge request/);
+    expect(skill).toContain("A local mirror\ncannot override provider authority");
+    expect(skill).toContain("For a GitHub run use only\n   `gh`; for a GitLab run use only `glab`");
+    expect(skill).toContain("`contextReviewConnectionId` and\n`contextReviewInstanceOrigin`");
+    expect(skill).toContain("the same `gitlabConnection.id`, and the same\nexact normalized");
+    expect(skill).toContain("before every\nrepair edit, commit, push, MR note, and merge mutation");
+    expect(skill).toContain("GitLab has no First Tree approval action");
+    expect(skill).toContain("Never run `first-tree tree review`");
+    expect(skill).toContain("Use `glab mr note`");
+    expect(skill).toContain('glab mr merge "$MR_IID"');
+    expect(skill).toContain('--sha "$REVIEWED_HEAD"');
+    expect(skill).toMatch(/Merge\s+Requests API documents and enforces the SHA compare-and-set/u);
+    expect(skill).toContain("Never replace CAS with “read head then merge unconditionally.”");
+    expect(skill).toContain("exactly one read-only `glab mr view` or `glab api` reconciliation");
+    expect(skill).toContain("pipeline_or_protection");
+    expect(skill).toContain("let Note webhooks self-trigger a review");
+    expect(skill).toContain("App-authored PR\n  review is the only GitHub verdict");
+    expect(openai).toContain("provider-scoped Context Reviewer run");
   });
 });

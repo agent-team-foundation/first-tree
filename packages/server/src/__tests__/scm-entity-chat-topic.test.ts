@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatContextReviewTopic,
   formatGitlabEntityTopic,
   formatScmAutoTopic,
   refreshGitlabEntityTopic,
@@ -11,6 +12,23 @@ describe("SCM automatic topics", () => {
     expect(formatScmAutoTopic("PR repo#7", "Ship it")).toBe("PR repo#7: Ship it");
     expect(formatScmAutoTopic("Issue repo#8", null)).toBe("Issue repo#8");
     expect(refreshScmAutoTopic("manual", "New", [{ matches: "PR repo#7", nextHead: "PR repo#7" }])).toBeNull();
+  });
+
+  it("renders stable Context Review topics with provider-native references", () => {
+    expect(
+      formatContextReviewTopic({
+        provider: "github",
+        repositoryPath: "agent-team-foundation/first-tree-context",
+        changeNumber: 789,
+      }),
+    ).toBe("Context Review · first-tree-context#789");
+    expect(
+      formatContextReviewTopic({
+        provider: "gitlab",
+        repositoryPath: "platform/context/first-tree-context",
+        changeNumber: 42,
+      }),
+    ).toBe("Context Review · first-tree-context!42");
   });
 
   it("renders all GitLab automatic topic variants", () => {
@@ -25,6 +43,15 @@ describe("SCM automatic topics", () => {
         title: "Bug",
       }),
     ).toBe("Issue project#18: Bug");
+  });
+
+  it("renders stable Context Reviewer topics for both providers", () => {
+    expect(
+      formatContextReviewTopic({ provider: "github", repositoryPath: "owner/context-tree", changeNumber: 7 }),
+    ).toBe("Context Review · context-tree#7");
+    expect(
+      formatContextReviewTopic({ provider: "gitlab", repositoryPath: "group/platform/context-tree", changeNumber: 8 }),
+    ).toBe("Context Review · context-tree!8");
   });
 
   it("refreshes title and project path while preserving the review head", () => {

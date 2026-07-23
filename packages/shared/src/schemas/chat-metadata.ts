@@ -46,6 +46,10 @@ export const gitlabChatMetadataSchema = z.object({
   entityUrl: z.string().url().optional(),
   /** Stage 3 routes review requests; Stage 4 owns source-read execution state. */
   reviewRequestRouted: z.literal(true).optional(),
+  /** True only for the Server-reserved Context Tree MR Reviewer chat. */
+  contextTreeReviewer: z.literal(true).optional(),
+  /** Configured Context Reviewer when the reserved chat was created or refreshed. */
+  reviewerAgentUuid: z.string().min(1).optional(),
 });
 export type GitlabChatMetadata = z.infer<typeof gitlabChatMetadataSchema>;
 

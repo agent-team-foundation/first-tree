@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNotifier, notifyRecipients } from "../services/notifier.js";
+import { createNotifier, notifyRecipients, notifyRecipientsSettled } from "../services/notifier.js";
 
 type ListenHandler = (payload?: string) => void;
 
@@ -311,6 +311,9 @@ describe("createNotifier", () => {
   it("notifies recipient inboxes without awaiting individual failures", async () => {
     const notifier = {
       notify: vi.fn((inboxId: string) => (inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve())),
+      notifyStrict: vi.fn((inboxId: string) =>
+        inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve(),
+      ),
     };
 
     notifyRecipients(notifier as never, ["ok", "bad"], "msg_1");
@@ -318,5 +321,34 @@ describe("createNotifier", () => {
 
     expect(notifier.notify).toHaveBeenCalledWith("ok", "msg_1");
     expect(notifier.notify).toHaveBeenCalledWith("bad", "msg_1");
+  });
+
+  it("settles recipient notifies and reports failures for observers", async () => {
+    const notifier = {
+      notify: vi.fn(async () => undefined),
+      notifyStrict: vi.fn((inboxId: string) =>
+        inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve(),
+      ),
+    };
+
+    const result = await notifyRecipientsSettled(notifier as never, ["ok", "bad"], "msg_1");
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(notifier.notifyStrict).toHaveBeenCalledWith("ok", "msg_1");
+    expect(notifier.notifyStrict).toHaveBeenCalledWith("bad", "msg_1");
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it("observes createNotifier pg_notify failures on the settled path only", async () => {
+    const rejecting = makeListenClient(true);
+    const swallowing = makeListenClient(true);
+    const strictNotifier = createNotifier(rejecting.client as never);
+    const softNotifier = createNotifier(swallowing.client as never);
+
+    await expect(softNotifier.notify("inbox_1", "msg_soft")).resolves.toBeUndefined();
+
+    const settled = await notifyRecipientsSettled(strictNotifier, ["inbox_1"], "msg_strict");
+    expect(settled.failed).toBe(1);
+    expect(String(settled.errors[0])).toMatch(/notify failed/);
   });
 });

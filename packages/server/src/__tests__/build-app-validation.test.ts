@@ -24,6 +24,7 @@ const baseConfig: Config = {
     landingCampaignMaxTrialsPerUserPer24Hours: 5,
   },
   docs: { enabled: false },
+  cronJobs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
@@ -63,6 +64,21 @@ afterEach(() => {
 });
 
 describe("buildApp — token-lifetime config validation", () => {
+  it("fails startup for an invalid or permanently blocked GitLab egress CIDR", async () => {
+    const cfg: Config = {
+      ...baseConfig,
+      gitlab: {
+        egressAllowlist: [
+          {
+            origin: "https://gitlab.internal",
+            addressPolicy: { kind: "cidrs", cidrs: ["127.0.0.0/8"] },
+          },
+        ],
+      },
+    };
+    await expect(buildApp(cfg)).rejects.toThrow(/permanently blocked range/u);
+  });
+
   it("rejects a malformed refresh token expiry", async () => {
     const cfg: Config = { ...baseConfig, auth: { ...baseConfig.auth, refreshTokenExpiry: "30x" } };
     let app: FastifyInstance | undefined;

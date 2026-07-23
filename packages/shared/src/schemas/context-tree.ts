@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { contextTreeRepoSchema } from "./org-settings.js";
+import { contextTreeProviderSchema, contextTreeRepoSchema } from "./org-settings.js";
 
 export const CONTEXT_TREE_SNAPSHOT_STATUSES = {
   ACTIVE: "active",
@@ -333,7 +333,32 @@ export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
 export const contextTreeRecoveryActionSchema = z.literal("manage_github_app_installation");
 export type ContextTreeRecoveryAction = z.infer<typeof contextTreeRecoveryActionSchema>;
 
+export const contextTreeContentAvailabilitySchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("available"),
+    accessMode: z.enum(["local", "anonymous", "github_app"]),
+  }),
+  z.object({
+    status: z.literal("unavailable"),
+    accessMode: z.enum(["local", "anonymous", "github_app"]).nullable(),
+    reason: z.enum([
+      "not_configured",
+      "invalid_binding",
+      "gitlab_authentication_required",
+      "gitlab_origin_not_authorized",
+      "gitlab_egress_denied",
+      "gitlab_redirect_forbidden",
+      "sync_failed",
+    ]),
+  }),
+]);
+export type ContextTreeContentAvailability = z.infer<typeof contextTreeContentAvailabilitySchema>;
+
 export const contextTreeSnapshotSchema = z.object({
+  // Optional for rolling API/client compatibility. Current Server snapshots
+  // always emit both fields.
+  provider: contextTreeProviderSchema.nullish(),
+  contentAvailability: contextTreeContentAvailabilitySchema.optional(),
   repo: z.string().nullable(),
   branch: z.string().nullable(),
   headCommit: z.string().nullable(),

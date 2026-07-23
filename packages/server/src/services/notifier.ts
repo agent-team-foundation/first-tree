@@ -151,6 +151,12 @@ export type Notifier = {
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
   notify(inboxId: string, messageId: string): Promise<void>;
+  /**
+   * Same NOTIFY as `notify`, but rejects when the underlying `pg_notify` fails.
+   * Ordinary callers keep using fire-and-forget `notify`; cron post-commit
+   * observability uses this so delivery-hint failures are countable.
+   */
+  notifyStrict(inboxId: string, messageId: string): Promise<void>;
   /** Notify that a config has changed */
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
@@ -276,6 +282,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     }
   }
 
+  async function notifyStrict(inboxId: string, messageId: string) {
+    await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+  }
+
   return {
     subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler) {
       let map = subscriptions.get(inboxId);
@@ -296,9 +306,11 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    notifyStrict,
+
     async notify(inboxId: string, messageId: string) {
       try {
-        await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+        await notifyStrict(inboxId, messageId);
       } catch {
         // Fire-and-forget: durable inbox rows are repaired by bound WS backlog
         // drains if this volatile NOTIFY hint is missed.
@@ -781,4 +793,22 @@ export function notifyRecipients(notifier: Notifier, recipients: string[], messa
   for (const inboxId of recipients) {
     notifier.notify(inboxId, messageId).catch(() => {});
   }
+}
+
+/**
+ * Await every recipient notify via `notifyStrict` and report failures.
+ * Ordinary callers keep using fire-and-forget `notifyRecipients`, which goes
+ * through swallowing `notify()`. Cron sweeps use this so production
+ * `pg_notify` failures increment post-commit failure telemetry.
+ */
+export async function notifyRecipientsSettled(
+  notifier: Notifier,
+  recipients: string[],
+  messageId: string,
+): Promise<{ failed: number; errors: unknown[] }> {
+  const results = await Promise.allSettled(recipients.map((inboxId) => notifier.notifyStrict(inboxId, messageId)));
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  return { failed: errors.length, errors };
 }

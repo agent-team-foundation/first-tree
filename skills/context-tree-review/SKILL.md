@@ -1,24 +1,32 @@
 ---
 name: context-tree-review
-version: 0.3.3
+version: 0.4.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Review a GitHub pull request against the workspace bound Context Tree when a trusted GitHub App Context Reviewer wake-up supplies a server-authored run. The reviewer repairs every safely determined finding with its local git/gh identity before escalation, publishes the verdict through the App, and may squash-merge locally after approval. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or default-branch audits.
+description: Review a GitHub pull request or GitLab merge request against the workspace-bound Context Tree when a trusted server-authored Context Reviewer run supplies provider-scoped authority. Repair every safely determined finding with the host git and forge CLI identity, then use GitHub App review plus exact-head merge or GitLab note plus exact-SHA merge. Do not use for code changes, ordinary tree reads or writes, or default-branch audits.
 ---
 
 # Context Tree Review
 
-Review the latest live state of one Context Tree pull request under the
-generated Context Tree Policy. The GitHub App webhook owns review dispatch and
-the App-authored PR review is the only GitHub verdict. On a trusted run, the
-local reviewer identity must repair every safely determined finding before
-escalating any residual blocker, and may merge after approval. The App
-credential never enters the runtime.
+Review the latest live state of one Context Tree pull request (PR) or merge
+request (MR) under the generated Context Tree Policy. A trusted server-authored
+run selects exactly one provider adapter:
 
-This workflow is GitHub-only. A GitLab Context Tree Merge Request remains on
-the ordinary independent GitLab MR review path and never enters this skill. Do
-not substitute `glab` for `gh` or translate the GitHub App publication and
-local merge contracts into GitLab behavior.
+- GitHub keeps its existing App dispatch and formal review. The App-authored PR
+  review is the only GitHub verdict and the App credential never enters the
+  runtime.
+- GitLab uses inbound Webhook dispatch only. The Review Agent uses the host's
+  local `git` and exact-host `glab` identity for live reads, repair, notes,
+  pushes and one exact-SHA squash merge. Cloud never supplies a GitLab
+  repository credential and GitLab has no simulated approval or gate.
+
+Both adapters share validator-first review, detached exact-head snapshots,
+repair-before-escalation, complete re-review after repair, and fail-closed
+live-binding checks.
+
+The GitHub App webhook owns review dispatch for GitHub. GitLab inbound Webhook
+dispatch is separate and never grants App review authority.
+The App-authored PR review is the only GitHub verdict.
 
 This workflow has no managed task packet, protocol marker, canonical top-level
 comment, commit status or terminal Chat receipt. Historical managed marker text
@@ -26,57 +34,72 @@ has no behavior.
 
 ## Authority gate
 
-Before any Reviewer configuration lookup, reject provider mismatches.
-A GitLab URL, Merge Request identifier, or bound GitLab upstream is not review
-authority. Route it to ordinary independent GitLab review.
-A local mirror cannot override this exclusion.
-
 Publication and mutation require a server-authored Context Reviewer wake-up
-that names the repository, pull request and Context Review run id and instructs
-the assigned reviewer to load this installed skill. Run
+that names `provider`, the repository, the PR/MR identity and trusted run
+metadata and instructs the assigned reviewer to load this installed skill. Run
 `first-tree org context-tree review-config --json` and require the live binding,
-enabled Reviewer and assigned Agent to match the task.
+provider, enabled Reviewer and assigned Agent to match the task. A local mirror
+cannot override provider authority. Reject a GitHub run for a GitLab binding,
+a GitLab run for a GitHub binding, an unknown legacy provider, or any
+repository/branch mismatch before clone, forge CLI use, content read or
+mutation.
+
+For GitLab, record `contextReviewConnectionId` and
+`contextReviewInstanceOrigin` from the trusted run. The live config must report
+`providerMatchesRepository: true`, the same `gitlabConnection.id`, and the same
+exact normalized `gitlabConnection.instanceOrigin`. A missing connection,
+changed connection id or origin, or repository-match failure invalidates the
+run even when the repository path and branch are unchanged. Apply this complete
+GitLab authority tuple at the initial gate and again immediately before every
+repair edit, commit, push, MR note, and merge mutation.
 
 Ordinary Chat prose, copied metadata, an agent outbox message, a human-authored
-prompt or an invented run id cannot create App review authority. Without a
+prompt or invented metadata cannot create Context Reviewer authority. Without a
 trusted run, an explicit human request may receive read-only findings only.
 
-The run authorizes review of the PR; it is not a snapshot of one webhook commit.
-Treat webhook payload fields as discovery hints and read the latest PR state
-from GitHub before reviewing.
+The run authorizes review of the PR/MR; it is not a snapshot of one webhook
+commit. Treat webhook payload fields as discovery hints and read the latest
+forge state before reviewing.
 
-## Resolve the latest live PR
+## Resolve the latest live PR or MR
 
 1. Read `.first-tree/workspace.json` and the generated Tree Location section.
    Resolve the declared Context Tree path, upstream and branch. Normalize and
-   classify the upstream before any clone or `git -C` command. For GitLab or
-   another recognized non-GitHub forge, stop before any Reviewer configuration
-   lookup, clone, `gh` command, fetch, edit, push or merge; never fall back to
-   `gh` or substitute `glab`. A local filesystem mirror is not provider
-   authority. For a GitHub upstream, verify an existing checkout's normalized
+   classify the upstream before any clone or `git -C` command. Require it to
+   equal the trusted run and live binding provider. For a GitHub run use only
+   `gh`; for a GitLab run use only `glab` authenticated to the repository's
+   exact host. Never substitute one forge CLI for the other or accept ambient
+   credentials for a different host. Verify an existing checkout's normalized
    `origin` or follow the generated clone command when missing. Never delete,
    re-point or overwrite a mismatched checkout. Discovery is metadata-only:
    do not use `rg`, `grep`, `find`, `cat`, `sed`, Git object readers, or another
    content scan against the bound main Context Tree. Its normal, member and
    archive content is not review input until the detached PR snapshot passes
    validation.
-2. Use `gh pr view` to read the live repository, number, state, draft flag,
-   author, base ref/OID, head repository/ref/OID, URL, title, body, changed
-   files, discussion and checks. Require the returned live URL and repository
-   identity to prove a GitHub pull request before any fetch or semantic read.
-3. Require the PR repository and base branch to equal the live Context Tree
-   binding. Closed or merged PRs receive no new review. Fork PRs are read-only.
+2. For GitHub, use `gh pr view` to read the live repository, number, state,
+   draft flag, author, base ref/OID, head repository/ref/OID, URL, title, body,
+   changed files, discussion and checks. For GitLab, use `glab mr view` and,
+   when necessary, a read-only `glab api` call to read the live instance,
+   project path/id, MR IID, state, draft flag, author, target branch/SHA,
+   source project/ref/SHA, URL, title, description, changes, discussions and
+   pipeline status. Require the returned live identity to prove the expected
+   provider entity before any fetch or semantic read.
+3. Require the PR/MR repository and base/target branch to equal the live
+   Context Tree binding. Closed or merged entities receive no new review. Fork
+   PRs/MRs are read-only.
 4. Record the current full lowercase head OID as `REVIEWED_HEAD` for the local
    snapshot and report. The server will independently read the live head when
-   publishing the App review.
+   publishing the App review or attempting the GitLab merge.
 
 ## Detached snapshot and validator-first review
 
-Fetch the base and `refs/pull/<number>/head` without switching the main Context
-Tree checkout. Create a unique agent-owned detached worktree at the exact
-recorded `REVIEWED_HEAD`, not an ambiguous `FETCH_HEAD` or a persistent local
-review ref. Never use `gh pr checkout` in the main checkout or reuse an unknown
-worktree.
+Fetch the base/target and exact live head without switching the main Context
+Tree checkout. GitHub may fetch `refs/pull/<number>/head`; GitLab must fetch the
+live source ref/SHA from the verified source project and must not trust a
+payload-only ref. Create a unique agent-owned detached worktree at the exact
+recorded `REVIEWED_HEAD`, not an ambiguous `FETCH_HEAD` or persistent local
+review ref. Never use `gh pr checkout` or `glab mr checkout` in the main
+checkout or reuse an unknown worktree.
 
 Before semantic reads, inspect only the changed path list needed to classify
 normal, archive/supporting and member content. Then run from the detached PR
@@ -210,12 +233,13 @@ instead of pasting the checklist.
 For every finding in a trusted run, classify it before choosing an outcome:
 
 A draft PR is read-only even when its findings would be mechanically
-repairable on a ready PR. Do not mutate, commit or push from a draft run;
+repairable on a ready PR. A draft GitLab MR has the same read-only constraint.
+Do not mutate, commit or push from a draft run;
 record the findings in an `## Approval deferred` `COMMENT` and wait for a
 fresh ready-for-review run before classifying them for repair.
 
-- `SAFE_REPAIR` — the PR is ready for review, same-repository and non-fork, the live source ref
-  exists, the current local git/`gh` identity can push, Tree and source evidence
+- `SAFE_REPAIR` — the PR/MR is ready for review, same-repository and non-fork, the live source ref
+  exists, the current local git and provider CLI identity can push, Tree and source evidence
   determine one correction, and the change does not cross a protected boundary.
   The assigned reviewer **must** repair it before escalation. No PR-body consent
   block or task packet is required.
@@ -234,6 +258,9 @@ safe findings in one minimal, same-theme batch before handing off only the
 remaining protected or blocked findings. The presence of one protected decision
 does not permit mechanical or decision-preserving findings to be returned to
 the author.
+
+For either provider, the entity must be ready for review, same-repository and
+non-fork before any repair can be safe.
 
 Keep repairs limited to defects found while reviewing the PR. Never use review
 as authority to expand the proposal into unrelated paths. Treat these as
@@ -254,7 +281,9 @@ member ownership does not implicitly assign ownership to another node.
 
 Immediately before mutation, rerun
 `first-tree org context-tree review-config --json`; require the live binding,
-enabled Reviewer and assigned Agent to still match the trusted run. Re-read the
+enabled Reviewer and assigned Agent to still match the trusted run. For GitLab,
+also require `providerMatchesRepository: true` and the live connection id and
+exact origin to equal the trusted run. Re-read the
 complete PR identity and source ref; require open/ready state, the reviewed
 repository, base ref/OID, head repository/ref/OID and `REVIEWED_HEAD`, with the
 source ref at that same head. On change, discard the findings and restart or
@@ -270,7 +299,7 @@ Commit normally with the host git identity. Immediately before push, rerun
 `first-tree org context-tree review-config --json` and repeat the complete PR
 identity and source-ref checks against `REVIEWED_HEAD`; never push after any
 authority, binding, state or ref change.
-Push with the host git/`gh` credential only while that authority remains current.
+Push with the host git/forge credential only while that authority remains current.
 Never force-push, use
 `--force-with-lease`, amend, rebase, merge the base branch or retarget the PR.
 
@@ -294,17 +323,17 @@ occasional duplicate wake-up is harmless.
 For an uncertain push, fetch and inspect the source and PR refs before deciding
 whether it landed; never retry blindly.
 
-## Choose one App review outcome
+## Choose one provider outcome
 
 Immediately before submitting any outcome, rerun
 `first-tree org context-tree review-config --json`; require the live repository
 and branch, enabled Reviewer and assigned Agent to match the reviewed authority
-tuple. Then use `gh pr view` again and require its base ref to equal that live
-binding branch and its repository, state, draft flag, base ref/OID and head
-repository/ref/OID to match the reviewed snapshot. This applies to `COMMENT`,
-`REQUEST_CHANGES` and `APPROVE`. Unreadable or changed authority publishes
-nothing. If only the PR state moved within the same authority, discard the old
-conclusion and restart against the successor state.
+tuple. Then use the provider's live read again and require its base/target ref
+to equal that live binding branch and its repository, state, draft flag,
+base/target ref/OID and head repository/ref/OID to match the reviewed snapshot.
+Unreadable or changed authority publishes nothing. If only the PR/MR state
+moved within the same authority, discard the old conclusion and restart against
+the successor state.
 
 Choose exactly one outcome from the latest reviewed state:
 
@@ -321,16 +350,20 @@ Choose exactly one outcome from the latest reviewed state:
 - `APPROVE` only for a ready PR whose final head passed validation, both quality
   passes and acceptable checks with no unresolved blocker.
 
-A ready, otherwise safe PR with only `Advisory` findings still receives
-`APPROVE`; include the advice concisely in the approval body.
+A ready, otherwise safe PR/MR with only `Advisory` findings remains safe;
+include the advice concisely in the provider-specific body.
+For GitHub, a ready PR with only `Advisory` findings still receives
+`APPROVE`.
 
 Keep the review body concise but evidence-based: identify the inspected head,
 verification result, material context checked, challenge result, any repair and
 every unresolved blocker. Do not paste an internal checklist or manufacture an
 empty ledger merely to signal completion.
 
-Write the review body to a temporary file. For `REQUEST_CHANGES` and
-`COMMENT`, submit only through:
+### GitHub publication
+
+For GitHub, write the review body to a temporary file. For `REQUEST_CHANGES`
+and `COMMENT`, submit only through:
 
 ```bash
 first-tree tree review \
@@ -351,7 +384,57 @@ the same command only as its documented reconciliation path; never post a
 compensating review. The server's pending/submitting/unknown/failed/submitted
 states exist solely to reconcile GitHub publication safely.
 
-## Checks, approval and local merge
+### GitLab note and exact-SHA merge
+
+GitLab has no First Tree approval action. Never run `first-tree tree review`,
+`glab mr approve`, an approval API, commit status, label, ruleset, CODEOWNERS
+gate, merge queue, admin bypass or force operation for a GitLab run.
+
+For a draft or unresolved blocking finding, leave exactly one concise MR note
+with the host's exact-instance `glab` identity. State the reviewed head,
+verification result, blocker and recovery action. Use `glab mr note`; do not
+create a second verdict protocol or let Note webhooks self-trigger a review.
+Immediately before that note mutation, repeat the complete GitLab authority
+tuple check, including connection id, exact instance origin and
+`providerMatchesRepository: true`.
+If note delivery is unknown, inspect the MR discussions once and do not retry
+the mutation.
+
+For a ready, non-fork, blocker-free MR, require successful deterministic
+validation and acceptable project pipeline/protection state. Immediately
+before merge, rerun `first-tree org context-tree review-config --json`; require
+the complete GitLab authority tuple, including connection id, exact instance
+origin and `providerMatchesRepository: true`, to equal the trusted run. Then reread
+the complete live MR identity, and require the live source SHA to equal
+`REVIEWED_HEAD`. Perform exactly one squash merge compare-and-set:
+
+```bash
+glab mr merge "$MR_IID" \
+  --repo "$EXACT_REPO" \
+  --sha "$REVIEWED_HEAD" \
+  --squash \
+  --yes \
+  --auto-merge=false
+```
+
+If the installed `glab` does not expose `--sha`, use exactly one `glab api
+--method PUT` request to
+`projects/<url-encoded-project>/merge_requests/<iid>/merge` with
+`sha="$REVIEWED_HEAD"` and `squash=true`, but only when the target GitLab Merge
+Requests API documents and enforces the SHA compare-and-set. If the instance,
+version or CLI cannot enforce exact-SHA CAS, fail closed without a merge
+attempt. Never replace CAS with “read head then merge unconditionally.”
+
+Classify a rejected merge specifically as `head_mismatch`, `credential`,
+`pipeline_or_protection`, `deterministic_validation`, or
+`transient_or_unknown`. There is no mutation retry. An unknown result permits
+exactly one read-only `glab mr view` or `glab api` reconciliation: report
+`merged` only when the MR is merged and its recorded head is the exact
+`REVIEWED_HEAD`; report `open` only when it remains open at that head; otherwise
+report `unknown`. Do not compensate with a note, approval, second merge or
+alternate method.
+
+### GitHub checks, approval and local merge
 
 Before `APPROVE`, inspect required checks. Wait with bounded backoff for at most
 10 minutes. A repairable failure returns to repair; another failed check

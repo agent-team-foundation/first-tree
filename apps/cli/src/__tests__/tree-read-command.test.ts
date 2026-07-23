@@ -133,6 +133,7 @@ describe("tree read command action", () => {
 
     expect(outputMocks.status.mock.calls).toEqual([
       ["Team", "team-command"],
+      ["Provider", "legacy/unresolved"],
       ["Binding", `${remote.bindingRepo}#main`],
       ["Exact commit", remote.commit],
       ["Snapshot", realpathSync(snapshotPath)],

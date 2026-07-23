@@ -1,8 +1,13 @@
 # First Tree Skill Evals
 
-Opt-in live model evaluations for First Tree skills. These scripts are not part
-of `pnpm test`, `pnpm check`, or default CI because they can consume real model
-quota.
+Human-directed live model evaluations for First Tree skills. These scripts are
+not part of `pnpm test`, `pnpm check`, or default CI because they can consume
+real model quota.
+
+Agents run only no-model code checks such as `eval:floor` by default.
+`eval:gate`, `eval:quality`, `eval:periodic`, `--include-quality`, and any
+equivalent model-backed case require an explicit human instruction.
+`eval:select` therefore recommends only floor commands.
 
 ## Commands
 
@@ -42,7 +47,7 @@ every on-disk `skills/*/` payload is either eval-covered or explicitly excluded,
 so nothing escapes both.
 
 `eval:select` is a no-model helper for local development and PR review. It
-looks at changed files and recommends the smallest relevant eval commands:
+looks at changed files and recommends the smallest relevant floor commands:
 
 ```bash
 pnpm --filter @first-tree/skill-evals eval:select -- --base main
@@ -50,19 +55,15 @@ pnpm --filter @first-tree/skill-evals eval:select -- --changed-file skills/first
 pnpm --filter @first-tree/skill-evals eval:select -- --base main --json
 ```
 
-The selector is intentionally conservative for shared skill-eval
-infrastructure: core runner or schema changes recommend floor plus all
-implemented deterministic gates, and judge-core changes also recommend quality.
-Provider runner changes additionally recommend the provider-sensitive
-`first-tree-read` periodic fixture. This is limited to provider infrastructure
-changes; ordinary skill changes still do not recommend periodic.
-Suite or skill changes recommend that suite's floor/gate/quality coverage where
-implemented. The command only recommends; live gate and quality evals remain
-opt-in and are not part of `pnpm test`.
+The selector never recommends model-backed execution. Suite or skill changes
+select the corresponding floor; shared runner, provider, judge, generated
+briefing, or eval-framework changes select the all-suite floor. Live gate,
+quality, and periodic commands remain available only when a human explicitly
+requests them.
 
-`eval:periodic` is the opt-in tier for broader, more expensive coverage that is
-not suitable for default gates or ordinary CI. It accepts the same basic live
-eval controls as gates, including `--suite`, `--case`, `--model`,
+`eval:periodic` is the human-directed tier for broader, more expensive coverage
+that is not suitable for default gates or ordinary CI. It accepts the same
+basic live eval controls as gates, including `--suite`, `--case`, `--model`,
 `--provider`, `--codex-bin`, `--claude-bin`, `--json`, and `--verbose`.
 `first-tree-read` periodic runs a runtime-generated briefing fixture with the
 installed First Tree skill topology; it is fixture coverage for the generated
@@ -74,11 +75,10 @@ bare source fixture from the current `first-tree` repo `HEAD` and still
 requires the seed bare-source worktree protocol. `eval:periodic` with no
 `--suite` runs all implemented periodic suites in one result-store run group.
 Suites without implemented periodic cases still print a clear no-op summary and
-exit 0. The default `eval:select` recommendations do not include periodic for
-ordinary skill changes; maintainers trigger periodic manually or via future
-scheduling.
+exit 0. `eval:select` never recommends periodic; run it only on explicit human
+instruction.
 
-`eval:quality` is an opt-in LLM-as-judge layer. It does not replace
+`eval:quality` is a human-directed LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate` by default. Each quality
 case first runs the corresponding live gate case and requires that deterministic
 gate to pass; only then does it send the actual produced artifact to the judge.
@@ -223,9 +223,10 @@ accepts the source row id as an alias.
 `eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
 deterministic gate first. If that hard-rule gate passes, the quality judge
 scores the actual Phase 1 skeleton proposal and source evidence. This judge is
-opt-in and does not replace the deterministic seed gate: empty-tree self-check,
-source boundary, bare worktree protocol, no tree/source/GitHub side effects, and
-no Phase 2 leaf content before approval remain hard-rule oracle conditions.
+human-directed and does not replace the deterministic seed gate: empty-tree
+self-check, source boundary, bare worktree protocol, no tree/source/GitHub side
+effects, and no Phase 2 leaf content before approval remain hard-rule oracle
+conditions.
 
 `eval:periodic -- --suite first-tree-seed` runs
 `first-tree-seed-real-first-tree-source-periodic`. The fixture creates an empty
@@ -238,12 +239,12 @@ periodic tier and is not part of the default seed gate.
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
-runs the selected tested-agent provider from the case workspace for live eval
-commands. Codex is the default provider. Use `--provider claude --claude-bin
-<path>` to opt into the Claude provider, or `--provider codex --codex-bin
-<path>` to be explicit. Claude support is opt-in and is validated by no-quota
-fake-binary tests by default; real Claude live evals consume provider quota and
-must be triggered intentionally.
+runs the selected tested-agent provider from the case workspace for
+human-directed live eval commands. Codex is the default provider. Use
+`--provider claude --claude-bin <path>` for the Claude provider, or
+`--provider codex --codex-bin <path>` to be explicit. Claude support is
+validated by no-quota fake-binary tests by default; real Claude live evals
+consume provider quota and require explicit human instruction.
 Fixture validation runs `tree verify` through the per-run `first-tree` shim by
 default. To validate fixtures with an installed channel binary instead, set
 `FIRST_TREE_EVAL_VERIFY_BIN` to the desired executable, for example

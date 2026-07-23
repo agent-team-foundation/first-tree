@@ -7,14 +7,15 @@ const skillPath = join(repoRoot, "skills", "first-tree-write");
 const skill = readFileSync(join(skillPath, "SKILL.md"), "utf8");
 
 describe("first-tree-write App review handoff floor", () => {
-  it("ends writer ownership at a source-complete GitHub PR", () => {
-    expect(skill).toContain("Let the App reviewer own GitHub review dispatch");
-    expect(skill).toContain("GitHub App webhook creates or\n   reuses the PR-scoped Reviewer Chat");
+  it("ends writer ownership at a source-complete provider artifact", () => {
+    expect(skill).toContain("Let provider automation own review dispatch");
+    expect(skill).toContain("GitHub App webhook creates or reuses the PR-scoped Reviewer Chat");
+    expect(skill).toContain("valid matching inbound Webhook creates or\n   reuses the MR-scoped Reviewer Chat");
     expect(skill).toContain("The configured review agent may\nrepair the PR directly");
     expect(skill).toContain("Do not add a repair-consent block, exact-file permission\nlist");
     expect(skill).toContain("Do not add a repair-consent block");
     expect(skill).toContain("legacy dispatch marker or task payload");
-    expect(skill).toContain("Supported GitHub App webhooks are the sole dispatch owner");
+    expect(skill).toContain("Supported GitHub App or GitLab inbound Webhooks are the sole dispatch");
   });
 
   it("does not retain the member task packet or direct Reviewer dispatch", () => {
@@ -26,20 +27,21 @@ describe("first-tree-write App review handoff floor", () => {
   });
 
   it("keeps clean BYO Write bound to explicit Team and exact snapshot", () => {
-    expect(skill).toContain("BYO clean (GitHub-bound Context Trees only)");
-    expect(skill).toContain("A GitLab-bound tree\ncannot use this activation");
+    expect(skill).toContain("BYO clean (GitHub- or GitLab-bound Context Trees)");
     expect(skill).toContain('first-tree --json tree write --team "<team-id>"');
     expect(skill).toContain('--snapshot "<exact-snapshot>" --github-login "<gh-login>"');
+    expect(skill).toContain("For GitLab, do not pass a GitHub login");
+    expect(skill).toContain("exact-host\nGitLab `glab` authentication");
     expect(skill).toContain("Do not require or reconstruct a Workspace manifest");
     expect(skill).toContain("separate task worktree and branch from the returned exact base commit");
     expect(skill).toContain("immediately before the first push");
     expect(skill).toContain("observability only, never local routing");
   });
 
-  it("selects publication forge from the Context Tree and follows ordinary GitLab MRs", () => {
+  it("selects publication forge from the Context Tree and follows GitLab MRs", () => {
     expect(skill).toMatch(/detect the Context Tree forge from its own `origin`/u);
     expect(skill).toContain("never infer it\nfrom the source");
-    expect(skill).toMatch(/Audit-originated GitLab MR stays draft for ordinary independent review/u);
+    expect(skill).toMatch(/Audit-originated artifacts stay draft/u);
     expect(skill).toContain("first-tree gitlab follow <mr-url>");
     expect(skill).toContain("creating, resolving or\n   reusing any GitLab MR");
     expect(skill).toContain("returned pending or active state is success");
@@ -48,7 +50,7 @@ describe("first-tree-write App review handoff floor", () => {
 
   it("keeps version metadata and the standalone VERSION file aligned", () => {
     const version = readFileSync(join(skillPath, "VERSION"), "utf8").trim();
-    expect(version).toBe("0.12.0");
+    expect(version).toBe("0.13.0");
     expect(skill).toContain(`version: ${version}`);
     expect(skill.split("\n").length).toBeLessThanOrEqual(500);
   });

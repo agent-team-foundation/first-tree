@@ -251,7 +251,9 @@ describe("FirstTreeHubSDK.preflightMemberContextTreeWrite", () => {
   it("uses only the explicit Team member route and returns Server current authority", async () => {
     const authority = {
       organizationId: "team /?#",
-      binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
+      provider: "github",
+      binding: { provider: "github", repo: "https://github.com/acme/context-tree.git", branch: "main" },
+      gitlabInstanceOrigin: null,
       reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "Writer",
     };

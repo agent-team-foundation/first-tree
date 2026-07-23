@@ -24,6 +24,53 @@ describe("Context Review schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts a provider-specific GitLab MR run without an App submission state", () => {
+    expect(
+      contextReviewerRunMessageMetadataSchema.parse({
+        source: "gitlab",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-2",
+        contextReviewRepository: "gitlab.internal/group/subgroup/context-tree",
+        contextReviewConnectionId: "connection-1",
+        contextReviewInstanceOrigin: "https://gitlab.internal",
+        contextReviewProjectId: 123,
+        contextReviewMrIid: 42,
+        contextReviewEntityUrl: "https://gitlab.internal/group/subgroup/context-tree/-/merge_requests/42",
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+        mentions: ["reviewer-1"],
+      }),
+    ).toMatchObject({
+      source: "gitlab",
+      contextReviewProjectId: 123,
+      contextReviewMrIid: 42,
+    });
+  });
+
+  it("requires a normalized exact GitLab instance origin in the trusted run", () => {
+    const run = {
+      source: "gitlab",
+      contextTreeReviewer: true,
+      contextReviewRunId: "run-2",
+      contextReviewRepository: "gitlab.internal/group/context-tree",
+      contextReviewConnectionId: "connection-1",
+      contextReviewProjectId: 123,
+      contextReviewMrIid: 42,
+      contextReviewEntityUrl: "https://gitlab.internal/group/context-tree/-/merge_requests/42",
+      contextReviewOrganizationId: "org-1",
+      contextReviewReviewerAgentUuid: "reviewer-1",
+      contextReviewReviewerManagerHumanAgentId: "human-1",
+    };
+    expect(contextReviewerRunMessageMetadataSchema.safeParse(run).success).toBe(false);
+    expect(
+      contextReviewerRunMessageMetadataSchema.safeParse({
+        ...run,
+        contextReviewInstanceOrigin: "https://GITLAB.internal/",
+      }).success,
+    ).toBe(false);
+  });
+
   it.each([
     { state: "pending" },
     {
@@ -80,11 +127,11 @@ describe("Context Review schemas", () => {
     ).toBe(true);
   });
 
-  it("rejects incomplete or non-GitHub run envelopes", () => {
+  it("rejects incomplete or unsupported-provider run envelopes", () => {
     expect(contextReviewerRunMessageMetadataSchema.safeParse({ source: "github" }).success).toBe(false);
     expect(
       contextReviewerRunMessageMetadataSchema.safeParse({
-        source: "gitlab",
+        source: "bitbucket",
         contextTreeReviewer: true,
         contextReviewRunId: "run-1",
       }).success,

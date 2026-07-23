@@ -45,8 +45,10 @@ import {
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
 import {
+  getOrgContextReviewRuntime,
   getOrgContextTreeBinding,
   getOrgContextTreeSettingState,
+  isOrgContextReviewRuntimeCurrent,
   putInitializedOrgContextTreeBinding,
 } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
@@ -173,34 +175,51 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     );
   });
 
-  app.post<{ Params: { orgId: string }; Body: unknown }>("/seed-preflight", async (request, reply) => {
-    contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
-    const scope = await requireOrgMembership(request, app.db);
-    if (scope.role !== "admin") {
-      return reply.status(403).send({
-        error: "Context Tree Seed requires an active Team Admin.",
-        code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
-      });
-    }
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/seed-preflight",
+    writePreflightRouteOptions,
+    async (request, reply) => {
+      contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
+      const scope = await requireOrgMembership(request, app.db);
+      if (scope.role !== "admin") {
+        return reply.status(403).send({
+          error: "Context Tree Seed requires an active Team Admin.",
+          code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+        });
+      }
 
-    const state = await getOrgContextTreeSettingState(app.db, scope.organizationId);
-    if (state.kind === "invalid") {
-      return reply.status(409).send({
-        error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
-        code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
-      });
-    }
+      const runtime = await getOrgContextReviewRuntime(app.db, scope.organizationId);
+      if (runtime.bindingState === "invalid") {
+        return reply.status(409).send({
+          error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+          code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+        });
+      }
 
-    return reply.status(200).send(
-      contextTreeSeedPreflightResponseSchema.parse({
-        organizationId: scope.organizationId,
-        state:
-          state.kind === "bound"
-            ? { status: "bound", binding: state.binding }
-            : { status: "unbound", branch: state.branch },
-      }),
-    );
-  });
+      return reply.status(200).send(
+        contextTreeSeedPreflightResponseSchema.parse({
+          organizationId: scope.organizationId,
+          state:
+            runtime.bindingState === "bound" && runtime.repo && runtime.branch
+              ? {
+                  status: "bound",
+                  binding: {
+                    ...(runtime.provider ? { provider: runtime.provider } : {}),
+                    repo: runtime.repo,
+                    branch: runtime.branch,
+                  },
+                }
+              : { status: "unbound", branch: runtime.branch ?? "main" },
+          gitlabConnection: runtime.gitlabConnection
+            ? {
+                id: runtime.gitlabConnection.id,
+                instanceOrigin: runtime.gitlabConnection.instanceOrigin,
+              }
+            : null,
+        }),
+      );
+    },
+  );
 
   app.post<{ Params: { orgId: string }; Body: unknown }>(
     "/write-preflight",
@@ -328,7 +347,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw err;
     }
 
-    const initializedBinding = contextTreeActiveBindingSchema.safeParse({ repo: repo.cloneUrl, branch: BRANCH });
+    const initializedBinding = contextTreeActiveBindingSchema.safeParse({
+      provider: "github",
+      repo: repo.cloneUrl,
+      branch: BRANCH,
+    });
     const initializedResponse = initializeContextTreeResponseSchema.safeParse({
       repo: repo.cloneUrl,
       htmlUrl: repo.htmlUrl,
@@ -447,6 +470,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       setting = await putInitializedOrgContextTreeBinding(app.db, finalScope.organizationId, initializedBinding.data, {
         expectedUnboundBranch: existing.branch,
         updatedBy: finalScope.userId,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       });
     } catch (error) {
       if (error instanceof ConflictError) {
@@ -496,10 +520,22 @@ async function resolveTreeSetupRecoveryMessage(
     const installation = await findInstallationByOrg(app.db, organizationId);
     mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
   }
-  const snapshot = await getContextTreeSnapshot({
-    ...binding,
-    ...(mintResult?.ok ? { githubToken: mintResult.token } : {}),
-  });
+  const reviewRuntime = await getOrgContextReviewRuntime(app.db, organizationId);
+  const snapshot = await getContextTreeSnapshot(
+    {
+      ...binding,
+      ...(mintResult?.ok ? { githubToken: mintResult.token } : {}),
+    },
+    undefined,
+    {
+      gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin,
+      gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+      gitlabExecutionGuard:
+        reviewRuntime.provider === "gitlab"
+          ? () => isOrgContextReviewRuntimeCurrent(app.db, organizationId, reviewRuntime)
+          : undefined,
+    },
+  );
   if (snapshot.snapshotStatus !== "unavailable") return null;
   const recoveryAction = mintResult ? await resolveContextTreeRecoveryAction(snapshot, binding, mintResult) : null;
   return treeSetupRecoveryMessage(

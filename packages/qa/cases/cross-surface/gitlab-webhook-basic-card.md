@@ -115,7 +115,8 @@ and manual bindings while later directed events may route afresh, lifecycle-only
 state/topic, terminal chats archive only after all safety guards pass, webhook turn input identifies GitLab/system without
 changing participant routing, anomalies fail closed, and no source-review state is claimed.
 
-`FAIL`: cross-Team resolution, secret exposure, any outbound request to GitLab, incorrect pending binding, duplicate cards
+`FAIL`: cross-Team resolution, secret exposure, any outbound request caused by
+connection, follow, or webhook processing, incorrect pending binding, duplicate cards
 for one chat within one pass, a fuzzy personnel match, new personnel routing after its authority was removed, reviewer
 downgrade, or a claim that source review is running/completed.
 

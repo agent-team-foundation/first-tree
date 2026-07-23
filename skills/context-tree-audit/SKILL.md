@@ -124,10 +124,11 @@ not own a second authoring policy or PR/MR verdict workflow.
 Never edit `owners` without explicit human authority, approve a pull request or
 merge request created from this audit, merge, change repository governance,
 create a new CLI surface, or claim scheduled execution. A GitHub tree PR
-continues through `context-tree-review`. A GitLab tree MR remains draft and
-continues through ordinary independent GitLab MR review; never invoke
-`context-tree-review` for it. Audit never marks either artifact ready, approves
-it, or merges it.
+continues through `context-tree-review`. A GitLab tree MR also continues
+through `context-tree-review`, but Audit leaves it draft so that run remains
+read-only. After creating or reusing a GitLab MR, run `first-tree gitlab follow
+<mr-url>`. Audit never creates a Reviewer Chat, marks either artifact ready,
+publishes a verdict, approves it, repairs it, or merges it.
 
 ## Completion Report
 

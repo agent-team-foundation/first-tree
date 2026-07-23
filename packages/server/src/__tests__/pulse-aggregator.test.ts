@@ -24,6 +24,7 @@ function makeMockNotifier(): {
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
     notify: vi.fn(async () => {}),
+    notifyStrict: vi.fn(async () => {}),
     notifyConfigChange: vi.fn(async () => {}),
     notifySessionStateChange: vi.fn(async () => {}),
     notifyRuntimeStateChange: vi.fn(async () => {}),

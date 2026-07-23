@@ -44,6 +44,11 @@ const githubAppMocks = vi.hoisted(() => ({
   getGithubAppInstallation: vi.fn(),
 }));
 
+const gitlabConnectionMocks = vi.hoisted(() => ({
+  gitlabConnectionsQueryKey: (organizationId: string | null) => ["gitlab-connections", organizationId] as const,
+  listGitlabConnectionsAt: vi.fn(),
+}));
+
 const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
 }));
@@ -62,6 +67,8 @@ vi.mock("../../api/context-tree.js", () => contextApiMocks);
 
 vi.mock("../../api/github-app.js", () => githubAppMocks);
 
+vi.mock("../../api/gitlab-connections.js", () => gitlabConnectionMocks);
+
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
 }));
@@ -70,6 +77,7 @@ const NOW = "2026-05-28T12:00:00.000Z";
 
 function contextTree(overrides: Partial<OrgContextTreeOutput> = {}): OrgContextTreeOutput {
   return {
+    ...(overrides.provider ? { provider: overrides.provider } : {}),
     repo: overrides.repo ?? "https://github.com/acme/context",
     branch: overrides.branch ?? "main",
   };
@@ -271,6 +279,7 @@ beforeEach(() => {
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getRawContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
+  gitlabConnectionMocks.listGitlabConnectionsAt.mockResolvedValue([]);
   githubAppMocks.getGithubAppInstallation.mockResolvedValue({
     installationId: 42,
     accountLogin: "acme",
@@ -426,6 +435,56 @@ describe("settings panels", () => {
     expect(container.textContent).not.toContain("Repo URL");
     expect(container.textContent).not.toContain("Branch");
 
+    await act(async () => root.unmount());
+  });
+
+  it("uses the Server-resolved provider for a legacy GitLab binding and keeps the repo form editable", async () => {
+    settingsMocks.getRawContextTreeSetting.mockResolvedValueOnce(
+      contextTree({
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      }),
+    );
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce(
+      contextTree({
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      }),
+    );
+    gitlabConnectionMocks.listGitlabConnectionsAt.mockResolvedValueOnce([
+      {
+        id: "connection-1",
+        organizationId: "org-1",
+        displayName: "Private GitLab",
+        instanceOrigin: "https://gitlab.internal",
+        endpointSeen: true,
+        stableDeliveryObserved: true,
+        reviewerCapability: {
+          mode: "assignee",
+          lastObservedVersion: "13.12",
+          lastSchemaAnomalyAt: null,
+          lastSchemaAnomalyCode: null,
+        },
+        health: {
+          lastValidInboundAt: "2026-05-28T11:00:00.000Z",
+          lastProcessingFailureAt: null,
+          lastProcessingFailureCode: null,
+        },
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Healthy · inbound Webhook observed");
+
+    expect(container.textContent).toContain("gitlab");
+    expect(container.textContent).not.toContain("Provider unresolved");
+    expect(container.textContent).toContain("GitLab Webhook");
+    expect(container.textContent).toContain("Automatic MR review");
+    expect(container.textContent).toContain("last valid inbound 2026-05-28T11:00:00.000Z");
+    await click(buttonByText(container, "Edit"));
+    expect(inputByLabel(container, "Repo URL")?.value).toBe("https://gitlab.internal/acme/platform/context-tree.git");
     await act(async () => root.unmount());
   });
 

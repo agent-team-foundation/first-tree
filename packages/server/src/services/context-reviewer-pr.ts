@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -8,18 +7,22 @@ import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
-import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
+import {
+  type ContextReviewerAgent,
+  contextReviewerChatReservationKey,
+  findExistingContextReviewerChat,
+  loadValidContextReviewerAgent,
+} from "./context-reviewer-common.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
-import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
+import { getOrgContextReviewRuntime } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
+import { formatContextReviewTopic } from "./scm-entity-chat-topic.js";
 
 const log = createLogger("ContextReviewerPr");
 const require = createRequire(import.meta.url);
@@ -88,12 +91,6 @@ type ContextReviewerPrTrigger =
     }
   | { eventType: "issue_comment"; action: "created"; triggerEvent: string }
   | { eventType: "pull_request_review_comment"; action: "created" | "edited"; triggerEvent: string };
-
-type ReviewerAgent = {
-  uuid: string;
-  managerHumanAgentId: string;
-  managerGithubLogin: string | null;
-};
 
 let templateCache: Promise<string> | null = null;
 
@@ -223,11 +220,22 @@ async function handleContextReviewerPrEventWithInfo(
   },
   info: PullRequestPayloadInfo,
 ): Promise<ContextReviewerPrResult> {
-  const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
-  const boundRepo = normalizeGithubRepo(contextTree?.repo);
-  if (!boundRepo) {
+  const runtime = await getOrgContextReviewRuntime(app.db, input.organizationId);
+  const boundRepo = normalizeGithubRepo(runtime.repo);
+  if (runtime.bindingState !== "bound" || !runtime.repo) {
     log.debug({ organizationId: input.organizationId }, "context reviewer skipped: context tree repo unset");
     return { handled: false, reason: "context_tree_repo_unset" };
+  }
+  if (runtime.provider !== "github" || !runtime.providerMatchesRepository || !boundRepo) {
+    log.debug(
+      {
+        organizationId: input.organizationId,
+        provider: runtime.provider,
+        providerMatchesRepository: runtime.providerMatchesRepository,
+      },
+      "context reviewer skipped: context tree is not an executable GitHub binding",
+    );
+    return { handled: false, reason: "repo_mismatch" };
   }
   const webhookRepo = normalizeGithubRepo(info.repoFullName);
   if (!webhookRepo || webhookRepo !== boundRepo) {
@@ -238,16 +246,15 @@ async function handleContextReviewerPrEventWithInfo(
     return { handled: false, reason: "repo_mismatch" };
   }
 
-  const features = await getOrgSetting(app.db, input.organizationId, "context_tree_features");
-  if (!features.contextReviewer.enabled) {
+  if (!runtime.contextReviewer.enabled) {
     return { handled: false, reason: "feature_disabled" };
   }
-  const reviewerAgentUuid = features.contextReviewer.agentUuid;
+  const reviewerAgentUuid = runtime.contextReviewer.agentUuid;
   if (!reviewerAgentUuid) {
     return { handled: false, reason: "reviewer_agent_missing" };
   }
 
-  const reviewer = await loadValidReviewerAgent(app.db, {
+  const reviewer = await loadValidContextReviewerAgent(app.db, {
     organizationId: input.organizationId,
     reviewerAgentUuid,
   });
@@ -259,7 +266,7 @@ async function handleContextReviewerPrEventWithInfo(
     return { handled: false, reason: "reviewer_agent_invalid" };
   }
 
-  const existingChatId = await findExistingReviewerChat(app.db, {
+  const existingChatId = await findExistingContextReviewerChat(app.db, {
     organizationId: input.organizationId,
     entityKey: info.entityKey,
   });
@@ -340,7 +347,11 @@ async function handleContextReviewerPrEventWithInfo(
     organizationId: input.organizationId,
     initialRecipientAgentIds: [reviewer.uuid],
     contextParticipantAgentIds: [],
-    topic: `Context Review PR #${info.prNumber}: ${info.title}`,
+    topic: formatContextReviewTopic({
+      provider: "github",
+      repositoryPath: info.repoFullName,
+      changeNumber: info.prNumber,
+    }),
     onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
     initialMessage: {
       source: "github",
@@ -386,11 +397,6 @@ async function handleContextReviewerPrEventWithInfo(
     "context reviewer task chat created",
   );
   return { handled: true, chatId: created.chat.id, messageId: created.message.id, reused: false };
-}
-
-function contextReviewerChatReservationKey(organizationId: string, entityKey: string): string {
-  const digest = createHash("sha256").update(`${organizationId}\0${entityKey}`).digest("hex");
-  return `context-review:${digest}`;
 }
 
 export async function handleContextReviewerPullRequest(
@@ -548,7 +554,7 @@ function readCommentAuthor(comment: Record<string, unknown> | null): { login: st
 
 function buildTemplateInput(
   info: PullRequestPayloadInfo,
-  reviewer: ReviewerAgent,
+  reviewer: ContextReviewerAgent,
   contextReviewRunId: string,
 ): ContextReviewerPrTemplateInput {
   return {
@@ -560,7 +566,7 @@ function buildTemplateInput(
 
 function contextReviewerMessageMetadata(
   info: PullRequestPayloadInfo,
-  reviewer: ReviewerAgent,
+  reviewer: ContextReviewerAgent,
   contextReviewRunId: string,
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
@@ -596,49 +602,9 @@ function contextReviewerMessageMetadata(
   return metadata;
 }
 
-async function loadValidReviewerAgent(
-  db: Database,
-  input: { organizationId: string; reviewerAgentUuid: string },
-): Promise<ReviewerAgent | null> {
-  const [agent] = await db
-    .select({
-      uuid: agents.uuid,
-      managerHumanAgentId: members.agentId,
-      managerGithubLogin: sql<string | null>`${authIdentities.metadata}->>'login'`,
-    })
-    .from(agents)
-    .innerJoin(members, eq(members.id, agents.managerId))
-    .leftJoin(authIdentities, and(eq(authIdentities.userId, members.userId), eq(authIdentities.provider, "github")))
-    .where(
-      and(
-        eq(agents.uuid, input.reviewerAgentUuid),
-        eq(agents.organizationId, input.organizationId),
-        eq(agents.type, "agent"),
-        eq(agents.status, "active"),
-        eq(members.organizationId, input.organizationId),
-        eq(members.status, "active"),
-      ),
-    )
-    .limit(1);
-  return agent ?? null;
-}
-
-async function findExistingReviewerChat(
-  db: Database,
-  input: { organizationId: string; entityKey: string },
-): Promise<string | null> {
-  const reservationKey = contextReviewerChatReservationKey(input.organizationId, input.entityKey);
-  const [row] = await db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(and(eq(chats.organizationId, input.organizationId), eq(chats.onboardingKickoffKey, reservationKey)))
-    .limit(1);
-  return row?.id ?? null;
-}
-
 async function findSuppressibleReviewerEchoMessageId(
   db: Database,
-  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent; appSlug: string | null },
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ContextReviewerAgent; appSlug: string | null },
 ): Promise<string | null> {
   if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return null;
 
@@ -691,9 +657,9 @@ function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
 
 export const contextReviewerPrTestInternals = {
   extractPullRequestPayloadInfo,
-  findExistingReviewerChat,
+  findExistingReviewerChat: findExistingContextReviewerChat,
   isSupportedContextReviewerPrEvent,
-  loadValidReviewerAgent,
+  loadValidReviewerAgent: loadValidContextReviewerAgent,
   parseBareRepo,
   parseScpLikeRepo,
   parseUrlRepo,
