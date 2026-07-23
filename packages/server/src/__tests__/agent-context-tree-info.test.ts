@@ -13,6 +13,57 @@ import { createTestAdmin, seedClient, useTestApp } from "./helpers.js";
 describe("agent context tree info route", () => {
   const getApp = useTestApp();
 
+  it("masks a historical private Reviewer UUID from other Team runtimes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const clientId = await seedClient(app, admin.userId, admin.organizationId);
+    const runtimeAgent = await createAgent(app.db, {
+      name: `agent-ct-runtime-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Agent Context Tree Runtime",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId,
+    });
+    const privateReviewer = await createAgent(app.db, {
+      name: `private-reviewer-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Historical Private Reviewer",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId,
+      visibility: "private",
+    });
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: privateReviewer.uuid } },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features"),
+    ).resolves.toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: null,
+        reviewerAgent: null,
+      },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/context-tree/info",
+      headers: { authorization: `Bearer ${admin.accessToken}`, "x-agent-id": runtimeAgent.uuid },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      contextReviewer: { enabled: true, agentUuid: null },
+    });
+    expect(response.body).not.toContain(privateReviewer.uuid);
+  });
+
   it("uses the authenticated agent org, not the caller primary org", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

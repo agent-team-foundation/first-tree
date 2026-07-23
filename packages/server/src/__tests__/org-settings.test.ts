@@ -159,6 +159,48 @@ describe("org-settings service", () => {
     }
   });
 
+  it("keeps a GitLab Tree snapshot current when only Reviewer state changes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal", addressPolicy: { kind: "public" } }],
+      },
+    );
+    const expectedRuntime = await orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId);
+
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: uuidv7() } },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.isOrgContextTreeBindingRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(true);
+    await expect(
+      orgSettingsService.isOrgContextReviewRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(false);
+  });
+
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -822,7 +864,7 @@ describe("org-settings service", () => {
     expect(re).toEqual(out);
   });
 
-  it("context_tree_features clears agentUuid when disabled", async () => {
+  it("context_tree_features preserves the selected reviewer when disabled", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
@@ -846,7 +888,13 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId, memberId: admin.memberId },
     );
 
-    expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
   });
 
   it("context_tree_features rejects enabling the Reviewer without a writable GitHub App installation", async () => {
@@ -2371,7 +2419,7 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ repos: [] });
   });
 
-  it("admin can GET and PUT context_tree_features through the generic settings route", async () => {
+  it("admin can persist and preserve a disabled Reviewer selection through the compatibility route", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
@@ -2393,12 +2441,12 @@ describe("org-settings API (admin gating + masking)", () => {
       method: "PUT",
       url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+      payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(put.statusCode).toBe(200);
     expect(put.json()).toEqual({
       contextReviewer: {
-        enabled: true,
+        enabled: false,
         agentUuid: reviewer.uuid,
         reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
       },
@@ -2411,7 +2459,13 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(disabled.statusCode).toBe(200);
-    expect(disabled.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled.json()).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
   });
 
   it("member can GET source_repos and context_tree (readPolicy: member) but cannot PUT / DELETE", async () => {

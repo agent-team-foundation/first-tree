@@ -14,6 +14,7 @@ import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { ForbiddenError } from "../errors.js";
+import { loadValidContextReviewerAgent } from "./context-reviewer-common.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 
 type RequesterIdentity = {
@@ -57,24 +58,12 @@ async function readGithubIdentityLogin(db: Database, requester: RequesterIdentit
 
 async function isActiveContextReviewer(
   db: Database,
-  input: { organizationId: string; reviewerAgentUuid: string },
+  input: {
+    organizationId: string;
+    reviewerAgentUuid: string;
+  },
 ): Promise<boolean> {
-  const [reviewer] = await db
-    .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      status: agents.status,
-    })
-    .from(agents)
-    .where(eq(agents.uuid, input.reviewerAgentUuid))
-    .limit(1);
-  return (
-    reviewer !== undefined &&
-    reviewer.organizationId === input.organizationId &&
-    reviewer.type !== AGENT_TYPES.HUMAN &&
-    reviewer.status === AGENT_STATUSES.ACTIVE
-  );
+  return (await loadValidContextReviewerAgent(db, input)) !== null;
 }
 
 async function requireActiveRequesterMembership(
@@ -199,7 +188,12 @@ export async function preflightContextTreeWriteAuthority(
   }
 
   const reviewerAgentUuid = runtime.contextReviewer.agentUuid;
-  if (!(await isActiveContextReviewer(db, { organizationId: input.organizationId, reviewerAgentUuid }))) {
+  if (
+    !(await isActiveContextReviewer(db, {
+      organizationId: input.organizationId,
+      reviewerAgentUuid,
+    }))
+  ) {
     throw new ContextTreeWritePreflightError(
       "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE",
       409,

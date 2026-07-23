@@ -7,6 +7,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ConflictError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import { putLegacyContextReviewerSetting } from "../../services/context-reviewer-settings.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
 /**
@@ -90,6 +91,13 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       const namespace = parseNamespace(request.params.namespace);
       if (namespace === "source_repos") {
         throw new GoneError("source_repos is read-only; use Team Resources instead");
+      }
+      if (namespace === "context_tree_features") {
+        return putLegacyContextReviewerSetting(app.db, scope.organizationId, request.body, {
+          updatedBy: scope.userId,
+          staleSeconds: app.config.runtime.presenceCleanupSeconds,
+          githubAppCredentials: app.config.oauth?.githubApp,
+        });
       }
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
         memberId: scope.memberId,

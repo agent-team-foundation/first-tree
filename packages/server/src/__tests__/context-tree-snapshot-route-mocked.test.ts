@@ -53,7 +53,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
         }
       : null,
   );
-  const isOrgContextReviewRuntimeCurrent = vi.fn().mockResolvedValue(true);
+  const isOrgContextTreeBindingRuntimeCurrent = vi.fn().mockResolvedValue(true);
   const getContextTreeSnapshot = vi.fn().mockResolvedValue(snapshot);
   const isGithubRemoteBinding = vi.fn().mockReturnValue(input.githubRemote ?? false);
   const findInstallationByOrg = vi.fn().mockResolvedValue({ installationId: 123 });
@@ -88,7 +88,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../services/org-settings.js", () => ({
     getOrgContextReviewRuntime,
     getOrgContextTreeBinding,
-    isOrgContextReviewRuntimeCurrent,
+    isOrgContextTreeBindingRuntimeCurrent,
     resolveUserPrimaryOrgId,
   }));
   vi.doMock("../services/context-tree-snapshot.js", () => ({
@@ -121,7 +121,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
       getOrgContextReviewRuntime,
       getContextTreeSnapshot,
       getOrgContextTreeBinding,
-      isOrgContextReviewRuntimeCurrent,
+      isOrgContextTreeBindingRuntimeCurrent,
       isGithubRemoteBinding,
       mintContextTreeInstallationToken,
       resolveContextTreeRecoveryAction,

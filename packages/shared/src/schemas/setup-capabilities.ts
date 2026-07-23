@@ -23,8 +23,15 @@ export const setupBlockerCodeSchema = z.enum([
   "context_tree_provider_unresolved",
   "context_tree_connection_mismatch",
   "context_review_provider_prerequisite_missing",
+  "context_review_assignment_required",
+  "context_review_no_eligible_agent",
   "context_review_agent_missing",
   "context_review_agent_inactive",
+  "context_review_agent_manager_inactive",
+  "context_review_agent_private",
+  "context_review_agent_no_runtime",
+  "context_review_agent_runtime_unavailable",
+  "context_review_state_changed",
 ]);
 
 export const setupResolutionOwnerSchema = z.enum(["admin", "operator"]);
@@ -38,6 +45,8 @@ export const setupActionKindSchema = z.enum([
   "open_tree_setup_chat",
   "select_review_agent",
   "replace_review_agent",
+  "open_agent_owner_flow",
+  "manage_review_agent",
 ]);
 
 export const setupBlockerSchema = z

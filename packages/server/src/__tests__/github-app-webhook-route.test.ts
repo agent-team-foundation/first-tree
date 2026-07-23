@@ -15,7 +15,7 @@ import * as githubAudienceService from "../services/github-audience.js";
 import * as githubEntityStateService from "../services/github-entity-state.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, seedClient, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
 const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
@@ -138,7 +138,7 @@ async function seedInstallation(
     hubOrganizationId: opts.orgId,
     permissions: { contents: "read", pull_requests: "write" },
     events: ["pull_request", "issues"],
-    suspendedAt: opts.suspended ? new Date() : null,
+    suspendedAt: opts.suspended ? new Date(Date.now() - 1_000) : null,
   });
 }
 
@@ -148,6 +148,16 @@ async function configureContextReviewer(app: App, admin: Awaited<ReturnType<type
     memberId: admin.memberId,
     name: `context-reviewer-${randomUUID().slice(0, 6)}`,
   });
+  const clientId = await seedClient(app, admin.userId, admin.organizationId);
+  await app.db.update(agents).set({ clientId, runtimeProvider: "claude-code" }).where(eq(agents.uuid, reviewer));
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer,
+    clientId,
+  });
+  await app.db
+    .update(githubAppInstallations)
+    .set({ events: ["pull_request", "issue_comment", "pull_request_review_comment", "issues"] })
+    .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
   await putOrgSetting(
     app.db,
     admin.organizationId,

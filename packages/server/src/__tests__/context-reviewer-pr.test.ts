@@ -1,10 +1,15 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { clients } from "../db/schema/clients.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -12,15 +17,15 @@ import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import {
   contextReviewerPrTestInternals,
-  handleContextReviewerPrEvent,
-  handleContextReviewerPullRequest,
+  handleContextReviewerPrEvent as handleContextReviewerPrEventService,
+  handleContextReviewerPullRequest as handleContextReviewerPullRequestService,
   normalizeGithubRepo,
   renderContextReviewerPrPrompt,
 } from "../services/context-reviewer-pr.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { createMember } from "../services/member.js";
 import { putOrgSetting } from "../services/org-settings.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 const HEAD_SHA = "a".repeat(40);
@@ -29,6 +34,27 @@ const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(observer: ReturnType<typeof postgres>, applicationName: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ wait_event_type: string | null }[]>`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock: ${applicationName}`);
+}
 
 function pullRequestPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -96,13 +122,18 @@ async function createReviewer(
   admin: Awaited<ReturnType<typeof createAdminContext>>,
   options: { name?: string } = {},
 ) {
-  return createAgent(app.db, {
+  const reviewer = await createAgent(app.db, {
     name: options.name ?? `reviewer-${randomUUID().slice(0, 8)}`,
     type: "agent",
     displayName: "Context Reviewer",
     managerId: admin.memberId,
     clientId: admin.clientId,
   });
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer.uuid,
+    clientId: admin.clientId,
+  });
+  return reviewer;
 }
 
 async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createAdminContext>>, reviewerUuid: string) {
@@ -132,11 +163,33 @@ async function seedReviewerInstallation(app: App, organizationId: string): Promi
       accountLogin: "owner",
       accountGithubId: numericId + 1,
       permissions: { metadata: "read", pull_requests: "write" },
-      events: ["pull_request"],
+      events: ["pull_request", "issue_comment", "pull_request_review_comment"],
       suspendedAt: null,
     },
     hubOrganizationId: organizationId,
   });
+}
+
+type TestReviewerPrInput = Omit<Parameters<typeof handleContextReviewerPrEventService>[1], "installationId"> & {
+  installationId?: number;
+};
+
+async function withCurrentInstallation(app: App, input: TestReviewerPrInput) {
+  if (input.installationId !== undefined) return { ...input, installationId: input.installationId };
+  const [installation] = await app.db
+    .select({ installationId: githubAppInstallations.installationId })
+    .from(githubAppInstallations)
+    .where(eq(githubAppInstallations.hubOrganizationId, input.organizationId))
+    .limit(1);
+  return { ...input, installationId: installation?.installationId ?? 0 };
+}
+
+async function handleContextReviewerPrEvent(app: App, input: TestReviewerPrInput) {
+  return handleContextReviewerPrEventService(app, await withCurrentInstallation(app, input));
+}
+
+async function handleContextReviewerPullRequest(app: App, input: TestReviewerPrInput) {
+  return handleContextReviewerPullRequestService(app, await withCurrentInstallation(app, input));
 }
 
 async function seedGithubIdentity(app: App, userId: string, login: string) {
@@ -335,6 +388,26 @@ describe("normalizeGithubRepo", () => {
 
 describe("handleContextReviewerPrEvent", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM });
+  const getAppWithoutSlug = useTestApp({
+    githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM,
+    omitGithubAppSlug: true,
+  });
+
+  it("fails closed before creating a trusted run when the GitHub App slug is unavailable", async () => {
+    const app = getAppWithoutSlug();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "reviewer_runtime_unavailable" });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+  });
 
   it("skips when webhook repo is not the bound context repo", async () => {
     const app = getApp();
@@ -808,7 +881,7 @@ describe("handleContextReviewerPrEvent", () => {
     });
   });
 
-  it("does not suppress a delayed opened task after the reviewer manager changes", async () => {
+  it("fails closed after the reviewer manager changes without a matching Computer owner", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -838,22 +911,230 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
-    if (!opened.handled) throw new Error("expected delayed opened event handled");
+    expect(opened).toEqual({ handled: false, reason: "reviewer_agent_invalid" });
     const runMessages = await app.db
       .select({ id: messages.id, metadata: messages.metadata })
       .from(messages)
       .where(eq(messages.chatId, synchronized.chatId))
       .orderBy(desc(messages.createdAt), desc(messages.id));
-    expect(runMessages).toHaveLength(2);
-    expect(runMessages[0]).toMatchObject({
-      id: opened.messageId,
-      metadata: {
-        triggerEvent: "pull_request.opened",
-        contextReviewReviewerAgentUuid: reviewer.uuid,
-        contextReviewReviewerManagerHumanAgentId: currentManager.agentId,
-      },
+    expect(runMessages).toHaveLength(1);
+  });
+
+  it("fails closed per run while the Computer is offline and recovers without rewriting Reviewer settings", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const [settingBefore] = await app.db
+      .select()
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree_features"),
+        ),
+      );
+
+    await app.db.update(clients).set({ status: "disconnected" }).where(eq(clients.id, admin.clientId));
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({
+      handled: false,
+      reason: "reviewer_runtime_unavailable",
     });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+
+    await seedHealthyAgentRuntime(app, {
+      agentUuid: reviewer.uuid,
+      clientId: admin.clientId,
+    });
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toMatchObject({ handled: true, reused: false });
+    const [settingAfter] = await app.db
+      .select()
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree_features"),
+        ),
+      );
+    expect(settingAfter).toEqual(settingBefore);
+  });
+
+  it("rejects a historical enabled landing-campaign trial Agent without creating a trusted run", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    await app.db
+      .update(agents)
+      .set({ metadata: { landingCampaignTrial: true } })
+      .where(eq(agents.uuid, reviewer.uuid));
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "reviewer_agent_invalid" });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+  });
+
+  it("rechecks disabled settings after routing and writes no trusted run", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const [installation] = await app.db
+      .select({ installationId: githubAppInstallations.installationId })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
+    if (!installation) throw new Error("review installation missing");
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const applicationName = `context_review_dispatch_setting_${randomUUID().slice(0, 8)}`;
+    const dispatchDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, applicationName));
+    const dispatchApp = {
+      db: dispatchDb,
+      config: app.config,
+      notifier: app.notifier,
+    } as FastifyInstance;
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      await blocker`SELECT id FROM members WHERE id = ${admin.memberId} FOR UPDATE`;
+
+      const handling = handleContextReviewerPrEventService(dispatchApp, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+        installationId: installation.installationId,
+      });
+      await waitForPostgresLockWait(observer, applicationName);
+
+      // The fence must wait on manager before taking Computer or Agent.
+      await blocker`SELECT id FROM clients WHERE id = ${admin.clientId} FOR UPDATE`;
+      await blocker`SELECT uuid FROM agents WHERE uuid = ${reviewer.uuid} FOR UPDATE`;
+      await putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      );
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(handling).resolves.toEqual({ handled: false, reason: "reviewer_runtime_unavailable" });
+      await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+      await expect(app.db.select({ id: messages.id }).from(messages)).resolves.toHaveLength(0);
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await dispatchDb.end();
+      await blocker.end();
+      await observer.end();
+    }
+  });
+
+  it("rechecks provider authority after routing and writes no trusted run", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const [installation] = await app.db
+      .select({ installationId: githubAppInstallations.installationId })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
+    if (!installation) throw new Error("review installation missing");
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const applicationName = `context_review_dispatch_provider_${randomUUID().slice(0, 8)}`;
+    const dispatchDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, applicationName));
+    const dispatchApp = {
+      db: dispatchDb,
+      config: app.config,
+      notifier: app.notifier,
+    } as FastifyInstance;
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      await blocker`SELECT id FROM members WHERE id = ${admin.memberId} FOR UPDATE`;
+
+      const handling = handleContextReviewerPrEventService(dispatchApp, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+        installationId: installation.installationId,
+      });
+      await waitForPostgresLockWait(observer, applicationName);
+
+      await app.db
+        .update(githubAppInstallations)
+        .set({ permissions: { metadata: "read", pull_requests: "read" } })
+        .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(handling).resolves.toEqual({ handled: false, reason: "reviewer_runtime_unavailable" });
+      await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+      await expect(app.db.select({ id: messages.id }).from(messages)).resolves.toHaveLength(0);
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await dispatchDb.end();
+      await blocker.end();
+      await observer.end();
+    }
+  });
+
+  it("fails closed before creating a trusted run when current GitHub review authority is revoked", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const [installation] = await app.db
+      .select({ installationId: githubAppInstallations.installationId })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
+    if (!installation) throw new Error("review installation missing");
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+        installationId: installation.installationId + 1,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "reviewer_runtime_unavailable" });
+
+    await app.db
+      .update(githubAppInstallations)
+      .set({ permissions: { metadata: "read", pull_requests: "read" } })
+      .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "reviewer_runtime_unavailable" });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
   it("reuses the reviewer chat for pull_request.synchronize and notifies the reviewer", async () => {

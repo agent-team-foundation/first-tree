@@ -375,6 +375,18 @@ export {
   contextReviewSubmitResponseSchema,
 } from "./schemas/context-review.js";
 export {
+  type ContextReviewerAssignmentInput,
+  type ContextReviewerCandidate,
+  type ContextReviewerCandidateRuntime,
+  type ContextReviewerCandidatesOutput,
+  type ContextReviewerEnablementInput,
+  contextReviewerAssignmentInputSchema,
+  contextReviewerCandidateRuntimeSchema,
+  contextReviewerCandidateSchema,
+  contextReviewerCandidatesOutputSchema,
+  contextReviewerEnablementInputSchema,
+} from "./schemas/context-reviewer-settings.js";
+export {
   CONTEXT_TREE_CHANGE_TYPES,
   CONTEXT_TREE_EDGE_KINDS,
   CONTEXT_TREE_NODE_KINDS,

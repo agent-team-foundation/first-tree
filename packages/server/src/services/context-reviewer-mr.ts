@@ -13,7 +13,9 @@ import {
   contextReviewerChatReservationKey,
   findExistingContextReviewerChat,
   loadValidContextReviewerAgent,
+  withContextReviewerDispatchAuthority,
 } from "./context-reviewer-common.js";
+import { readContextReviewerAgentReadiness } from "./context-reviewer-readiness.js";
 import type { NormalizedGitlabWebhook } from "./gitlab-webhook.js";
 import { type DeferredSendMessagePostCommitEffects, sendMessage } from "./message.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
@@ -36,7 +38,8 @@ export type ContextReviewerMrSkipReason =
   | "connection_mismatch"
   | "feature_disabled"
   | "reviewer_agent_missing"
-  | "reviewer_agent_invalid";
+  | "reviewer_agent_invalid"
+  | "reviewer_runtime_unavailable";
 
 export type ContextReviewerMrResult =
   | { handled: false; reason: ContextReviewerMrSkipReason }
@@ -97,7 +100,8 @@ export function isContextReviewerMrCandidate(normalized: NormalizedGitlabWebhook
 export async function handleContextReviewerMrEvent(input: {
   database: Database;
   normalized: NormalizedGitlabWebhook;
-  connection: { id: string; organizationId: string; instanceOrigin: string };
+  connection: { id: string; organizationId: string; instanceOrigin: string; tokenHash: string };
+  staleSeconds?: number;
 }): Promise<ContextReviewerMrResult> {
   if (!isContextReviewerMrCandidate(input.normalized)) {
     return { handled: false, reason: "unsupported_event" };
@@ -132,6 +136,15 @@ export async function handleContextReviewerMrEvent(input: {
     reviewerAgentUuid: runtime.contextReviewer.agentUuid,
   });
   if (!reviewer) return { handled: false, reason: "reviewer_agent_invalid" };
+  const readiness = await readContextReviewerAgentReadiness(input.database, {
+    organizationId: input.connection.organizationId,
+    reviewerAgentUuid: runtime.contextReviewer.agentUuid,
+    now: new Date(),
+    staleSeconds: input.staleSeconds ?? 60,
+  });
+  if (readiness.structuralBlockers.length > 0 || readiness.healthBlockers.length > 0) {
+    return { handled: false, reason: "reviewer_runtime_unavailable" };
+  }
 
   const entityKey = `gitlab:${input.connection.id}:${entity.projectId}:pull_request:${entity.entityIid}`;
   const contextReviewRunId = uuidv7();
@@ -148,137 +161,155 @@ export async function handleContextReviewerMrEvent(input: {
     contextReviewRunId,
   };
   const prompt = await renderContextReviewerMrPrompt(templateInput);
-  const metadata = chatMetadataSchema.parse({
-    source: "gitlab",
-    entityType: "pull_request",
-    entityKey,
-    entityUrl: entity.entityUrl,
-    contextTreeReviewer: true,
-    reviewerAgentUuid: reviewer.uuid,
-  });
-  const messageMetadata = {
-    source: "gitlab",
-    event: event.eventType,
-    action: event.action,
-    triggerEvent: templateInput.triggerEvent,
-    entityType: "pull_request",
-    entityKey,
-    contextTreeReviewer: true,
-    contextReviewRunId,
-    contextReviewRepository: webhookRepo,
-    contextReviewConnectionId: input.connection.id,
-    contextReviewInstanceOrigin: input.connection.instanceOrigin,
-    contextReviewProjectId: entity.projectId,
-    contextReviewMrIid: entity.entityIid,
-    contextReviewEntityUrl: entity.entityUrl,
-    contextReviewOrganizationId: input.connection.organizationId,
-    contextReviewReviewerAgentUuid: reviewer.uuid,
-    contextReviewReviewerManagerHumanAgentId: reviewer.managerHumanAgentId,
-    mentions: [reviewer.uuid],
-    mergeRequestDraft: entity.entityState === "draft",
-  };
-
-  const existingChatId = await findExistingContextReviewerChat(input.database, {
-    organizationId: input.connection.organizationId,
-    entityKey,
-  });
-  if (existingChatId) {
-    await input.database.update(chats).set({ metadata }).where(eq(chats.id, existingChatId));
-    await applyMembershipWrite(
-      input.database,
-      existingChatId,
-      [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
-      { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
-    );
-    const sent = await sendMessage(
-      input.database,
-      existingChatId,
-      reviewer.managerHumanAgentId,
-      { source: "gitlab", format: "markdown", content: prompt, metadata: messageMetadata },
-      { normalizeMentionsInContent: false, allowContextReviewRun: true, deferPostCommitEffects: true },
-    );
-    if (!sent.deferredPostCommitEffects) {
-      throw new Error("Context Reviewer MR message did not return deferred post-commit effects");
-    }
-    return {
-      handled: true,
-      chatId: existingChatId,
-      messageId: sent.message.id,
-      reused: true,
-      recipients: sent.recipients,
-      deferredPostCommitEffects: sent.deferredPostCommitEffects,
-    };
-  }
-
-  const created = await createChat(input.database, {
-    mode: "task",
-    initiatorAgentId: reviewer.managerHumanAgentId,
-    organizationId: input.connection.organizationId,
-    initialRecipientAgentIds: [reviewer.uuid],
-    contextParticipantAgentIds: [],
-    topic: formatContextReviewTopic({
-      provider: "gitlab",
-      repositoryPath: entity.projectPath,
-      changeNumber: entity.entityIid,
-    }),
-    onboardingKickoffKey: contextReviewerChatReservationKey(input.connection.organizationId, entityKey),
-    initialMessage: {
-      source: "gitlab",
-      format: "markdown",
-      content: prompt,
-      metadata: messageMetadata,
-    },
-    allowContextReviewRun: true,
-    deferPostCommitEffects: true,
-    source: "manual",
-  });
-  await input.database.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
-  if (!created.initialMessageCreated) {
-    await applyMembershipWrite(
-      input.database,
-      created.chat.id,
-      [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
-      { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
-    );
-    const sent = await sendMessage(
-      input.database,
-      created.chat.id,
-      reviewer.managerHumanAgentId,
-      { source: "gitlab", format: "markdown", content: prompt, metadata: messageMetadata },
-      { normalizeMentionsInContent: false, allowContextReviewRun: true, deferPostCommitEffects: true },
-    );
-    if (!sent.deferredPostCommitEffects) {
-      throw new Error("Context Reviewer MR message did not return deferred post-commit effects");
-    }
-    return {
-      handled: true,
-      chatId: created.chat.id,
-      messageId: sent.message.id,
-      reused: true,
-      recipients: sent.recipients,
-      deferredPostCommitEffects: sent.deferredPostCommitEffects,
-    };
-  }
-  log.info(
+  const fenced = await withContextReviewerDispatchAuthority(
+    input.database,
     {
       organizationId: input.connection.organizationId,
-      connectionId: input.connection.id,
+      reviewerAgentUuid: reviewer.uuid,
       entityKey,
-      chatId: created.chat.id,
-      triggerEvent: templateInput.triggerEvent,
+      expectedManagerHumanAgentId: reviewer.managerHumanAgentId,
+      staleSeconds: input.staleSeconds ?? 60,
+      authority: {
+        provider: "gitlab",
+        connectionId: input.connection.id,
+        instanceOrigin: input.connection.instanceOrigin,
+        tokenHash: input.connection.tokenHash,
+      },
     },
-    "context reviewer MR task chat created",
-  );
-  return {
-    handled: true,
-    chatId: created.chat.id,
-    messageId: created.message.id,
-    reused: false,
-    recipients: created.recipients,
-    deferredPostCommitEffects:
-      created.deferredPostCommitEffects ??
-      (() => {
+    async (tx, currentReviewer): Promise<Extract<ContextReviewerMrResult, { handled: true }>> => {
+      const metadata = chatMetadataSchema.parse({
+        source: "gitlab",
+        entityType: "pull_request",
+        entityKey,
+        entityUrl: entity.entityUrl,
+        contextTreeReviewer: true,
+        reviewerAgentUuid: currentReviewer.uuid,
+      });
+      const messageMetadata = {
+        source: "gitlab",
+        event: event.eventType,
+        action: event.action,
+        triggerEvent: templateInput.triggerEvent,
+        entityType: "pull_request",
+        entityKey,
+        contextTreeReviewer: true,
+        contextReviewRunId,
+        contextReviewRepository: webhookRepo,
+        contextReviewConnectionId: input.connection.id,
+        contextReviewInstanceOrigin: input.connection.instanceOrigin,
+        contextReviewProjectId: entity.projectId,
+        contextReviewMrIid: entity.entityIid,
+        contextReviewEntityUrl: entity.entityUrl,
+        contextReviewOrganizationId: input.connection.organizationId,
+        contextReviewReviewerAgentUuid: currentReviewer.uuid,
+        contextReviewReviewerManagerHumanAgentId: currentReviewer.managerHumanAgentId,
+        mentions: [currentReviewer.uuid],
+        mergeRequestDraft: entity.entityState === "draft",
+      };
+
+      const existingChatId = await findExistingContextReviewerChat(tx, {
+        organizationId: input.connection.organizationId,
+        entityKey,
+      });
+      if (existingChatId) {
+        await tx.update(chats).set({ metadata }).where(eq(chats.id, existingChatId));
+        await applyMembershipWrite(
+          tx,
+          existingChatId,
+          [{ agentId: currentReviewer.managerHumanAgentId }, { agentId: currentReviewer.uuid }],
+          { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+        );
+        const sent = await sendMessage(
+          tx,
+          existingChatId,
+          currentReviewer.managerHumanAgentId,
+          { source: "gitlab", format: "markdown", content: prompt, metadata: messageMetadata },
+          { normalizeMentionsInContent: false, allowContextReviewRun: true, deferPostCommitEffects: true },
+        );
+        if (!sent.deferredPostCommitEffects) {
+          throw new Error("Context Reviewer MR message did not return deferred post-commit effects");
+        }
+        return {
+          handled: true,
+          chatId: existingChatId,
+          messageId: sent.message.id,
+          reused: true,
+          recipients: sent.recipients,
+          deferredPostCommitEffects: sent.deferredPostCommitEffects,
+        };
+      }
+
+      const created = await createChat(tx, {
+        mode: "task",
+        initiatorAgentId: currentReviewer.managerHumanAgentId,
+        organizationId: input.connection.organizationId,
+        initialRecipientAgentIds: [currentReviewer.uuid],
+        contextParticipantAgentIds: [],
+        topic: formatContextReviewTopic({
+          provider: "gitlab",
+          repositoryPath: entity.projectPath,
+          changeNumber: entity.entityIid,
+        }),
+        onboardingKickoffKey: contextReviewerChatReservationKey(input.connection.organizationId, entityKey),
+        initialMessage: {
+          source: "gitlab",
+          format: "markdown",
+          content: prompt,
+          metadata: messageMetadata,
+        },
+        allowContextReviewRun: true,
+        deferPostCommitEffects: true,
+        source: "manual",
+      });
+      await tx.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
+      if (!created.initialMessageCreated) {
+        await applyMembershipWrite(
+          tx,
+          created.chat.id,
+          [{ agentId: currentReviewer.managerHumanAgentId }, { agentId: currentReviewer.uuid }],
+          { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+        );
+        const sent = await sendMessage(
+          tx,
+          created.chat.id,
+          currentReviewer.managerHumanAgentId,
+          { source: "gitlab", format: "markdown", content: prompt, metadata: messageMetadata },
+          { normalizeMentionsInContent: false, allowContextReviewRun: true, deferPostCommitEffects: true },
+        );
+        if (!sent.deferredPostCommitEffects) {
+          throw new Error("Context Reviewer MR message did not return deferred post-commit effects");
+        }
+        return {
+          handled: true,
+          chatId: created.chat.id,
+          messageId: sent.message.id,
+          reused: true,
+          recipients: sent.recipients,
+          deferredPostCommitEffects: sent.deferredPostCommitEffects,
+        };
+      }
+      if (!created.deferredPostCommitEffects) {
         throw new Error("Context Reviewer MR chat did not return deferred post-commit effects");
-      })(),
-  };
+      }
+      log.info(
+        {
+          organizationId: input.connection.organizationId,
+          connectionId: input.connection.id,
+          entityKey,
+          chatId: created.chat.id,
+          triggerEvent: templateInput.triggerEvent,
+        },
+        "context reviewer MR task chat created",
+      );
+      return {
+        handled: true,
+        chatId: created.chat.id,
+        messageId: created.message.id,
+        reused: false,
+        recipients: created.recipients,
+        deferredPostCommitEffects: created.deferredPostCommitEffects,
+      };
+    },
+  );
+  return fenced.authorized ? fenced.value : { handled: false, reason: "reviewer_runtime_unavailable" };
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  AGENT_VISIBILITY,
   CONTEXT_REVIEW_RUN_MARKER_PREFIX,
   type ContextReviewEvent,
   type ContextReviewSubmissionState,
@@ -7,6 +8,8 @@ import {
   type ContextReviewSubmitResponse,
   contextReviewSubmissionStateSchema,
   contextReviewSubmitRequestSchema,
+  isRuntimeProviderEnabled,
+  runtimeProviderSchema,
 } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -18,6 +21,7 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { uuidv7 } from "../uuid.js";
+import { agentNotLandingCampaignTrialCondition } from "./access-control.js";
 import { validateAgentRuntimeSession } from "./agent-runtime-session.js";
 import { normalizeGithubRepo } from "./context-reviewer-pr.js";
 import {
@@ -75,8 +79,15 @@ export async function submitContextReviewOutcome(input: {
   const request = { ...parsedRequest, body: parsedRequest.body.trimEnd() };
   const inspection = await input.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    const runSnapshot = await loadRunFacts(db, input.chatId, input.runId);
+    authorizeRun(runSnapshot, input.callerAgentUuid);
+    const orderingValid = await lockPublisherAuthorityRowsBeforeChat(db, runSnapshot, {
+      callerAgentUuid: input.callerAgentUuid,
+      callerClientId: input.callerClientId,
+    });
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
+    assertSameRunAuthority(runSnapshot, run);
     authorizeRun(run, input.callerAgentUuid);
 
     if (run.submission.state === "submitted") {
@@ -87,6 +98,13 @@ export async function submitContextReviewOutcome(input: {
     }
     if (run.submission.state === "failed") {
       throw alreadySubmitted();
+    }
+    if (!orderingValid) {
+      throw new ContextReviewPublisherError(
+        403,
+        "CONTEXT_REVIEW_RUN_FORBIDDEN",
+        "The configured Context Reviewer runtime changed before publication.",
+      );
     }
 
     const current = await assertCurrentAuthority(db, run, {
@@ -153,9 +171,23 @@ export async function submitContextReviewOutcome(input: {
 
   const claim = await input.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    const runSnapshot = await loadRunFacts(db, input.chatId, input.runId);
+    authorizeRun(runSnapshot, input.callerAgentUuid);
+    const orderingValid = await lockPublisherAuthorityRowsBeforeChat(db, runSnapshot, {
+      callerAgentUuid: input.callerAgentUuid,
+      callerClientId: input.callerClientId,
+    });
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
+    assertSameRunAuthority(runSnapshot, run);
     authorizeRun(run, input.callerAgentUuid);
+    if (!orderingValid) {
+      throw new ContextReviewPublisherError(
+        403,
+        "CONTEXT_REVIEW_RUN_FORBIDDEN",
+        "The configured Context Reviewer runtime changed before publication.",
+      );
+    }
     await assertCurrentAuthority(db, run, {
       callerAgentUuid: input.callerAgentUuid,
       callerClientId: input.callerClientId,
@@ -359,6 +391,60 @@ function authorizeRun(run: RunFacts, callerAgentUuid: string): void {
   }
 }
 
+function assertSameRunAuthority(snapshot: RunFacts, current: RunFacts): void {
+  if (
+    current.messageId !== snapshot.messageId ||
+    current.chatId !== snapshot.chatId ||
+    current.organizationId !== snapshot.organizationId ||
+    current.repository !== snapshot.repository ||
+    current.prNumber !== snapshot.prNumber ||
+    current.reviewerAgentUuid !== snapshot.reviewerAgentUuid ||
+    current.reviewerManagerHumanAgentId !== snapshot.reviewerManagerHumanAgentId
+  ) {
+    throw new ContextReviewPublisherError(
+      403,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "Context Reviewer run authority changed before publication.",
+    );
+  }
+}
+
+/**
+ * Match the manager → Computer → Agent order used by assignment and runtime
+ * lifecycle mutations before taking the Chat row. The run is re-read after
+ * the Chat lock, so this unlocked snapshot is used only to choose lock order.
+ */
+async function lockPublisherAuthorityRowsBeforeChat(
+  db: Database,
+  run: RunFacts,
+  input: { callerAgentUuid: string; callerClientId: string },
+): Promise<boolean> {
+  const [organization] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, run.organizationId))
+    .for("update")
+    .limit(1);
+  if (!organization) return false;
+
+  const [snapshot] = await db
+    .select({ managerId: agents.managerId, clientId: agents.clientId })
+    .from(agents)
+    .where(eq(agents.uuid, input.callerAgentUuid))
+    .limit(1);
+  if (!snapshot) return false;
+
+  await db.select({ id: members.id }).from(members).where(eq(members.id, snapshot.managerId)).for("update").limit(1);
+  await db.select({ id: clients.id }).from(clients).where(eq(clients.id, input.callerClientId)).for("update").limit(1);
+  const [reviewer] = await db
+    .select({ managerId: agents.managerId, clientId: agents.clientId })
+    .from(agents)
+    .where(eq(agents.uuid, input.callerAgentUuid))
+    .for("update")
+    .limit(1);
+  return reviewer?.managerId === snapshot.managerId && reviewer.clientId === snapshot.clientId;
+}
+
 async function assertCurrentAuthority(
   db: Database,
   run: RunFacts,
@@ -399,26 +485,15 @@ async function assertCurrentAuthority(
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
 
-  const [reviewer] = await db
+  const [reviewerSnapshot] = await db
     .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      status: agents.status,
-      clientId: agents.clientId,
       managerId: agents.managerId,
+      clientId: agents.clientId,
     })
     .from(agents)
-    .where(eq(agents.uuid, input.callerAgentUuid))
-    .for("update")
+    .where(and(eq(agents.uuid, input.callerAgentUuid), agentNotLandingCampaignTrialCondition()))
     .limit(1);
-  if (
-    !reviewer ||
-    reviewer.organizationId !== run.organizationId ||
-    reviewer.type !== "agent" ||
-    reviewer.status !== "active" ||
-    reviewer.clientId !== input.callerClientId
-  ) {
+  if (!reviewerSnapshot) {
     throw new ContextReviewPublisherError(
       403,
       "CONTEXT_REVIEW_RUN_FORBIDDEN",
@@ -426,6 +501,18 @@ async function assertCurrentAuthority(
     );
   }
 
+  const [manager] = await db
+    .select({
+      id: members.id,
+      organizationId: members.organizationId,
+      userId: members.userId,
+      agentId: members.agentId,
+      status: members.status,
+    })
+    .from(members)
+    .where(eq(members.id, reviewerSnapshot.managerId))
+    .for("update")
+    .limit(1);
   const [client] = await db
     .select({
       id: clients.id,
@@ -437,18 +524,41 @@ async function assertCurrentAuthority(
     .where(eq(clients.id, input.callerClientId))
     .for("update")
     .limit(1);
-  const [manager] = await db
+
+  const [reviewer] = await db
     .select({
-      id: members.id,
-      organizationId: members.organizationId,
-      userId: members.userId,
-      agentId: members.agentId,
-      status: members.status,
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+      visibility: agents.visibility,
+      runtimeProvider: agents.runtimeProvider,
+      clientId: agents.clientId,
+      managerId: agents.managerId,
     })
-    .from(members)
-    .where(eq(members.id, reviewer.managerId))
+    .from(agents)
+    .where(and(eq(agents.uuid, input.callerAgentUuid), agentNotLandingCampaignTrialCondition()))
     .for("update")
     .limit(1);
+  if (
+    !reviewer ||
+    reviewer.organizationId !== run.organizationId ||
+    reviewer.type !== "agent" ||
+    reviewer.status !== "active" ||
+    reviewer.visibility !== AGENT_VISIBILITY.ORGANIZATION ||
+    !runtimeProviderSchema.safeParse(reviewer.runtimeProvider).success ||
+    !isRuntimeProviderEnabled(reviewer.runtimeProvider) ||
+    reviewer.clientId !== input.callerClientId ||
+    reviewer.clientId !== reviewerSnapshot.clientId ||
+    reviewer.managerId !== reviewerSnapshot.managerId
+  ) {
+    throw new ContextReviewPublisherError(
+      403,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "The configured Context Reviewer runtime is no longer active for this run.",
+    );
+  }
+
   if (
     !client ||
     client.organizationId !== run.organizationId ||

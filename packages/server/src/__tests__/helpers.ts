@@ -6,9 +6,11 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
+import { serverInstances } from "../db/schema/server-instances.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
@@ -386,6 +388,71 @@ export async function seedClient(app: FastifyInstance, userId: string, organizat
   const id = `cli-${crypto.randomUUID().slice(0, 8)}`;
   await app.db.insert(clients).values({ id, userId, organizationId, status: "connected" });
   return id;
+}
+
+/** Seed the exact live route and install-only capability facts used by runtime health gates. */
+export async function seedHealthyAgentRuntime(
+  app: FastifyInstance,
+  input: {
+    agentUuid: string;
+    clientId: string;
+    runtimeProvider?: RuntimeProvider;
+    now?: Date;
+  },
+): Promise<void> {
+  const now = input.now ?? new Date();
+  const runtimeProvider = input.runtimeProvider ?? "claude-code";
+  const instanceId = `instance-${input.clientId}`;
+  await app.db
+    .update(clients)
+    .set({
+      status: "connected",
+      instanceId,
+      lastSeenAt: now,
+      retiredAt: null,
+      pausedReason: null,
+      metadata: {
+        capabilities: {
+          [runtimeProvider]: {
+            state: "ok",
+            available: true,
+            detectedAt: now.toISOString(),
+          },
+        },
+      },
+    })
+    .where(eq(clients.id, input.clientId));
+  await app.db
+    .insert(serverInstances)
+    .values({ instanceId, lastHeartbeat: now })
+    .onConflictDoUpdate({
+      target: serverInstances.instanceId,
+      set: { lastHeartbeat: now },
+    });
+  await app.db
+    .insert(agentPresence)
+    .values({
+      agentId: input.agentUuid,
+      status: "online",
+      clientId: input.clientId,
+      instanceId,
+      runtimeType: runtimeProvider,
+      runtimeState: "idle",
+      lastSeenAt: now,
+      runtimeUpdatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: agentPresence.agentId,
+      set: {
+        status: "online",
+        clientId: input.clientId,
+        instanceId,
+        runtimeType: runtimeProvider,
+        runtimeState: "idle",
+        lastSeenAt: now,
+        runtimeUpdatedAt: now,
+      },
+    });
 }
 
 /**

@@ -1,4 +1,5 @@
 import {
+  AGENT_VISIBILITY,
   type ContextTreeActiveBinding,
   type ContextTreeProvider,
   type ContextTreeSettingState,
@@ -125,11 +126,15 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     return next as OrgSettingStorage<K>;
   }
   if (namespace === "context_tree_features") {
+    const cur = current as OrgSettingStorage<"context_tree_features">;
     const inp = input as OrgSettingInput<"context_tree_features">;
+    const agentUuid = inp.contextReviewer.enabled
+      ? inp.contextReviewer.agentUuid
+      : (inp.contextReviewer.agentUuid ?? cur.contextReviewer.agentUuid);
     const next: OrgSettingStorage<"context_tree_features"> = {
       contextReviewer: {
         enabled: inp.contextReviewer.enabled,
-        agentUuid: inp.contextReviewer.enabled ? inp.contextReviewer.agentUuid : null,
+        agentUuid,
       },
     };
     return next as OrgSettingStorage<K>;
@@ -167,11 +172,15 @@ async function toOutput<K extends OrgSettingNamespace>(
   }
   if (namespace === "context_tree_features") {
     const s = storage as OrgSettingStorage<"context_tree_features">;
+    const reviewerAgent = await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid);
     const out: OrgSettingOutput<"context_tree_features"> = {
       contextReviewer: {
         enabled: s.contextReviewer.enabled,
-        agentUuid: s.contextReviewer.agentUuid,
-        reviewerAgent: await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid),
+        // This namespace is member-readable. A private, deleted, or foreign
+        // historical selection stays in storage for replacement, but its
+        // opaque identity is not a Team-wide fact.
+        agentUuid: reviewerAgent?.uuid ?? null,
+        reviewerAgent,
       },
     };
     return out as OrgSettingOutput<K>;
@@ -207,9 +216,11 @@ export async function getOrgContextTreeBinding(db: Database, orgId: string): Pro
 }
 
 /**
- * Read the live Context Tree binding and Reviewer assignment in one database
- * statement. Review mutations use this tuple so they never combine a binding
- * from one settings snapshot with an assignment from another.
+ * Read the live Context Tree binding and raw Reviewer assignment in one
+ * database statement. Server-internal review mutations use this tuple so they
+ * never combine a binding from one settings snapshot with an assignment from
+ * another. Member- or Agent-readable surfaces must use the Team-safe
+ * projection below.
  */
 export async function getOrgContextReviewRuntime(db: Database, orgId: string): Promise<OrgContextReviewRuntime> {
   const rows = await db
@@ -287,6 +298,26 @@ export async function getOrgContextReviewRuntime(db: Database, orgId: string): P
   };
 }
 
+/**
+ * Apply the same Team-safe Reviewer identity projection as `getOrgSetting`.
+ * Invalid historical private, deleted, or foreign selections remain stored
+ * for admin replacement without exposing their opaque UUID to Team runtimes.
+ */
+export async function getTeamSafeOrgContextReviewRuntime(
+  db: Database,
+  orgId: string,
+): Promise<OrgContextReviewRuntime> {
+  const runtime = await getOrgContextReviewRuntime(db, orgId);
+  const reviewerAgent = await resolveContextReviewerAgentSummary(db, orgId, runtime.contextReviewer.agentUuid);
+  return {
+    ...runtime,
+    contextReviewer: {
+      enabled: runtime.contextReviewer.enabled,
+      agentUuid: reviewerAgent?.uuid ?? null,
+    },
+  };
+}
+
 export type OrgContextReviewRuntime = {
   bindingState: "bound" | "unbound" | "invalid";
   provider: ContextTreeProvider | null;
@@ -303,12 +334,10 @@ export type OrgContextReviewRuntime = {
   contextReviewer: { enabled: boolean; agentUuid: string | null };
 };
 
-export async function isOrgContextReviewRuntimeCurrent(
-  db: Database,
-  orgId: string,
+function isSameOrgContextTreeBindingRuntime(
+  current: OrgContextReviewRuntime,
   expected: OrgContextReviewRuntime,
-): Promise<boolean> {
-  const current = await getOrgContextReviewRuntime(db, orgId);
+): boolean {
   return (
     current.bindingState === expected.bindingState &&
     current.provider === expected.provider &&
@@ -317,6 +346,36 @@ export async function isOrgContextReviewRuntimeCurrent(
     current.providerMatchesRepository === expected.providerMatchesRepository &&
     current.gitlabConnection?.id === expected.gitlabConnection?.id &&
     current.gitlabConnection?.instanceOrigin === expected.gitlabConnection?.instanceOrigin
+  );
+}
+
+/**
+ * Recheck only the Context Tree binding and provider route used by a snapshot.
+ * Reviewer assignment and enablement are independent and must not invalidate
+ * an in-flight Tree read.
+ */
+export async function isOrgContextTreeBindingRuntimeCurrent(
+  db: Database,
+  orgId: string,
+  expected: OrgContextReviewRuntime,
+): Promise<boolean> {
+  const current = await getOrgContextReviewRuntime(db, orgId);
+  return isSameOrgContextTreeBindingRuntime(current, expected);
+}
+
+/**
+ * Recheck the complete review mutation tuple, including the selected Reviewer.
+ */
+export async function isOrgContextReviewRuntimeCurrent(
+  db: Database,
+  orgId: string,
+  expected: OrgContextReviewRuntime,
+): Promise<boolean> {
+  const current = await getOrgContextReviewRuntime(db, orgId);
+  return (
+    isSameOrgContextTreeBindingRuntime(current, expected) &&
+    current.contextReviewer.enabled === expected.contextReviewer.enabled &&
+    current.contextReviewer.agentUuid === expected.contextReviewer.agentUuid
   );
 }
 
@@ -545,7 +604,14 @@ async function resolveContextReviewerAgentSummary(
       displayName: agents.displayName,
     })
     .from(agents)
-    .where(and(eq(agents.uuid, agentUuid), eq(agents.organizationId, orgId), ne(agents.status, "deleted")))
+    .where(
+      and(
+        eq(agents.uuid, agentUuid),
+        eq(agents.organizationId, orgId),
+        eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION),
+        ne(agents.status, "deleted"),
+      ),
+    )
     .limit(1);
   return agent ?? null;
 }
@@ -579,7 +645,6 @@ async function assertContextReviewerAgentAllowed(
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
   }
-
   const runtime = await getOrgContextReviewRuntime(db, orgId);
   if (
     runtime.bindingState !== "bound" ||

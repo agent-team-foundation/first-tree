@@ -1,16 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
-import { getOrgContextReviewRuntime } from "../../services/org-settings.js";
+import { getTeamSafeOrgContextReviewRuntime } from "../../services/org-settings.js";
 
 export async function agentContextTreeInfoRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Class D — `/api/v1/agent/context-tree/info`. Returns the Context Tree
-   * binding and Reviewer assignment for the authenticated runtime agent's
-   * organization. The service returns both from one database statement.
+   * binding and Team-safe Reviewer assignment for the authenticated runtime
+   * agent's organization.
    */
   app.get("/context-tree/info", async (request) => {
     const identity = requireAgent(request);
-    const runtime = await getOrgContextReviewRuntime(app.db, identity.organizationId);
+    const runtime = await getTeamSafeOrgContextReviewRuntime(app.db, identity.organizationId);
     return {
       provider: runtime.provider,
       repo: runtime.repo,

@@ -52,6 +52,7 @@ import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgAttachmentRoutes } from "./api/orgs/attachments.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
+import { orgContextReviewerRoutes } from "./api/orgs/context-reviewer.js";
 import { orgContextTreeRoutes } from "./api/orgs/context-tree.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
 import { orgDocumentRoutes } from "./api/orgs/documents.js";
@@ -571,6 +572,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgGitlabConnectionRoutes, { prefix: "/gitlab-connections" });
           await scope.register(orgGitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
+          await scope.register(orgContextReviewerRoutes, { prefix: "/context-reviewer" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgSetupCapabilitiesRoutes, { prefix: "/setup-capabilities" });

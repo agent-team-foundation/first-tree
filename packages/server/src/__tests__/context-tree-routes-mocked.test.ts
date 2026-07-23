@@ -95,6 +95,7 @@ async function setupRoute() {
     gitlabConnection: null,
     contextReviewer: { enabled: false, agentUuid: null },
   });
+  const isOrgContextTreeBindingRuntimeCurrent = vi.fn().mockResolvedValue(true);
   const putInitializedOrgContextTreeBinding = vi
     .fn()
     .mockResolvedValue({ provider: "github", repo: repo.cloneUrl, branch: "main" });
@@ -128,6 +129,7 @@ async function setupRoute() {
     getOrgContextTreeBinding,
     getOrgContextTreeSettingState,
     getOrgContextReviewRuntime,
+    isOrgContextTreeBindingRuntimeCurrent,
     putInitializedOrgContextTreeBinding,
   }));
   vi.doMock("../services/organization.js", () => ({ getOrganization }));
@@ -175,6 +177,7 @@ async function setupRoute() {
       getOrgContextTreeBinding,
       getOrgContextTreeSettingState,
       getOrgContextReviewRuntime,
+      isOrgContextTreeBindingRuntimeCurrent,
       putInitializedOrgContextTreeBinding,
       getOrganization,
       preflightContextTreeWriteAuthority,

@@ -1,23 +1,47 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
+import postgres from "postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
-import { handleContextReviewerPrEvent } from "../services/context-reviewer-pr.js";
+import { handleContextReviewerPrEvent as handleContextReviewerPrEventService } from "../services/context-reviewer-pr.js";
 import { submitContextReviewOutcome } from "../services/context-reviewer-publisher.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { putOrgSetting } from "../services/org-settings.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 const { privateKey: privateKeyPem } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(observer: ReturnType<typeof postgres>, applicationName: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ wait_event_type: string | null }[]>`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock: ${applicationName}`);
+}
 
 describe("Context Reviewer App publisher", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem: privateKeyPem, runtimeHttpTokenEnforcement: false });
@@ -72,6 +96,49 @@ describe("Context Reviewer App publisher", () => {
       reviewerManagerHumanAgentId: fixture.admin.humanAgentUuid,
       reviewerClientId: fixture.admin.clientId,
     });
+  });
+
+  it("takes manager and Computer locks before the Reviewer Agent row", async () => {
+    const fixture = await createRunFixture(getApp());
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+
+    const applicationName = `context_review_publish_${randomUUID().slice(0, 8)}`;
+    const publisherDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, applicationName));
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      await blocker`SELECT id FROM members WHERE id = ${fixture.admin.memberId} FOR UPDATE`;
+
+      const publishing = submitContextReviewOutcome({
+        db: publisherDb,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { event: "COMMENT", body: "Lock order regression" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher: successfulGithubFetcher(),
+      });
+      await waitForPostgresLockWait(observer, applicationName);
+
+      // If publication had already taken the Reviewer Agent lock before
+      // waiting on its manager, this lock would complete a deadlock cycle.
+      await blocker`SELECT id FROM clients WHERE id = ${fixture.admin.clientId} FOR UPDATE`;
+      await blocker`SELECT uuid FROM agents WHERE uuid = ${fixture.reviewer.uuid} FOR UPDATE`;
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(publishing).resolves.toMatchObject({ action: "COMMENT" });
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await publisherDb.end();
+      await blocker.end();
+      await observer.end();
+    }
   });
 
   it("rejects the wrong reviewer before any GitHub call", async () => {
@@ -244,7 +311,41 @@ describe("Context Reviewer App publisher", () => {
       }),
     ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_APP_PERMISSION_REQUIRED" });
   });
+
+  it("revokes publication when the configured Reviewer becomes private mid-run", async () => {
+    const fixture = await createRunFixture(getApp());
+    await fixture.app.db.update(agents).set({ visibility: "private" }).where(eq(agents.uuid, fixture.reviewer.uuid));
+
+    await expect(
+      submitContextReviewOutcome({
+        db: fixture.app.db,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { event: "COMMENT", body: "Deferred" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher: successfulGithubFetcher(),
+      }),
+    ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_RUN_FORBIDDEN" });
+  });
 });
+
+async function handleContextReviewerPrEvent(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  input: Omit<Parameters<typeof handleContextReviewerPrEventService>[1], "installationId">,
+) {
+  const [installation] = await app.db
+    .select({ installationId: githubAppInstallations.installationId })
+    .from(githubAppInstallations)
+    .where(eq(githubAppInstallations.hubOrganizationId, input.organizationId))
+    .limit(1);
+  return handleContextReviewerPrEventService(app, {
+    ...input,
+    installationId: installation?.installationId ?? 0,
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -268,6 +369,10 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
     managerId: admin.memberId,
     clientId: admin.clientId,
   });
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer.uuid,
+    clientId: admin.clientId,
+  });
   const runtimeToken = await bindAgentRuntimeSession(app.db, reviewer.uuid, admin.clientId);
   await upsertInstallationFromMetadata(app.db, {
     installation: {
@@ -276,7 +381,7 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
       accountLogin: "owner",
       accountGithubId: Math.floor(Math.random() * 1_000_000_000),
       permissions: { metadata: "read", pull_requests: "write" },
-      events: ["pull_request"],
+      events: ["pull_request", "issue_comment", "pull_request_review_comment"],
       suspendedAt: null,
     },
     hubOrganizationId: admin.organizationId,

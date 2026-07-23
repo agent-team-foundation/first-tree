@@ -16,7 +16,7 @@ import {
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../../services/github-app-token.js";
-import { getOrgContextReviewRuntime, isOrgContextReviewRuntimeCurrent } from "../../services/org-settings.js";
+import { getOrgContextReviewRuntime, isOrgContextTreeBindingRuntimeCurrent } from "../../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../../services/session-event.js";
 
 const querySchema = z
@@ -54,7 +54,7 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
         gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
         gitlabExecutionGuard:
           reviewRuntime.provider === "gitlab"
-            ? () => isOrgContextReviewRuntimeCurrent(app.db, scope.organizationId, reviewRuntime)
+            ? () => isOrgContextTreeBindingRuntimeCurrent(app.db, scope.organizationId, reviewRuntime)
             : undefined,
       }),
     );
