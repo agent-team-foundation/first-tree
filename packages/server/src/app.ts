@@ -65,6 +65,7 @@ import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgResourceRoutes } from "./api/orgs/resources.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
+import { orgSetupCapabilitiesRoutes } from "./api/orgs/setup-capabilities.js";
 import { orgUsageRoutes } from "./api/orgs/usage.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { readyzRoutes } from "./api/readyz.js";
@@ -572,6 +573,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgGitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
+          await scope.register(orgSetupCapabilitiesRoutes, { prefix: "/setup-capabilities" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
           if (config.docs.enabled) {
             await scope.register(orgDocumentRoutes, { prefix: "/documents" });

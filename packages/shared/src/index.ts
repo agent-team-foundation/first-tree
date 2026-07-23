@@ -1190,6 +1190,28 @@ export {
   sessionReconcileResultSchema,
 } from "./schemas/session-reconcile.js";
 export {
+  type SetupActionKind,
+  type SetupAutomaticReview,
+  type SetupBlocker,
+  type SetupBlockerCode,
+  type SetupCapabilityHealth,
+  type SetupContextTreeBinding,
+  type SetupRepositoryAutomationProvider,
+  type SetupResolutionOwner,
+  type SetupReviewerAgent,
+  setupActionKindSchema,
+  setupAutomaticReviewSchema,
+  setupBlockerCodeSchema,
+  setupBlockerSchema,
+  setupCapabilityHealthSchema,
+  setupContextTreeBindingSchema,
+  setupRepositoryAutomationProviderSchema,
+  setupResolutionOwnerSchema,
+  setupReviewerAgentSchema,
+  type TeamSetupCapabilities,
+  teamSetupCapabilitiesSchema,
+} from "./schemas/setup-capabilities.js";
+export {
   type AgentSkills,
   agentSkillsSchema,
   SKILL_NAME_REGEX,
