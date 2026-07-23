@@ -27,10 +27,12 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
+import { destroyDeletingAttachments, syncMessageAttachmentReferences } from "./attachment-references.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 import { hasRemainingLandingCampaignTrialBudget } from "./landing-campaigns/chat-state.js";
 import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
+import type { ObjectStorage } from "./object-storage.js";
 
 const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
@@ -688,10 +690,17 @@ async function sendMessageInner(
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
-      tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).limit(1),
+      tx
+        .select({ metadata: chats.metadata, organizationId: chats.organizationId })
+        .from(chats)
+        .where(eq(chats.id, chatId))
+        .limit(1),
     ]);
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
+    }
+    if (!chatRowSnapshot) {
+      throw new NotFoundError(`Chat "${chatId}" not found`);
     }
     const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
     // Trial chat state is a server-owned single-run state machine. Lock and
@@ -752,6 +761,17 @@ async function sendMessageInner(
         source: data.source,
       })
       .returning();
+
+    // 3b. Record attachment references (content imageIds + metadata refs)
+    //     in the same transaction, validating each referenced attachment is
+    //     a live same-org `stored` row — the first existence gate content
+    //     imageIds ever get, and the write side of the orphan-sweep ledger.
+    await syncMessageAttachmentReferences(tx, {
+      messageId,
+      organizationId: chatRowSnapshot.organizationId,
+      content: outboundContent,
+      metadata: metadataToStore,
+    });
 
     // 4. Fan-out: create inbox entries for every non-sender participant.
     //    The `notify` flag splits them in two:
@@ -1051,67 +1071,101 @@ export function maybeUnwrapDoubleEncoded(content: string): string | null {
 
 export async function editMessage(
   db: Database,
+  objectStorage: ObjectStorage | null,
   chatId: string,
   messageId: string,
   senderId: string,
   data: { format?: string; content?: unknown },
 ) {
-  const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
-  if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
-  if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
-  if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
-  const protectedContextReviewKey = Object.keys(msg.metadata).find(
-    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
-  );
-  if (protectedContextReviewKey) {
-    throw new ForbiddenError("Context Reviewer run history cannot be edited");
-  }
-
-  // The open-question counter (`open_request_count`) is maintained only on the
-  // send path, keyed off `format=request`. Allowing an edit to flip a message
-  // into or out of `request` would desync that counter (a request edited to
-  // text leaves a stuck +1; text edited to request renders an open card with
-  // no count). Forbid format changes that touch `request`; content edits and
-  // other format changes are unaffected. See proposals/group-chat-unified-send §D1.
-  if (
-    data.format !== undefined &&
-    data.format !== msg.format &&
-    (data.format === MESSAGE_FORMATS.REQUEST || msg.format === MESSAGE_FORMATS.REQUEST)
-  ) {
-    throw new BadRequestError("Cannot change a message's format to or from 'request'.");
-  }
-
-  const setClause: Record<string, unknown> = {};
-  if (data.format !== undefined) setClause.format = data.format;
-  if (data.content !== undefined) {
-    // An edit can replace the body of any message — including an already-open
-    // `format=request` ask whose format is frozen above. Reuse the send-path
-    // guards against the effective post-edit `{ format, content }` so an edit
-    // can't turn a live message into an empty / placeholder blocking card or an
-    // agent-authored escaped-newline body.
-    const [senderRow] = await db.select({ type: agents.type }).from(agents).where(eq(agents.uuid, senderId)).limit(1);
-    if (!senderRow) throw new NotFoundError(`Sender agent "${senderId}" not found`);
-    const effectiveContent = normalizeNonHumanTextContent({
-      chatId,
-      senderId,
-      senderType: senderRow.type,
-      content: data.content,
-    });
-    validateMessageContent(
-      { format: data.format ?? msg.format, content: effectiveContent },
-      { hasAttachmentRefs: attachmentRefsFromMetadata(msg.metadata ?? undefined).length > 0 },
+  // Transactional: the content swap and the attachment-reference ledger
+  // reconciliation must land atomically — a content edit is the one live
+  // event that can DROP a reference, and dropping the last one tombstones
+  // the attachment inside the same transaction.
+  const { updated, removedForDeletion } = await db.transaction(async (tx) => {
+    const [msg] = await tx.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+    if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
+    if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
+    if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
+    const protectedContextReviewKey = Object.keys(msg.metadata).find(
+      (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
     );
-    setClause.content = effectiveContent;
+    if (protectedContextReviewKey) {
+      throw new ForbiddenError("Context Reviewer run history cannot be edited");
+    }
+
+    // The open-question counter (`open_request_count`) is maintained only on the
+    // send path, keyed off `format=request`. Allowing an edit to flip a message
+    // into or out of `request` would desync that counter (a request edited to
+    // text leaves a stuck +1; text edited to request renders an open card with
+    // no count). Forbid format changes that touch `request`; content edits and
+    // other format changes are unaffected. See proposals/group-chat-unified-send §D1.
+    if (
+      data.format !== undefined &&
+      data.format !== msg.format &&
+      (data.format === MESSAGE_FORMATS.REQUEST || msg.format === MESSAGE_FORMATS.REQUEST)
+    ) {
+      throw new BadRequestError("Cannot change a message's format to or from 'request'.");
+    }
+
+    const setClause: Record<string, unknown> = {};
+    if (data.format !== undefined) setClause.format = data.format;
+    if (data.content !== undefined) {
+      // An edit can replace the body of any message — including an already-open
+      // `format=request` ask whose format is frozen above. Reuse the send-path
+      // guards against the effective post-edit `{ format, content }` so an edit
+      // can't turn a live message into an empty / placeholder blocking card or an
+      // agent-authored escaped-newline body.
+      const [senderRow] = await tx.select({ type: agents.type }).from(agents).where(eq(agents.uuid, senderId)).limit(1);
+      if (!senderRow) throw new NotFoundError(`Sender agent "${senderId}" not found`);
+      const effectiveContent = normalizeNonHumanTextContent({
+        chatId,
+        senderId,
+        senderType: senderRow.type,
+        content: data.content,
+      });
+      validateMessageContent(
+        { format: data.format ?? msg.format, content: effectiveContent },
+        { hasAttachmentRefs: attachmentRefsFromMetadata(msg.metadata ?? undefined).length > 0 },
+      );
+      setClause.content = effectiveContent;
+    }
+
+    // Patch only the edit timestamp in Postgres so concurrent server-owned
+    // metadata transitions cannot be overwritten by a stale read of the row.
+    setClause.metadata = sql`jsonb_set(${messages.metadata}, '{editedAt}', ${JSON.stringify(
+      new Date().toISOString(),
+    )}::jsonb)`;
+
+    const [updatedRow] = await tx.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
+    if (!updatedRow) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+
+    // Reconcile the reference ledger against the post-edit shape. New
+    // content imageIds are validated + recorded; imageIds the edit dropped
+    // lose their edge, and an attachment left with zero edges is
+    // tombstoned here ("delete on last reference removed").
+    const [chatRow] = await tx
+      .select({ organizationId: chats.organizationId })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .limit(1);
+    if (!chatRow) throw new NotFoundError(`Chat "${chatId}" not found`);
+    const sync = await syncMessageAttachmentReferences(tx, {
+      messageId,
+      organizationId: chatRow.organizationId,
+      content: updatedRow.content,
+      metadata: updatedRow.metadata,
+    });
+
+    return { updated: updatedRow, removedForDeletion: sync.removedForDeletion };
+  });
+
+  // Post-commit: destroy tombstoned attachments immediately (object first,
+  // then row). Best-effort — failures are logged and the background sweep
+  // retries; the tombstone already hides the attachment either way.
+  if (removedForDeletion.length > 0) {
+    await destroyDeletingAttachments(db, objectStorage, removedForDeletion);
   }
 
-  // Patch only the edit timestamp in Postgres so concurrent server-owned
-  // metadata transitions cannot be overwritten by a stale read of the row.
-  setClause.metadata = sql`jsonb_set(${messages.metadata}, '{editedAt}', ${JSON.stringify(
-    new Date().toISOString(),
-  )}::jsonb)`;
-
-  const [updated] = await db.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return updated;
 }
 
