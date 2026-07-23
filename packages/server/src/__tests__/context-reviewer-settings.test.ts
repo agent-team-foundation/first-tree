@@ -603,7 +603,7 @@ describe("Context Reviewer assignment/readiness contract", () => {
     });
   });
 
-  it("keeps GitLab inbound readiness as an enablement prerequisite and recovers without reassignment", async () => {
+  it("requires a processed GitLab System Hook MR before enablement and recovers without reassignment", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -644,12 +644,26 @@ describe("Context Reviewer assignment/readiness contract", () => {
         staleSeconds: 60,
         now: () => observedAt,
       }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      blocker: { code: "gitlab_merge_request_event_not_seen" },
+    });
+    await app.db
+      .update(gitlabConnections)
+      .set({ lastSystemHookMergeRequestInboundAt: observedAt })
+      .where(eq(gitlabConnections.id, connection.connectionId));
+    await expect(
+      putContextReviewerEnablement(app.db, admin.organizationId, true, {
+        updatedBy: admin.userId,
+        staleSeconds: 60,
+        now: () => observedAt,
+      }),
     ).resolves.toMatchObject({
       contextReviewer: { enabled: true, agentUuid: reviewer.uuid },
     });
   });
 
-  it("rechecks GitLab inbound authority after a concurrent bearer-health reset", async () => {
+  it("rechecks GitLab routing verification after a concurrent readiness reset", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -665,7 +679,11 @@ describe("Context Reviewer assignment/readiness contract", () => {
     });
     await app.db
       .update(gitlabConnections)
-      .set({ endpointFirstSeenAt: observedAt, lastValidInboundAt: observedAt })
+      .set({
+        endpointFirstSeenAt: observedAt,
+        lastValidInboundAt: observedAt,
+        lastSystemHookMergeRequestInboundAt: observedAt,
+      })
       .where(eq(gitlabConnections.id, connection.connectionId));
     await putContextReviewerAssignment(app.db, admin.organizationId, reviewer.uuid, {
       updatedBy: admin.userId,
@@ -689,7 +707,7 @@ describe("Context Reviewer assignment/readiness contract", () => {
       await waitForRelease;
       await tx
         .update(gitlabConnections)
-        .set({ endpointFirstSeenAt: null, lastValidInboundAt: null })
+        .set({ lastSystemHookMergeRequestInboundAt: null })
         .where(eq(gitlabConnections.id, connection.connectionId));
     });
     await locked;
@@ -704,7 +722,7 @@ describe("Context Reviewer assignment/readiness contract", () => {
 
     await expect(enabling).rejects.toMatchObject({
       statusCode: 409,
-      blocker: { code: "gitlab_webhook_not_seen" },
+      blocker: { code: "gitlab_merge_request_event_not_seen" },
     });
     await expect(getOrgSetting(app.db, admin.organizationId, "context_tree_features")).resolves.toMatchObject({
       contextReviewer: { enabled: false, agentUuid: reviewer.uuid },

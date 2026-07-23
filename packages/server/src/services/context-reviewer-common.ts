@@ -122,12 +122,6 @@ export async function withContextReviewerDispatchAuthority<T>(
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext('context_reviewer_dispatch'), hashtext(${reservationKey}))`,
     );
-    await tx
-      .select({ id: chats.id })
-      .from(chats)
-      .where(and(eq(chats.organizationId, input.organizationId), eq(chats.onboardingKickoffKey, reservationKey)))
-      .for("update")
-      .limit(1);
 
     const [snapshot] = await tx
       .select({

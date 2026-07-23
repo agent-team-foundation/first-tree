@@ -1,7 +1,9 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
+import postgres from "postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
@@ -19,6 +21,27 @@ const { privateKey: privateKeyPem } = generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(observer: ReturnType<typeof postgres>, applicationName: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ wait_event_type: string | null }[]>`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock: ${applicationName}`);
+}
 
 describe("Context Reviewer App publisher", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem: privateKeyPem, runtimeHttpTokenEnforcement: false });
@@ -73,6 +96,49 @@ describe("Context Reviewer App publisher", () => {
       reviewerManagerHumanAgentId: fixture.admin.humanAgentUuid,
       reviewerClientId: fixture.admin.clientId,
     });
+  });
+
+  it("takes manager and Computer locks before the Reviewer Agent row", async () => {
+    const fixture = await createRunFixture(getApp());
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+
+    const applicationName = `context_review_publish_${randomUUID().slice(0, 8)}`;
+    const publisherDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, applicationName));
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      await blocker`SELECT id FROM members WHERE id = ${fixture.admin.memberId} FOR UPDATE`;
+
+      const publishing = submitContextReviewOutcome({
+        db: publisherDb,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { event: "COMMENT", body: "Lock order regression" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher: successfulGithubFetcher(),
+      });
+      await waitForPostgresLockWait(observer, applicationName);
+
+      // If publication had already taken the Reviewer Agent lock before
+      // waiting on its manager, this lock would complete a deadlock cycle.
+      await blocker`SELECT id FROM clients WHERE id = ${fixture.admin.clientId} FOR UPDATE`;
+      await blocker`SELECT uuid FROM agents WHERE uuid = ${fixture.reviewer.uuid} FOR UPDATE`;
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(publishing).resolves.toMatchObject({ action: "COMMENT" });
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await publisherDb.end();
+      await blocker.end();
+      await observer.end();
+    }
   });
 
   it("rejects the wrong reviewer before any GitHub call", async () => {
