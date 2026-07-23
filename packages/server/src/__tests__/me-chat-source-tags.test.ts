@@ -470,12 +470,10 @@ describe("conversation-list source tags", () => {
     expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
     expect(counts.manual).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
-    const watchingCounts = await listMeChatSourceCounts(
-      app.db,
-      admin.humanAgentUuid,
-      admin.organizationId,
-      { engagement: "active", watching: true },
-    );
+    const watchingCounts = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
+      engagement: "active",
+      watching: true,
+    });
     expect(watchingCounts.counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
     expect(watchingCounts.counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 

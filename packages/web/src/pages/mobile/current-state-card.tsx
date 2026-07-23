@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../components/ui/markdown.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../lib/utils.js";
@@ -21,9 +21,8 @@ export function MobileCurrentStateCard({
   const measurementRef = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => setExpanded(false), [trimmed]);
+  const [expandedDescription, setExpandedDescription] = useState<string | null>(null);
+  const expanded = expandedDescription === trimmed;
 
   useLayoutEffect(() => {
     const measurement = measurementRef.current;
@@ -38,8 +37,7 @@ export function MobileCurrentStateCard({
       if (!active) return;
       const parsedLineHeight = Number.parseFloat(window.getComputedStyle(measurement).lineHeight);
       const lineHeight = Number.isFinite(parsedLineHeight) ? parsedLineHeight : MOBILE_SUMMARY_FALLBACK_LINE_HEIGHT_PX;
-      const nextOverflowing =
-        measurement.scrollHeight > lineHeight * MOBILE_SUMMARY_COLLAPSE_LINES + 1;
+      const nextOverflowing = measurement.scrollHeight > lineHeight * MOBILE_SUMMARY_COLLAPSE_LINES + 1;
       setOverflowing((current) => (current === nextOverflowing ? current : nextOverflowing));
       setMeasured(true);
     };
@@ -117,9 +115,7 @@ export function MobileCurrentStateCard({
         }}
         data-mobile-current-state-measure
       >
-        <Markdown className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
-          {trimmed}
-        </Markdown>
+        <Markdown className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">{trimmed}</Markdown>
       </div>
 
       {(!measured || overflowing) && !expanded ? (
@@ -150,7 +146,7 @@ export function MobileCurrentStateCard({
         <button
           type="button"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpandedDescription((value) => (value === trimmed ? null : trimmed))}
           className="text-mobile-caption inline-flex min-h-11 items-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)]"
           style={{
             gap: "var(--sp-1)",
