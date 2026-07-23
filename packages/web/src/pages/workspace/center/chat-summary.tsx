@@ -109,6 +109,28 @@ function clearDismissedVersion(chatId: string, version: string): void {
 }
 
 /**
+ * Drop every `first-tree:chat-summary-*` localStorage key. Called on logout
+ * (SEC-042 / issue 1647): the keys embed chatIds, which are account-linked
+ * session data, so they must not survive into the next account on a shared
+ * browser. Iterates the prefix so future keys added under it are covered
+ * automatically (mirrors `clearOnboardingSessionFlags`).
+ */
+export function clearChatSummaryPrefs(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const ls = window.localStorage;
+    const toRemove: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k?.startsWith("first-tree:chat-summary-")) toRemove.push(k);
+    }
+    for (const k of toRemove) ls.removeItem(k);
+  } catch {
+    // localStorage may be unavailable (private mode); ignore.
+  }
+}
+
+/**
  * Best-effort single-line preview of a markdown description for the collapsed
  * bar. A leading `## 任务` / `## Goals`-style section heading is a structural
  * label, not the summary itself — the real one-line gist is the prose under it.

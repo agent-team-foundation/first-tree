@@ -11,6 +11,8 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
+import { purgeAccountLocalData, purgeLegacyUnscopedStores, setStorageNamespace } from "../api/storage-scope.js";
+import { clearChatSummaryPrefs } from "../pages/workspace/center/chat-summary.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -239,6 +241,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
   const logout = useCallback(() => {
+    // SEC-042: purge this account's per-browser session data (namespaced
+    // message/read-state/image IndexedDBs, drafts in both scope formats,
+    // legacy global DBs). The token's `sub` is captured BEFORE clearing
+    // tokens and passed as the fallback purge target — it only matters when
+    // this session's /me never resolved (storage-scope's namespace is still
+    // stale from a previous session); once /me has resolved, the namespace
+    // set from `user.id` equals the token's (org keying relies on the same
+    // equivalence). Fire-and-forget: target namespaces are write-blocked
+    // synchronously, the deletion itself settles asynchronously.
+    const tokenUserId = userIdFromToken();
+    void purgeAccountLocalData(tokenUserId);
+    // Per-chat summary prefs embed chatIds — account-linked, so they go too.
+    clearChatSummaryPrefs();
+    // Post-logout state is anonymous; the stores' next operations either land
+    // in the (purged, write-blocked) anon namespace or wait for the next
+    // fetchMe to set the new account's namespace.
+    setStorageNamespace(null);
     clearStoredTokens();
     // Keep the persisted last-used org (no writeSelectedOrgId(null) here) so a
     // returning sign-in lands back in the org this user left rather than their
@@ -269,6 +288,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const data = await api.get<MeResponse>("/me");
       setUser(data.user ?? null);
+      // Point every persistent browser store at this account's namespace
+      // BEFORE meLoaded flips and the gated UI starts firing store
+      // reads/writes — otherwise the first wave would land in the anonymous
+      // (or a previous account's) namespace (SEC-042).
+      setStorageNamespace(data.user?.id ?? null);
       const ms = data.memberships ?? [];
       setMemberships(ms);
       setDocsEnabled(data.features?.docs === true);
@@ -477,6 +501,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       fetchMe();
     }
   }, [isAuthenticated, user, fetchMe]);
+
+  // SEC-042: one-shot cleanup of the pre-namespacing global IndexedDBs
+  // (`first-tree-chat-cache`, `first-tree-images`) left by older builds. Their
+  // content is cache-only (the server re-hydrates) and not attributable to an
+  // account, so the safe disposition is deletion. Fire-and-forget.
+  useEffect(() => {
+    void purgeLegacyUnscopedStores();
+  }, []);
 
   // Listen for auth failure dispatched by the API client
   useEffect(() => {

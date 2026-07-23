@@ -5,7 +5,13 @@
  * authoritative bytes always live server-side, so a cache miss (cross-device,
  * incognito, cleared storage) is recoverable — not a "not available"
  * dead-end like the old IndexedDB-only design.
+ * The database lives under the storage-scope namespace
+ * (`first-tree-images@<origin>#<userId>`) so accounts sharing a browser
+ * profile never see each other's cached images, and logout purges it — see
+ * `api/storage-scope.ts` (SEC-042 / issue 1647).
  */
+
+import { activeScopedDbName, isActiveScopedDbName, registerDatabaseCloseHook } from "./storage-scope.js";
 
 const DB_NAME = "first-tree-images";
 const DB_VERSION = 1;
@@ -19,22 +25,59 @@ type Stored = {
 };
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let dbConnection: IDBDatabase | null = null;
+
+/**
+ * Close the cached connection and forget it. Registered with storage-scope:
+ * runs on namespace switch and on logout purge so a stale handle neither
+ * serves reads for the wrong account nor blocks `deleteDatabase`.
+ */
+function resetCachedDb(): void {
+  dbConnection?.close();
+  dbConnection = null;
+  dbPromise = null;
+}
+
+registerDatabaseCloseHook(resetCachedDb);
 
 function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
+  // null when the current namespace was purged by logout — callers degrade
+  // exactly like the IndexedDB-unavailable path (reads null, writes reject),
+  // and nothing is cached so a later sign-in re-checks fresh.
+  const name = activeScopedDbName(DB_NAME);
+  if (!name) return Promise.resolve(null);
   dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: "imageId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // The namespace can switch (or be purged) while this open is in flight;
+      // never hand out a connection to the previous account's database.
+      if (!isActiveScopedDbName(DB_NAME, name)) {
+        db.close();
+        resolve(null);
+        return;
+      }
+      dbConnection = db;
+      // Multi-tab: when another tab deletes (or upgrades) this database, close
+      // so its `deleteDatabase` is not blocked — AND drop the cached promise,
+      // otherwise a later `db.transaction()` on the closed connection throws
+      // InvalidStateError synchronously, breaking the read contract. The next
+      // operation re-opens via `openDb` (or is dropped when the namespace was
+      // purged).
+      db.onversionchange = () => resetCachedDb();
+      resolve(db);
+    };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });
