@@ -33,6 +33,16 @@ import { runCapture, runCaptureOut } from "./supervisor/shared.js";
 export const LEGACY_GITHUB_SCAN_LABEL_PREFIX = "com.first-tree.github-scan.runner.";
 
 /**
+ * "This job is not loaded" answers from `launchctl bootout` — the expected
+ * idempotent case, not an error. Matched both by message ("Could not find
+ * specified service", "No such process") and by the stable launchd error
+ * codes launchctl prints in `Boot-out failed: <code>:` form (3 = ESRCH,
+ * 113 = could-not-find-service), so detection does not hinge on exact
+ * wording.
+ */
+const BOOTOUT_NOT_LOADED_RE = /not find|no such|not loaded|failed: (?:3|113):/i;
+
+/**
  * `~/.first-tree/github-scan/runner/launchd` — matches the retired runner's
  * `resolveRunnerHome()` default. Deliberately based on `homedir()`, not the
  * channel home: the legacy runner predates multi-channel and only ever wrote
@@ -113,7 +123,7 @@ export function retireLegacyGithubScanRunner(): LegacyGithubScanCleanup {
     const bootout = runCapture("launchctl", ["bootout", `${domain}/${label}`], 15_000);
     if (bootout.ok) {
       result.retiredLabels.push(label);
-    } else if (!/not find|no such|not loaded/i.test(bootout.stderr)) {
+    } else if (!BOOTOUT_NOT_LOADED_RE.test(bootout.stderr)) {
       result.warnings.push(
         `launchctl bootout ${domain}/${label}: ${bootout.stderr || `exit ${bootout.code ?? "unknown"}`}`,
       );

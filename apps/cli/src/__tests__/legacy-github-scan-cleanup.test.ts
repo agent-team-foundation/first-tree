@@ -188,6 +188,33 @@ describe("retireLegacyGithubScanRunner", () => {
     ]);
   });
 
+  it("unions loaded-only and plist-only labels in a single pass", () => {
+    // labelA: loaded in launchd, plist hand-deleted. labelB: plist on disk,
+    // job no longer loaded. Both must be handled in one run.
+    const labelA = `${LEGACY_GITHUB_SCAN_LABEL_PREFIX}gandy.loaded-only`;
+    const labelB = `${LEGACY_GITHUB_SCAN_LABEL_PREFIX}gandy.plist-only`;
+    mkdirSync(legacyDir, { recursive: true });
+    const plistB = join(legacyDir, `${labelB}.plist`);
+    writeFileSync(plistB, "<plist/>");
+
+    spawnSyncMock
+      .mockReturnValueOnce(ok(launchctlList([labelA])))
+      .mockReturnValueOnce(ok()) // bootout labelA
+      .mockReturnValueOnce(fail("Boot-out failed: 113: Could not find specified service")); // bootout labelB
+
+    const result = retireLegacyGithubScanRunner();
+    expect(result.retiredLabels).toEqual([labelA]);
+    expect(result.removedPlists).toEqual([plistB]);
+    expect(result.warnings).toEqual([]);
+    expect(existsSync(plistB)).toBe(false);
+    expect(existsSync(legacyDir)).toBe(false);
+    expect(launchctlCalls()).toEqual([
+      ["launchctl", ["list"]],
+      ["launchctl", ["bootout", `gui/501/${labelA}`]],
+      ["launchctl", ["bootout", `gui/501/${labelB}`]],
+    ]);
+  });
+
   it("retires multiple stranded profiles in deterministic order", () => {
     mkdirSync(legacyDir, { recursive: true });
     const labelA = `${LEGACY_GITHUB_SCAN_LABEL_PREFIX}gandy.alpha`;
