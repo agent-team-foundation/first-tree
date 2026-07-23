@@ -225,6 +225,37 @@ describe("attachments route — upload + capability download", () => {
     expect(reply.statusCode).toBe(411);
   });
 
+  it("redirect mode answers 302 with a working short-lived presigned URL", async () => {
+    const app = await createTestApp({
+      objectStorage: workerObjectStorage(),
+      attachments: { downloadMode: "redirect" },
+    });
+    try {
+      const admin = await createTestAdmin(app, { username: `rd-${crypto.randomUUID().slice(0, 6)}` });
+      const bytes = Buffer.from("redirect-me");
+      const uploadReply = await postAttachment(app, admin, bytes, { filename: "r.bin", mime: "text/plain" });
+      expect(uploadReply.statusCode).toBe(201);
+      const id = (uploadReply.json() as { id: string }).id;
+
+      const reply = await getAttachment(app, admin, id);
+      expect(reply.statusCode).toBe(302);
+      expect(reply.headers["cache-control"]).toBe("private, no-store");
+      const location = reply.headers.location;
+      expect(typeof location).toBe("string");
+      expect(String(location)).toContain("X-Amz-Signature");
+
+      // The presigned URL works without any Authorization header and pins
+      // the response content headers.
+      const fetched = await fetch(String(location));
+      expect(fetched.status).toBe(200);
+      expect(Buffer.from(await fetched.arrayBuffer()).equals(bytes)).toBe(true);
+      expect(fetched.headers.get("content-type")).toBe("text/plain");
+      expect(fetched.headers.get("content-disposition")).toContain("inline");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("answers 503 when object storage is not configured", async () => {
     const app = await createTestApp();
     try {

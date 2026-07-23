@@ -30,6 +30,15 @@ Run the server and web commands in separate terminals. The server command
 loads the root `.env` file and enables the local dev GitHub callback stub via
 its package script.
 
+`docker compose up -d` starts PostgreSQL (relational data) and MinIO
+(S3-compatible object storage for attachment/avatar payloads; console at
+`http://localhost:9001`). The `.env.example` values point the server at the
+compose MinIO out of the box, and the server creates its bucket on boot.
+Without the `FIRST_TREE_S3_*` group the server still runs, but attachment
+uploads answer 503 until storage is configured. Server tests need neither
+service pre-started — vitest provisions its own containers (or uses the
+`CI_DATABASE_URL` / `CI_S3_ENDPOINT` escape hatches).
+
 ## Local URLs
 
 - API server: `http://127.0.0.1:8000`
@@ -53,6 +62,11 @@ FIRST_TREE_DATABASE_URL=postgresql://firsttree:firsttree@localhost:5432/firsttre
 FIRST_TREE_HOST=127.0.0.1
 FIRST_TREE_PORT=8000
 FIRST_TREE_CHANNEL=dev
+FIRST_TREE_S3_BUCKET=firsttree-attachments
+FIRST_TREE_S3_ENDPOINT=http://localhost:9000
+FIRST_TREE_S3_ACCESS_KEY_ID=firsttree
+FIRST_TREE_S3_SECRET_ACCESS_KEY=firsttree-minio
+FIRST_TREE_S3_FORCE_PATH_STYLE=true
 ```
 
 The local `dev` channel can auto-generate `FIRST_TREE_JWT_SECRET` and

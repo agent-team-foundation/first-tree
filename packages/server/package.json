@@ -24,6 +24,7 @@
     "coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate && node ../../scripts/sync-migration-head.mjs",
     "db:migrate": "drizzle-kit migrate",
+    "migrate:attachments": "tsx --env-file-if-exists=../../.env scripts/migrate-attachments.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
