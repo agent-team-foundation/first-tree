@@ -83,8 +83,12 @@ describe("Settings Setup overview", () => {
     expect(view.host.textContent).not.toContain("%");
     expect(view.host.textContent).not.toContain("Onboarding completed");
     expect(view.host.querySelector("h1")).toBeNull();
+    expect(view.host.querySelector("[data-setup-lead]")?.textContent).toBe("See what's ready and what you can set up.");
     expect(view.host.querySelector("[data-setup-context]")?.textContent).toBe("Acme · Admin");
+    expect(view.host.textContent).not.toContain("set up for Acme");
     expect(view.host.textContent).not.toContain("Your access and configuration");
+    expect(view.host.textContent).not.toContain("finish setup");
+    expect(view.host.textContent).not.toContain("complete setup");
 
     await act(async () => view.root.unmount());
   });

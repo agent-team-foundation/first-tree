@@ -428,9 +428,14 @@ export function SetupOverview({
 
   return (
     <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }} data-setup-overview={roleLabel.toLowerCase()}>
-      <p className="text-body" data-setup-context style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-3)" }}>
-        {facts.teamName ?? "This team"} · {roleLabel}
-      </p>
+      <header style={{ marginBottom: "var(--sp-3)" }}>
+        <p className="text-body" data-setup-lead style={{ margin: 0, color: "var(--fg-2)" }}>
+          See what's ready and what you can set up.
+        </p>
+        <p className="text-label" data-setup-context style={{ margin: "var(--sp-0_5) 0 0", color: "var(--fg-4)" }}>
+          {facts.teamName ?? "This team"} · {roleLabel}
+        </p>
+      </header>
 
       <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>
         {rows.map((row) => (
