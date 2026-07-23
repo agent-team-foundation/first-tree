@@ -32,6 +32,7 @@ import {
 export type ContextReviewerMutationOptions = {
   updatedBy: string;
   staleSeconds: number;
+  expectedAgentUuid?: string;
   githubAppCredentials?: GithubReviewCredentials;
   githubFetch?: typeof fetch;
   probeGithubReview?: (
@@ -359,6 +360,15 @@ export async function putContextReviewerEnablement(
   if (!expectedRuntime.contextReviewer.agentUuid) {
     fail(blocker("context_review_assignment_required", "select_review_agent"));
   }
+  if (
+    options.expectedAgentUuid !== undefined &&
+    expectedRuntime.contextReviewer.agentUuid !== options.expectedAgentUuid
+  ) {
+    fail(
+      blocker("context_review_state_changed", "manage_review_agent"),
+      "Context Reviewer assignment changed before enablement; retry with current Team state",
+    );
+  }
   const expectedAgentUuid = expectedRuntime.contextReviewer.agentUuid;
   const expectedInstallation = await findInstallationByOrg(db, organizationId);
   await assertReady(db, organizationId, options);
@@ -372,16 +382,16 @@ export async function putContextReviewerEnablement(
         "Context Reviewer state changed during enablement; retry with current Team state",
       );
     }
-    await readAssignableAgentForUpdate(txDb, {
-      organizationId,
-      agentUuid: expectedAgentUuid,
-    });
     if (expectedRuntime.provider === "gitlab") {
       await lockGitlabConnectionForUpdate(txDb, {
         organizationId,
         expectedConnectionId: expectedRuntime.gitlabConnection?.id ?? null,
       });
     }
+    await readAssignableAgentForUpdate(txDb, {
+      organizationId,
+      agentUuid: expectedAgentUuid,
+    });
     const currentInstallationId =
       expectedRuntime.provider === "github" ? await readGithubInstallationIdForUpdate(txDb, organizationId) : null;
     if (expectedRuntime.provider === "github" && currentInstallationId !== expectedInstallation?.installationId) {
@@ -433,5 +443,8 @@ export async function putLegacyContextReviewerSetting(
   if (input.agentUuid) {
     await putContextReviewerAssignment(db, organizationId, input.agentUuid, options);
   }
-  return putContextReviewerEnablement(db, organizationId, input.enabled, options);
+  return putContextReviewerEnablement(db, organizationId, input.enabled, {
+    ...options,
+    expectedAgentUuid: input.enabled && input.agentUuid ? input.agentUuid : undefined,
+  });
 }

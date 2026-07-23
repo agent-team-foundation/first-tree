@@ -492,6 +492,30 @@ describe("Context Reviewer assignment/readiness contract", () => {
     }
   });
 
+  it("rejects legacy enablement when another request replaced its assigned Agent", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requested = await createReviewer(app, admin);
+    const replacement = await createReviewer(app, admin);
+    await seedGithubPrerequisites(app, admin);
+    await putContextReviewerAssignment(app.db, admin.organizationId, replacement.uuid, {
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      putContextReviewerEnablement(app.db, admin.organizationId, true, {
+        ...mutationOptions(app, admin, async () => "ready"),
+        expectedAgentUuid: requested.uuid,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      blocker: { code: "context_review_state_changed" },
+    });
+    await expect(getOrgSetting(app.db, admin.organizationId, "context_tree_features")).resolves.toMatchObject({
+      contextReviewer: { enabled: false, agentUuid: replacement.uuid },
+    });
+  });
+
   it("retains the Tree binding and disabled selection across provider failure, then enables offline and projects degraded health", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
@@ -661,6 +685,71 @@ describe("Context Reviewer assignment/readiness contract", () => {
     ).resolves.toMatchObject({
       contextReviewer: { enabled: true, agentUuid: reviewer.uuid },
     });
+  });
+
+  it("takes the GitLab connection lock before Reviewer manager, Computer, and Agent locks", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await seedContextTreeBinding(app, admin, {
+      provider: "gitlab",
+      repo: "https://gitlab.internal/acme/context-tree.git",
+    });
+    const connection = await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await app.db
+      .update(gitlabConnections)
+      .set({
+        endpointFirstSeenAt: observedAt,
+        lastValidInboundAt: observedAt,
+        lastSystemHookMergeRequestInboundAt: observedAt,
+      })
+      .where(eq(gitlabConnections.id, connection.connectionId));
+    await putContextReviewerAssignment(app.db, admin.organizationId, reviewer.uuid, {
+      updatedBy: admin.userId,
+    });
+    const options = {
+      updatedBy: admin.userId,
+      staleSeconds: 60,
+      now: () => observedAt,
+    };
+    await putContextReviewerEnablement(app.db, admin.organizationId, true, options);
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const applicationName = `context_review_gitlab_enable_${randomUUID().slice(0, 8)}`;
+    const enablementDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, applicationName));
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      await blocker`SELECT id FROM gitlab_connections WHERE id = ${connection.connectionId} FOR UPDATE`;
+
+      const enabling = putContextReviewerEnablement(enablementDb, admin.organizationId, true, options);
+      await waitForPostgresLockWait(observer, applicationName);
+
+      // A System Hook holds the connection row before entering Reviewer
+      // dispatch. These locks must not complete a connection ↔ Agent cycle.
+      await blocker`SELECT id FROM members WHERE id = ${admin.memberId} FOR UPDATE`;
+      await blocker`SELECT id FROM clients WHERE id = ${admin.clientId} FOR UPDATE`;
+      await blocker`SELECT uuid FROM agents WHERE uuid = ${reviewer.uuid} FOR UPDATE`;
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(enabling).resolves.toMatchObject({
+        contextReviewer: { enabled: true, agentUuid: reviewer.uuid },
+      });
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await enablementDb.end();
+      await blocker.end();
+      await observer.end();
+    }
   });
 
   it("rechecks GitLab routing verification after a concurrent readiness reset", async () => {
