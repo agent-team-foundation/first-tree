@@ -242,6 +242,98 @@ describe("SelectedOrganizationController", () => {
     expect(captureContentStoreRuntime(secondSelected.viewLease)).not.toBeNull();
   });
 
+  it("rotates an exact suspended selected head and publishes only the fresh view", async () => {
+    const fixture = await createStoreFixture({ label: "selection-offline-rebind", organizationId: "org-a" });
+    currentFixture = fixture;
+    const selected = controller(fixture, ["revision-a", "revision-rebound"]);
+    const lease = accountLease(fixture);
+    await selected.reconcile({
+      lease,
+      identity: await verifiedIdentity(fixture, ["org-a"], "org-a"),
+      reason: "initialize",
+    });
+    const beforePublication = selected.readCurrentPublication();
+    const before = selectedViewPublication(beforePublication);
+    if (!beforePublication) throw new Error("Expected selected publication");
+
+    const rebound = await selected.rebindSuspendedPublication({
+      lease,
+      publication: beforePublication,
+    });
+    const reboundSelected = selectedViewPublication(rebound);
+
+    expect(reboundSelected.state).toEqual({
+      kind: "selected",
+      organizationId: "org-a",
+      orgRevision: "revision-rebound",
+    });
+    expect(reboundSelected.viewLease).not.toBe(before.viewLease);
+    expect(captureContentStoreRuntime(before.viewLease)).toBeNull();
+    expect(captureContentStoreRuntime(reboundSelected.viewLease)).not.toBeNull();
+    await expect(
+      new AccountStateStore().getAccountEntry(lease, {
+        kind: "selected-organization",
+        key: "current",
+        tabId: lease.ownerTabId,
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        state: "selected",
+        organizationId: "org-a",
+        orgRevision: "revision-rebound",
+      },
+    });
+  });
+
+  it("rotates an exact suspended needs-selection head without inventing an organization", async () => {
+    const fixture = await createStoreFixture({ label: "selection-offline-needs", organizationId: "org-a" });
+    currentFixture = fixture;
+    const selected = controller(fixture, ["revision-needs", "revision-needs-rebound"]);
+    const lease = accountLease(fixture);
+    await selected.reconcile({
+      lease,
+      identity: await verifiedIdentity(fixture, ["org-a"]),
+      reason: "initialize",
+    });
+    const before = selected.readCurrentPublication();
+    expect(before).toEqual({
+      state: { kind: "needs-selection", orgRevision: "revision-needs" },
+      viewLease: null,
+    });
+    if (!before) throw new Error("Expected needs-selection publication");
+
+    await expect(selected.rebindSuspendedPublication({ lease, publication: before })).resolves.toEqual({
+      state: { kind: "needs-selection", orgRevision: "revision-needs-rebound" },
+      viewLease: null,
+    });
+  });
+
+  it("fails closed instead of following a selected head changed during suspension", async () => {
+    const fixture = await createStoreFixture({ label: "selection-offline-changed", organizationId: "org-a" });
+    currentFixture = fixture;
+    const selected = controller(fixture, ["revision-a", "revision-unused"]);
+    const lease = accountLease(fixture);
+    await selected.reconcile({
+      lease,
+      identity: await verifiedIdentity(fixture, ["org-a", "org-b"], "org-a"),
+      reason: "initialize",
+    });
+    const before = selected.readCurrentPublication();
+    if (!before) throw new Error("Expected selected publication");
+    await new AccountStateStore().putAccountEntry(lease, {
+      kind: "selected-organization",
+      key: "current",
+      tabId: lease.ownerTabId,
+      value: { state: "selected", organizationId: "org-b", orgRevision: "external-revision" },
+      updatedAt: 99,
+    });
+
+    await expect(selected.rebindSuspendedPublication({ lease, publication: before })).rejects.toMatchObject({
+      code: "recovery_required",
+    });
+    expect(selected.readCurrentPublication()).toBe(before);
+  });
+
   it("preserves a completed switch when a cursor-free older initialization arrives later", async () => {
     const fixture = await createStoreFixture({ label: "selection-late-initialize", organizationId: "org-a" });
     currentFixture = fixture;

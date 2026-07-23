@@ -289,6 +289,7 @@ export class BrowserSessionRuntime {
   #suspended = false;
   #pendingSourceNotices = new Set<string>();
   #pendingAuthorityNotice = false;
+  #hardSuspendedActive: ActiveRuntime | null = null;
 
   public constructor(options: BrowserSessionRuntimeOptions = {}) {
     const indexedDBOption = options.indexedDB;
@@ -480,6 +481,7 @@ export class BrowserSessionRuntime {
 
   public async resume(): Promise<BrowserSessionProjection> {
     if (this.#documentTarget?.visibilityState === "hidden") return this.getProjection();
+    const hardSuspendedActive = this.#hardSuspendedActive;
     this.#suspended = false;
     for (let attempts = 0; attempts < MAX_RECONCILIATION_ATTEMPTS; attempts += 1) {
       const active = this.#active;
@@ -537,25 +539,101 @@ export class BrowserSessionRuntime {
         if (authority.kind === "unavailable") {
           const session = await this.#coordinator.readActiveSession();
           this.#assertCurrent(operation);
-          if (!sameActivation(session.authority.session, active.projection.activation)) {
+          if (
+            !sameActivation(session.authority.session, active.projection.activation) ||
+            !sameCredentialCursor(session.credential, active.projection.credential)
+          ) {
             throw new SessionError(sessionErrorCodes.staleOperation, "Offline account authority changed");
           }
           const accountRuntime = captureAccountStoreRuntime(active.projection.accountLease);
           const view = active.projection.publication.viewLease;
           const contentRuntime = view ? captureContentStoreRuntime(view) : null;
-          if (!accountRuntime || (view !== null && !contentRuntime)) {
+          if (accountRuntime && (view === null || contentRuntime)) {
+            this.#publishActive(
+              active,
+              session,
+              Object.freeze({ me: active.projection.me, publication: active.projection.publication }),
+              operation,
+              false,
+            );
+            this.#finishNoticeFence(operation);
+            return this.getProjection();
+          }
+          if (hardSuspendedActive !== active || accountRuntime !== null || (view !== null && contentRuntime !== null)) {
             throw new SessionError(
               sessionErrorCodes.recoveryRequired,
-              "Offline resume cannot reuse a suspended account view",
+              "Offline resume has no exact hard-suspended account view",
             );
           }
-          this.#publishActive(
-            active,
-            session,
-            Object.freeze({ me: active.projection.me, publication: active.projection.publication }),
-            operation,
-            false,
-          );
+          const suspendedPublication = active.projection.publication;
+          const suspendedMe = active.projection.me;
+          this.#recoveryRemount = Object.freeze({
+            activation: active.activation,
+            expectedState: suspendedPublication.state,
+          });
+          this.#retireLocalActive(active);
+          const handle = this.#installAccountRuntime(active.activation);
+          try {
+            const publication = await this.#selectedOrganization.rebindSuspendedPublication({
+              lease: handle.accountLease,
+              publication: suspendedPublication,
+            });
+            this.#assertCurrent(operation);
+            const currentSession = await this.#coordinator.readActiveSession();
+            this.#assertCurrent(operation);
+            if (
+              !sameActivation(currentSession.authority.session, active.activation) ||
+              !sameCredentialCursor(currentSession.credential, session.credential)
+            ) {
+              throw new SessionError(sessionErrorCodes.staleOperation, "Offline account changed before publication");
+            }
+            const finalAuthority = await this.#authority.reconcile(active.projection.activation.serverAuthority);
+            this.#assertCurrent(operation);
+            const finalAuthorityMatches =
+              (finalAuthority.kind === "match" &&
+                finalAuthority.authority === active.projection.activation.serverAuthority) ||
+              (finalAuthority.kind === "unavailable" &&
+                finalAuthority.expected === active.projection.activation.serverAuthority);
+            if (!finalAuthorityMatches) {
+              const mismatch = new SessionError(
+                sessionErrorCodes.admissionDenied,
+                "Server authority changed during offline account restoration",
+              );
+              this.#retireAccountHandle(handle, mismatch);
+              await this.#retireServerMismatch(active.activation, operation, true);
+              this.#finishNoticeFence(operation);
+              return this.getProjection();
+            }
+            const deliverySession = await this.#coordinator.readActiveSession();
+            this.#assertCurrent(operation);
+            if (
+              !sameActivation(deliverySession.authority.session, active.activation) ||
+              !sameCredentialCursor(deliverySession.credential, currentSession.credential)
+            ) {
+              throw new SessionError(
+                sessionErrorCodes.staleOperation,
+                "Offline account changed during the final authority check",
+              );
+            }
+            await this.#selectedOrganization.assertPublicationCurrent(handle.accountLease, publication);
+            this.#assertCurrent(operation);
+            this.#publishActive(
+              handle,
+              deliverySession,
+              Object.freeze({ me: suspendedMe, publication }),
+              operation,
+              false,
+            );
+            this.#recoveryRemount = null;
+          } catch (error) {
+            this.#retireAccountHandle(handle, error);
+            const latestPublication = this.#selectedOrganization.readCurrentPublication();
+            this.#recoveryRemount = Object.freeze({
+              activation: active.activation,
+              expectedState: latestPublication?.state ?? suspendedPublication.state,
+            });
+            throw error;
+          }
           this.#finishNoticeFence(operation);
           return this.getProjection();
         }
@@ -689,6 +767,7 @@ export class BrowserSessionRuntime {
     this.#detachResumeListeners = null;
     this.#notices.dispose();
     this.#detachVeilSubscription();
+    this.#hardSuspendedActive = null;
     this.#subscribers.clear();
   }
 
@@ -696,6 +775,7 @@ export class BrowserSessionRuntime {
     this.#started = true;
     const onSuspend = (): void => {
       if (this.#disposed) return;
+      this.#hardSuspendedActive = this.#active;
       this.#suspended = true;
       this.#noticeProcessingReady = false;
     };
@@ -1178,11 +1258,20 @@ export class BrowserSessionRuntime {
     let currentExpected = expectedState;
     let latestMe: Readonly<Record<string, unknown>> | null = null;
     let credentialRefreshAttempted = false;
+    let activeMeRetryClaim: unknown;
     for (let attempts = 0; attempts < MAX_RECONCILIATION_ATTEMPTS; attempts += 1) {
       let identity: Awaited<ReturnType<AuthSessionCoordinator["requestActiveMe"]>>;
       try {
-        identity = await this.#coordinator.requestActiveMe(accountLease);
+        identity = await this.#coordinator.requestActiveMe(accountLease, activeMeRetryClaim);
       } catch (error) {
+        if (activeMeRetryClaim !== undefined && sessionHttpStatus(error, "active_me_http_status") === 401) {
+          const retirement = await this.#coordinator.retireAccountAfterTerminalActiveMe401(accountLease, error);
+          throw new SessionError(
+            sessionErrorCodes.admissionDenied,
+            "Account identity remained unauthorized after credential refresh",
+            Object.freeze({ kind: "refresh_http_status", status: 401, retirement }),
+          );
+        }
         if (credentialRefreshAttempted || sessionHttpStatus(error, "active_me_http_status") !== 401) throw error;
         await this.#coordinator.refreshAccountCredentialAfterActiveMe401(
           accountLease,
@@ -1190,6 +1279,7 @@ export class BrowserSessionRuntime {
           this.#freshGeneration("owned-401"),
         );
         this.#assertCurrent(operation);
+        activeMeRetryClaim = error;
         credentialRefreshAttempted = true;
         continue;
       }
@@ -1353,6 +1443,7 @@ export class BrowserSessionRuntime {
     this.#state = projection;
     try {
       this.#reveal(operation);
+      this.#hardSuspendedActive = null;
     } catch (error) {
       if (this.#active === active) {
         this.#active = null;
@@ -1371,6 +1462,7 @@ export class BrowserSessionRuntime {
     this.#recoveryLogoutOwner = null;
     this.#state = Object.freeze({ kind: "anonymous" });
     this.#reveal(operation);
+    this.#hardSuspendedActive = null;
   }
 
   #retireLocalActive(active: ActiveRuntime): void {
@@ -1453,6 +1545,7 @@ export class BrowserSessionRuntime {
       }
       this.#state = active.projection;
       this.#reveal(operation);
+      this.#hardSuspendedActive = null;
       return this.getProjection();
     } catch {
       try {
@@ -1473,18 +1566,36 @@ export class BrowserSessionRuntime {
   async #recoverOwned401(source: ActivationCertificate, operation: RuntimeOperation, error: unknown): Promise<boolean> {
     const retirement = owned401Retirement(error);
     if (retirement === null) return false;
+    if (retirement === "superseded") {
+      const authority = await this.#coordinator.readAuthority();
+      this.#assertCurrent(operation);
+      await this.#convergeAuthority(authority, operation, false);
+      return true;
+    }
+    await this.#convergeCommittedOwned401(source);
+    return true;
+  }
+
+  async #convergeCommittedOwned401(source: ActivationCertificate): Promise<void> {
+    // The coordinator retirement transaction is authoritative even if a
+    // re-entrant refresh, page lifecycle event, or subscriber superseded the
+    // operation that initiated it. Transfer local cleanup to a fresh
+    // operation so the sender does not depend on receiving its own notice.
+    const convergence = this.#begin("owned_401_retirement_convergence");
     this.#pendingUiRetirementEpoch = source.sessionEpoch;
     try {
       const sourceNoticeDelivered = this.#announceSourceRetired(source);
       const authority = await this.#coordinator.readAuthority();
-      this.#assertCurrent(operation);
+      this.#assertCurrent(convergence);
       await this.#convergeAuthority(
         authority,
-        operation,
+        convergence,
         false,
         Object.freeze({ sessionEpoch: source.sessionEpoch, delivered: sourceNoticeDelivered }),
       );
-      return true;
+    } catch (error) {
+      this.#fail(convergence, error);
+      throw error;
     } finally {
       if (this.#pendingUiRetirementEpoch === source.sessionEpoch) this.#pendingUiRetirementEpoch = null;
     }

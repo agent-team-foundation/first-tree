@@ -62,6 +62,11 @@ export type ReconcileSelectedOrganizationInput = Readonly<{
   reason: SelectedOrganizationReason;
 }>;
 
+export type RebindSuspendedOrganizationInput = Readonly<{
+  lease: AccountLease;
+  publication: SelectedOrganizationPublication;
+}>;
+
 export type SelectedOrganizationControllerOptions = Readonly<{
   store: AccountStateStore;
   barrier: ContentScopeBarrier;
@@ -203,6 +208,19 @@ function entryFor(
     value: persistedValue(state),
     updatedAt,
   });
+}
+
+function rotateStateRevision(
+  state: SelectedOrganizationState,
+  createRevision: () => string,
+): SelectedOrganizationState {
+  const orgRevision = requireBoundedId(createRevision(), "Organization revision", MAX_REVISION_LENGTH);
+  if (orgRevision === state.orgRevision) {
+    throw new SessionError(sessionErrorCodes.platformUnavailable, "Organization revision did not advance");
+  }
+  return state.kind === "selected"
+    ? Object.freeze({ kind: "selected", organizationId: state.organizationId, orgRevision })
+    : Object.freeze({ kind: "needs-selection", orgRevision });
 }
 
 function chooseState(
@@ -404,6 +422,107 @@ export class SelectedOrganizationController {
       }
     } finally {
       identity.settle();
+    }
+  }
+
+  /**
+   * Rebind a hard-suspended, already verified projection without consulting
+   * the network. This is deliberately narrower than reconciliation: it may
+   * rotate only the exact durable head this controller previously published.
+   */
+  public async rebindSuspendedPublication(
+    input: RebindSuspendedOrganizationInput,
+  ): Promise<SelectedOrganizationPublication> {
+    const lease = validateAccountLease(input.lease);
+    const publication = input.publication;
+    if (publication !== this.#publication) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization publication is stale");
+    }
+    const expected = normalizeState(publication.state);
+    if (!expected || lease.signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization view was cancelled");
+    }
+    const lockName = `${ORGANIZATION_NAVIGATION_LOCK_PREFIX}${lease.ownerTabId}`;
+    try {
+      const rebound = await this.#locks.request(lockName, { mode: "exclusive", signal: lease.signal }, async () => {
+        if (lease.signal.aborted || publication !== this.#publication) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization publication was replaced");
+        }
+        const locator = Object.freeze({
+          kind: SELECTED_ORGANIZATION_KIND,
+          key: SELECTED_ORGANIZATION_KEY,
+          tabId: lease.ownerTabId,
+        });
+        const currentEntry = await this.#store.getAccountEntry<PersistedSelection>(lease, locator);
+        if (lease.signal.aborted || publication !== this.#publication) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization head read became stale");
+        }
+        const current = parseEntry(currentEntry);
+        if (!statesEqual(current, expected) || currentEntry === null) {
+          throw new SessionError(
+            sessionErrorCodes.recoveryRequired,
+            "Suspended organization head changed while the document was hidden",
+          );
+        }
+        const replacementState = rotateStateRevision(expected, this.#createRevision);
+        const replacement = entryFor(lease, replacementState, requireTimestamp(this.#now()));
+        const exchange = await this.#store.compareExchangeAccountEntry(lease, locator, currentEntry, replacement);
+        if (lease.signal.aborted || publication !== this.#publication) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization rebind became stale");
+        }
+        if (!exchange.committed) {
+          throw new SessionError(
+            sessionErrorCodes.recoveryRequired,
+            "Suspended organization head lost its exact compare/exchange",
+          );
+        }
+        this.publishView(lease, replacementState);
+        const currentPublication = this.#publication;
+        if (!currentPublication || currentPublication.state !== replacementState) {
+          throw new SessionError(sessionErrorCodes.recoveryRequired, "Suspended organization view was not published");
+        }
+        return currentPublication;
+      });
+      if (lease.signal.aborted || this.#publication !== rebound) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization delivery became stale");
+      }
+      return rebound;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Suspended organization lock was cancelled");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Final delivery fence for a projection that crossed a network or other
+   * external await after it was rebound. The publication object identity
+   * proves that no same-document navigation replaced it, while the account
+   * store read proves that another document did not move the durable head.
+   */
+  public async assertPublicationCurrent(leaseValue: unknown, publicationValue: unknown): Promise<void> {
+    const lease = validateAccountLease(leaseValue);
+    const publication = publicationValue;
+    if (publication !== this.#publication || lease.signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Selected organization publication is stale");
+    }
+    const expected = normalizeState((publication as SelectedOrganizationPublication).state);
+    if (!expected) {
+      throw new SessionError(sessionErrorCodes.invalidState, "Selected organization publication is malformed");
+    }
+    const current = parseEntry(
+      await this.#store.getAccountEntry<PersistedSelection>(lease, {
+        kind: SELECTED_ORGANIZATION_KIND,
+        key: SELECTED_ORGANIZATION_KEY,
+        tabId: lease.ownerTabId,
+      }),
+    );
+    if (lease.signal.aborted || publication !== this.#publication || !statesEqual(current, expected)) {
+      throw new SessionError(
+        sessionErrorCodes.staleOperation,
+        "Selected organization changed before projection delivery",
+      );
     }
   }
 

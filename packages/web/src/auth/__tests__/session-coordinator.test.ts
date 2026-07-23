@@ -21,6 +21,7 @@ import {
   createSessionAttempt,
   createViewLease,
   installAccountStoreRuntime,
+  installSessionLifecycleHooks,
   readVerifiedActiveMeProof,
   SessionError,
   type SessionLockManager,
@@ -271,6 +272,45 @@ function deferNextOpen(factory: IDBFactory): Readonly<{
     });
   });
   return Object.freeze({ started, release: releaseResolve });
+}
+
+function afterNextOwned401AuthorityWrite(callback: () => void): Promise<void> {
+  const prototype = IDBObjectStore.prototype;
+  const originalPut = prototype.put;
+  let observedResolve = (): void => undefined;
+  const observed = new Promise<void>((resolve) => {
+    observedResolve = resolve;
+  });
+  vi.spyOn(prototype, "put").mockImplementation(function (
+    this: IDBObjectStore,
+    ...args: Parameters<IDBObjectStore["put"]>
+  ) {
+    const request = originalPut.apply(this, args);
+    const row = args[0];
+    if (
+      this.name === "authority" &&
+      typeof row === "object" &&
+      row !== null &&
+      "authority" in row &&
+      typeof row.authority === "object" &&
+      row.authority !== null &&
+      "mode" in row.authority &&
+      row.authority.mode === "retiring" &&
+      "cause" in row.authority &&
+      row.authority.cause === "owned_401"
+    ) {
+      request.addEventListener(
+        "success",
+        () => {
+          callback();
+          observedResolve();
+        },
+        { once: true },
+      );
+    }
+    return request;
+  });
+  return observed;
 }
 
 class ImmediateLocks implements SessionLockManager {
@@ -1881,6 +1921,375 @@ describe("AuthSessionCoordinator", () => {
     ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(before.credential.credentialRevision).toBe(0);
+    disposeRuntime();
+  });
+
+  it("lets only the exact refresh-bound retry 401 retire the refreshed credential", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-terminal-active-me-401");
+    const certificate = activation("terminal-active-me-401", "generation-terminal-active-me-401");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-terminal-active-me-401");
+    const replacement = await credential(certificate, 1, "terminal-active-me-401-rotated");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-terminal-active-me-401",
+      ownerTabId: "owner-tab-terminal-active-me-401",
+      documentId: "document-terminal-active-me-401",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+      )
+      .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, firstRejection)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    const lookalikeRetryClaim = new SessionError(firstRejection.code, firstRejection.message, firstRejection.detail);
+    await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      "generation-terminal-active-me-401-retiring",
+    );
+    await expect(coordinator.requestActiveMe(lease, lookalikeRetryClaim)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("Authorization")).toBe(
+      `Bearer ${replacement.accessToken}`,
+    );
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(
+        lease,
+        terminalRejection,
+        "generation-terminal-active-me-401-invalid-refresh",
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    await expect(
+      coordinator.retireAccountAfterTerminalActiveMe401(
+        lease,
+        new SessionError(terminalRejection.code, terminalRejection.message, terminalRejection.detail),
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe("retired");
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: {
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        phase: "revoked",
+        generation: "generation-terminal-active-me-401-retiring",
+      },
+      credentials: [],
+      attempts: [],
+    });
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    disposeRuntime();
+  });
+
+  it("preserves a newer credential that commits before a terminal active me 401 retirement", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-terminal-active-me-401-credential-wins");
+    const certificate = activation(
+      "terminal-active-me-401-credential-wins",
+      "generation-terminal-active-me-401-credential-wins",
+    );
+    await activateAnonymous(factory, coordinator, certificate, "attempt-terminal-active-me-401-credential-wins");
+    const refreshed = await credential(certificate, 1, "terminal-active-me-401-credential-wins-refreshed");
+    const winner = await credential(certificate, 2, "terminal-active-me-401-credential-wins-winner");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-terminal-active-me-401-credential-wins",
+      ownerTabId: "owner-tab-terminal-active-me-401-credential-wins",
+      documentId: "document-terminal-active-me-401-credential-wins",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+        .mockResolvedValueOnce(
+          jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken }),
+        )
+        .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 }))
+        .mockResolvedValueOnce(jsonResponse({ accessToken: winner.accessToken, refreshToken: winner.refreshToken })),
+    );
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    const refreshedCursor = await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      "generation-terminal-active-me-401-credential-wins-retiring",
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    await coordinator.refreshAccountCredential(
+      lease,
+      refreshedCursor,
+      "generation-terminal-active-me-401-credential-wins-unused",
+    );
+    const beforeRetirement = await readCoordinatorSnapshot(factory);
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe(
+      "superseded",
+    );
+    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeRetirement);
+    expect(beforeRetirement).toMatchObject({
+      authority: { mode: "active", session: certificate },
+      credentials: [winner],
+    });
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    disposeRuntime();
+  });
+
+  it.each([
+    "runtime",
+    "source-abort",
+    "pagehide",
+    "freeze",
+    "request-sequence",
+  ] as const)("leaves authority unchanged when %s supersedes a terminal active me 401 claim", async (winner) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-terminal-active-me-401-${winner}-wins`);
+    const certificate = activation(
+      `terminal-active-me-401-${winner}-wins`,
+      `generation-terminal-active-me-401-${winner}-wins`,
+    );
+    await activateAnonymous(factory, coordinator, certificate, `attempt-terminal-active-me-401-${winner}-wins`);
+    const refreshed = await credential(certificate, 1, `terminal-active-me-401-${winner}-wins-refreshed`);
+    const sourceController = new AbortController();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-terminal-active-me-401-${winner}-wins`,
+      ownerTabId: `owner-tab-terminal-active-me-401-${winner}-wins`,
+      documentId: `document-terminal-active-me-401-${winner}-wins`,
+      signal: sourceController.signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken }))
+      .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 }))
+      .mockRejectedValueOnce(new TypeError("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      `generation-terminal-active-me-401-${winner}-wins-retiring`,
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget();
+    const detachLifecycle = installSessionLifecycleHooks({
+      registry: barrier.registry,
+      windowTarget,
+      documentTarget,
+    });
+    let disposeWinner = (): void => undefined;
+    if (winner === "runtime") {
+      const winnerLease = createAccountLease({
+        ...lease,
+        accountRevision: `${lease.accountRevision}-winner`,
+        signal: new AbortController().signal,
+      });
+      disposeWinner = installAccountStoreRuntime({ barrier, lease: winnerLease });
+    } else if (winner === "source-abort") {
+      sourceController.abort();
+    } else if (winner === "pagehide") {
+      windowTarget.dispatchEvent(new Event("pagehide"));
+    } else if (winner === "freeze") {
+      documentTarget.dispatchEvent(new Event("freeze"));
+    } else {
+      await expect(coordinator.requestActiveMe(lease)).rejects.toMatchObject({
+        code: sessionErrorCodes.admissionDenied,
+      });
+    }
+    const beforeRetirement = await readCoordinatorSnapshot(factory);
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe(
+      "superseded",
+    );
+    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeRetirement);
+    expect(beforeRetirement).toMatchObject({
+      authority: { mode: "active", session: certificate },
+      credentials: [refreshed],
+    });
+    detachLifecycle();
+    disposeWinner();
+    disposeRuntime();
+  });
+
+  it.each([
+    "runtime",
+    "pagehide",
+    "freeze",
+    "request-sequence",
+  ] as const)("keeps the terminal 401 retirement result authoritative when %s changes after its write succeeds", async (lateChange) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-terminal-active-me-401-${lateChange}-after-plan`);
+    const certificate = activation(
+      `terminal-active-me-401-${lateChange}-after-plan`,
+      `generation-terminal-active-me-401-${lateChange}-after-plan`,
+    );
+    await activateAnonymous(factory, coordinator, certificate, `attempt-terminal-active-me-401-${lateChange}`);
+    const refreshed = await credential(certificate, 1, `terminal-active-me-401-${lateChange}-after-plan-refreshed`);
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-terminal-active-me-401-${lateChange}-after-plan`,
+      ownerTabId: `owner-tab-terminal-active-me-401-${lateChange}-after-plan`,
+      documentId: `document-terminal-active-me-401-${lateChange}-after-plan`,
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken }))
+      .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 }))
+      .mockRejectedValue(new TypeError("retirement winner must prevent another identity dispatch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      `generation-terminal-active-me-401-${lateChange}-after-plan-retiring`,
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget();
+    const detachLifecycle = installSessionLifecycleHooks({
+      registry: barrier.registry,
+      windowTarget,
+      documentTarget,
+    });
+    let disposeWinner = (): void => undefined;
+    let newerRequest: Promise<unknown> | null = null;
+    let callbackError: unknown = null;
+    const authorityWriteSucceeded = afterNextOwned401AuthorityWrite(() => {
+      try {
+        if (lateChange === "runtime") {
+          disposeWinner = installAccountStoreRuntime({
+            barrier,
+            lease: createAccountLease({
+              ...lease,
+              accountRevision: `${lease.accountRevision}-winner`,
+              signal: new AbortController().signal,
+            }),
+          });
+        } else if (lateChange === "pagehide") {
+          windowTarget.dispatchEvent(new Event("pagehide"));
+        } else if (lateChange === "freeze") {
+          documentTarget.dispatchEvent(new Event("freeze"));
+        } else {
+          newerRequest = coordinator.requestActiveMe(lease).then(
+            (value) => value,
+            (error: unknown) => error,
+          );
+        }
+      } catch (error) {
+        callbackError = error;
+      }
+    });
+
+    const retirement = coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection);
+    await authorityWriteSucceeded;
+    expect(callbackError).toBeNull();
+    await expect(retirement).resolves.toBe("retired");
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: {
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        generation: `generation-terminal-active-me-401-${lateChange}-after-plan-retiring`,
+      },
+      credentials: [],
+    });
+    if (newerRequest) await expect(newerRequest).resolves.toBeInstanceOf(SessionError);
+
+    detachLifecycle();
+    disposeWinner();
+    disposeRuntime();
+  });
+
+  it("does not let a held newer refresh resurrect credentials after terminal 401 retirement wins", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-terminal-active-me-401-retirement-wins");
+    const certificate = activation(
+      "terminal-active-me-401-retirement-wins",
+      "generation-terminal-active-me-401-retirement-wins",
+    );
+    await activateAnonymous(factory, coordinator, certificate, "attempt-terminal-active-me-401-retirement-wins");
+    const refreshed = await credential(certificate, 1, "terminal-active-me-401-retirement-wins-refreshed");
+    const staleWinner = await credential(certificate, 2, "terminal-active-me-401-retirement-wins-stale");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-terminal-active-me-401-retirement-wins",
+      ownerTabId: "owner-tab-terminal-active-me-401-retirement-wins",
+      documentId: "document-terminal-active-me-401-retirement-wins",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    let releaseHeldRefresh = (_response: Response): void => undefined;
+    const heldRefresh = new Promise<Response>((resolve) => {
+      releaseHeldRefresh = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken }))
+      .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 }))
+      .mockImplementationOnce(() => heldRefresh);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    const refreshedCursor = await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      "generation-terminal-active-me-401-retirement-wins-retiring",
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    const staleRefresh = coordinator.refreshAccountCredential(
+      lease,
+      refreshedCursor,
+      "generation-terminal-active-me-401-retirement-wins-unused",
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe("retired");
+    releaseHeldRefresh(jsonResponse({ accessToken: staleWinner.accessToken, refreshToken: staleWinner.refreshToken }));
+    await expect(staleRefresh).rejects.toBeInstanceOf(SessionError);
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: { mode: "retiring", source: certificate, cause: "owned_401" },
+      credentials: [],
+    });
     disposeRuntime();
   });
 

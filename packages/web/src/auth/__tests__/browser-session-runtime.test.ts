@@ -9,6 +9,7 @@ import {
   type BrowserSessionStorage,
   OWNER_TAB_STORAGE_KEY,
 } from "../browser-session-runtime.js";
+import { ORGANIZATION_NAVIGATION_LOCK_PREFIX } from "../selected-organization.js";
 import {
   AuthSessionCoordinator,
   CONTENT_SCOPE_LOCK_PREFIX,
@@ -17,6 +18,8 @@ import {
   type CrossDocumentAuthNotice,
   type CrossDocumentNoticeDelivery,
   type CrossDocumentNoticeTransport,
+  captureAccountStoreRuntime,
+  captureContentStoreRuntime,
   closeCoordinatorConnections,
   createAccountLease,
   createAccountScopeKey,
@@ -111,6 +114,44 @@ class PurgeGateLocks extends ImmediateLocks {
       this.#held = false;
     }
     return super.request(name, options, callback);
+  }
+}
+
+class NavigationDeliveryGateLocks extends ImmediateLocks {
+  #held = false;
+  #release = (): void => undefined;
+  readonly navigationCommitted: Promise<void>;
+  #markCommitted = (): void => undefined;
+
+  public constructor() {
+    super();
+    this.navigationCommitted = new Promise<void>((resolve) => {
+      this.#markCommitted = resolve;
+    });
+  }
+
+  public holdNavigationDelivery(): void {
+    this.#held = true;
+  }
+
+  public releaseNavigationDelivery(): void {
+    this.#release();
+  }
+
+  public override async request<T>(
+    name: string,
+    options: SessionLockOptions,
+    callback: () => T | PromiseLike<T>,
+  ): Promise<T> {
+    const result = await super.request(name, options, callback);
+    if (this.#held && name.startsWith(ORGANIZATION_NAVIGATION_LOCK_PREFIX)) {
+      this.#markCommitted();
+      await new Promise<void>((resolve) => {
+        this.#release = resolve;
+      });
+      this.#held = false;
+    }
+    return result;
   }
 }
 
@@ -211,6 +252,17 @@ function deferredResponse(): Readonly<{
   return Object.freeze({ promise, resolve });
 }
 
+function deferredValue<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}> {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return Object.freeze({ promise, resolve });
+}
+
 function rawOpen(factory: IDBFactory, name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(name, 1);
@@ -250,6 +302,36 @@ async function readRawRow(factory: IDBFactory, databaseName: string, key: string
   await transactionDone(transaction);
   database.close();
   return value;
+}
+
+async function overwriteSelectedOrganization(
+  factory: IDBFactory,
+  activation: SeededActive["activation"],
+  ownerTabId: string,
+  organizationId: string,
+  orgRevision: string,
+): Promise<void> {
+  const databaseName = createScopedDatabaseName("first-tree-account-state", 1, activation.scopeKey);
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = factory.open(databaseName, 1);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => reject(new Error("Expected the account-state database to exist"));
+  });
+  const transaction = database.transaction("entries", "readwrite");
+  transaction.objectStore("entries").put({
+    v: 1,
+    sessionEpoch: activation.sessionEpoch,
+    partitionKind: "account",
+    partitionId: "account",
+    kind: "selected-organization",
+    tabId: ownerTabId,
+    key: "current",
+    value: { state: "selected", organizationId, orgRevision },
+    updatedAt: Date.now(),
+  });
+  await transactionDone(transaction);
+  database.close();
 }
 
 async function seedActive(
@@ -720,6 +802,202 @@ describe("BrowserSessionRuntime", () => {
     expect(after.publication.state).toMatchObject({ kind: "selected", organizationId: "org-a" });
   });
 
+  it.each([
+    "pagehide",
+    "freeze",
+  ] as const)("rebinds an exact %s-suspended view with fresh revisions during same-process offline recovery", async (eventName) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-offline-${eventName}`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `offline-${eventName}`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-offline-${eventName}`,
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    const beforeView = before.publication.viewLease;
+    if (!beforeView) throw new Error("Expected selected organization view");
+    fetch.mockClear();
+    harness.authority.reconcile.mockResolvedValue({ kind: "unavailable", expected: SERVER_AUTHORITY });
+
+    (eventName === "pagehide" ? harness.windowTarget : harness.documentTarget).dispatchEvent(new Event(eventName));
+    expect(captureAccountStoreRuntime(before.accountLease)).toBeNull();
+    expect(captureContentStoreRuntime(beforeView)).toBeNull();
+
+    const after = activeProjection(await harness.runtime.resume());
+    const afterView = after.publication.viewLease;
+    if (!afterView) throw new Error("Expected rebound organization view");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(before.accountLease.signal.aborted).toBe(true);
+    expect(after.me).toBe(before.me);
+    expect(after.accountLease.signal).not.toBe(before.accountLease.signal);
+    expect(after.accountLease.accountRevision).not.toBe(before.accountLease.accountRevision);
+    expect(after.publication.state).toMatchObject({ kind: "selected", organizationId: "org-a" });
+    expect(after.publication.state.orgRevision).not.toBe(before.publication.state.orgRevision);
+    expect(afterView).not.toBe(beforeView);
+    expect(captureAccountStoreRuntime(after.accountLease)).not.toBeNull();
+    expect(captureContentStoreRuntime(afterView)).not.toBeNull();
+    await expect(
+      new AccountStateStore().getAccountEntry(after.accountLease, {
+        kind: "selected-organization",
+        key: "current",
+        tabId: after.accountLease.ownerTabId,
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        state: "selected",
+        organizationId: "org-a",
+        orgRevision: after.publication.state.orgRevision,
+      },
+    });
+  });
+
+  it.each([
+    ["pagehide", "changed"],
+    ["freeze", "missing"],
+  ] as const)("keeps a %s-restored view in recovery when the Vite generation is %s", async (eventName, reason) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-generation-${eventName}`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `generation-${eventName}`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-generation-${eventName}`,
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    fetch.mockClear();
+    harness.authority.reconcile.mockRejectedValue(new Error(`Vite generation ${reason}`));
+
+    (eventName === "pagehide" ? harness.windowTarget : harness.documentTarget).dispatchEvent(new Event(eventName));
+    const projection = await harness.runtime.resume();
+
+    expect(projection).toMatchObject({ kind: "recovery" });
+    expect(projection.kind).not.toBe("active");
+    expect(before.accountLease.signal.aborted).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the Vite generation after a suspended selected-head commit and before cached delivery", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-generation-race");
+    const locks = new NavigationDeliveryGateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "generation-race");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-generation-race",
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    const beforeView = before.publication.viewLease;
+    if (!beforeView) throw new Error("Expected selected organization view");
+    fetch.mockClear();
+    harness.authority.reconcile.mockReset();
+    harness.authority.reconcile.mockResolvedValueOnce({ kind: "unavailable", expected: SERVER_AUTHORITY });
+    locks.holdNavigationDelivery();
+
+    harness.windowTarget.dispatchEvent(new Event("pagehide"));
+    const delivered: BrowserSessionProjection[] = [];
+    const unsubscribe = harness.runtime.subscribe((projection) => delivered.push(projection));
+    delivered.length = 0;
+    const resuming = harness.runtime.resume();
+    await locks.navigationCommitted;
+
+    expect(harness.authority.reconcile).toHaveBeenCalledTimes(1);
+    expect(harness.runtime.getProjection().kind).toBe("veiled");
+    harness.authority.reconcile.mockRejectedValueOnce(new Error("Vite V2 retargeted to unavailable S2"));
+    locks.releaseNavigationDelivery();
+
+    await expect(resuming).resolves.toMatchObject({ kind: "recovery" });
+    expect(harness.authority.reconcile).toHaveBeenCalledTimes(2);
+    expect(delivered.some((projection) => projection.kind === "active")).toBe(false);
+    expect(captureAccountStoreRuntime(before.accountLease)).toBeNull();
+    expect(captureContentStoreRuntime(beforeView)).toBeNull();
+    await expect(harness.runtime.refresh()).rejects.toMatchObject({ code: "admission_denied" });
+    expect(fetch).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it.each([
+    "retirement",
+    "selected-head",
+  ] as const)("rechecks durable %s ownership after the final suspended authority probe", async (winner) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-final-suspend-${winner}`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `final-suspend-${winner}`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-final-suspend-${winner}`,
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    const finalProbe = deferredValue<Awaited<ReturnType<BrowserSessionAuthorityProbe["reconcile"]>>>();
+    harness.authority.reconcile.mockReset();
+    harness.authority.reconcile.mockResolvedValueOnce({ kind: "unavailable", expected: SERVER_AUTHORITY });
+    harness.authority.reconcile.mockReturnValueOnce(finalProbe.promise);
+
+    harness.windowTarget.dispatchEvent(new Event("pagehide"));
+    const delivered: BrowserSessionProjection[] = [];
+    const unsubscribe = harness.runtime.subscribe((projection) => delivered.push(projection));
+    delivered.length = 0;
+    const resuming = harness.runtime.resume();
+    await vi.waitFor(() => expect(harness.authority.reconcile).toHaveBeenCalledTimes(2));
+
+    if (winner === "retirement") {
+      const external = new AuthSessionCoordinator({
+        indexedDB: factory,
+        legacyPersistence: { indexedDB: factory, localStorage, sessionStorage },
+      });
+      await external.beginRetirement(seeded.activation, "logout", "generation-final-suspend-external-retirement");
+    } else {
+      await overwriteSelectedOrganization(
+        factory,
+        seeded.activation,
+        before.accountLease.ownerTabId,
+        "org-b",
+        "external-org-revision",
+      );
+    }
+    finalProbe.resolve({ kind: "unavailable", expected: SERVER_AUTHORITY });
+
+    await expect(resuming).resolves.toMatchObject({ kind: "recovery" });
+    expect(delivered.some((projection) => projection.kind === "active")).toBe(false);
+    expect(harness.runtime.getProjection().kind).not.toBe("active");
+    unsubscribe();
+  });
+
   it("defers notice-driven reads and purge while pagehidden until visible reconciliation", async () => {
     const factory = new IDBFactory();
     const localStorage = new MemoryStorage();
@@ -854,6 +1132,102 @@ describe("BrowserSessionRuntime", () => {
     expect(harness.notices.authorityAdvancedCount).toBe(1);
   });
 
+  it("retires and purges when refreshed credentials still receive an exact account identity 401", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-terminal-active-me-401");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "terminal-active-me-401");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-terminal-active-me-401",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "terminal-active-me-401-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "terminal-active-me-401-rotated");
+    const requests: Array<Readonly<{ url: string; init: RequestInit | undefined }>> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push(Object.freeze({ url, init }));
+      if (url === "/api/v1/auth/refresh") {
+        return new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const activeMeCount = requests.filter((request) => request.url === "/api/v1/me").length;
+      return activeMeCount === 1
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("expired", { status: 401 });
+    });
+    const before = activeProjection(await harness.runtime.start());
+
+    await expect(harness.runtime.refresh()).resolves.toEqual({ kind: "anonymous" });
+    expect(requests.map((request) => request.url)).toEqual([
+      "/api/v1/me",
+      "/api/v1/me",
+      "/api/v1/auth/refresh",
+      "/api/v1/me",
+    ]);
+    expect(new Headers(requests[3]?.init?.headers).get("Authorization")).toBe(`Bearer ${replacementAccess}`);
+    expect(before.accountLease.signal.aborted).toBe(true);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(harness.notices.authorityAdvancedCount).toBe(1);
+  });
+
+  it("transfers transaction-first terminal identity retirement to a fresh local cleanup operation", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-terminal-active-me-401-transfer");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "terminal-active-me-401-transfer");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-terminal-active-me-401-transfer",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "terminal-active-me-401-transfer");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "terminal-active-me-401-transfer");
+    let activeMeCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/v1/auth/refresh") {
+        return new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      activeMeCalls += 1;
+      return activeMeCalls === 1
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("expired", { status: 401 });
+    });
+    await harness.runtime.start();
+    const originalRetirement = AuthSessionCoordinator.prototype.retireAccountAfterTerminalActiveMe401;
+    let supersedingRefresh: Promise<BrowserSessionProjection> | null = null;
+    vi.spyOn(AuthSessionCoordinator.prototype, "retireAccountAfterTerminalActiveMe401").mockImplementationOnce(
+      async function (this: AuthSessionCoordinator, leaseValue, rejectionValue) {
+        const result = await originalRetirement.call(this, leaseValue, rejectionValue);
+        supersedingRefresh = harness.runtime.refresh();
+        return result;
+      },
+    );
+
+    await harness.runtime.refresh();
+    if (!supersedingRefresh) throw new Error("Expected the committed retirement to trigger a superseding refresh");
+    await supersedingRefresh;
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(harness.notices.authorityAdvancedCount).toBe(1);
+  });
+
   it("retires and purges an active account when the Vite identity firewall returns 421", async () => {
     const factory = new IDBFactory();
     const localStorage = new MemoryStorage();
@@ -943,6 +1317,79 @@ describe("BrowserSessionRuntime", () => {
     expect(notices.authorityAdvancedCount).toBe(1);
   });
 
+  it("preserves a newer credential without stale cleanup when it supersedes terminal account identity 401", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-terminal-401-superseded");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "terminal-401-superseded");
+    const notices = new ManualNoticeHarness();
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-terminal-401-superseded",
+      notices,
+    );
+    const firstAccess = jwt(seeded.activation.accountId, "access", "terminal-401-superseded-first");
+    const firstRefresh = jwt(seeded.activation.accountId, "refresh", "terminal-401-superseded-first");
+    const winnerAccess = jwt(seeded.activation.accountId, "access", "terminal-401-superseded-winner");
+    const winnerRefresh = jwt(seeded.activation.accountId, "refresh", "terminal-401-superseded-winner");
+    let activeMeCalls = 0;
+    let refreshCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/v1/auth/refresh") {
+        refreshCalls += 1;
+        return new Response(
+          JSON.stringify({
+            accessToken: refreshCalls === 1 ? firstAccess : winnerAccess,
+            refreshToken: refreshCalls === 1 ? firstRefresh : winnerRefresh,
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      activeMeCalls += 1;
+      if (activeMeCalls === 1 || activeMeCalls >= 4) {
+        return activeMe(seeded.activation.accountId, ["org-a"], "org-a");
+      }
+      return new Response("expired", { status: 401 });
+    });
+    await harness.runtime.start();
+    const external = new AuthSessionCoordinator({
+      indexedDB: factory,
+      legacyPersistence: { indexedDB: factory, localStorage, sessionStorage },
+    });
+    const retireTerminal = AuthSessionCoordinator.prototype.retireAccountAfterTerminalActiveMe401;
+    let observedRetirement: Awaited<ReturnType<typeof retireTerminal>> | null = null;
+    vi.spyOn(AuthSessionCoordinator.prototype, "retireAccountAfterTerminalActiveMe401").mockImplementationOnce(
+      async function (this: AuthSessionCoordinator, leaseValue, rejectionValue) {
+        const current = await external.readActiveSession();
+        await external.refreshAccountCredential(
+          leaseValue,
+          current.credential,
+          "generation-terminal-401-superseded-unused",
+        );
+        observedRetirement = await retireTerminal.call(this, leaseValue, rejectionValue);
+        return observedRetirement;
+      },
+    );
+    const deleteDatabase = vi.spyOn(factory, "deleteDatabase");
+    deleteDatabase.mockClear();
+
+    const projection = await harness.runtime.refresh();
+    expect(observedRetirement).toBe("superseded");
+    expect(activeMeCalls).toBeGreaterThanOrEqual(4);
+    expect(refreshCalls).toBe(2);
+    expect(await external.readAuthority()).toMatchObject({ mode: "active", session: seeded.activation });
+    expect(projection).toMatchObject({ kind: "recovery" });
+    expect(notices.retiredEpochs).toEqual([]);
+    expect(notices.authorityAdvancedCount).toBe(0);
+    expect(deleteDatabase).not.toHaveBeenCalled();
+  });
+
   it("does not treat superseded owned-401 retirement as source-notice delivery", async () => {
     const factory = new IDBFactory();
     const localStorage = new MemoryStorage();
@@ -982,11 +1429,11 @@ describe("BrowserSessionRuntime", () => {
       },
     );
 
-    await expect(harness.runtime.refresh()).resolves.toMatchObject({ kind: "recovery" });
+    await expect(harness.runtime.refresh()).resolves.toEqual({ kind: "anonymous" });
     expect(await external.readAuthority()).toMatchObject({ mode: "none" });
-    expect(notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(notices.retiredEpochs).toEqual([]);
     expect(notices.authorityAdvancedCount).toBe(0);
-    expect(harness.runtime.getProjection()).toMatchObject({ kind: "recovery" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
   });
 
   it("allows exact ordinary-hidden offline reuse but never reveals an externally retired account", async () => {

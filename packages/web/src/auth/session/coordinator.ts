@@ -56,6 +56,14 @@ type CoordinatorDecision<T> =
 
 type CoordinatorPlanner<T> = (snapshot: CoordinatorSnapshot) => CoordinatorDecision<T>;
 
+/**
+ * Most coordinator results are document-scoped and may not cross a lifecycle
+ * change. A transaction-scoped result is different: its synchronous planner
+ * is the authority race's ordering point, so a later lifecycle event cannot
+ * turn a committed mutation into an ambiguous delivery failure.
+ */
+type CoordinatorResultFence = "document-lifecycle" | "transaction";
+
 export type AuthorityCursor = Readonly<{
   generation: string;
   revision: number;
@@ -165,7 +173,7 @@ type VerifiedActiveMeProofState = {
   state: "available" | "claimed" | "consumed";
 };
 
-type ActiveMe401Evidence = Readonly<{
+type ActiveMe401BaseEvidence = Readonly<{
   runtime: CapturedAccountRuntimeFence;
   signal: AbortSignal;
   capturedCredential: CredentialRecord;
@@ -175,10 +183,42 @@ type ActiveMe401Evidence = Readonly<{
   requestSequence: number;
 }>;
 
+type ActiveMe401Evidence =
+  | (ActiveMe401BaseEvidence & Readonly<{ purpose: "refresh" }>)
+  | (ActiveMe401BaseEvidence &
+      Readonly<{
+        purpose: "retire";
+        authorityRevision: number;
+        retirementGeneration: string;
+      }>);
+
 type ActiveMe401State = {
   evidence: ActiveMe401Evidence;
   state: "available" | "claimed" | "consumed";
 };
+
+type ActiveMeRetryEvidence = Readonly<{
+  runtime: CapturedAccountRuntimeFence;
+  signal: AbortSignal;
+  refreshedCredential: CredentialRecord;
+  expectedCredential: CredentialCursor;
+  authorityRevision: number;
+  lifecycleGeneration: number;
+  requestKey: string;
+  priorRequestSequence: number;
+  retirementGeneration: string;
+}>;
+
+type ActiveMeRetryState = {
+  evidence: ActiveMeRetryEvidence;
+  state: "available" | "consumed";
+};
+
+type CommittedAccountRefresh = Readonly<{
+  cursor: CredentialCursor;
+  replacement: CredentialRecord;
+  authorityRevision: number;
+}>;
 
 export type ClaimedVerifiedActiveMeProof = Readonly<{
   membershipIds: readonly string[];
@@ -193,6 +233,7 @@ const refreshResponseProofs = new WeakMap<RefreshResponseProof, RefreshResponseS
 const accountRefreshResponseProofs = new WeakMap<AccountRefreshResponseProof, AccountRefreshResponseState>();
 const verifiedActiveMeProofs = new WeakMap<VerifiedActiveMeProof, VerifiedActiveMeProofState>();
 const activeMe401Rejections = new WeakMap<SessionError, ActiveMe401State>();
+const activeMeRetryClaims = new WeakMap<SessionError, ActiveMeRetryState>();
 const latestActiveMeRequests = new Map<string, number>();
 const activeMe401RefreshOwners = new Map<string, ActiveMe401State>();
 
@@ -320,6 +361,39 @@ function assertActiveMeSequence(key: string, sequence: number): void {
   if (latestActiveMeRequests.get(key) !== sequence) {
     throw new SessionError(sessionErrorCodes.staleOperation, "A newer account identity response superseded this one");
   }
+}
+
+function consumeActiveMeRetryClaim(
+  value: unknown,
+  sourceLease: AccountLease,
+  runtime: CapturedAccountRuntimeFence,
+  lifecycleGeneration: number,
+  requestKey: string,
+): ActiveMeRetryEvidence {
+  if (!(value instanceof SessionError)) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Account identity retry claim is malformed");
+  }
+  const state = activeMeRetryClaims.get(value);
+  const evidence = state?.evidence;
+  if (
+    !state ||
+    state.state !== "available" ||
+    !evidence ||
+    evidence.lifecycleGeneration !== lifecycleGeneration ||
+    evidence.signal !== runtime.lease.signal ||
+    evidence.runtime.lease !== runtime.lease ||
+    !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
+    evidence.requestKey !== requestKey ||
+    latestActiveMeRequests.get(requestKey) !== evidence.priorRequestSequence
+  ) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Account identity retry claim is stale");
+  }
+  if (evidence.signal.aborted) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Account identity retry claim crossed a lifecycle fence");
+  }
+  evidence.runtime.assertCurrent();
+  state.state = "consumed";
+  return evidence;
 }
 
 function requireVerifiedActiveMeEvidence(proofValue: unknown, leaseValue: unknown): VerifiedActiveMeProofState {
@@ -691,6 +765,7 @@ async function executeCoordinatorTransaction<T>(
   onBlocked: ((databaseName: string) => void) | undefined,
   planner: (snapshot: CoordinatorSnapshot | null) => CoordinatorDecision<T>,
   signal?: AbortSignal,
+  resultFence: CoordinatorResultFence = "document-lifecycle",
 ): Promise<T> {
   if (signal?.aborted) {
     throw new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator transaction was cancelled");
@@ -719,6 +794,7 @@ async function executeCoordinatorTransaction<T>(
     let completedRequests = 0;
 
     const abortForSignal = (): void => {
+      if (resultFence === "transaction" && hasPlannedValue) return;
       failure = new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator transaction was cancelled");
       try {
         transaction.abort();
@@ -777,7 +853,10 @@ async function executeCoordinatorTransaction<T>(
     transaction.oncomplete = () => {
       closeCoordinatorDatabase(database);
       signal?.removeEventListener("abort", abortForSignal);
-      if (signal?.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+      if (
+        resultFence === "document-lifecycle" &&
+        (signal?.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration)
+      ) {
         reject(new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator result crossed a lifecycle fence"));
         return;
       }
@@ -1112,7 +1191,11 @@ export class AuthSessionCoordinator {
    * Runs a synchronous planner over one fresh, overlapping authority/credentials/attempts transaction.
    * The returned promise resolves only after the transaction's `complete` event.
    */
-  private async commit<T>(planner: CoordinatorPlanner<T>, signal?: AbortSignal): Promise<T> {
+  private async commit<T>(
+    planner: CoordinatorPlanner<T>,
+    signal?: AbortSignal,
+    resultFence: CoordinatorResultFence = "document-lifecycle",
+  ): Promise<T> {
     return executeCoordinatorTransaction(
       this.factory,
       "readwrite",
@@ -1123,6 +1206,7 @@ export class AuthSessionCoordinator {
         return planner(snapshot);
       },
       signal,
+      resultFence,
     );
   }
 
@@ -1155,7 +1239,7 @@ export class AuthSessionCoordinator {
    * one account runtime lifecycle and only the newest request for that
    * runtime may drive organization reconciliation.
    */
-  public async requestActiveMe(leaseValue: unknown): Promise<VerifiedActiveMeResult> {
+  public async requestActiveMe(leaseValue: unknown, retryClaimValue?: unknown): Promise<VerifiedActiveMeResult> {
     const sourceLease = validateAccountLease(leaseValue);
     const runtime = captureAccountRuntimeFence(sourceLease);
     if (!runtime) {
@@ -1168,6 +1252,10 @@ export class AuthSessionCoordinator {
     if (activeMe401RefreshOwners.has(requestKey)) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity refresh already owns this runtime");
     }
+    const retryClaim =
+      retryClaimValue === undefined
+        ? null
+        : consumeActiveMeRetryClaim(retryClaimValue, sourceLease, runtime, lifecycleGeneration, requestKey);
     const requestSequence = nextActiveMeSequence(requestKey);
     if (signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity request lifecycle is stale");
@@ -1175,6 +1263,9 @@ export class AuthSessionCoordinator {
     const captured = await this.captureVerifiedCredential(lease.activation, signal);
     runtime.assertCurrent();
     assertActiveMeSequence(requestKey, requestSequence);
+    if (retryClaim && !sameCredentialRecord(captured, retryClaim.refreshedCredential)) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity retry credential is stale");
+    }
 
     const dispatch = await executeCoordinatorTransaction(
       this.factory,
@@ -1190,7 +1281,13 @@ export class AuthSessionCoordinator {
         assertActiveMeSequence(requestKey, requestSequence);
         const projection = activeProjection(snapshot, lease.activation);
         const current = matchingCredential(snapshot, projection.authority.session);
-        if (!current || !sameCredentialRecord(current, captured)) {
+        if (
+          !current ||
+          !sameCredentialRecord(current, captured) ||
+          (retryClaim !== null &&
+            (projection.authority.revision !== retryClaim.authorityRevision ||
+              !sameCredentialCursor(projection.credential, retryClaim.expectedCredential)))
+        ) {
           throw new SessionError(
             sessionErrorCodes.admissionDenied,
             "Credential changed before account identity dispatch",
@@ -1225,7 +1322,14 @@ export class AuthSessionCoordinator {
       }
       runtime.assertCurrent();
       assertActiveMeSequence(requestKey, requestSequence);
-      await this.admitAccountLease(lease);
+      const projection = await this.admitAccountLease(lease);
+      if (
+        retryClaim !== null &&
+        (projection.authority.revision !== retryClaim.authorityRevision ||
+          !sameCredentialCursor(projection.credential, retryClaim.expectedCredential))
+      ) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Account identity retry authority is stale");
+      }
       if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
         throw new SessionError(sessionErrorCodes.staleOperation, "Account identity response crossed a lifecycle fence");
       }
@@ -1257,7 +1361,14 @@ export class AuthSessionCoordinator {
           "Credential changed before account identity rejection delivery",
         );
       }
-      await this.finishCredentialAdmission(current, lease.activation, signal);
+      const projection = await this.finishCredentialAdmission(current, lease.activation, signal);
+      if (
+        retryClaim !== null &&
+        (projection.authority.revision !== retryClaim.authorityRevision ||
+          !sameCredentialCursor(projection.credential, retryClaim.expectedCredential))
+      ) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Account identity retry authority is stale");
+      }
       if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
         throw new SessionError(
           sessionErrorCodes.staleOperation,
@@ -1293,6 +1404,13 @@ export class AuthSessionCoordinator {
             lifecycleGeneration,
             requestKey,
             requestSequence,
+            ...(retryClaim === null
+              ? { purpose: "refresh" as const }
+              : {
+                  purpose: "retire" as const,
+                  authorityRevision: retryClaim.authorityRevision,
+                  retirementGeneration: retryClaim.retirementGeneration,
+                }),
           }),
           state: "available",
         });
@@ -1553,29 +1671,43 @@ export class AuthSessionCoordinator {
     }
   }
 
-  private async commitAccountRefreshResponse(proofValue: unknown): Promise<CredentialCursor> {
+  private async commitAccountRefreshResponse(
+    proofValue: unknown,
+  ): Promise<Readonly<{ cursor: CredentialCursor; authorityRevision: number }>> {
     const claim = claimAccountRefreshResponseProof(proofValue);
     const { activation, expectedCredential, capturedCredential, replacement, runtime } = claim.state;
     const signal = runtime.lease.signal;
     let committed = false;
     try {
-      const result = await this.commit((snapshot): CoordinatorDecision<CredentialCursor> => {
-        assertAccountRefreshStateCurrent(claim.state);
-        const projection = activeProjection(snapshot, activation);
-        if (!sameCredentialCursor(projection.credential, expectedCredential)) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before account refresh commit");
-        }
-        const current = matchingCredential(snapshot, activation);
-        if (!current || !sameCredentialRecord(current, capturedCredential)) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before account refresh commit");
-        }
-        const nextAuthority: ActiveAuthority = {
-          ...projection.authority,
-          revision: projection.authority.revision + 1,
-        };
-        const nextCredential = credentialCursor(replacement);
-        return replaceCoordinatorSnapshot(nextSnapshot(snapshot, nextAuthority, [replacement]), nextCredential);
-      }, signal);
+      const result = await this.commit(
+        (snapshot): CoordinatorDecision<Readonly<{ cursor: CredentialCursor; authorityRevision: number }>> => {
+          assertAccountRefreshStateCurrent(claim.state);
+          const projection = activeProjection(snapshot, activation);
+          if (!sameCredentialCursor(projection.credential, expectedCredential)) {
+            throw new SessionError(
+              sessionErrorCodes.admissionDenied,
+              "Credential changed before account refresh commit",
+            );
+          }
+          const current = matchingCredential(snapshot, activation);
+          if (!current || !sameCredentialRecord(current, capturedCredential)) {
+            throw new SessionError(
+              sessionErrorCodes.admissionDenied,
+              "Credential changed before account refresh commit",
+            );
+          }
+          const nextAuthority: ActiveAuthority = {
+            ...projection.authority,
+            revision: projection.authority.revision + 1,
+          };
+          const nextCredential = credentialCursor(replacement);
+          return replaceCoordinatorSnapshot(
+            nextSnapshot(snapshot, nextAuthority, [replacement]),
+            Object.freeze({ cursor: nextCredential, authorityRevision: nextAuthority.revision }),
+          );
+        },
+        signal,
+      );
       // A claimed active-/me rejection serializes newer identity requests for
       // this request key until transaction completion, so its owner fence is
       // still meaningful at the delivery boundary.
@@ -1652,11 +1784,15 @@ export class AuthSessionCoordinator {
       !rejection ||
       rejection.state !== "available" ||
       !evidence ||
+      evidence.purpose !== "refresh" ||
       evidence.lifecycleGeneration !== coordinatorLifecycleGeneration ||
       !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
       evidence.signal !== evidence.runtime.lease.signal
     ) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity rejection proof is stale");
+    }
+    if (owned401Generation === sourceLease.activation.authGeneration) {
+      throw new SessionError(sessionErrorCodes.invalidState, "Owned 401 retirement must rotate the auth generation");
     }
     if (sourceLease.signal.aborted || evidence.signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity rejection crossed a lifecycle fence");
@@ -1684,13 +1820,29 @@ export class AuthSessionCoordinator {
       assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
     };
     try {
-      return await this.refreshAccountCredentialOwned(
+      const committed = await this.refreshAccountCredentialOwned(
         evidence.runtime,
         evidence.expectedCredential,
         owned401Generation,
         evidence.capturedCredential,
         assertOwnerCurrent,
       );
+      assertOwnerCurrent();
+      activeMeRetryClaims.set(rejectionValue, {
+        evidence: Object.freeze({
+          runtime: evidence.runtime,
+          signal: evidence.signal,
+          refreshedCredential: committed.replacement,
+          expectedCredential: committed.cursor,
+          authorityRevision: committed.authorityRevision,
+          lifecycleGeneration: evidence.lifecycleGeneration,
+          requestKey: evidence.requestKey,
+          priorRequestSequence: evidence.requestSequence,
+          retirementGeneration: owned401Generation,
+        }),
+        state: "available",
+      });
+      return committed.cursor;
     } finally {
       if (activeMe401RefreshOwners.get(evidence.requestKey) === rejection) {
         activeMe401RefreshOwners.delete(evidence.requestKey);
@@ -1711,7 +1863,109 @@ export class AuthSessionCoordinator {
     if (!runtime) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account refresh runtime is stale");
     }
-    return this.refreshAccountCredentialOwned(runtime, expectedCredential, owned401Generation);
+    return (await this.refreshAccountCredentialOwned(runtime, expectedCredential, owned401Generation)).cursor;
+  }
+
+  /**
+   * Consumes only the exact terminal `/me` 401 emitted by the refresh-bound
+   * retry. A stale runtime, credential, request sequence, or authority loses
+   * the retirement race without mutating the current session.
+   */
+  public async retireAccountAfterTerminalActiveMe401(
+    leaseValue: unknown,
+    rejectionValue: unknown,
+  ): Promise<RetirementResult> {
+    const sourceLease = validateAccountLease(leaseValue);
+    if (!(rejectionValue instanceof SessionError)) {
+      throw new SessionError(sessionErrorCodes.invalidState, "Terminal account identity rejection is unavailable");
+    }
+    const rejection = activeMe401Rejections.get(rejectionValue);
+    const evidence = rejection?.evidence;
+    if (
+      !rejection ||
+      rejection.state !== "available" ||
+      !evidence ||
+      evidence.purpose !== "retire" ||
+      !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
+      evidence.signal !== evidence.runtime.lease.signal
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Terminal account identity rejection is stale");
+    }
+    rejection.state = "claimed";
+    const evidenceCurrent = (): boolean => {
+      if (
+        evidence.signal.aborted ||
+        evidence.lifecycleGeneration !== coordinatorLifecycleGeneration ||
+        latestActiveMeRequests.get(evidence.requestKey) !== evidence.requestSequence
+      ) {
+        return false;
+      }
+      try {
+        evidence.runtime.assertCurrent();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    try {
+      return await this.commit(
+        (snapshot): CoordinatorDecision<RetirementResult> => {
+          if (!evidenceCurrent()) return keepCoordinatorSnapshot("superseded");
+          const authority = snapshot.authority;
+          if (
+            authority.mode === "retiring" &&
+            authority.cause === "owned_401" &&
+            sameActivation(authority.source, sourceLease.activation)
+          ) {
+            return keepCoordinatorSnapshot("already_retiring");
+          }
+          if (
+            authority.mode !== "active" ||
+            !sameActivation(authority.session, sourceLease.activation) ||
+            authority.revision !== evidence.authorityRevision
+          ) {
+            return keepCoordinatorSnapshot("superseded");
+          }
+          const current = matchingCredential(snapshot, sourceLease.activation);
+          if (
+            !current ||
+            !sameCredentialCursor(credentialCursor(current), evidence.expectedCredential) ||
+            !sameCredentialRecord(current, evidence.capturedCredential)
+          ) {
+            return keepCoordinatorSnapshot("superseded");
+          }
+          if (
+            evidence.retirementGeneration === authority.generation ||
+            evidence.retirementGeneration === sourceLease.activation.authGeneration
+          ) {
+            throw new SessionError(
+              sessionErrorCodes.invalidState,
+              "Owned 401 retirement must rotate the auth generation",
+            );
+          }
+          const retiring: AuthAuthority = {
+            v: 6,
+            mode: "retiring",
+            generation: evidence.retirementGeneration,
+            revision: authority.revision + 1,
+            source: sourceLease.activation,
+            cause: "owned_401",
+            forbiddenGenerations: Object.freeze([]),
+            phase: "revoked",
+          };
+          return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
+        },
+        undefined,
+        // The exact planner check and the coordinator write are one
+        // transaction. Once that planner chooses retirement, runtime
+        // replacement, a newer request, or suspension may veil local UI but
+        // cannot retroactively win over the durable auth mutation.
+        "transaction",
+      );
+    } finally {
+      rejection.state = "consumed";
+    }
   }
 
   private async refreshAccountCredentialOwned(
@@ -1720,7 +1974,7 @@ export class AuthSessionCoordinator {
     owned401Generation: string,
     exactCapturedCredential?: CredentialRecord,
     assertOwnerCurrent?: () => void,
-  ): Promise<CredentialCursor> {
+  ): Promise<CommittedAccountRefresh> {
     const lifecycleGeneration = coordinatorLifecycleGeneration;
     const lease = runtime.lease;
     const signal = lease.signal;
@@ -1881,7 +2135,8 @@ export class AuthSessionCoordinator {
       lifecycleGeneration,
       ...(assertOwnerCurrent === undefined ? {} : { assertOwnerCurrent }),
     });
-    return this.commitAccountRefreshResponse(proof);
+    const committed = await this.commitAccountRefreshResponse(proof);
+    return Object.freeze({ ...committed, replacement });
   }
 
   private async commitRefreshResponse(proofValue: unknown): Promise<CredentialCursor> {
