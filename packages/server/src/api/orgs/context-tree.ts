@@ -48,7 +48,7 @@ import {
   getOrgContextReviewRuntime,
   getOrgContextTreeBinding,
   getOrgContextTreeSettingState,
-  isOrgContextReviewRuntimeCurrent,
+  isOrgContextTreeBindingRuntimeCurrent,
   putInitializedOrgContextTreeBinding,
 } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
@@ -532,7 +532,7 @@ async function resolveTreeSetupRecoveryMessage(
       gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       gitlabExecutionGuard:
         reviewRuntime.provider === "gitlab"
-          ? () => isOrgContextReviewRuntimeCurrent(app.db, organizationId, reviewRuntime)
+          ? () => isOrgContextTreeBindingRuntimeCurrent(app.db, organizationId, reviewRuntime)
           : undefined,
     },
   );

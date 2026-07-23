@@ -19,7 +19,7 @@ import {
 } from "../services/github-app-token.js";
 import {
   getOrgContextReviewRuntime,
-  isOrgContextReviewRuntimeCurrent,
+  isOrgContextTreeBindingRuntimeCurrent,
   resolveUserPrimaryOrgId,
 } from "../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../services/session-event.js";
@@ -60,7 +60,7 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
         gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
         gitlabExecutionGuard:
           orgId && reviewRuntime?.provider === "gitlab"
-            ? () => isOrgContextReviewRuntimeCurrent(app.db, orgId, reviewRuntime)
+            ? () => isOrgContextTreeBindingRuntimeCurrent(app.db, orgId, reviewRuntime)
             : undefined,
       }),
     );

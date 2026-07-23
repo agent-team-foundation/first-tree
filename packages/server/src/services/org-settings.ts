@@ -216,9 +216,11 @@ export async function getOrgContextTreeBinding(db: Database, orgId: string): Pro
 }
 
 /**
- * Read the live Context Tree binding and Reviewer assignment in one database
- * statement. Review mutations use this tuple so they never combine a binding
- * from one settings snapshot with an assignment from another.
+ * Read the live Context Tree binding and raw Reviewer assignment in one
+ * database statement. Server-internal review mutations use this tuple so they
+ * never combine a binding from one settings snapshot with an assignment from
+ * another. Member- or Agent-readable surfaces must use the Team-safe
+ * projection below.
  */
 export async function getOrgContextReviewRuntime(db: Database, orgId: string): Promise<OrgContextReviewRuntime> {
   const rows = await db
@@ -296,6 +298,26 @@ export async function getOrgContextReviewRuntime(db: Database, orgId: string): P
   };
 }
 
+/**
+ * Apply the same Team-safe Reviewer identity projection as `getOrgSetting`.
+ * Invalid historical private, deleted, or foreign selections remain stored
+ * for admin replacement without exposing their opaque UUID to Team runtimes.
+ */
+export async function getTeamSafeOrgContextReviewRuntime(
+  db: Database,
+  orgId: string,
+): Promise<OrgContextReviewRuntime> {
+  const runtime = await getOrgContextReviewRuntime(db, orgId);
+  const reviewerAgent = await resolveContextReviewerAgentSummary(db, orgId, runtime.contextReviewer.agentUuid);
+  return {
+    ...runtime,
+    contextReviewer: {
+      enabled: runtime.contextReviewer.enabled,
+      agentUuid: reviewerAgent?.uuid ?? null,
+    },
+  };
+}
+
 export type OrgContextReviewRuntime = {
   bindingState: "bound" | "unbound" | "invalid";
   provider: ContextTreeProvider | null;
@@ -312,6 +334,38 @@ export type OrgContextReviewRuntime = {
   contextReviewer: { enabled: boolean; agentUuid: string | null };
 };
 
+function isSameOrgContextTreeBindingRuntime(
+  current: OrgContextReviewRuntime,
+  expected: OrgContextReviewRuntime,
+): boolean {
+  return (
+    current.bindingState === expected.bindingState &&
+    current.provider === expected.provider &&
+    current.repo === expected.repo &&
+    current.branch === expected.branch &&
+    current.providerMatchesRepository === expected.providerMatchesRepository &&
+    current.gitlabConnection?.id === expected.gitlabConnection?.id &&
+    current.gitlabConnection?.instanceOrigin === expected.gitlabConnection?.instanceOrigin
+  );
+}
+
+/**
+ * Recheck only the Context Tree binding and provider route used by a snapshot.
+ * Reviewer assignment and enablement are independent and must not invalidate
+ * an in-flight Tree read.
+ */
+export async function isOrgContextTreeBindingRuntimeCurrent(
+  db: Database,
+  orgId: string,
+  expected: OrgContextReviewRuntime,
+): Promise<boolean> {
+  const current = await getOrgContextReviewRuntime(db, orgId);
+  return isSameOrgContextTreeBindingRuntime(current, expected);
+}
+
+/**
+ * Recheck the complete review mutation tuple, including the selected Reviewer.
+ */
 export async function isOrgContextReviewRuntimeCurrent(
   db: Database,
   orgId: string,
@@ -319,15 +373,9 @@ export async function isOrgContextReviewRuntimeCurrent(
 ): Promise<boolean> {
   const current = await getOrgContextReviewRuntime(db, orgId);
   return (
-    current.bindingState === expected.bindingState &&
-    current.provider === expected.provider &&
-    current.repo === expected.repo &&
-    current.branch === expected.branch &&
-    current.providerMatchesRepository === expected.providerMatchesRepository &&
+    isSameOrgContextTreeBindingRuntime(current, expected) &&
     current.contextReviewer.enabled === expected.contextReviewer.enabled &&
-    current.contextReviewer.agentUuid === expected.contextReviewer.agentUuid &&
-    current.gitlabConnection?.id === expected.gitlabConnection?.id &&
-    current.gitlabConnection?.instanceOrigin === expected.gitlabConnection?.instanceOrigin
+    current.contextReviewer.agentUuid === expected.contextReviewer.agentUuid
   );
 }
 

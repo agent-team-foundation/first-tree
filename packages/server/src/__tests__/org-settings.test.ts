@@ -159,6 +159,48 @@ describe("org-settings service", () => {
     }
   });
 
+  it("keeps a GitLab Tree snapshot current when only Reviewer state changes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal", addressPolicy: { kind: "public" } }],
+      },
+    );
+    const expectedRuntime = await orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId);
+
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: uuidv7() } },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.isOrgContextTreeBindingRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(true);
+    await expect(
+      orgSettingsService.isOrgContextReviewRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(false);
+  });
+
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

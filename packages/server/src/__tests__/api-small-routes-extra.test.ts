@@ -22,8 +22,8 @@ const routeMocks = {
   assertNoRuntimeSwitchInProgress: vi.fn(),
   getMeDocPreview: vi.fn(),
   getOrganization: vi.fn(),
-  getOrgContextReviewRuntime: vi.fn(),
   getOrgContextTreeBinding: vi.fn(),
+  getTeamSafeOrgContextReviewRuntime: vi.fn(),
   generateConnectToken: vi.fn(),
   ensureMembership: vi.fn(),
   findActiveByToken: vi.fn(),
@@ -117,8 +117,8 @@ function mockRouteDependencies(): void {
     kickoffOnboarding: vi.fn(async () => ({ chatId: "chat_1", sent: null })),
   }));
   vi.doMock("../services/org-settings.js", () => ({
-    getOrgContextReviewRuntime: routeMocks.getOrgContextReviewRuntime,
     getOrgContextTreeBinding: routeMocks.getOrgContextTreeBinding,
+    getTeamSafeOrgContextReviewRuntime: routeMocks.getTeamSafeOrgContextReviewRuntime,
   }));
   vi.doMock("../services/organization.js", () => ({
     getOrganization: routeMocks.getOrganization,
@@ -351,7 +351,7 @@ describe("small API route handlers", () => {
       configService: { getDecrypted: vi.fn().mockResolvedValue({ env: { A: "1" } }) },
       resourcesService: { resolveRuntimeConfig: vi.fn().mockReturnValue({ env: { A: "1" }, resources: [] }) },
     });
-    routeMocks.getOrgContextReviewRuntime
+    routeMocks.getTeamSafeOrgContextReviewRuntime
       .mockResolvedValueOnce({
         provider: "gitlab",
         branch: "main",
