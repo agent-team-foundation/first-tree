@@ -9,10 +9,10 @@ import {
   type TeamSetupCapabilities,
   teamSetupCapabilitiesSchema,
 } from "@first-tree/shared";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
+import { readContextReviewerAgentReadiness } from "./context-reviewer-readiness.js";
 import {
   createAppJwt,
   GithubAppApiError,
@@ -24,8 +24,8 @@ import { findInstallationByOrg, type InstallationRow } from "./github-app-instal
 import { projectGitlabConnectionReadiness } from "./gitlab-connections.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 
-type GithubReviewProbeResult = "ready" | "permission_required" | "repo_not_covered" | "failed";
-type GithubReviewCredentials = GithubAppCredentials & { slug?: string; webhookSecret?: string };
+export type GithubReviewProbeResult = "ready" | "permission_required" | "repo_not_covered" | "failed";
+export type GithubReviewCredentials = GithubAppCredentials & { slug?: string; webhookSecret?: string };
 const GITHUB_REVIEW_PROBE_TIMEOUT_MS = 5_000;
 const GITHUB_REPOSITORY_AUTOMATION_EVENTS: ReadonlySet<string> = new Set([
   "commit_comment",
@@ -44,6 +44,7 @@ export type SetupCapabilitiesOptions = {
   githubAppCredentials?: GithubReviewCredentials;
   githubFetch?: typeof fetch;
   probeGithubReview?: (installation: InstallationRow, repo: string) => Promise<GithubReviewProbeResult>;
+  staleSeconds?: number;
 };
 
 function blocker(
@@ -58,7 +59,7 @@ function githubRepositoryAutomationEventsReady(events: string[]): boolean {
   return events.some((event) => GITHUB_REPOSITORY_AUTOMATION_EVENTS.has(event));
 }
 
-function githubAutomaticReviewEventsReady(events: string[]): boolean {
+export function githubAutomaticReviewEventsReady(events: string[]): boolean {
   return GITHUB_AUTOMATIC_REVIEW_EVENTS.every((event) => events.includes(event));
 }
 
@@ -227,7 +228,8 @@ export async function getTeamSetupCapabilities(
   organizationId: string,
   options: SetupCapabilitiesOptions = {},
 ): Promise<TeamSetupCapabilities> {
-  const observedAt = (options.now?.() ?? new Date()).toISOString();
+  const now = options.now?.() ?? new Date();
+  const observedAt = now.toISOString();
   const [runtime, installation, gitlabRows] = await Promise.all([
     getOrgContextReviewRuntime(db, organizationId),
     findInstallationByOrg(db, organizationId),
@@ -263,44 +265,33 @@ export async function getTeamSetupCapabilities(
   }
 
   let reviewerAgent: SetupAutomaticReview["reviewerAgent"] = null;
-  let reviewerAgentActive = false;
-  if (runtime.contextReviewer.agentUuid) {
-    const [reviewer] = await db
-      .select({
-        uuid: agents.uuid,
-        displayName: agents.displayName,
-        type: agents.type,
-        status: agents.status,
-      })
-      .from(agents)
-      .where(and(eq(agents.uuid, runtime.contextReviewer.agentUuid), eq(agents.organizationId, organizationId)))
-      .limit(1);
-    if (reviewer?.type === "agent") {
-      reviewerAgent = { uuid: reviewer.uuid, displayName: reviewer.displayName };
-      reviewerAgentActive = reviewer.status === "active";
-    }
-  }
-
+  let reviewerStructurallyEligible = false;
   const reviewBlockers: SetupBlocker[] = [];
   let reviewHealth: SetupAutomaticReview["health"] = "not_observed";
-  let reviewAdoption: SetupAutomaticReview["adoption"];
+  const reviewAdoption: SetupAutomaticReview["adoption"] =
+    binding.state !== "bound" ? "unavailable" : runtime.contextReviewer.enabled ? "enabled" : "disabled";
+
+  if (runtime.contextReviewer.agentUuid) {
+    const agentReadiness = await readContextReviewerAgentReadiness(db, {
+      organizationId,
+      reviewerAgentUuid: runtime.contextReviewer.agentUuid,
+      now,
+      staleSeconds: options.staleSeconds ?? 60,
+    });
+    reviewerAgent = agentReadiness.reviewerAgent;
+    reviewerStructurallyEligible = agentReadiness.structuralBlockers.length === 0;
+    reviewBlockers.push(...agentReadiness.structuralBlockers, ...agentReadiness.healthBlockers);
+    reviewHealth =
+      agentReadiness.structuralBlockers.length > 0
+        ? "unavailable"
+        : agentReadiness.healthBlockers.length > 0
+          ? "degraded"
+          : "ready";
+  }
 
   if (binding.state !== "bound") {
-    reviewAdoption = "unavailable";
-  } else if (!runtime.contextReviewer.enabled) {
-    reviewAdoption = "disabled";
-  } else {
-    reviewAdoption = "enabled";
-    reviewHealth = "ready";
-
-    if (!reviewerAgent) {
-      reviewBlockers.push(blocker("context_review_agent_missing", "admin", "replace_review_agent"));
-      reviewHealth = "unavailable";
-    } else if (!reviewerAgentActive) {
-      reviewBlockers.push(blocker("context_review_agent_inactive", "admin", "replace_review_agent"));
-      reviewHealth = "unavailable";
-    }
-
+    if (reviewHealth === "ready") reviewHealth = "not_observed";
+  } else if (runtime.contextReviewer.agentUuid) {
     if (binding.provider === "github") {
       if (!options.githubAppCredentials?.webhookSecret) {
         reviewBlockers.push(blocker("github_app_not_configured", "operator", null));
@@ -317,7 +308,7 @@ export async function getTeamSetupCapabilities(
       } else if (!githubAutomaticReviewEventsReady(installation.events)) {
         reviewBlockers.push(blocker("github_webhook_events_missing", "operator", null));
         reviewHealth = "unavailable";
-      } else if (reviewHealth === "ready") {
+      } else if (reviewerStructurallyEligible) {
         const probe =
           options.probeGithubReview ??
           ((candidate: InstallationRow, repo: string) =>

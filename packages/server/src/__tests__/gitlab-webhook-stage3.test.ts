@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
+import { clients } from "../db/schema/clients.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
@@ -34,7 +35,7 @@ import { getCallerEngagement, setChatEngagement } from "../services/me-chat.js";
 import { deleteMember } from "../services/member.js";
 import { deactivateMembership, MEMBER_STATUSES, reactivateMembership } from "../services/membership.js";
 import { putOrgSetting } from "../services/org-settings.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, seedClient, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 
@@ -94,13 +95,16 @@ describe("GitLab Stage 3 personnel routing", () => {
 
   async function setupTarget(app: App) {
     const admin = await createTestAdmin(app, { username: `gitlab-stage3-${randomUUID().slice(0, 8)}` });
+    const clientId = await seedClient(app, admin.userId, admin.organizationId);
     const delegate = await createAgent(app.db, {
       name: `review-agent-${randomUUID().slice(0, 8)}`,
       type: "agent",
       displayName: "Review Agent",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
+      clientId,
     });
+    await seedHealthyAgentRuntime(app, { agentUuid: delegate.uuid, clientId });
     await app.db.update(agents).set({ delegateMention: delegate.uuid }).where(eq(agents.uuid, admin.humanAgentUuid));
     const connection = await createGitlabConnection(app.db, {
       organizationId: admin.organizationId,
@@ -114,7 +118,7 @@ describe("GitLab Stage 3 personnel routing", () => {
       membershipId: admin.memberId,
       username: "Reviewer.One",
     });
-    return { admin, delegate, connection, link };
+    return { admin, clientId, delegate, connection, link };
   }
 
   it("dispatches one reserved Context Reviewer run for an old-GitLab MR without personnel routing", async () => {
@@ -201,7 +205,7 @@ describe("GitLab Stage 3 personnel routing", () => {
 
   it("fails closed for wrong repo, disabled or invalid Reviewer, handles draft-to-ready update, and ignores Notes", async () => {
     const app = getApp();
-    const { admin, delegate, connection } = await setupTarget(app);
+    const { admin, clientId, delegate, connection } = await setupTarget(app);
     await putOrgSetting(
       app.db,
       admin.organizationId,
@@ -267,6 +271,19 @@ describe("GitLab Stage 3 personnel routing", () => {
     ).toHaveLength(0);
 
     await app.db.update(agents).set({ status: "active" }).where(eq(agents.uuid, delegate.uuid));
+    await app.db.update(clients).set({ status: "disconnected" }).where(eq(clients.id, clientId));
+    const offline = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({ projectPath: "Acme/Reviews", iid: 45 }),
+      "offline-context-reviewer",
+    );
+    expect(offline.statusCode).toBe(200);
+    expect(
+      (await app.db.select().from(chats)).filter((chat) => chat.metadata.contextTreeReviewer === true),
+    ).toHaveLength(0);
+    await seedHealthyAgentRuntime(app, { agentUuid: delegate.uuid, clientId });
+
     const draft = await postMr(
       app,
       connection.bearer,

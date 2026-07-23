@@ -10,6 +10,7 @@ export async function orgSetupCapabilitiesRoutes(app: FastifyInstance): Promise<
     return teamSetupCapabilitiesSchema.parse(
       await getTeamSetupCapabilities(app.db, scope.organizationId, {
         githubAppCredentials: app.config.oauth?.githubApp,
+        staleSeconds: app.config.runtime.presenceCleanupSeconds,
       }),
     );
   });

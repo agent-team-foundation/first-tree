@@ -282,6 +282,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
               eventType,
               payload,
               organizationId,
+              installationId,
             })
           : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
       resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),

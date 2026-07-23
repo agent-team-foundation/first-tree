@@ -159,6 +159,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                   database: tx,
                   normalized,
                   connection: fencedConnection,
+                  staleSeconds: app.config.runtime.presenceCleanupSeconds,
                 });
                 return { endpointSeen: true, contextReviewer };
               },

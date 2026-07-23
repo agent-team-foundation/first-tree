@@ -1,4 +1,5 @@
 import {
+  AGENT_VISIBILITY,
   type ContextTreeActiveBinding,
   type ContextTreeProvider,
   type ContextTreeSettingState,
@@ -125,11 +126,15 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     return next as OrgSettingStorage<K>;
   }
   if (namespace === "context_tree_features") {
+    const cur = current as OrgSettingStorage<"context_tree_features">;
     const inp = input as OrgSettingInput<"context_tree_features">;
+    const agentUuid = inp.contextReviewer.enabled
+      ? inp.contextReviewer.agentUuid
+      : (inp.contextReviewer.agentUuid ?? cur.contextReviewer.agentUuid);
     const next: OrgSettingStorage<"context_tree_features"> = {
       contextReviewer: {
         enabled: inp.contextReviewer.enabled,
-        agentUuid: inp.contextReviewer.enabled ? inp.contextReviewer.agentUuid : null,
+        agentUuid,
       },
     };
     return next as OrgSettingStorage<K>;
@@ -167,11 +172,15 @@ async function toOutput<K extends OrgSettingNamespace>(
   }
   if (namespace === "context_tree_features") {
     const s = storage as OrgSettingStorage<"context_tree_features">;
+    const reviewerAgent = await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid);
     const out: OrgSettingOutput<"context_tree_features"> = {
       contextReviewer: {
         enabled: s.contextReviewer.enabled,
-        agentUuid: s.contextReviewer.agentUuid,
-        reviewerAgent: await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid),
+        // This namespace is member-readable. A private, deleted, or foreign
+        // historical selection stays in storage for replacement, but its
+        // opaque identity is not a Team-wide fact.
+        agentUuid: reviewerAgent?.uuid ?? null,
+        reviewerAgent,
       },
     };
     return out as OrgSettingOutput<K>;
@@ -315,6 +324,8 @@ export async function isOrgContextReviewRuntimeCurrent(
     current.repo === expected.repo &&
     current.branch === expected.branch &&
     current.providerMatchesRepository === expected.providerMatchesRepository &&
+    current.contextReviewer.enabled === expected.contextReviewer.enabled &&
+    current.contextReviewer.agentUuid === expected.contextReviewer.agentUuid &&
     current.gitlabConnection?.id === expected.gitlabConnection?.id &&
     current.gitlabConnection?.instanceOrigin === expected.gitlabConnection?.instanceOrigin
   );
@@ -545,7 +556,14 @@ async function resolveContextReviewerAgentSummary(
       displayName: agents.displayName,
     })
     .from(agents)
-    .where(and(eq(agents.uuid, agentUuid), eq(agents.organizationId, orgId), ne(agents.status, "deleted")))
+    .where(
+      and(
+        eq(agents.uuid, agentUuid),
+        eq(agents.organizationId, orgId),
+        eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION),
+        ne(agents.status, "deleted"),
+      ),
+    )
     .limit(1);
   return agent ?? null;
 }
@@ -579,7 +597,6 @@ async function assertContextReviewerAgentAllowed(
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
   }
-
   const runtime = await getOrgContextReviewRuntime(db, orgId);
   if (
     runtime.bindingState !== "bound" ||

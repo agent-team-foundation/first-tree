@@ -13,7 +13,7 @@ import { createAgent } from "../services/agent.js";
 import { projectGitlabConnectionReadiness } from "../services/gitlab-connections.js";
 import { getTeamSetupCapabilities } from "../services/setup-capabilities.js";
 import { uuidv7 } from "../uuid.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 const observedAt = new Date("2026-07-23T08:00:00.000Z");
 const githubAppPrivateKey = generateKeyPairSync("rsa", {
@@ -188,6 +188,11 @@ async function createReviewer(
   if (status !== "active") {
     await app.db.update(agents).set({ status }).where(eq(agents.uuid, reviewer.uuid));
   }
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer.uuid,
+    clientId,
+    now: observedAt,
+  });
   return { uuid: reviewer.uuid, displayName: reviewer.displayName };
 }
 

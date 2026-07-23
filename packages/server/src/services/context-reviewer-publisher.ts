@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  AGENT_VISIBILITY,
   CONTEXT_REVIEW_RUN_MARKER_PREFIX,
   type ContextReviewEvent,
   type ContextReviewSubmissionState,
@@ -7,6 +8,8 @@ import {
   type ContextReviewSubmitResponse,
   contextReviewSubmissionStateSchema,
   contextReviewSubmitRequestSchema,
+  isRuntimeProviderEnabled,
+  runtimeProviderSchema,
 } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -18,6 +21,7 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { uuidv7 } from "../uuid.js";
+import { agentNotLandingCampaignTrialCondition } from "./access-control.js";
 import { validateAgentRuntimeSession } from "./agent-runtime-session.js";
 import { normalizeGithubRepo } from "./context-reviewer-pr.js";
 import {
@@ -399,26 +403,15 @@ async function assertCurrentAuthority(
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
 
-  const [reviewer] = await db
+  const [reviewerSnapshot] = await db
     .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      status: agents.status,
-      clientId: agents.clientId,
       managerId: agents.managerId,
+      clientId: agents.clientId,
     })
     .from(agents)
-    .where(eq(agents.uuid, input.callerAgentUuid))
-    .for("update")
+    .where(and(eq(agents.uuid, input.callerAgentUuid), agentNotLandingCampaignTrialCondition()))
     .limit(1);
-  if (
-    !reviewer ||
-    reviewer.organizationId !== run.organizationId ||
-    reviewer.type !== "agent" ||
-    reviewer.status !== "active" ||
-    reviewer.clientId !== input.callerClientId
-  ) {
+  if (!reviewerSnapshot) {
     throw new ContextReviewPublisherError(
       403,
       "CONTEXT_REVIEW_RUN_FORBIDDEN",
@@ -426,6 +419,18 @@ async function assertCurrentAuthority(
     );
   }
 
+  const [manager] = await db
+    .select({
+      id: members.id,
+      organizationId: members.organizationId,
+      userId: members.userId,
+      agentId: members.agentId,
+      status: members.status,
+    })
+    .from(members)
+    .where(eq(members.id, reviewerSnapshot.managerId))
+    .for("update")
+    .limit(1);
   const [client] = await db
     .select({
       id: clients.id,
@@ -437,18 +442,41 @@ async function assertCurrentAuthority(
     .where(eq(clients.id, input.callerClientId))
     .for("update")
     .limit(1);
-  const [manager] = await db
+
+  const [reviewer] = await db
     .select({
-      id: members.id,
-      organizationId: members.organizationId,
-      userId: members.userId,
-      agentId: members.agentId,
-      status: members.status,
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+      visibility: agents.visibility,
+      runtimeProvider: agents.runtimeProvider,
+      clientId: agents.clientId,
+      managerId: agents.managerId,
     })
-    .from(members)
-    .where(eq(members.id, reviewer.managerId))
+    .from(agents)
+    .where(and(eq(agents.uuid, input.callerAgentUuid), agentNotLandingCampaignTrialCondition()))
     .for("update")
     .limit(1);
+  if (
+    !reviewer ||
+    reviewer.organizationId !== run.organizationId ||
+    reviewer.type !== "agent" ||
+    reviewer.status !== "active" ||
+    reviewer.visibility !== AGENT_VISIBILITY.ORGANIZATION ||
+    !runtimeProviderSchema.safeParse(reviewer.runtimeProvider).success ||
+    !isRuntimeProviderEnabled(reviewer.runtimeProvider) ||
+    reviewer.clientId !== input.callerClientId ||
+    reviewer.clientId !== reviewerSnapshot.clientId ||
+    reviewer.managerId !== reviewerSnapshot.managerId
+  ) {
+    throw new ContextReviewPublisherError(
+      403,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "The configured Context Reviewer runtime is no longer active for this run.",
+    );
+  }
+
   if (
     !client ||
     client.organizationId !== run.organizationId ||

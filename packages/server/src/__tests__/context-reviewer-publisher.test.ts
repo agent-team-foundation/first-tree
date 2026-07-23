@@ -2,16 +2,17 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
-import { handleContextReviewerPrEvent } from "../services/context-reviewer-pr.js";
+import { handleContextReviewerPrEvent as handleContextReviewerPrEventService } from "../services/context-reviewer-pr.js";
 import { submitContextReviewOutcome } from "../services/context-reviewer-publisher.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { putOrgSetting } from "../services/org-settings.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 const { privateKey: privateKeyPem } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -244,7 +245,41 @@ describe("Context Reviewer App publisher", () => {
       }),
     ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_APP_PERMISSION_REQUIRED" });
   });
+
+  it("revokes publication when the configured Reviewer becomes private mid-run", async () => {
+    const fixture = await createRunFixture(getApp());
+    await fixture.app.db.update(agents).set({ visibility: "private" }).where(eq(agents.uuid, fixture.reviewer.uuid));
+
+    await expect(
+      submitContextReviewOutcome({
+        db: fixture.app.db,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { event: "COMMENT", body: "Deferred" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher: successfulGithubFetcher(),
+      }),
+    ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_RUN_FORBIDDEN" });
+  });
 });
+
+async function handleContextReviewerPrEvent(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  input: Omit<Parameters<typeof handleContextReviewerPrEventService>[1], "installationId">,
+) {
+  const [installation] = await app.db
+    .select({ installationId: githubAppInstallations.installationId })
+    .from(githubAppInstallations)
+    .where(eq(githubAppInstallations.hubOrganizationId, input.organizationId))
+    .limit(1);
+  return handleContextReviewerPrEventService(app, {
+    ...input,
+    installationId: installation?.installationId ?? 0,
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -268,6 +303,10 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
     managerId: admin.memberId,
     clientId: admin.clientId,
   });
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer.uuid,
+    clientId: admin.clientId,
+  });
   const runtimeToken = await bindAgentRuntimeSession(app.db, reviewer.uuid, admin.clientId);
   await upsertInstallationFromMetadata(app.db, {
     installation: {
@@ -276,7 +315,7 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
       accountLogin: "owner",
       accountGithubId: Math.floor(Math.random() * 1_000_000_000),
       permissions: { metadata: "read", pull_requests: "write" },
-      events: ["pull_request"],
+      events: ["pull_request", "issue_comment", "pull_request_review_comment"],
       suspendedAt: null,
     },
     hubOrganizationId: admin.organizationId,
