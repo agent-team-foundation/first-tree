@@ -12,7 +12,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const activityMocks = vi.hoisted(() => ({ listClients: vi.fn() }));
 const contextTreeMocks = vi.hoisted(() => ({ getContextTreeSnapshot: vi.fn() }));
+const githubMocks = vi.hoisted(() => ({ getGithubAppInstallation: vi.fn() }));
+const gitlabMocks = vi.hoisted(() => ({ listGitlabConnectionsAt: vi.fn() }));
 const onboardingEventMocks = vi.hoisted(() => ({ reportOnboardingEvent: vi.fn() }));
+const orgSettingsMocks = vi.hoisted(() => ({ getContextTreeSetting: vi.fn() }));
 const resourceMocks = vi.hoisted(() => ({ listTeamResourcesForOrg: vi.fn() }));
 const setupCapabilityMocks = vi.hoisted(() => ({ getTeamSetupCapabilitiesAt: vi.fn() }));
 const authMock = vi.hoisted(() => ({
@@ -32,7 +35,13 @@ const authMock = vi.hoisted(() => ({
 
 vi.mock("../../../api/activity.js", () => activityMocks);
 vi.mock("../../../api/context-tree.js", () => contextTreeMocks);
+vi.mock("../../../api/github-app.js", () => githubMocks);
+vi.mock("../../../api/gitlab-connections.js", () => ({
+  ...gitlabMocks,
+  gitlabConnectionsQueryKey: (organizationId: string | null) => ["gitlab-connections", organizationId],
+}));
 vi.mock("../../../api/onboarding-events.js", () => onboardingEventMocks);
+vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
 vi.mock("../../../api/resources.js", () => resourceMocks);
 vi.mock("../../../api/setup-capabilities.js", () => ({
   ...setupCapabilityMocks,
@@ -116,7 +125,20 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     },
     repositories: { state: "ready", value: 2 },
     capabilities: { state: "ready", value: capabilityFixture() },
+    contextTreeSetting: {
+      state: "ready",
+      value: {
+        provider: "github",
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+      },
+    },
     contextTreeSnapshot: { state: "ready", value: "active" },
+    github: {
+      state: "ready",
+      value: { accountLogin: "acme", accountType: "Organization" },
+    },
+    gitlab: { state: "ready", value: null },
     ...overrides,
   };
 }
@@ -194,11 +216,20 @@ beforeEach(() => {
   vi.clearAllMocks();
   activityMocks.listClients.mockResolvedValue([]);
   resourceMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+  orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree.git",
+    branch: "main",
+  });
   setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(capabilityFixture());
   contextTreeMocks.getContextTreeSnapshot.mockResolvedValue({
     snapshotStatus: "active",
     contextStatus: { severity: "ok", label: "Available", detail: null },
   });
+  githubMocks.getGithubAppInstallation.mockResolvedValue({
+    accountLogin: "acme",
+    accountType: "Organization",
+  });
+  gitlabMocks.listGitlabConnectionsAt.mockResolvedValue([]);
   authMock.value = {
     role: "admin",
     organizationId: "org-1",
@@ -218,7 +249,7 @@ afterEach(() => {
 });
 
 describe("Settings Setup overview", () => {
-  it("renders the permanent capability hierarchy without a completion score", async () => {
+  it("renders the approved six-row hierarchy with separate capability and status icons", async () => {
     const view = await renderSetup(facts());
     const titles = [...view.host.querySelectorAll("[data-setup-row] .text-body")].map((node) => node.textContent);
 
@@ -227,19 +258,94 @@ describe("Settings Setup overview", () => {
       "Your computer",
       "Your agent",
       "Code repositories",
-      "Repository automation",
       "Context Tree",
-      "Automatic review",
+      "GitHub / GitLab",
     ]);
-    expect(view.host.querySelector('[data-setup-row="automatic-review"]')?.getAttribute("data-setup-parent")).toBe(
-      "context-tree",
-    );
-    expect(view.host.querySelectorAll('[role="status"][aria-live="polite"]')).toHaveLength(7);
+    expect(view.host.querySelector('[data-setup-row="work-access"] .lucide-message-circle')).not.toBeNull();
+    const readyMarks = view.host.querySelectorAll("[data-setup-status-kind='ready'] .lucide-circle-check");
+    expect(readyMarks).toHaveLength(6);
+    expect([...readyMarks].every((mark) => mark.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(view.host.querySelectorAll('[role="status"], [aria-live]')).toHaveLength(0);
     expect(view.host.textContent).not.toContain("%");
+    expect(view.host.textContent).not.toContain("Setup complete");
     expect(view.host.textContent).not.toContain("Onboarding completed");
     expect(view.host.querySelector("h1")).toBeNull();
     expect(view.host.querySelector("[data-setup-lead]")?.textContent).toBe("See what's ready and what you can set up.");
     expect(view.host.querySelector("[data-setup-context]")?.textContent).toBe("Acme · Admin");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("uses form and color together for ready, optional, pending, attention, blocked, and unknown facts", async () => {
+    const mixed = facts({
+      hasPersonalAgent: false,
+      onboardingSuppressedAt: observedAt,
+      onboardingCompletedAt: null,
+      computers: {
+        state: "ready",
+        value: { connected: 0, saved: 0, connectedHostname: null },
+      },
+      repositories: { state: "error" },
+      capabilities: {
+        state: "ready",
+        value: capabilityFixture({
+          github: { adoption: "available", health: "not_observed" },
+          gitlab: {
+            adoption: "configuring",
+            health: "pending_verification",
+            blockers: [
+              {
+                code: "gitlab_webhook_not_seen",
+                resolutionOwner: "admin",
+                actionKind: "configure_gitlab_webhook",
+              },
+            ],
+          },
+          review: {
+            adoption: "enabled",
+            health: "degraded",
+            blockers: [{ code: "provider_probe_failed", resolutionOwner: "operator", actionKind: null }],
+          },
+        }),
+      },
+      github: { state: "ready", value: null },
+      gitlab: {
+        state: "ready",
+        value: { displayName: "Engineering", instanceOrigin: "https://gitlab.acme.test" },
+      },
+    });
+    const view = await renderSetup(mixed);
+    const expectation = [
+      ["work-access", "ready", "circle-check", "--success"],
+      ["computer", "optional", "circle-minus", "--fg-4"],
+      ["agent", "attention", "circle-alert", "--state-needs-you"],
+      ["repositories", "unknown", "circle-question-mark", "--fg-3"],
+      ["context-tree", "blocked", "circle-alert", "--state-blocked"],
+      ["providers", "pending", "clock-3", "--state-idle"],
+    ] as const;
+
+    for (const [key, kind, glyph, token] of expectation) {
+      const status = view.host.querySelector<HTMLElement>(
+        `[data-setup-row="${key}"] [data-setup-status-kind="${kind}"]`,
+      );
+      expect(status?.querySelector(`.lucide-${glyph}`)).not.toBeNull();
+      expect(status?.querySelector("svg")?.getAttribute("style")).toContain(token);
+    }
+    expect(
+      view.host.querySelector('[data-setup-row="providers"] [data-setup-status-kind] svg')?.getAttribute("class"),
+    ).not.toContain("animate-spin");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("reserves a spinner for transient loading and keeps verification pending static", async () => {
+    const input = facts({ computers: { state: "loading" } });
+    const view = await renderSetup(input);
+    const status = view.host.querySelector('[data-setup-row="computer"] [data-setup-status-kind="loading"]');
+    const icon = status?.querySelector(".lucide-loader-circle");
+
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("class")).toContain("motion-safe:animate-spin");
 
     await act(async () => view.root.unmount());
   });
@@ -274,12 +380,14 @@ describe("Settings Setup overview", () => {
       detail: "A team agent is available",
     });
     expect(rowFor("work-access", input).action).toEqual({ label: "Start a chat", to: "/" });
+    expect(rowFor("work-access", input).status.kind).toBe("ready");
     expect(rowFor("computer", input).status.detail).toBe("Optional while a team agent is available");
+    expect(rowFor("computer", input).status.kind).toBe("optional");
     expect(rowFor("agent", input).status.detail).toBe("Optional while a team agent is available");
+    expect(rowFor("agent", input).status.kind).toBe("optional");
     expect(view.host.textContent).not.toContain("Action required");
     expect(view.host.textContent).not.toContain("Manage");
     expect(rowFor("context-tree", input).action).toBeUndefined();
-    expect(rowFor("automatic-review", input).status.label).toBe("Available after Context Tree");
 
     await act(async () => view.root.unmount());
   });
@@ -289,20 +397,17 @@ describe("Settings Setup overview", () => {
       github: { adoption: "available", health: "not_observed" },
       gitlab: { adoption: "available", health: "not_observed" },
     });
-    const admin = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: optional } }));
-    const member = rowFor(
-      "repository-automation",
-      facts({ role: "member", capabilities: { state: "ready", value: optional } }),
-    );
+    const admin = rowFor("providers", facts({ capabilities: { state: "ready", value: optional } }));
+    const member = rowFor("providers", facts({ role: "member", capabilities: { state: "ready", value: optional } }));
 
-    expect(admin.status).toEqual({ label: "Not configured", detail: "Optional", tone: "neutral" });
-    expect(admin.action).toEqual({ label: "Set up", to: "/settings/integrations/github" });
+    expect(admin.status).toEqual({ label: "Not connected", detail: "Optional", kind: "optional" });
+    expect(admin.action).toEqual({ label: "Connect", to: "/settings/integrations/github" });
     expect(member.status).toEqual(admin.status);
     expect(member.action).toBeUndefined();
   });
 
   it.each([
-    ["GitHub only", capabilityFixture(), "GitHub ready", "positive"],
+    ["GitHub only", capabilityFixture(), "GitHub · acme", "ready"],
     [
       "GitLab only",
       capabilityFixture({
@@ -310,14 +415,9 @@ describe("Settings Setup overview", () => {
         gitlab: { adoption: "enabled", health: "ready" },
       }),
       "GitLab ready",
-      "positive",
+      "ready",
     ],
-    [
-      "both",
-      capabilityFixture({ gitlab: { adoption: "enabled", health: "ready" } }),
-      "GitHub + GitLab ready",
-      "positive",
-    ],
+    ["both", capabilityFixture({ gitlab: { adoption: "enabled", health: "ready" } }), "GitHub + GitLab", "ready"],
     [
       "partial",
       capabilityFixture({
@@ -334,7 +434,7 @@ describe("Settings Setup overview", () => {
         },
       }),
       "Partial coverage",
-      "attention",
+      "pending",
     ],
     [
       "degraded",
@@ -346,13 +446,21 @@ describe("Settings Setup overview", () => {
         },
       }),
       "Degraded",
-      "neutral",
+      "blocked",
     ],
-  ] as const)("summarizes %s repository automation coverage", (_name, capabilities, label, tone) => {
-    const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: capabilities } }));
+  ] as const)("summarizes %s repository automation coverage", (_name, capabilities, label, kind) => {
+    const row = rowFor("providers", facts({ capabilities: { state: "ready", value: capabilities } }));
 
     expect(row.status.label).toBe(label);
-    expect(row.status.tone).toBe(tone);
+    expect(row.status.kind).toBe(kind);
+  });
+
+  it("uses provider identity only as label enrichment, never as readiness evidence", () => {
+    const enriched = rowFor("providers");
+    const identityFailed = rowFor("providers", facts({ github: { state: "error" } }));
+
+    expect(enriched.status).toMatchObject({ label: "GitHub · acme", kind: "ready" });
+    expect(identityFailed.status).toMatchObject({ label: "GitHub ready", kind: "ready" });
   });
 
   it("turns the same Team blocker into admin attention and member read-only explanation", () => {
@@ -369,18 +477,12 @@ describe("Settings Setup overview", () => {
         ],
       },
     });
-    const admin = rowFor(
-      "repository-automation",
-      facts({ role: "admin", capabilities: { state: "ready", value: shared } }),
-    );
-    const member = rowFor(
-      "repository-automation",
-      facts({ role: "member", capabilities: { state: "ready", value: shared } }),
-    );
+    const admin = rowFor("providers", facts({ role: "admin", capabilities: { state: "ready", value: shared } }));
+    const member = rowFor("providers", facts({ role: "member", capabilities: { state: "ready", value: shared } }));
 
-    expect(admin.status).toMatchObject({ label: "Needs attention", tone: "attention" });
+    expect(admin.status).toMatchObject({ label: "Needs attention", kind: "attention" });
     expect(admin.action).toEqual({ label: "Manage GitHub", to: "/settings/integrations/github" });
-    expect(member.status).toMatchObject({ label: "Service unavailable", tone: "neutral" });
+    expect(member.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
     expect(member.status.detail).toContain("Ask an admin");
     expect(member.action).toBeUndefined();
   });
@@ -393,22 +495,23 @@ describe("Settings Setup overview", () => {
         blockers: [{ code: "github_app_not_configured", resolutionOwner: "operator", actionKind: null }],
       },
     });
-    const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: shared } }));
+    const row = rowFor("providers", facts({ capabilities: { state: "ready", value: shared } }));
 
-    expect(row.status).toMatchObject({ label: "Service unavailable", tone: "neutral" });
+    expect(row.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
     expect(row.status.detail).toContain("deployment");
+    expect(row.status.detail).toContain("No action is needed from you");
     expect(row.action).toBeUndefined();
   });
 
   it.each([
-    ["active", "Available", "positive", "Manage"],
-    ["stale", "Available · update delayed", "neutral", "Manage"],
+    ["active", "Available", "ready", "Manage"],
+    ["stale", "Available · update delayed", "blocked", "Manage"],
     ["unavailable", "Needs recovery", "attention", "Recover"],
-  ] as const)("maps bound Context Tree snapshot %s without equating binding to health", (value, label, tone, action) => {
+  ] as const)("maps bound Context Tree snapshot %s without equating binding to health", (value, label, kind, action) => {
     const row = rowFor("context-tree", facts({ contextTreeSnapshot: { state: "ready", value } }));
 
-    expect(row.status).toMatchObject({ label, tone });
-    expect(row.status.detail).toBe("acme/context-tree · main branch · GitHub");
+    expect(row.status).toMatchObject({ label, kind });
+    expect(row.status.detail).toContain("acme/context-tree · main branch · GitHub");
     expect(row.action?.label).toBe(action);
   });
 
@@ -459,14 +562,14 @@ describe("Settings Setup overview", () => {
       }),
     );
 
-    expect(unbound.status).toEqual({ label: "Not set up", detail: "Optional", tone: "neutral" });
+    expect(unbound.status).toEqual({ label: "Not set up", detail: "Optional", kind: "optional" });
     expect(unbound.action).toEqual({ label: "Set up", to: "/context" });
-    expect(unboundMember.status).toMatchObject({ label: "Not set up", tone: "neutral" });
+    expect(unboundMember.status).toMatchObject({ label: "Not set up", kind: "optional" });
     expect(unboundMember.status.detail).toContain("Ask an admin");
     expect(unboundMember.action).toBeUndefined();
-    expect(invalidAdmin.status).toMatchObject({ label: "Needs repair", tone: "attention" });
+    expect(invalidAdmin.status).toMatchObject({ label: "Needs repair", kind: "attention" });
     expect(invalidAdmin.action).toEqual({ label: "Repair", to: "/settings/repositories#context-tree" });
-    expect(invalidMember.status).toMatchObject({ label: "Unavailable", tone: "neutral" });
+    expect(invalidMember.status).toMatchObject({ label: "Unavailable", kind: "blocked" });
     expect(invalidMember.status.detail).toContain("Ask an admin");
     expect(invalidMember.action).toEqual({ label: "View", to: "/context" });
   });
@@ -480,7 +583,7 @@ describe("Settings Setup overview", () => {
       }),
     );
 
-    expect(row.status).toMatchObject({ label: "Unavailable", tone: "neutral" });
+    expect(row.status).toMatchObject({ label: "Unavailable", kind: "blocked" });
     expect(row.status.detail).toContain("Ask an admin to recover");
     expect(row.action).toEqual({ label: "View", to: "/context" });
   });
@@ -488,31 +591,21 @@ describe("Settings Setup overview", () => {
   it("keeps snapshot lookup failure unknown rather than claiming recovery is needed", () => {
     const row = rowFor("context-tree", facts({ contextTreeSnapshot: { state: "error" } }));
 
-    expect(row.status).toMatchObject({ label: "Status unknown", tone: "neutral" });
+    expect(row.status).toMatchObject({ label: "Status unavailable", kind: "unknown" });
     expect(row.action).toEqual({ label: "Manage", to: "/settings/repositories#context-tree" });
   });
 
   it.each([
     [
-      "unavailable",
-      capabilityFixture({
-        binding: { state: "unbound" },
-        review: { adoption: "unavailable", health: "not_observed", reviewerAgent: null },
-      }),
-      "Available after Context Tree",
-      "neutral",
-      undefined,
-    ],
-    [
       "disabled",
       capabilityFixture({
         review: { adoption: "disabled", health: "not_observed", reviewerAgent: null },
       }),
-      "Off",
-      "neutral",
-      "Set up",
+      "Available",
+      "ready",
+      "Manage",
     ],
-    ["ready", capabilityFixture(), "On", "positive", "Manage"],
+    ["ready", capabilityFixture(), "Available", "ready", "Manage"],
     [
       "pending",
       capabilityFixture({
@@ -522,8 +615,8 @@ describe("Settings Setup overview", () => {
           blockers: [{ code: "provider_probe_failed", resolutionOwner: "operator", actionKind: null }],
         },
       }),
-      "Verification pending",
-      "neutral",
+      "Available · review pending",
+      "pending",
       undefined,
     ],
     [
@@ -535,17 +628,36 @@ describe("Settings Setup overview", () => {
           blockers: [{ code: "gitlab_processing_failed", resolutionOwner: "admin", actionKind: null }],
         },
       }),
-      "Degraded",
+      "Available · review degraded",
       "attention",
       undefined,
     ],
-  ] as const)("maps Automatic review %s without making it a Start Chat gate", (_name, capabilities, label, tone, action) => {
+  ] as const)("keeps Automatic review %s as a qualified Context Tree fact without making it a Start Chat gate", (_name, capabilities, label, kind, action) => {
     const input = facts({ capabilities: { state: "ready", value: capabilities } });
-    const review = rowFor("automatic-review", input);
+    const tree = rowFor("context-tree", input);
 
-    expect(review.status).toMatchObject({ label, tone });
-    expect(review.action?.label).toBe(action);
+    expect(tree.status).toMatchObject({ label, kind });
+    expect(tree.action?.label).toBe(action);
     expect(rowFor("work-access", input).status.label).toBe("Can work now");
+  });
+
+  it("puts degraded review ownership before truncated Context Tree metadata", () => {
+    const capabilities = capabilityFixture({
+      review: {
+        adoption: "enabled",
+        health: "degraded",
+        blockers: [{ code: "gitlab_processing_failed", resolutionOwner: "admin", actionKind: null }],
+      },
+    });
+    const member = rowFor(
+      "context-tree",
+      facts({ role: "member", capabilities: { state: "ready", value: capabilities } }),
+    );
+
+    expect(member.status.detail).toMatch(
+      /^Automatic review degraded · Ask an admin to resolve this: Recent GitLab webhook processing failed\./,
+    );
+    expect(member.status.detail).toContain("acme/context-tree · main branch · GitHub");
   });
 
   it("makes reviewer replacement admin-only while preserving the same Team fact", () => {
@@ -563,32 +675,31 @@ describe("Settings Setup overview", () => {
         ],
       },
     });
-    const admin = rowFor("automatic-review", facts({ role: "admin", capabilities: { state: "ready", value: shared } }));
-    const member = rowFor(
-      "automatic-review",
-      facts({ role: "member", capabilities: { state: "ready", value: shared } }),
-    );
+    const admin = rowFor("context-tree", facts({ role: "admin", capabilities: { state: "ready", value: shared } }));
+    const member = rowFor("context-tree", facts({ role: "member", capabilities: { state: "ready", value: shared } }));
 
-    expect(admin.status).toMatchObject({ label: "Needs attention", tone: "attention" });
+    expect(admin.status).toMatchObject({ label: "Available · review unavailable", kind: "attention" });
     expect(admin.action).toEqual({ label: "Replace reviewer", to: "/settings/repositories#context-tree" });
-    expect(member.status).toMatchObject({ label: "Service unavailable", tone: "neutral" });
+    expect(member.status).toMatchObject({ label: "Available · review unavailable", kind: "blocked" });
     expect(member.status.detail).toContain("Ask an admin");
-    expect(member.action).toEqual({ label: "View", to: "/settings/repositories#context-tree" });
+    expect(member.action).toEqual({ label: "View", to: "/context" });
   });
 
-  it("uses the Team projection and only asks the snapshot owner endpoint for a bound tree", async () => {
+  it("uses Team readiness with identity enrichment and starts the tree snapshot from its owner setting", async () => {
     const view = await renderSettingsSetupPage();
-    const automation = await waitForRowText(view.host, "repository-automation", "GitHub ready");
+    const providers = await waitForRowText(view.host, "providers", "GitHub · acme");
     const tree = await waitForRowText(view.host, "context-tree", "Available");
 
-    expect(automation.textContent).toContain("GitLab not configured");
+    expect(providers.textContent).not.toContain("GitLab not configured");
     expect(tree.textContent).toContain("acme/context-tree");
     expect(setupCapabilityMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledWith("org-1");
+    expect(githubMocks.getGithubAppInstallation).toHaveBeenCalledWith("org-1");
     expect(contextTreeMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
     await act(async () => view.root.unmount());
   });
 
-  it("does not request a tree snapshot when the Team projection says it is unbound", async () => {
+  it("does not request a tree snapshot when the owner setting is unbound", async () => {
+    orgSettingsMocks.getContextTreeSetting.mockResolvedValue({ repo: null, branch: "main" });
     setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
       capabilityFixture({
         binding: { state: "unbound" },
@@ -627,23 +738,21 @@ describe("Settings Setup overview", () => {
     contextTreeMocks.getContextTreeSnapshot.mockRejectedValue(new Error("snapshot failed"));
 
     const view = await renderSettingsSetupPage();
-    const row = await waitForRowText(view.host, "context-tree", "Status unknown");
+    const row = await waitForRowText(view.host, "context-tree", "Status unavailable");
     expect(row.textContent).not.toContain("Needs recovery");
     await act(async () => view.root.unmount());
   });
 
-  it("fails closed when the capability projection cannot be loaded", async () => {
+  it("keeps primary Tree availability independent when the capability projection cannot be loaded", async () => {
     setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockRejectedValue(new Error("projection failed"));
 
     const view = await renderSettingsSetupPage();
-    const automation = await waitForRowText(view.host, "repository-automation", "Status unknown");
-    const tree = await waitForRowText(view.host, "context-tree", "Status unknown");
-    const review = await waitForRowText(view.host, "automatic-review", "Status unknown");
+    const providers = await waitForRowText(view.host, "providers", "Status unavailable");
+    const tree = await waitForRowText(view.host, "context-tree", "Available · review status unavailable");
 
-    expect(automation.querySelector("a")).toBeNull();
-    expect(tree.querySelector("a")).toBeNull();
-    expect(review.querySelector("a")).toBeNull();
-    expect(contextTreeMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    expect(providers.querySelector("a")).toBeNull();
+    expect(tree.textContent).not.toContain("Context Tree unavailable");
+    expect(contextTreeMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
     await act(async () => view.root.unmount());
   });
 
@@ -675,15 +784,19 @@ describe("Settings Setup overview", () => {
     );
     authMock.value = {
       ...authMock.value,
+      currentOrgHasPersonalAgent: false,
       onboardingDismissedAt: "2026-07-23T00:00:00.000Z",
       onboardingCompletedAt: null,
       restoreOnboarding,
     };
     const view = await renderSettingsSetupPage();
+    const agent = await waitForRowText(view.host, "agent", "Setup paused");
     const resume = [...view.host.querySelectorAll<HTMLAnchorElement>("a")].find(
       (link) => link.textContent === "Resume setup",
     );
 
+    expect(agent.querySelector("[data-setup-status-kind='attention'] .lucide-circle-alert")).not.toBeNull();
+    expect(agent.textContent).toContain("Resume to create your agent");
     expect(resume).toBeDefined();
     await act(async () => {
       resume?.click();
