@@ -37,7 +37,7 @@ type SessionRecord = {
   retryHeadMessage: SessionMessage | null;
   deferredMessages: SessionMessage[];
   routeTransitionGeneration: number;
-  routeTransition: { generation: number; handler: AgentHandler } | null;
+  routeTransition: { generation: number; handler: AgentHandler; phase: "start" | "resume" } | null;
   pendingRuntimeFailureNotice: ProviderRetryEventPayload | null;
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
@@ -429,6 +429,11 @@ describe("SessionManager edge coverage", () => {
         status: "suspended",
       };
     }
+    entries["chat-empty-legacy"] = {
+      claudeSessionId: "",
+      lastActivity: new Date(10_000).toISOString(),
+      status: "suspended",
+    };
     writeFileSync(registryPath, JSON.stringify({ version: 1, entries }), "utf-8");
 
     const resumed = handler({ resume: vi.fn().mockResolvedValue("resumed-from-registry") });
@@ -436,6 +441,7 @@ describe("SessionManager edge coverage", () => {
 
     expect(sm.getEvictedChatIds()).not.toContain("chat-0");
     expect(sm.getEvictedChatIds()).toContain("chat-500");
+    expect(sm.getEvictedChatIds()).not.toContain("chat-empty-legacy");
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-500" }));
     expect(resumed.resume).toHaveBeenCalledWith(
@@ -449,6 +455,50 @@ describe("SessionManager edge coverage", () => {
     internals(sm).persistRegistry();
     await sm.shutdown();
 
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not persist an unresolved fresh start as an empty resume mapping across manager restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-session-registry-unresolved-start-"));
+    const registryPath = join(dir, "sessions.json");
+    let signalStartStarted: (() => void) | undefined;
+    let resolveStart: (() => void) | undefined;
+    const startStarted = new Promise<void>((resolve) => {
+      signalStartStarted = resolve;
+    });
+    const startGate = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    const pendingHandler = handler({
+      start: vi.fn().mockImplementation(async () => {
+        signalStartStarted?.();
+        await startGate;
+        return "stale-session";
+      }),
+    });
+    const first = makeManager({ handlers: [pendingHandler], registryPath });
+    const chatId = "chat-registry-unresolved-start";
+    const entry = mockEntry({ id: 91, chatId, messageId: "msg-registry-unresolved-start" });
+
+    const pendingDispatch = first.dispatch(entry);
+    await startStarted;
+    await first.shutdown();
+
+    const persisted = JSON.parse(readFileSync(registryPath, "utf-8")) as { entries: Record<string, unknown> };
+    expect(persisted.entries).toEqual({});
+
+    resolveStart?.();
+    await pendingDispatch;
+
+    const replacement = handler({ start: vi.fn().mockResolvedValue("replacement-session") });
+    const second = makeManager({ handlers: [replacement], registryPath });
+    await second.dispatch(entry);
+
+    expect(replacement.start).toHaveBeenCalledTimes(1);
+    expect(replacement.resume).not.toHaveBeenCalled();
+    expect(internals(second).sessions.get(chatId)?.claudeSessionId).toBe("replacement-session");
+
+    await second.shutdown();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1304,6 +1354,127 @@ describe("SessionManager edge coverage", () => {
     await freshCtx.finishTurn(messageFromEntry(tailEntry), { status: "success", terminal: true });
     expect(ackEntry).toHaveBeenNthCalledWith(1, 2);
     expect(ackEntry).toHaveBeenNthCalledWith(2, 3);
+
+    await sm.shutdown();
+  });
+
+  it("redelivers a canceled unresolved start through a fresh start instead of resume", async () => {
+    let signalStartStarted: (() => void) | undefined;
+    let resolveStart: (() => void) | undefined;
+    const startStarted = new Promise<void>((resolve) => {
+      signalStartStarted = resolve;
+    });
+    const pendingStart = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    const oldHandler = handler({
+      start: vi.fn().mockImplementation(async () => {
+        signalStartStarted?.();
+        await pendingStart;
+        return "stale-start-session";
+      }),
+    });
+    let freshCtx: SessionContext | undefined;
+    let freshHead: SessionMessage | undefined;
+    const freshHandler = handler({
+      start: vi.fn().mockImplementation(async (message, ctx) => {
+        freshCtx = ctx;
+        freshHead = message;
+        return "fresh-start-session";
+      }),
+    });
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      handlers: [oldHandler, freshHandler],
+      ackEntry,
+      recoverChat,
+    });
+    const i = internals(sm);
+    const chatId = "chat-suspend-late-success-start";
+    const headEntry = mockEntry({ id: 82, chatId, messageId: "msg-canceled-start-head" });
+    const tailEntry = mockEntry({ id: 83, chatId, messageId: "msg-canceled-start-tail" });
+    const blocker = makeSessionRecord("chat-canceled-start-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(headEntry);
+    await startStarted;
+    await sm.dispatch(tailEntry);
+    expect(i.sessions.get(chatId)?.deferredMessages).toHaveLength(1);
+    expect(sm.activeCount).toBe(2);
+
+    await sm.handleCommand(chatId, "session:suspend");
+    await vi.waitFor(() => expect(i.inboxDelivery.hasRecoveryDebt(chatId)).toBe(true));
+
+    expect(i.sessions.has(chatId)).toBe(false);
+    expect(sm.activeCount).toBe(1);
+    expect(oldHandler.resume).not.toHaveBeenCalled();
+
+    resolveStart?.();
+    await headDispatch;
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.handleCommand(chatId, "session:resume");
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+
+    await sm.dispatch(headEntry);
+    await sm.dispatch(tailEntry);
+
+    expect(freshHandler.start).toHaveBeenCalledTimes(1);
+    expect(freshHandler.resume).not.toHaveBeenCalled();
+    expect(freshHead?.id).toBe(headEntry.message.id);
+    expect(freshHandler.inject).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tailEntry.message.id }),
+      expect.anything(),
+    );
+    expect(i.sessions.get(chatId)?.claudeSessionId).toBe("fresh-start-session");
+    expect(sm.activeCount).toBe(2);
+
+    if (!freshCtx || !freshHead) throw new Error("fresh replacement start route was not captured");
+    await freshCtx.finishTurn(freshHead, { status: "success", terminal: true });
+    await freshCtx.finishTurn(messageFromEntry(tailEntry), { status: "success", terminal: true });
+    expect(ackEntry).toHaveBeenNthCalledWith(1, headEntry.id);
+    expect(ackEntry).toHaveBeenNthCalledWith(2, tailEntry.id);
+
+    await sm.shutdown();
+  });
+
+  it("does not create an empty resume mapping when LRU evicts a fresh-start retry window", async () => {
+    const replacement = handler({ start: vi.fn().mockResolvedValue("replacement-after-lru") });
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      handlers: [replacement],
+      recoverChat,
+      maxSessions: 1,
+    });
+    const i = internals(sm);
+    const chatId = "chat-lru-fresh-start-retry";
+    const headEntry = mockEntry({ id: 84, chatId, messageId: "msg-lru-fresh-start-retry" });
+    const head = messageFromEntry(headEntry);
+    i.inboxDelivery.receive(headEntry);
+    i.sessions.set(
+      chatId,
+      makeSessionRecord(chatId, {
+        status: "suspended",
+        claudeSessionId: "",
+        retryAttempt: 1,
+        retryHeadMessage: head,
+        routeTransition: null,
+      }),
+    );
+
+    i.evictIfNeeded();
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith(chatId));
+
+    expect(i.sessions.has(chatId)).toBe(false);
+    expect(i.evictedMappings.has(chatId)).toBe(false);
+
+    await sm.dispatch(headEntry);
+
+    expect(replacement.start).toHaveBeenCalledTimes(1);
+    expect(replacement.resume).not.toHaveBeenCalled();
+    expect(i.sessions.get(chatId)?.claudeSessionId).toBe("replacement-after-lru");
 
     await sm.shutdown();
   });

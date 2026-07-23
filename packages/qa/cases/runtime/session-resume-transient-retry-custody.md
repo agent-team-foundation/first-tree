@@ -60,6 +60,20 @@ then let that attempt succeed late. There must be no
 attempt, stale session-id adoption, or route revival. Recovery debt and slot
 accounting must remain attributable to the suspend decision.
 
+Repeat cancellation while the chat's first provider `start()` is still
+unresolved and no resumable session id has been adopted. After recovery,
+redeliver the same head and a later tail. The replacement handler must receive
+the head through `start()`, never `resume()`, then accept the tail in order;
+the canceled start must not leave an empty resume mapping or settle either
+delivery.
+
+Evict the same unestablished chat while it is in a non-active fresh-start
+retry/terminal window, and separately restart the SessionManager while its
+first start is unresolved. Neither LRU state nor the persisted registry may
+contain an empty resume mapping. Historical empty mappings must be ignored on
+load, and every recovered delivery must enter the replacement handler through
+`start()`.
+
 After a route is fully active, capture a delivery token from an injected
 message, suspend or preempt the route, recover the chat, and redeliver the
 same inbox entry id. Every late mutation through the old token must be ignored:

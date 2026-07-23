@@ -135,9 +135,13 @@ type SessionEntry = {
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
 
-type RouteTransitionToken = {
+type RouteLeaseToken = {
   generation: number;
   handler: AgentHandler;
+};
+
+type RouteTransitionToken = RouteLeaseToken & {
+  phase: "start" | "resume";
 };
 
 type SessionFailureHandling =
@@ -407,8 +411,15 @@ function jitteredReaffirmDelay(): number {
   return RUNTIME_REAFFIRM_BASE_MS + offset;
 }
 
+function resumableProviderSessionId(...candidates: Array<string | null | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+  }
+  return null;
+}
+
 function previousAvailable(entry: SessionEntry): boolean {
-  return Boolean(entry.claudeSessionId) || Boolean(entry.retryFromEvicted?.claudeSessionId);
+  return resumableProviderSessionId(entry.claudeSessionId, entry.retryFromEvicted?.claudeSessionId) !== null;
 }
 
 function normalizeStartReceipt(result: StartResult): {
@@ -1009,9 +1020,13 @@ export class SessionManager {
     return handler;
   }
 
-  private beginRouteTransition(entry: SessionEntry, handler: AgentHandler): RouteTransitionToken {
+  private beginRouteTransition(
+    entry: SessionEntry,
+    handler: AgentHandler,
+    phase: RouteTransitionToken["phase"],
+  ): RouteTransitionToken {
     entry.routeTransitionGeneration++;
-    const transition = { generation: entry.routeTransitionGeneration, handler };
+    const transition = { generation: entry.routeTransitionGeneration, handler, phase };
     entry.routeTransition = transition;
     return transition;
   }
@@ -1020,7 +1035,7 @@ export class SessionManager {
     return entry.routeTransition === transition && this.isRouteLeaseValid(entry, transition);
   }
 
-  private isRouteLeaseValid(entry: SessionEntry, transition: RouteTransitionToken): boolean {
+  private isRouteLeaseValid(entry: SessionEntry, transition: RouteLeaseToken): boolean {
     return (
       !this.shuttingDown &&
       this.sessions.get(entry.chatId) === entry &&
@@ -1190,7 +1205,11 @@ export class SessionManager {
 
     this.invalidateRouteTransition(entry, reason);
     this.clearRetryState(entry);
-    const resumeSessionId = sessionId || entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+    const resumeSessionId = resumableProviderSessionId(
+      sessionId,
+      entry.claudeSessionId,
+      entry.retryFromEvicted?.claudeSessionId,
+    );
     if (resumeSessionId) {
       this.addEvictedMapping(chatId, {
         claudeSessionId: resumeSessionId,
@@ -1517,7 +1536,11 @@ export class SessionManager {
     if (!this.acquireActiveSlot(chatId, message, deliveryKind)) return;
 
     // Check for prior evicted session mapping
-    const evicted = this.evictedMappings.get(chatId);
+    const storedEvicted = this.evictedMappings.get(chatId);
+    const evictedSessionId = resumableProviderSessionId(storedEvicted?.claudeSessionId);
+    const evicted =
+      storedEvicted && evictedSessionId ? { ...storedEvicted, claudeSessionId: evictedSessionId } : undefined;
+    if (storedEvicted && !evicted) this.evictedMappings.delete(chatId);
 
     // Step 6: thread the AgentConfigCache to the handler so it can read the
     // current per-agent runtime config when launching its sub-process.
@@ -1548,7 +1571,7 @@ export class SessionManager {
 
     this.sessions.set(chatId, entry);
     this.claimActiveSlot(entry);
-    const transition = this.beginRouteTransition(entry, handler);
+    const transition = this.beginRouteTransition(entry, handler, evicted ? "resume" : "start");
     const routeLeaseValid = () => this.isRouteLeaseValid(entry, transition);
     const ctx = this.buildSessionContext(chatId, routeLeaseValid);
     if (evicted) this.evictedMappings.delete(chatId);
@@ -1649,7 +1672,7 @@ export class SessionManager {
     const routeHandler = this.handlerForRouteTransition(entry);
     entry.status = "active";
     this.claimActiveSlot(entry);
-    const transition = this.beginRouteTransition(entry, routeHandler);
+    const transition = this.beginRouteTransition(entry, routeHandler, "resume");
     const routeLeaseValid = () => this.isRouteLeaseValid(entry, transition);
     const ctx = this.buildSessionContext(entry.chatId, routeLeaseValid);
     entry.lastActivity = Date.now();
@@ -2051,7 +2074,7 @@ export class SessionManager {
     entry.status = "active";
     this.claimActiveSlot(entry);
     entry.lastActivity = Date.now();
-    const transition = this.beginRouteTransition(entry, newHandler);
+    const transition = this.beginRouteTransition(entry, newHandler, retryRoute.kind);
     const routeLeaseValid = () => this.isRouteLeaseValid(entry, transition);
     const ctx = this.buildSessionContext(chatId, routeLeaseValid);
 
@@ -2353,7 +2376,13 @@ export class SessionManager {
     },
   ): void {
     const canceledTransition = this.invalidateRouteTransition(entry, opts.reason);
+    // A canceled fresh start has never established a provider-neutral resume
+    // handle. Keeping that entry as "suspended" would make redelivery call
+    // resume(undefined/empty-id) instead of starting a replacement route.
+    // Drop only the local SessionEntry; coordinator recovery retains the head.
+    const canceledUnestablishedStart = canceledTransition?.phase === "start";
     if (canceledTransition) entry.deferredMessages = [];
+    if (canceledUnestablishedStart) this.clearRetryState(entry);
     const prepare = opts.operatorResolution
       ? this.inboxDelivery.prepareOperatorSuspend(entry.chatId)
       : opts.ackConsumedPrefix
@@ -2364,6 +2393,10 @@ export class SessionManager {
     // Clear per-session runtime state on suspend
     this.sessionRuntimeStates.delete(entry.chatId);
     this.recomputeRuntimeState();
+    if (canceledUnestablishedStart && this.sessions.get(entry.chatId) === entry) {
+      this.sessions.delete(entry.chatId);
+      this.currentTrigger.delete(entry.chatId);
+    }
     entry.suspending = prepare
       .then(() => {
         if (canceledTransition || this.retiredHandlers.has(entry.handler)) {
@@ -2503,11 +2536,21 @@ export class SessionManager {
 
     if (candidate) {
       this.invalidateRouteTransition(candidate.session, "session_evicted");
-      // Preserve mapping for future recovery
-      this.addEvictedMapping(candidate.key, {
-        claudeSessionId: candidate.session.claudeSessionId,
-        lastActivity: candidate.session.lastActivity,
-      });
+      // Preserve only an adopted, provider-neutral resume handle. Transition
+      // phase is not sufficient: a fresh-start retry/terminal window has no
+      // active start transition but still has no resumable provider session.
+      const resumableSessionId = resumableProviderSessionId(
+        candidate.session.claudeSessionId,
+        candidate.session.retryFromEvicted?.claudeSessionId,
+      );
+      if (resumableSessionId) {
+        this.addEvictedMapping(candidate.key, {
+          claudeSessionId: resumableSessionId,
+          lastActivity: candidate.session.lastActivity,
+        });
+      } else {
+        this.evictedMappings.delete(candidate.key);
+      }
 
       this.config.log.info({ chatId: candidate.key }, "session evicted (max_sessions reached)");
       const activeSlotHeld = candidate.session.activeSlotHeld;
@@ -2602,7 +2645,12 @@ export class SessionManager {
 
   /** Add an evicted mapping, pruning the oldest if over capacity. */
   private addEvictedMapping(chatId: string, mapping: { claudeSessionId: string; lastActivity: number }): void {
-    this.evictedMappings.set(chatId, mapping);
+    const resumableSessionId = resumableProviderSessionId(mapping.claudeSessionId);
+    if (!resumableSessionId) {
+      this.evictedMappings.delete(chatId);
+      return;
+    }
+    this.evictedMappings.set(chatId, { ...mapping, claudeSessionId: resumableSessionId });
     if (this.evictedMappings.size > MAX_EVICTED_MAPPINGS) {
       // Map iteration order is insertion order — first key is the oldest
       const oldest = this.evictedMappings.keys().next().value;
@@ -2931,18 +2979,25 @@ export class SessionManager {
     if (!this.registry) return;
 
     const persisted = this.registry.load();
+    let loadedCount = 0;
     for (const [chatId, data] of persisted) {
       // All persisted sessions become evicted mappings on load.
       // Handlers are allocated lazily when a message arrives (startNewSession
       // checks evictedMappings and calls handler.resume instead of start).
+      const resumableSessionId = resumableProviderSessionId(data.claudeSessionId);
+      if (!resumableSessionId) {
+        this.config.log.warn({ chatId }, "ignoring persisted session mapping without a resumable provider session id");
+        continue;
+      }
       this.addEvictedMapping(chatId, {
-        claudeSessionId: data.claudeSessionId,
+        claudeSessionId: resumableSessionId,
         lastActivity: data.lastActivity,
       });
+      loadedCount++;
     }
 
-    if (persisted.size > 0) {
-      this.config.log.info({ count: persisted.size }, "loaded persisted session mappings");
+    if (loadedCount > 0) {
+      this.config.log.info({ count: loadedCount }, "loaded persisted session mappings");
     }
   }
 
@@ -2951,16 +3006,23 @@ export class SessionManager {
 
     const entries = new Map<string, { claudeSessionId: string; lastActivity: number; status: string }>();
     for (const [chatId, session] of this.sessions) {
+      const resumableSessionId = resumableProviderSessionId(
+        session.claudeSessionId,
+        session.retryFromEvicted?.claudeSessionId,
+      );
+      if (!resumableSessionId) continue;
       entries.set(chatId, {
-        claudeSessionId: session.claudeSessionId,
+        claudeSessionId: resumableSessionId,
         lastActivity: session.lastActivity,
         status: session.status,
       });
     }
     // Include evicted mappings for crash recovery
     for (const [chatId, mapping] of this.evictedMappings) {
+      const resumableSessionId = resumableProviderSessionId(mapping.claudeSessionId);
+      if (!resumableSessionId) continue;
       entries.set(chatId, {
-        claudeSessionId: mapping.claudeSessionId,
+        claudeSessionId: resumableSessionId,
         lastActivity: mapping.lastActivity,
         status: "evicted",
       });
