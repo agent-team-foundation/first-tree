@@ -357,6 +357,9 @@ describe("settings panels", () => {
     const completedDesktop = await renderDom(<SettingsLayout />, "/settings/setup");
     expect(completedDesktop.container.querySelector('aside a[href="/settings/setup"]')).not.toBeNull();
     expect(completedDesktop.container.textContent).toContain("Setup");
+    const setupHeading = completedDesktop.container.querySelector("h1");
+    expect(setupHeading?.textContent).toBe("Setup");
+    expect(setupHeading?.classList.contains("sr-only")).toBe(true);
     await act(async () => completedDesktop.root.unmount());
 
     authMock.value = { ...authMock.value, meLoaded: false };

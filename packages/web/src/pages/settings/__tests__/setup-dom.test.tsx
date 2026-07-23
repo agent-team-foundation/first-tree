@@ -82,6 +82,9 @@ describe("Settings Setup overview", () => {
     expect(view.host.textContent).not.toContain("Team agents");
     expect(view.host.textContent).not.toContain("%");
     expect(view.host.textContent).not.toContain("Onboarding completed");
+    expect(view.host.querySelector("h1")).toBeNull();
+    expect(view.host.querySelector("[data-setup-context]")?.textContent).toBe("Acme · Admin");
+    expect(view.host.textContent).not.toContain("Your access and configuration");
 
     await act(async () => view.root.unmount());
   });

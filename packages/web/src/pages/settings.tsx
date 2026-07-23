@@ -19,13 +19,9 @@ type Item = {
   label: string;
   /**
    * Optional one-line lead rendered under the (visually-hidden) page heading.
-   * Present only where it adds context the sidebar label can't: Computers and
-   * Setup restate their own label ("Machines connected to First Tree"), so
-   * they carry no description.
+   * Present only where it adds context the sidebar label can't.
    */
   description?: string;
-  /** The page renders its own visible title and team/role context. */
-  ownsHeader?: boolean;
 };
 
 type ItemGroup = {
@@ -38,7 +34,7 @@ const ACCOUNT_ITEM: Item = {
   label: "Account",
   description: "Manage your profile and sign-in methods. These settings follow you across all your teams.",
 };
-const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup", ownsHeader: true };
+const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup" };
 const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
 const REPOSITORIES_ITEM: Item = {
   to: "/settings/repositories",
@@ -189,7 +185,7 @@ export function SettingsLayout({ activePathname, children }: { activePathname?: 
  * a quiet one-line lead above the sub-page content.
  */
 function SettingsHeader({ item }: { item: Item | undefined }) {
-  if (!item || item.ownsHeader) return null;
+  if (!item) return null;
   return (
     <>
       <h1 className="sr-only">{item.label}</h1>

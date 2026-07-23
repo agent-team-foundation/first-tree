@@ -427,15 +427,14 @@ export function SetupOverview({
   const roleLabel = facts.role === "admin" ? "Admin" : "Member";
 
   return (
-    <div style={{ padding: "var(--sp-5) var(--sp-5) var(--sp-7)" }} data-setup-overview={roleLabel.toLowerCase()}>
-      <header style={{ marginBottom: "var(--sp-5)" }}>
-        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          Setup
-        </h1>
-        <p className="text-body" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-3)" }}>
-          Your access and configuration for {facts.teamName ?? "this team"} · {roleLabel}
-        </p>
-      </header>
+    <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }} data-setup-overview={roleLabel.toLowerCase()}>
+      <p
+        className="text-body"
+        data-setup-context
+        style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-3)" }}
+      >
+        {facts.teamName ?? "This team"} · {roleLabel}
+      </p>
 
       <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>
         {rows.map((row) => (
