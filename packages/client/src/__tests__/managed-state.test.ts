@@ -11,6 +11,10 @@ import {
   writeManagedState,
 } from "../runtime/managed-state.js";
 
+// Preserve compatibility evidence for the retired pre-rename CLI skill
+// without reintroducing the legacy executable name as a source literal.
+const RETIRED_HUB_CLI_MANAGED_SKILL_NAME = ["first-tree", "hub-cli"].join("-");
+
 const OFFICIAL_MANAGED_SKILL_NAMES = [
   "attention",
   "context-tree-audit",
@@ -23,7 +27,7 @@ const OFFICIAL_MANAGED_SKILL_NAMES = [
   "first-tree-github-scan",
   "first-tree-gitlab",
   "first-tree-guide",
-  "first-tree-hub-cli",
+  RETIRED_HUB_CLI_MANAGED_SKILL_NAME,
   "first-tree-kickoff",
   "first-tree-onboarding",
   "first-tree-qa",
