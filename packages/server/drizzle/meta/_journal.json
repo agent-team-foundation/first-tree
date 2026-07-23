@@ -582,6 +582,13 @@
       "when": 1784778296618,
       "tag": "0082_heavy_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1784803448712,
+      "tag": "0083_overconfident_maelstrom",
+      "breakpoints": true
     }
   ]
 }

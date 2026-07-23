@@ -63,6 +63,8 @@ const TRUNCATE_TABLES = [
   "inbox_entries",
   "session_events",
   "notifications",
+  "attachment_references",
+  "attachments",
   "messages",
   "chat_user_state",
   "chat_membership",

@@ -81,6 +81,15 @@ export const agents = pgTable(
      */
     avatarImageUpdatedAt: timestamp("avatar_image_updated_at", { withTimezone: true }),
     /**
+     * Object-storage key of the avatar image (`avatars/<uuid>`, overwritten
+     * in place on re-upload). NULL when no avatar is set or the image still
+     * sits in the legacy `avatar_image_data` bytea (pre-migration). Avatars
+     * are NOT `attachments` rows: 1:1 with the agent, bounded by the 512 KiB
+     * cap, and replaced rather than accumulated — so they carry no quota or
+     * reference-lifecycle accounting.
+     */
+    avatarObjectKey: text("avatar_object_key"),
+    /**
      * Agent-reported skill (slash-command) list. Discovered by the daemon by
      * scanning the agent runtime's skill directories (~/.claude/skills,
      * <repo>/.claude/skills, plugin skill dirs) and uploaded via

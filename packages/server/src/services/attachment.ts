@@ -82,9 +82,12 @@ export async function loadAttachmentMeta(db: AttachmentReader, id: string): Prom
   const [row] = await db
     .select({
       id: attachments.id,
+      organizationId: attachments.organizationId,
       mimeType: attachments.mimeType,
       filename: attachments.filename,
       sizeBytes: attachments.sizeBytes,
+      objectKey: attachments.objectKey,
+      state: attachments.state,
       uploadedBy: attachments.uploadedBy,
       createdAt: attachments.createdAt,
     })
