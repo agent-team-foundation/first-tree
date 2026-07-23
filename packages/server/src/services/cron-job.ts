@@ -329,15 +329,11 @@ export async function createCronJob(
 
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
-    const [agent] = await txDb.select().from(agents).where(eq(agents.uuid, input.agentId)).limit(1);
-    if (!agent || agent.status !== "active") {
-      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
-    }
 
-    // Prefer the authenticated caller as owner. Re-check manager/speaker/
-    // engagement inside this txn so a mid-flight reassignment cannot mint a
-    // schedule owned by the new manager on the old caller's authorization.
-    let ownerMemberId = agent.managerId;
+    // Class D: lock auth rows (member→agent→speakers→engagement) before the
+    // owner-chat advisory barrier so manager reassignment serializes on the
+    // agent row until this transaction commits.
+    let ownerMemberId: string;
     if (input.callerMemberId && input.callerHumanAgentId) {
       await assertCronAgentRouteAccess(txDb, {
         chatId: input.controlChatId,
@@ -346,6 +342,12 @@ export async function createCronJob(
         callerHumanAgentId: input.callerHumanAgentId,
       });
       ownerMemberId = input.callerMemberId;
+    } else {
+      const [agent] = await txDb.select().from(agents).where(eq(agents.uuid, input.agentId)).for("update").limit(1);
+      if (!agent || agent.status !== "active") {
+        throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
+      }
+      ownerMemberId = agent.managerId;
     }
 
     await lockOwnerChatCronBarrier(txDb, input.controlChatId, ownerMemberId);
@@ -470,20 +472,39 @@ export async function updateCronJob(
     const txDb = tx as unknown as Database;
     const body = input.body;
 
-    // Global lock order matches pauseActiveJobsForOwnerChatDelete: advisory
-    // barrier before any cron row FOR UPDATE. Peek barrier keys without row
-    // lock when resume/activate is requested.
+    // Peek identity without row locks so Class D auth can take member→agent
+    // locks before the owner-chat advisory / cron FOR UPDATE locks.
+    const [peek] = await txDb
+      .select({
+        controlChatId: cronJobs.controlChatId,
+        ownerMemberId: cronJobs.ownerMemberId,
+        agentId: cronJobs.agentId,
+      })
+      .from(cronJobs)
+      .where(eq(cronJobs.id, input.jobId))
+      .limit(1);
+    if (!peek) throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
+
+    if (input.agentScope) {
+      if (peek.agentId !== input.agentScope.agentId || peek.controlChatId !== input.agentScope.controlChatId) {
+        throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
+      }
+    }
+    if (input.ownerMemberId && peek.ownerMemberId !== input.ownerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
+    }
+
+    if (input.callerMemberId && input.callerHumanAgentId) {
+      await assertCronAgentRouteAccess(txDb, {
+        chatId: peek.controlChatId,
+        agentId: peek.agentId,
+        callerMemberId: input.callerMemberId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
+    }
+
     if (body.state === "active") {
       assertMutationsAvailable(input.config);
-      const [peek] = await txDb
-        .select({
-          controlChatId: cronJobs.controlChatId,
-          ownerMemberId: cronJobs.ownerMemberId,
-        })
-        .from(cronJobs)
-        .where(eq(cronJobs.id, input.jobId))
-        .limit(1);
-      if (!peek) throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
       await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
     }
 
@@ -495,14 +516,6 @@ export async function updateCronJob(
     }
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
-    }
-    if (input.callerMemberId && input.callerHumanAgentId) {
-      await assertCronAgentRouteAccess(txDb, {
-        chatId: job.controlChatId,
-        agentId: job.agentId,
-        callerMemberId: input.callerMemberId,
-        callerHumanAgentId: input.callerHumanAgentId,
-      });
     }
     assertRevision(job, input.expectedRevision);
 
@@ -615,6 +628,34 @@ export async function deleteCronJob(
 ): Promise<DeleteCronJobResponse> {
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    const [peek] = await txDb
+      .select({
+        controlChatId: cronJobs.controlChatId,
+        ownerMemberId: cronJobs.ownerMemberId,
+        agentId: cronJobs.agentId,
+      })
+      .from(cronJobs)
+      .where(eq(cronJobs.id, input.jobId))
+      .limit(1);
+    if (!peek) throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
+
+    if (input.agentScope) {
+      if (peek.agentId !== input.agentScope.agentId || peek.controlChatId !== input.agentScope.controlChatId) {
+        throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
+      }
+    }
+    if (input.ownerMemberId && peek.ownerMemberId !== input.ownerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
+    }
+    if (input.callerMemberId && input.callerHumanAgentId) {
+      await assertCronAgentRouteAccess(txDb, {
+        chatId: peek.controlChatId,
+        agentId: peek.agentId,
+        callerMemberId: input.callerMemberId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
+    }
+
     const job = await lockJob(txDb, input.jobId);
     if (input.agentScope) {
       if (job.agentId !== input.agentScope.agentId || job.controlChatId !== input.agentScope.controlChatId) {
@@ -623,14 +664,6 @@ export async function deleteCronJob(
     }
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
-    }
-    if (input.callerMemberId && input.callerHumanAgentId) {
-      await assertCronAgentRouteAccess(txDb, {
-        chatId: job.controlChatId,
-        agentId: job.agentId,
-        callerMemberId: input.callerMemberId,
-        callerHumanAgentId: input.callerHumanAgentId,
-      });
     }
     assertRevision(job, input.expectedRevision);
     await tx.delete(cronJobs).where(eq(cronJobs.id, job.id));
@@ -692,16 +725,31 @@ export async function pauseActiveJobsForOwnerChatDelete(
   return locked.length;
 }
 
+/**
+ * Class D authorization check held until commit.
+ *
+ * Lock order (must stay ahead of owner-chat advisory + cron row locks):
+ *   1. caller member row
+ *   2. agent row
+ *   3. chat_membership speaker rows (`agent_id` ASC)
+ *   4. chat_user_state engagement row (when present)
+ *
+ * Matches `updateAgent` / `deactivateMembership` member→agent ordering so a
+ * concurrent manager reassignment's `UPDATE agents` blocks on the agent
+ * row lock until this transaction commits — closing the READ COMMITTED
+ * TOCTOU between ordinary SELECTs and the cron mutation.
+ */
 export async function assertCronAgentRouteAccess(
   db: Database,
   input: { chatId: string; agentId: string; callerMemberId: string; callerHumanAgentId: string },
 ): Promise<void> {
-  const [agent] = await db
-    .select({ managerId: agents.managerId })
-    .from(agents)
-    .where(eq(agents.uuid, input.agentId))
+  const [callerMember] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.id, input.callerMemberId), eq(members.status, "active")))
+    .for("update")
     .limit(1);
-  if (!agent || agent.managerId !== input.callerMemberId) {
+  if (!callerMember) {
     throw new CronJobAppError(
       403,
       "CRON_JOB_FORBIDDEN",
@@ -709,40 +757,50 @@ export async function assertCronAgentRouteAccess(
     );
   }
 
-  const [humanSpeaker] = await db
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .where(
-      and(
-        eq(chatMembership.chatId, input.chatId),
-        eq(chatMembership.agentId, input.callerHumanAgentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
+  const [agent] = await db
+    .select({ managerId: agents.managerId, status: agents.status })
+    .from(agents)
+    .where(eq(agents.uuid, input.agentId))
+    .for("update")
     .limit(1);
-  if (!humanSpeaker) {
-    throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Managing human must be a speaker in this chat");
+  if (!agent || agent.status !== "active" || agent.managerId !== input.callerMemberId) {
+    throw new CronJobAppError(
+      403,
+      "CRON_JOB_FORBIDDEN",
+      "Only the managing human may manage scheduled jobs for this agent",
+    );
   }
 
-  const [agentSpeaker] = await db
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .where(
-      and(
-        eq(chatMembership.chatId, input.chatId),
-        eq(chatMembership.agentId, input.agentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
-    .limit(1);
-  if (!agentSpeaker) {
-    throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent must be a speaker in this chat");
+  const speakerAgentIds = [input.callerHumanAgentId, input.agentId].slice().sort((a, b) => a.localeCompare(b));
+  for (const speakerAgentId of speakerAgentIds) {
+    const [speaker] = await db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, input.chatId),
+          eq(chatMembership.agentId, speakerAgentId),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!speaker) {
+      throw new CronJobAppError(
+        403,
+        "CRON_JOB_FORBIDDEN",
+        speakerAgentId === input.callerHumanAgentId
+          ? "Managing human must be a speaker in this chat"
+          : "Agent must be a speaker in this chat",
+      );
+    }
   }
 
   const [engagement] = await db
     .select({ status: chatUserState.engagementStatus })
     .from(chatUserState)
     .where(and(eq(chatUserState.chatId, input.chatId), eq(chatUserState.agentId, input.callerHumanAgentId)))
+    .for("update")
     .limit(1);
   if (engagement?.status === "deleted") {
     throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Control chat is deleted for the schedule owner");

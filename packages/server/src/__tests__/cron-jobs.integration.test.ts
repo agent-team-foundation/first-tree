@@ -1,6 +1,8 @@
 import { CRON_TRIGGER_METADATA_KEY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
@@ -15,6 +17,27 @@ import { createCronScheduler } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(observer: ReturnType<typeof postgres>, applicationName: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ wait_event_type: string | null }[]>`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock: ${applicationName}`);
+}
 
 async function seedDispatchRoute(app: ReturnType<ReturnType<typeof useTestApp>>, agentId: string, clientId: string) {
   const now = new Date();
@@ -712,5 +735,58 @@ describe("cron jobs integration", () => {
     await expect(sweep).resolves.toBeUndefined();
     const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
     expect(row?.nextRunAt?.getTime()).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("rejects create when manager reassignment commits between auth lock and write", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const other = await createTestAgent(app, { name: `cron-race-mgr-${crypto.randomUUID().slice(0, 6)}` });
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+
+    const createAppName = `cron_create_auth_${crypto.randomUUID().slice(0, 8)}`;
+    const createDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, createAppName));
+    const blocker = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let blockerCommitted = false;
+    try {
+      // Hold the agent row between the Class D guard and the insert path.
+      await blocker`BEGIN`;
+      await blocker`SELECT uuid FROM agents WHERE uuid = ${runtime.agent.uuid} FOR UPDATE`;
+
+      const createPromise = createCronJob(createDb, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body: {
+          name: "mid-txn-reassign",
+          schedule: "0 16 * * *",
+          timezone: "UTC",
+          prompt: "must not land under new manager",
+        },
+        config: {
+          enabled: true,
+          pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+        },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      });
+      await waitForPostgresLockWait(observer, createAppName);
+
+      // Reassign while create is blocked on the agent FOR UPDATE, then release.
+      await blocker`UPDATE agents SET manager_id = ${other.memberId}, updated_at = NOW() WHERE uuid = ${runtime.agent.uuid}`;
+      await blocker`COMMIT`;
+      blockerCommitted = true;
+
+      await expect(createPromise).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+      const rows = await app.db
+        .select()
+        .from(cronJobs)
+        .where(and(eq(cronJobs.controlChatId, chatId), eq(cronJobs.name, "mid-txn-reassign")));
+      expect(rows).toHaveLength(0);
+    } finally {
+      if (!blockerCommitted) await blocker`ROLLBACK`;
+      await createDb.end();
+      await blocker.end();
+      await observer.end();
+    }
   });
 });
