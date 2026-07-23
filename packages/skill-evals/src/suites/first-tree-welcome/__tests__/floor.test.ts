@@ -121,9 +121,36 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toContain("preserve its returned pending or\nactive state");
     expect(skillMarkdown).toMatch(/A follow failure does not\s+invalidate the MR/u);
     expect(skillMarkdown).toMatch(/report\s+only the First Tree chat attention gap/u);
-    expect(skillMarkdown).toContain("do not call\n`first-tree github follow`, send the user to **Settings -> GitHub**");
+    expect(skillMarkdown).toContain(
+      "do not call\n`first-tree github follow`, send the user to **Settings → Setup** for GitHub App",
+    );
     expect(skillMarkdown).toContain("Never substitute `first-tree github follow`");
     expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
+  });
+
+  it("keeps capability setup milestone-gated, role-aware, and owned by Setup", () => {
+    expect(skillMarkdown).toContain("After a pre-existing Context Tree milestone: guide Review setup once");
+    expect(skillMarkdown).toContain("first-tree org context-tree review-config --json");
+    expect(skillMarkdown).toContain("its default Team can differ from this Agent/chat's Team");
+    expect(skillMarkdown).toContain("**Settings → Setup** can select a Review Agent");
+    expect(skillMarkdown).toContain("launcher performs no Team mutation");
+    expect(skillMarkdown).toContain("It is not a health or\n  readiness check");
+    expect(skillMarkdown).toMatch(/infer\s+debt when the read fails or is ambiguous/u);
+    expect(skillMarkdown).toContain("dedicated tree task owns its own post-PR/MR handoff");
+    expect(skillMarkdown).toContain("consume that result and never repeat it");
+    expect(skillMarkdown).toContain("must not\nsend the same Setup prompt again");
+    expect(skillMarkdown).toMatch(/Never make it an\s+onboarding gate/u);
+    expect(skillMarkdown).not.toContain("Settings -> GitHub");
+
+    const handoffRows = [
+      "| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |",
+      "| Pre-existing populated tree after value | Confirmed admin; Review off | Read config, then hand off once to Settings → Setup |",
+      "| Pre-existing populated tree after value | Review configured, read failed/ambiguous, member, or unclear role | No Review setup handoff |",
+      "| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |",
+    ];
+    for (const row of handoffRows) {
+      expect(skillMarkdown).toContain(row);
+    }
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {

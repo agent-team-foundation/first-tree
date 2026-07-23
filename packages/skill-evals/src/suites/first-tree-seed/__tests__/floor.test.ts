@@ -45,7 +45,7 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("Use `--adopt` instead of `--create`");
     expect(skillMarkdown).toContain("Never\ncreate or simulate an approval rule");
     expect(skillMarkdown).toContain("exact-SHA merge");
-    expect(skillMarkdown).toContain("Never substitute `/settings/github`");
+    expect(skillMarkdown).toContain("Never substitute a GitHub App URL");
     expect(skillMarkdown).toContain("Provider-aware `tree init` always requires `--team`");
     const initCommands = [...skillMarkdown.matchAll(/^first-tree tree init .+$/gmu)].map((match) => match[0]);
     expect(initCommands.length).toBeGreaterThan(0);
@@ -80,9 +80,9 @@ describe("first-tree-seed floor invariants", () => {
     expect(durableProgressMarkdown).toContain("binding change");
   });
 
-  it("publishes the portable Seed skill as version 0.5.0", () => {
-    expect(skillVersion).toBe("0.5.0");
-    expect(skillMarkdown).toContain("version: 0.5.0");
+  it("publishes the portable Seed skill as version 0.5.1", () => {
+    expect(skillVersion).toBe("0.5.1");
+    expect(skillMarkdown).toContain("version: 0.5.1");
     expect(skillMarkdown).toContain('first-tree: ">=0.5.16 <0.6.0"');
     expect(openAiMetadata).toContain("$first-tree-seed");
     expect(openAiMetadata).toContain("merged durable progress");
@@ -130,7 +130,36 @@ describe("first-tree-seed floor invariants", () => {
   it("delays App coverage guidance until a reviewable milestone", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open");
     expect(skillMarkdown).toMatch(/do\s+not interrupt source resolution,\s+structure/u);
-    expect(skillMarkdown).toMatch(/Relay only a recovery URL returned/);
+    expect(skillMarkdown).toMatch(/collect any uncovered\s+tree-repo recovery returned/u);
+  });
+
+  it("hands off Review Agent configuration to Setup without blocking Seed", () => {
+    expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open, check Review Agent configuration once");
+    expect(skillMarkdown).toContain('first-tree org context-tree review-config --as-member --org "<team-id>" --json');
+    expect(skillMarkdown).toMatch(/Review Agent selection through \*\*Settings →\s+Setup\*\*/u);
+    expect(skillMarkdown).toMatch(/Setup owns\s+provider prerequisites and the Team mutation/u);
+    expect(skillMarkdown).toContain("It is not a health or\n  readiness check");
+    expect(skillMarkdown).toContain("first perform the Review Agent read");
+    expect(skillMarkdown).toContain("send at most one combined setup handoff");
+    expect(skillMarkdown).toMatch(/supersedes\s+the generated briefing's generic GitHub-follow setup prompt/u);
+    expect(skillMarkdown).toContain("If only one is missing, mention\n  only that action");
+    expect(skillMarkdown).toContain("creates no inferred debt and does not block Seed");
+    expect(skillMarkdown).toContain("optional for Team, Chat, basic Tree use and Seed\n  completion");
+    expect(skillMarkdown).toContain("only when this run verified that ruleset setup succeeded");
+    expect(skillMarkdown).toContain("report the governance actually observed");
+    expect(skillMarkdown).toContain("Do not repeat the Review Agent\nhandoff from Phase 1");
+
+    const handoffRows = [
+      "| GitHub coverage missing | Off | One combined handoff: authoritative coverage recovery plus Review Agent in Settings → Setup |",
+      "| GitHub coverage missing | Configured or read failed/ambiguous | Coverage recovery only; infer no Review debt |",
+      "| GitHub covered | Off | Review Agent in Settings → Setup only |",
+      "| GitHub covered | Configured or read failed/ambiguous | No setup handoff |",
+      "| GitLab | Off | Review Agent in Settings → Setup only; no GitHub App guidance |",
+      "| GitLab | Configured or read failed/ambiguous | No setup handoff |",
+    ];
+    for (const row of handoffRows) {
+      expect(skillMarkdown).toContain(row);
+    }
   });
 
   it("follows GitLab tree MRs without inventing GitHub setup", () => {
@@ -141,7 +170,8 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("only pending waits\nfor a matching valid webhook");
     expect(skillMarkdown).toContain("failure does not invalidate the MR");
     expect(skillMarkdown).toContain("no GitHub App coverage guidance applies");
-    expect(skillMarkdown).toContain("Never substitute `/settings/github`");
+    expect(skillMarkdown).toContain("Never substitute a GitHub App URL");
+    expect(skillMarkdown).toContain("Use **Settings → Setup** only for an actual Team capability");
   });
 
   it("discovers GitLab CI as a Tier 0 operations signal", () => {

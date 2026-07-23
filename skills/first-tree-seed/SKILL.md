@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.5.0
+version: 0.5.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Supports clean explicit-Team invocation without a Workspace manifest, managed briefing, or prior setup-chat transcript, while preserving managed-workspace compatibility. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses unrelated re-seeding once the tree has domain structure and recovers Phase 2 from durable merged Tree state plus the same explicit sources."
@@ -291,22 +291,26 @@ separate GitLab integration recovery target only when First Tree returns one
 explicitly; never invent a product path.
 
 **After the Phase 1 PR/MR is open**, or earlier only when the next requested
-operation actually needs Cloud snapshot/reviewer access, surface an uncovered
-tree repo once in the setup chat. Relay only a recovery URL returned by
-`tree init` or another authoritative First Tree command:
+operation actually needs Cloud snapshot/reviewer access, collect any uncovered
+tree-repo recovery returned by `tree init` or another authoritative First Tree
+command. Do not send a coverage prompt yet: first perform the Review Agent read
+below, then send at most one combined setup handoff. This workflow supersedes
+the generated briefing's generic GitHub-follow setup prompt for these Tree
+PRs/MRs; report the attention gap, but consolidate the action here.
 
 - **GitHub tree, selected-repositories install excludes it:** `tree init`
   prints a GitHub installation-settings URL — an absolute `https://` link, so
   it renders clickable in chat. Relay it and say to add the tree repo there.
 - **GitHub tree, no App installed:** give the admin a clickable link to the web
-  console's GitHub settings, built from the server URL the agent knows — take
+  console's Setup surface, built from the server URL the agent knows — take
   the `Server:` value from `first-tree agent status` and append
-  `/settings/github` (an absolute `https://…/settings/github` renders
-  clickable; a bare `/settings/github` path does **not** — the chat link guard
-  drops relative paths). Tell them to open it and click **Install on GitHub**.
+  `/settings/setup` (an absolute `https://…/settings/setup` renders
+  clickable; a bare `/settings/setup` path does **not** — the chat link guard
+  drops relative paths). Tell them to open it and complete GitHub App
+  installation or repository coverage there.
   This assumes the web console shares the server's origin (the standard
-  deployment); if it does not, the link may not resolve — then just name the
-  destination in words: **Settings → GitHub** in the web app. Do **not**
+  deployment); if it does not, the link may not resolve — then name the
+  destination in words: **Settings → Setup** in the web app. Do **not**
   fabricate a raw GitHub App install URL yourself — the install must run
   through the web console so it binds back to your org. Add the **placement
   caveat**: the tree repo was created under the GitHub account shown as
@@ -318,8 +322,44 @@ tree repo once in the setup chat. Relay only a recovery URL returned by
 - **GitLab-hosted existing tree:** no GitHub App coverage guidance applies. MR
   attention uses `first-tree gitlab follow` after creation or recovery/reuse.
   Relay any separate recovery target only when First Tree returns it explicitly.
-  Never substitute `/settings/github`, a GitHub App URL, or an invented GitLab
-  product path.
+  Never substitute a GitHub App URL or tell the user to install the GitHub App
+  for GitLab. Use **Settings → Setup** only for an actual Team capability
+  handoff after the milestone below; do not invent a GitLab-specific product
+  path.
+
+**After the Phase 1 PR/MR is open, check Review Agent configuration once.**
+Do not introduce it before this reviewable milestone. Before any user-facing
+coverage handoff, read the selected Team:
+
+```bash
+first-tree org context-tree review-config --as-member --org "<team-id>" --json
+```
+
+- Use this read only to distinguish configured from off. It is not a health or
+  readiness check. When configured, do not infer Reviewer health from this
+  command. When off, include Review Agent selection through **Settings →
+  Setup** in the setup handoff.
+- Send one milestone response: combine any GitHub App recovery or repository
+  coverage action with Review Agent selection. If only one is missing, mention
+  only that action. If neither is missing, add no setup guidance. Setup owns
+  provider prerequisites and the Team mutation.
+- A failed or ambiguous read creates no inferred debt and does not block Seed.
+  Context Review remains optional for Team, Chat, basic Tree use and Seed
+  completion. For a newly created GitHub tree, mention baseline approval rules
+  only when this run verified that ruleset setup succeeded. For an existing
+  tree or failed ruleset setup, report the governance actually observed instead
+  of implying that baseline approval rules exist.
+
+Use this response matrix after the milestone:
+
+| Tree provider / coverage | Review config read | User-facing setup action |
+| --- | --- | --- |
+| GitHub coverage missing | Off | One combined handoff: authoritative coverage recovery plus Review Agent in Settings → Setup |
+| GitHub coverage missing | Configured or read failed/ambiguous | Coverage recovery only; infer no Review debt |
+| GitHub covered | Off | Review Agent in Settings → Setup only |
+| GitHub covered | Configured or read failed/ambiguous | No setup handoff |
+| GitLab | Off | Review Agent in Settings → Setup only; no GitHub App guidance |
+| GitLab | Configured or read failed/ambiguous | No setup handoff |
 
 **B — Bound but unseeded.** The tree is bound and holds at most non-normal
 supporting/member structure under the generated policy's content classes,
@@ -992,9 +1032,9 @@ After all sub-agents return:
   gitlab follow <mr-url>`. A returned pending or active state is success; a
   follow failure does not invalidate the MR.
 
-After PR/MR 2 opens, the seed skill is done. Subsequent writes are owned
-by `first-tree-write`; subsequent maintenance uses focused tasks with
-explicit scope.
+After PR/MR 2 opens, the seed skill is done. Do not repeat the Review Agent
+handoff from Phase 1. Subsequent writes are owned by `first-tree-write`;
+subsequent maintenance uses focused tasks with explicit scope.
 
 ### Recovery path: PR/MR 1 merged, Phase 2 abandoned
 

@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.2
+version: 1.2.3
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR/MR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -396,16 +396,17 @@ so the user can see the parallel streams. As each spawned chat produces a result
 (a PR/MR, a passing test, the seed PRs/MRs), note it here so the launcher stays the
 map of what is in flight.
 
-### After a GitHub value PR opens: guide App install once
+### After a GitHub value PR opens: consume the task's Setup handoff
 
 A review-ready PR gives the admin a concrete reason to install or update First
 Tree GitHub App coverage: CI results, review comments, and merge state can flow
-back into chat. The welcome launcher owns one concise install/coverage guidance
-at this moment; do not rely only on the generic PR-following failure text that a
-spawned task may have shown.
+back into chat. The spawned task owns the one user-facing install/coverage
+handoff in its task chat. The welcome launcher consumes that result and must not
+send the same Setup prompt again.
 
 This section's App-install guidance is GitHub-only. For a GitLab MR, do not call
-`first-tree github follow`, send the user to **Settings -> GitHub**, or imply
+`first-tree github follow`, send the user to **Settings → Setup** for GitHub App
+installation, or imply
 that the First Tree GitHub App is involved. Instead, consume the spawned task's
 `first-tree gitlab follow <url>` result and preserve its returned pending or
 active state. GitLab attention is inbound-only; explain the webhook wait only
@@ -422,18 +423,14 @@ a GitLab integration URL or settings target.
   add App-install guidance.
 - If tracking is blocked because the First Tree GitHub App is not installed on,
   or does not cover, the GitHub account/repo that owns the PR, and the human is a
-  confirmed **admin**, include one launcher-level install/coverage line when you
-  report that PR result. Keep it tied to the win, for example: "PR is open. To
-  have CI, review comments, and merge updates flow back here, install or cover
-  this repo from Settings -> GitHub." Use a product link only when you have a
-  stable one; otherwise name **Settings -> GitHub**. Do not fabricate raw GitHub
-  App install URLs.
+  confirmed **admin**, summarize that live updates are waiting on the admin
+  action already surfaced in the task chat. Do not add a second destination or
+  repeat its setup explanation.
 - If the human is an invitee/member or role is unclear, do not route them into
   an admin-only install surface. Say an organization admin can enable live PR
   updates for this repo if useful.
-- Give this App-install guidance at most once in the onboarding launcher. If the
-  spawned task chat already mentioned the missing App, still include the short
-  launcher-level line; do not repeat a full setup explanation.
+- If the task result did not establish whether tracking is active or blocked,
+  report only the PR result. Do not infer App debt.
 
 ## After value lands: the one-time tree offer
 
@@ -462,6 +459,35 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   tree is already populated.
 - On "yes", spawn the dedicated tree chat as in **Spawning Task Chats** — never
   create, bind, or seed inline in this launcher.
+
+## After a pre-existing Context Tree milestone: guide Review setup once
+
+Automatic Context Review is a Team capability, not an onboarding gate. After
+the user has seen value, check it here only when a populated tree was already
+readable and no dedicated tree task produced the milestone in this onboarding
+run. The dedicated tree task owns its own post-PR/MR handoff through
+`first-tree-seed`; consume that result and never repeat it in this launcher.
+
+- For a confirmed **admin**, read the current managed Agent's Team with
+  `first-tree org context-tree review-config --json`. Do not switch to
+  `--as-member`: its default Team can differ from this Agent/chat's Team.
+  If Review is off, say once that **Settings → Setup** can select a Review Agent
+  for automatic Tree PR/MR review.
+- Use this read only to distinguish configured from off. It is not a health or
+  readiness check. Do not prompt a member, repeat a configured setup, or infer
+  debt when the read fails or is ambiguous. None of these states blocks
+  onboarding.
+- Setup owns provider prerequisites, Reviewer selection and health; this
+  launcher performs no Team mutation.
+
+The ownership matrix is intentionally small:
+
+| Observed milestone | State | This launcher's action |
+| --- | --- | --- |
+| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |
+| Pre-existing populated tree after value | Confirmed admin; Review off | Read config, then hand off once to Settings → Setup |
+| Pre-existing populated tree after value | Review configured, read failed/ambiguous, member, or unclear role | No Review setup handoff |
+| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |
 
 ## Doing the Work & Talking to the User
 
@@ -555,15 +581,15 @@ for tree build; other authorizations use a tracked ask.
   (6) do not offer "Build your Context Tree" until there is readable code and
   the human is a confirmed admin.
 
-**Setup handoff (steps you cannot perform — durable GitHub App install, repo
-authorization).** Raise them only when the chosen work genuinely needs them, then
+**Setup handoff (steps you cannot perform — durable provider authorization,
+repository coverage, Review Agent selection).** Raise them only when a real
+milestone makes the capability relevant, then
 guide that one step to completion — do not raise setup as an opening menu, and do
 not give brittle click-by-click paths. When you do hand off, give the most
-specific stable target available (product deep link; GitHub install URL only when
-the URL/App slug is known; otherwise the console base URL plus a durable area like
-Settings / Integrations). Do not guess slugs or URLs, and do not expose tokens or
-secrets. If the human is not an admin, do not send them into an admin-only
-surface; involve the responsible admin.
+specific stable target available (product deep link when authoritative;
+otherwise **Settings → Setup**). Do not guess slugs or URLs, and do not expose
+tokens or secrets. If the human is not an admin, do not send them into an
+admin-only surface; involve the responsible admin.
 
 ## Hard Rules
 
@@ -587,16 +613,24 @@ surface; involve the responsible admin.
   first value task delivers a verified result (see **After value lands**) — tied
   to that win, one line, no repeated nudging.
 - When the first value result is a GitHub PR, consume the task chat's
-  follow/tracking status and, only for a confirmed admin when App coverage is
-  missing, surface the one-time App-install guidance from **After a GitHub value
-  PR opens** in this launcher. For a GitLab MR, consume the task chat's
+  follow/tracking status. When App coverage is missing, do not repeat the task
+  chat's Setup destination or explanation in this launcher. For a GitLab MR,
+  consume the task chat's
   `first-tree gitlab follow <url>` result and report its returned pending or
   active state. Attention is inbound-only; only pending waits for a matching
   valid webhook. If follow failed, report only that chat attention gap and do
   not treat the MR as invalid. Never substitute `first-tree github follow`,
-  **Settings -> GitHub**, or other GitHub App guidance. This does not replace
+  **Settings → Setup** for GitHub App installation, or other GitHub App
+  guidance. This does not replace
   the tree offer; if both apply, keep each to a short sentence and do not repeat
   either later.
+- After value against a pre-existing populated tree, check Context Review
+  configuration and give a confirmed admin at most one **Settings → Setup**
+  handoff when no Reviewer is configured. A dedicated tree task owns this
+  handoff for its own PR/MR; never repeat it in the launcher. Never make it an
+  onboarding gate, treat configuration as a health check, infer debt from an
+  ambiguous state, prompt a member to configure it, or perform the Team mutation
+  from this launcher.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the
   value tasks listed individually; never a one-option ask; no "Skip for now"
