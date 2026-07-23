@@ -19,6 +19,58 @@ function project() {
 }
 
 describe("GitLab webhook normalization", () => {
+  it("classifies GitLab System Hook merge requests and ignores unrelated instance events", () => {
+    const mr = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "System Hook",
+      body: {
+        object_kind: "merge_request",
+        project: project(),
+        user: { username: "alice" },
+        reviewers: [],
+        object_attributes: {
+          iid: 7,
+          action: "open",
+          title: "System Hook MR",
+          url: "https://gitlab.internal/Acme/API/-/merge_requests/7",
+        },
+      },
+    });
+    expect(mr.event).toMatchObject({
+      eventType: "merge_request",
+      kind: "opened",
+      entity: { type: "pull_request", key: "99:pull_request:7" },
+    });
+
+    const repositoryUpdate = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "System Hook",
+      body: { event_name: "repository_update", project_id: 99 },
+    });
+    expect(repositoryUpdate).toMatchObject({
+      observation: null,
+      event: null,
+      entityIdentity: null,
+    });
+  });
+
+  it("rejects missing or contradictory GitLab System Hook discriminators", () => {
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "System Hook",
+        body: {},
+      }),
+    ).toThrow("requires event_name or object_kind=merge_request");
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "System Hook",
+        body: { event_name: "repository_update", object_kind: "merge_request" },
+      }),
+    ).toThrow("event_name does not match object_kind");
+  });
+
   it("normalizes merge request, issue, and note payloads without exposing raw provider fields", () => {
     const mr = normalizeGitlabWebhook({
       ...base,

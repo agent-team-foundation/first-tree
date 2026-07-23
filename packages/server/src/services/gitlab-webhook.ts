@@ -296,15 +296,30 @@ export function normalizeGitlabWebhook(input: {
   body: unknown;
 }): NormalizedGitlabWebhook {
   const payload = object(input.body, "GitLab webhook body");
-  const objectKind = requiredString(payload.object_kind, "object_kind");
   const expectedKind: Record<string, string> = {
     "Merge Request Hook": "merge_request",
     "Issue Hook": "issue",
     "Note Hook": "note",
     "Test Hook": "test",
   };
-  const expected = expectedKind[input.eventHeader];
-  if (expected && objectKind !== expected) throw new BadRequestError("X-Gitlab-Event does not match object_kind");
+  let expected: string | undefined;
+  if (input.eventHeader === "System Hook") {
+    const eventName = payload.event_name === undefined ? undefined : requiredString(payload.event_name, "event_name");
+    const objectKind =
+      payload.object_kind === undefined ? undefined : requiredString(payload.object_kind, "object_kind");
+    if (eventName && objectKind && eventName !== objectKind) {
+      throw new BadRequestError("GitLab System Hook event_name does not match object_kind");
+    }
+    const discriminator = objectKind === "merge_request" ? objectKind : eventName;
+    if (!discriminator) {
+      throw new BadRequestError("GitLab System Hook requires event_name or object_kind=merge_request");
+    }
+    expected = ["merge_request", "issue", "note", "test"].includes(discriminator) ? discriminator : undefined;
+  } else {
+    const objectKind = requiredString(payload.object_kind, "object_kind");
+    expected = expectedKind[input.eventHeader];
+    if (expected && objectKind !== expected) throw new BadRequestError("X-Gitlab-Event does not match object_kind");
+  }
   const ingress: ScmIngressContext = {
     provider: "gitlab",
     source: { organizationId: input.organizationId, externalId: input.connectionId },

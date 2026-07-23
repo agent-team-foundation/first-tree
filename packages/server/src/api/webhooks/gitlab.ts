@@ -70,6 +70,18 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           failureMarked.add(request);
           throw new BadRequestError("X-Gitlab-Event is required");
         }
+        if (eventHeader !== "System Hook") {
+          await markGitlabProcessingFailure(
+            app.db,
+            endpoint.connection.id,
+            endpoint.connection.tokenHash,
+            "unsupported_hook_type",
+          );
+          failureMarked.add(request);
+          throw new BadRequestError(
+            "Only GitLab System Hooks are supported; configure this webhook URL under GitLab /admin/hooks",
+          );
+        }
         eventHeaderByRequest.set(request, eventHeader);
         return payload;
       },

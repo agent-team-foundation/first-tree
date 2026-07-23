@@ -81,7 +81,7 @@ async function postMr(app: App, bearer: string, body: object, stableId?: string,
     url: `/api/v1/webhooks/gitlab/${bearer}`,
     headers: {
       "content-type": "application/json",
-      "x-gitlab-event": "Merge Request Hook",
+      "x-gitlab-event": "System Hook",
       "user-agent": userAgent,
       ...(stableId ? { "idempotency-key": stableId } : {}),
     },
@@ -146,7 +146,21 @@ describe("GitLab Stage 3 personnel routing", () => {
     );
 
     const payload = mergeRequestPayload({ projectPath: "Acme/Reviews" });
-    const first = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/14.10.5");
+    const rejectedProjectHook = await app.inject({
+      method: "POST",
+      url: `/api/v1/webhooks/gitlab/${connection.bearer}`,
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Merge Request Hook",
+      },
+      payload: JSON.stringify(payload),
+    });
+    expect(rejectedProjectHook.statusCode).toBe(400);
+    expect(
+      (await app.db.select().from(chats)).filter((chat) => chat.metadata.contextTreeReviewer === true),
+    ).toHaveLength(0);
+
+    const first = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/11.11.3");
     expect(first.statusCode).toBe(200);
 
     const reviewerChats = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
@@ -346,7 +360,7 @@ describe("GitLab Stage 3 personnel routing", () => {
         },
       }),
     });
-    expect(note.statusCode).toBe(200);
+    expect(note.statusCode).toBe(400);
     expect(
       reviewerChat ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id)) : [],
     ).toHaveLength(3);
@@ -406,7 +420,7 @@ describe("GitLab Stage 3 personnel routing", () => {
         connectionId: "connection-1",
         instanceOrigin: "https://gitlab.internal",
         stableDeliveryId: null,
-        eventHeader: "Merge Request Hook",
+        eventHeader: "System Hook",
         body,
       });
 
