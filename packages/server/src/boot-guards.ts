@@ -11,6 +11,7 @@ export function assertBootConfigValid(config: Config): void {
   assertSecretsValid(config);
   assertProductionRequiresPublicUrl(config);
   assertGithubAppConfigComplete(config);
+  assertS3ConfigComplete(config);
 }
 
 function assertSecretsValid(config: Config): void {
@@ -94,6 +95,35 @@ function assertGithubAppConfigComplete(config: Config): void {
     throw new Error(
       "FIRST_TREE_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
         "If the value came from a single-line env file, replace literal `\\n` with real newlines.",
+    );
+  }
+}
+
+function assertS3ConfigComplete(config: Config): void {
+  // All-or-none guard for the S3 block, mirroring the GitHub App pattern:
+  // setting any FIRST_TREE_S3_* var activates the block, and a partially-set
+  // block almost always means the operator copied the env recipe but missed
+  // one var. The Zod schema on `s3.*` enforces `.min(1)` so blank values
+  // fail config parse before this runs — this guard is the belt-and-braces
+  // backstop with an actionable message. `endpoint` and `forcePathStyle`
+  // are deliberately exempt: empty endpoint = AWS standard endpoint, and
+  // forcePathStyle has a safe default.
+  const s3 = config.s3;
+  if (!s3) return;
+
+  const required: Record<string, string | undefined> = {
+    FIRST_TREE_S3_REGION: s3.region,
+    FIRST_TREE_S3_BUCKET: s3.bucket,
+    FIRST_TREE_S3_ACCESS_KEY_ID: s3.accessKeyId,
+    FIRST_TREE_S3_SECRET_ACCESS_KEY: s3.secretAccessKey,
+  };
+  const missing = Object.entries(required)
+    .filter(([, v]) => !v || v.trim().length === 0)
+    .map(([k]) => k);
+  if (missing.length > 0) {
+    throw new Error(
+      `S3 attachment storage is half-configured — missing env vars: ${missing.join(", ")}. ` +
+        "Set all four or unset every FIRST_TREE_S3_* var.",
     );
   }
 }

@@ -1,3 +1,4 @@
+import { get as httpGet } from "node:http";
 import type { AgentType, RuntimeProvider } from "@first-tree/shared";
 import { setConfig } from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
@@ -25,6 +26,82 @@ import { uuidv7 } from "../uuid.js";
  * throwing.
  */
 export const INVALID_BCRYPT_PLACEHOLDER = `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`;
+
+type PresignedFetchResult = {
+  status: number;
+  contentType: string | null;
+  contentDisposition: string | null;
+  server: string | null;
+  requestId: string | null;
+  body: Buffer;
+};
+
+/**
+ * GET a URL over a FRESH TCP connection (`agent: false` — no keep-alive
+ * pooling). Matters here: under full-suite load, Docker Desktop's userspace
+ * port proxy can wedge an idle pooled connection and answer a bare
+ * `500 unexpected` (no MinIO headers) on every request reused over it,
+ * while fresh connections succeed. undici's global fetch pools by default,
+ * so plain `fetch()` keeps hitting the same wedged connection.
+ */
+function httpGetFresh(url: string): Promise<PresignedFetchResult> {
+  return new Promise((resolve, reject) => {
+    const req = httpGet(url, { agent: false }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        // Node types multi-value-capable headers as string | string[]; these
+        // four are single-valued in practice — narrow without `as` by taking
+        // the first entry when an array shows up.
+        const first = (value: string | string[] | undefined): string | null =>
+          Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+        resolve({
+          status: res.statusCode ?? 0,
+          contentType: first(res.headers["content-type"]),
+          contentDisposition: first(res.headers["content-disposition"]),
+          server: first(res.headers.server),
+          requestId: first(res.headers["x-amz-request-id"]),
+          body: Buffer.concat(chunks),
+        });
+      });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+}
+
+/**
+ * Fetch a presigned attachment URL, failing with the response body on
+ * non-200 so a MinIO/S3-side error (signature, bucket, internal) is
+ * diagnosable from the test output instead of a bare status mismatch.
+ *
+ * Retries 5xx a few times over fresh connections (see httpGetFresh) — a
+ * Docker Desktop proxy hiccup is a local infra artifact, not the behavior
+ * under test. 4xx and persistent failures still surface with full
+ * diagnostics.
+ */
+export async function fetchPresignedAttachment(location: string | undefined): Promise<{
+  contentType: string | null;
+  contentDisposition: string | null;
+  body: Buffer;
+}> {
+  if (!location) throw new Error("missing Location header on 302");
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    const res = await httpGetFresh(location);
+    if (res.status === 200) {
+      return { contentType: res.contentType, contentDisposition: res.contentDisposition, body: res.body };
+    }
+    lastError = new Error(
+      `presigned GET failed: ${res.status} server=${res.server ?? "-"} amz-req=${res.requestId ?? "-"} url=${location.slice(0, 120)} — ${res.body.toString("utf8").slice(0, 500)}`,
+    );
+    if (res.status < 500) break; // 4xx is deterministic — fail without retrying
+  }
+  throw lastError;
+}
 
 const DEFAULT_TEST_PASSWORD = "testpassword123";
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
@@ -77,6 +154,14 @@ export type CreateTestAppOptions = {
   runtimeHttpTokenEnforcement?: boolean;
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
+  /**
+   * Pass `s3: false` to drop the `s3` block from the test config entirely,
+   * simulating a deployment without object storage (upload/delete paths
+   * answer 503; legacy bytea downloads keep working). Default: build the
+   * block from the per-worker `VITEST_S3_*` env (global-setup provisions a
+   * MinIO testcontainer locally, or reuses the CI-provided one).
+   */
+  s3?: false;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
    * `/github-app-installation/install-url` 503 test — the slug is the
@@ -176,6 +261,18 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       },
     },
     trustProxy: false,
+    ...(opts.s3 === false
+      ? {}
+      : {
+          s3: {
+            endpoint: process.env.VITEST_S3_ENDPOINT,
+            region: process.env.VITEST_S3_REGION ?? "us-east-1",
+            bucket: process.env.VITEST_S3_BUCKET ?? "attachments-w1",
+            accessKeyId: process.env.VITEST_S3_ACCESS_KEY_ID ?? "minioadmin",
+            secretAccessKey: process.env.VITEST_S3_SECRET_ACCESS_KEY ?? "minioadmin",
+            forcePathStyle: true,
+          },
+        }),
     connectBootstrap: {
       portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
       ...opts.connectBootstrap,
@@ -196,6 +293,9 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // call it explicitly via `sweepChatArchive`, so the background
       // timer would only add nondeterminism.
       archiveSweepIntervalSeconds: 0,
+      // Same rationale for the attachment orphan sweeper: suites call
+      // `sweepOrphanAttachments` directly.
+      attachmentSweepIntervalSeconds: 0,
       archiveMappedIdleSeconds: 60 * 60,
       notificationWebhookUrl: undefined,
     },

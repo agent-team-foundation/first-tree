@@ -297,6 +297,14 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.addContentTypeParser(/^image\//, { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });
+  // The route rejects `application/octet-stream` with a 400 nudging callers
+  // to image/* — but it can only do so when the body parses. Scoped buffer
+  // parser (this plugin only) so the rejection keeps working now that the
+  // global octet-stream parser is gone (attachment uploads own the streaming
+  // pass-through variant — see api/orgs/attachments.ts).
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
 
   app.put<{ Params: { uuid: string } }>(
     "/:uuid/avatar",

@@ -67,6 +67,32 @@ start web with:
 VITE_PROXY_TARGET=http://127.0.0.1:8001 pnpm --filter @first-tree/web dev --host 127.0.0.1
 ```
 
+## Object Storage (Attachments)
+
+Attachment bytes live in S3-compatible object storage; Postgres keeps only
+metadata. `docker compose up -d` starts a local MinIO (API on
+`http://localhost:9000`, console on `http://localhost:9001`, credentials
+`minioadmin` / `minioadmin`) and creates the `first-tree-attachments` bucket.
+Enable it by uncommenting the `FIRST_TREE_S3_*` block in `.env` (see
+`.env.example`). Without that block the server still boots — attachment
+upload/delete paths answer 503 while previously stored legacy rows remain
+downloadable.
+
+Production notes for AWS S3 / Cloudflare R2:
+
+- Downloads are 302 redirects to presigned URLs, so the browser fetches the
+  object endpoint directly. Configure **bucket CORS** for your web origin
+  (MinIO allows `*` out of the box; AWS S3 and R2 do not). The cross-origin
+  redirect strips the `Authorization` header per the fetch spec, so no JWT
+  reaches the object store.
+- Add an **AbortIncompleteMultipartUpload** lifecycle rule (e.g. 7 days) so
+  multipart uploads abandoned mid-stream (client disconnects, oversize
+  aborts) cannot accumulate invisible parts. The server aborts the uploads
+  it starts, but the lifecycle rule is the backstop.
+- `scripts/migrate-attachments-to-s3.ts` drains pre-S3 rows (bytes stored in
+  the `attachments.data` column) into the bucket; it is idempotent and safe
+  to rerun.
+
 ## GitHub Integration
 
 A real GitHub App is not required for ordinary UI, API, CLI, or database work.

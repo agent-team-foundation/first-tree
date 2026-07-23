@@ -43,6 +43,7 @@ const baseConfig: Config = {
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,
+    attachmentSweepIntervalSeconds: 0,
     archiveMappedIdleSeconds: 60 * 60,
     notificationWebhookUrl: undefined,
   },

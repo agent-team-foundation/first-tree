@@ -88,6 +88,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
         request.params.messageId,
         identity.uuid,
         body,
+        app.attachmentStore,
       );
 
       return {

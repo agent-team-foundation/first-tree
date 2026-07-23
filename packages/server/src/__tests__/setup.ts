@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
+import { WORKER_BUCKET_PREFIX, WORKER_DB_PREFIX } from "./test-config.js";
 
 /** Fixed UUID for the default organization used across all tests. */
 // Fixed test fixture UUID — not a real org, recreated before each test
@@ -28,18 +29,30 @@ if (!process.env.FIRST_TREE_DEV_CALLBACK_ENABLED) {
 // process.env.DATABASE_URL afterwards sees the worker-scoped URL.
 selectWorkerDatabase();
 
+// Same worker-slot logic for the attachment bucket: each worker owns
+// `attachments-w<slot>` (pre-created in global-setup.ts) so file-parallel
+// attachment tests never share S3 objects.
+selectWorkerS3Bucket();
+
+function selectWorkerSlot() {
+  const maxWorkers = Number.parseInt(process.env.VITEST_PG_MAX_WORKERS ?? "1", 10);
+  // VITEST_POOL_ID is 1-based per pool slot. Modulo-cap so values larger than
+  // the pre-created resource count fall back to a valid one (defensive — the
+  // cap matches vitest.config's maxForks today).
+  const rawId = Number.parseInt(process.env.VITEST_POOL_ID ?? "1", 10);
+  return ((rawId - 1) % Math.max(1, maxWorkers)) + 1;
+}
+
 function selectWorkerDatabase() {
   const baseUrl = process.env.VITEST_PG_BASE_URL;
-  const maxWorkers = Number.parseInt(process.env.VITEST_PG_MAX_WORKERS ?? "1", 10);
   if (!baseUrl) return;
-  // VITEST_POOL_ID is 1-based per pool slot. Modulo-cap so values larger than
-  // the pre-created DB count fall back to a valid one (defensive — the cap
-  // matches vitest.config's maxForks today).
-  const rawId = Number.parseInt(process.env.VITEST_POOL_ID ?? "1", 10);
-  const slot = ((rawId - 1) % Math.max(1, maxWorkers)) + 1;
   const workerUrl = new URL(baseUrl);
-  workerUrl.pathname = `/vitest_w${slot}`;
+  workerUrl.pathname = `/${WORKER_DB_PREFIX}${selectWorkerSlot()}`;
   process.env.DATABASE_URL = workerUrl.toString();
+}
+
+function selectWorkerS3Bucket() {
+  process.env.VITEST_S3_BUCKET = `${WORKER_BUCKET_PREFIX}${selectWorkerSlot()}`;
 }
 
 // Reuse a single DB connection across all beforeEach calls
@@ -64,6 +77,7 @@ const TRUNCATE_TABLES = [
   "session_events",
   "notifications",
   "messages",
+  "attachments",
   "chat_user_state",
   "chat_membership",
   "chats",

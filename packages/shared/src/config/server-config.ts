@@ -278,6 +278,31 @@ export const serverConfigSchema = defineConfig({
     origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),
   }),
   /**
+   * S3-compatible object storage for attachment bytes. Optional at boot:
+   * when the block is absent the server still starts (legacy bytea downloads
+   * keep working), while attachment upload / delete paths fail fast with
+   * 503. Setting any `FIRST_TREE_S3_*` var activates the block, and the
+   * boot guard then requires the full credential set (all-or-none, same
+   * pattern as `oauth.githubApp`) — a half-wired store is worse than none.
+   *
+   * `endpoint` is the only optional field inside the block: leave it empty
+   * for the AWS standard endpoint of `region`; set it for MinIO / R2 /
+   * other S3-compatible stores. `forcePathStyle` is required by MinIO and
+   * most self-hosted stores (path-style `host/bucket/key` instead of
+   * virtual-host `bucket.host/key`).
+   */
+  s3: optional({
+    endpoint: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_S3_ENDPOINT" }),
+    region: field(z.string().min(1), { env: "FIRST_TREE_S3_REGION" }),
+    bucket: field(z.string().min(1), { env: "FIRST_TREE_S3_BUCKET" }),
+    accessKeyId: field(z.string().min(1), { env: "FIRST_TREE_S3_ACCESS_KEY_ID" }),
+    secretAccessKey: field(z.string().min(1), {
+      env: "FIRST_TREE_S3_SECRET_ACCESS_KEY",
+      secret: true,
+    }),
+    forcePathStyle: field(z.boolean().default(false), { env: "FIRST_TREE_S3_FORCE_PATH_STYLE" }),
+  }),
+  /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
    * in production where First Tree sits behind Cloudflare / a reverse proxy — otherwise
    * unauthenticated rate-limit fallback keys resolve to the proxy. Default false;
@@ -472,6 +497,16 @@ export const serverConfigSchema = defineConfig({
      */
     archiveSweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(300), {
       env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
+    }),
+    /**
+     * Attachment orphan sweeper cadence. Each tick picks up to 200
+     * attachments older than the 24h orphan grace and deletes the ones no
+     * known reference point uses (object + row). Set to 0 to disable
+     * (useful in tests and one-off CLI runs). Default 3600s (1h) bounds
+     * orphan lifetime without hot-looping the messages reference scan.
+     */
+    attachmentSweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(3600), {
+      env: "FIRST_TREE_ATTACHMENT_SWEEP_INTERVAL_SECONDS",
     }),
     /**
      * Idle threshold for SCM-originated chats. Mapped chats require all GitHub
