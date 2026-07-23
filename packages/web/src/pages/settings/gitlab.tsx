@@ -1,7 +1,9 @@
-import type {
-  GitlabConnectionSecretResponse,
-  GitlabConnectionSummary,
-  GitlabIdentityLinkSummary,
+import {
+  GITLAB_CONNECTION_READINESS,
+  type GitlabConnectionReadiness,
+  type GitlabConnectionSecretResponse,
+  type GitlabConnectionSummary,
+  type GitlabIdentityLinkSummary,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, ExternalLink } from "lucide-react";
@@ -34,12 +36,7 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
 import { useToast } from "../../components/ui/toast.js";
-import {
-  GITLAB_CONNECTION_READINESS,
-  type GitlabConnectionReadiness,
-  gitlabConnectionPollingInterval,
-  gitlabConnectionReadiness,
-} from "../../lib/gitlab-connection-readiness.js";
+import { gitlabConnectionPollingInterval } from "../../lib/gitlab-connection-readiness.js";
 import { useCopyFeedback } from "../../lib/use-copy-feedback.js";
 
 const identityKey = (organizationId: string | null) => ["gitlab-identity-links", organizationId] as const;
@@ -221,7 +218,7 @@ function ConnectionSummary(props: {
   onDelete: () => void;
 }) {
   const { connection } = props;
-  const readiness = gitlabConnectionReadiness(connection);
+  const readiness = connection.health.readiness;
   const status = CONNECTION_STATUS[readiness];
   return (
     <div className="space-y-3 py-4">
@@ -622,9 +619,7 @@ function OneTimeSecretDialog(props: {
     props.onClose();
   };
   const adminUrl = props.secret ? gitlabAdminHooksUrl(props.secret.connection.instanceOrigin) : null;
-  const readiness = props.connection
-    ? gitlabConnectionReadiness(props.connection)
-    : GITLAB_CONNECTION_READINESS.waiting;
+  const readiness = props.connection?.health.readiness ?? GITLAB_CONNECTION_READINESS.waiting;
   return (
     <Dialog
       open={props.secret !== null}

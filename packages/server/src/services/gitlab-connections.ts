@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  GITLAB_CONNECTION_READINESS,
+  type GitlabConnectionReadiness,
   type GitlabConnectionSummary,
   type GitlabReviewerMode,
   resolveGitLabRepositoryWebIdentity,
@@ -390,6 +392,24 @@ export async function markGitlabProcessingFailure(
     .where(and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.tokenHash, tokenHash)));
 }
 
+export function projectGitlabConnectionReadiness(
+  connection: Pick<
+    typeof gitlabConnections.$inferSelect,
+    "lastValidInboundAt" | "lastSystemHookMergeRequestInboundAt" | "lastProcessingFailureAt"
+  >,
+): GitlabConnectionReadiness {
+  if (
+    connection.lastProcessingFailureAt &&
+    (!connection.lastSystemHookMergeRequestInboundAt ||
+      connection.lastProcessingFailureAt.getTime() >= connection.lastSystemHookMergeRequestInboundAt.getTime())
+  ) {
+    return GITLAB_CONNECTION_READINESS.needsAttention;
+  }
+  if (connection.lastSystemHookMergeRequestInboundAt) return GITLAB_CONNECTION_READINESS.routingVerified;
+  if (connection.lastValidInboundAt) return GITLAB_CONNECTION_READINESS.transportReceived;
+  return GITLAB_CONNECTION_READINESS.waiting;
+}
+
 export async function getGitlabConnectionSummary(db: Database, connectionId: string): Promise<GitlabConnectionSummary> {
   const [connection] = await db.select().from(gitlabConnections).where(eq(gitlabConnections.id, connectionId)).limit(1);
   if (!connection) throw new NotFoundError("GitLab connection not found");
@@ -407,6 +427,7 @@ export async function getGitlabConnectionSummary(db: Database, connectionId: str
       lastSchemaAnomalyCode: connection.lastReviewerSchemaAnomalyCode,
     },
     health: {
+      readiness: projectGitlabConnectionReadiness(connection),
       lastValidInboundAt: connection.lastValidInboundAt?.toISOString() ?? null,
       lastSystemHookMergeRequestInboundAt: connection.lastSystemHookMergeRequestInboundAt?.toISOString() ?? null,
       lastProcessingFailureAt: connection.lastProcessingFailureAt?.toISOString() ?? null,

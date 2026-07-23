@@ -46,6 +46,7 @@ function connection(overrides: Partial<GitlabConnectionSummary> = {}): GitlabCon
       lastSchemaAnomalyCode: null,
     },
     health: {
+      readiness: "routing_verified",
       lastValidInboundAt: "2026-07-15T08:00:00.000Z",
       lastSystemHookMergeRequestInboundAt: "2026-07-15T08:00:00.000Z",
       lastProcessingFailureAt: null,
@@ -296,6 +297,7 @@ describe("SettingsGitlabPage", () => {
         endpointSeen: false,
         stableDeliveryObserved: false,
         health: {
+          readiness: "waiting",
           lastValidInboundAt: null,
           lastSystemHookMergeRequestInboundAt: null,
           lastProcessingFailureAt: null,
@@ -328,6 +330,7 @@ describe("SettingsGitlabPage", () => {
       connection({
         instanceOrigin: "https://gitlab.internal:8443",
         health: {
+          readiness: "transport_received",
           lastValidInboundAt: "2026-07-15T08:00:00.000Z",
           lastSystemHookMergeRequestInboundAt: null,
           lastProcessingFailureAt: null,
@@ -348,9 +351,10 @@ describe("SettingsGitlabPage", () => {
     apiMocks.listGitlabConnections.mockResolvedValue([
       connection({
         health: {
+          readiness: "needs_attention",
           lastValidInboundAt: "2026-07-15T08:00:00.000Z",
           lastSystemHookMergeRequestInboundAt: "2026-07-15T08:00:00.000Z",
-          lastProcessingFailureAt: "2026-07-15T08:00:00.000Z",
+          lastProcessingFailureAt: "2026-07-15T07:59:00.000Z",
           lastProcessingFailureCode: "malformed_payload",
         },
       }),

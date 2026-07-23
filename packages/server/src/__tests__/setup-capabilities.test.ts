@@ -10,6 +10,7 @@ import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
+import { projectGitlabConnectionReadiness } from "../services/gitlab-connections.js";
 import { getTeamSetupCapabilities } from "../services/setup-capabilities.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -281,6 +282,49 @@ function withoutObservedAt(value: unknown): unknown {
       .map(([key, nested]) => [key, withoutObservedAt(nested)]),
   );
 }
+
+describe("projectGitlabConnectionReadiness", () => {
+  it.each([
+    ["waiting", null, null, null, "waiting"],
+    ["transport only", new Date("2026-07-23T08:00:00.000Z"), null, null, "transport_received"],
+    [
+      "MR verified",
+      new Date("2026-07-23T08:00:00.000Z"),
+      new Date("2026-07-23T08:01:00.000Z"),
+      null,
+      "routing_verified",
+    ],
+    [
+      "failure without MR",
+      new Date("2026-07-23T08:00:00.000Z"),
+      null,
+      new Date("2026-07-23T08:01:00.000Z"),
+      "needs_attention",
+    ],
+    [
+      "same-time failure wins",
+      new Date("2026-07-23T08:00:00.000Z"),
+      new Date("2026-07-23T08:01:00.000Z"),
+      new Date("2026-07-23T08:01:00.000Z"),
+      "needs_attention",
+    ],
+    [
+      "newer MR recovers",
+      new Date("2026-07-23T08:02:00.000Z"),
+      new Date("2026-07-23T08:02:00.000Z"),
+      new Date("2026-07-23T08:01:00.000Z"),
+      "routing_verified",
+    ],
+  ] as const)("%s", (_label, lastValidInboundAt, lastSystemHookMergeRequestInboundAt, lastProcessingFailureAt, expected) => {
+    expect(
+      projectGitlabConnectionReadiness({
+        lastValidInboundAt,
+        lastSystemHookMergeRequestInboundAt,
+        lastProcessingFailureAt,
+      }),
+    ).toBe(expected);
+  });
+});
 
 describe("Team setup capabilities", () => {
   const getApp = useTestApp();

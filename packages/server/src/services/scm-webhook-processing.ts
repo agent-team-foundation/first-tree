@@ -10,15 +10,27 @@ export type ScmAudienceResolution<TTarget> = {
   actorHumanId: string | null;
 };
 
+export type ScmObservationOutcome = "not_applicable" | "applied" | "failed";
+
 export type ScmProcessingResult<TDeliveryStats, TProviderResult> =
   | { outcome: "duplicate" }
-  | { outcome: "provider_only"; providerResult: TProviderResult }
+  | {
+      outcome: "provider_only";
+      observationOutcome: ScmObservationOutcome;
+      providerResult: TProviderResult;
+    }
   | {
       outcome: "audience_empty";
       reason: "audience_empty_no_targets" | "audience_empty_with_targets";
+      observationOutcome: ScmObservationOutcome;
       providerResult: TProviderResult;
     }
-  | { outcome: "delivered"; deliveryStats: TDeliveryStats; providerResult: TProviderResult };
+  | {
+      outcome: "delivered";
+      deliveryStats: TDeliveryStats;
+      observationOutcome: ScmObservationOutcome;
+      providerResult: TProviderResult;
+    };
 
 type ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult> = {
   db: Database;
@@ -59,8 +71,13 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
 
   try {
     const providerResult = await input.runProviderWork();
+    let observationOutcome: ScmObservationOutcome = "not_applicable";
     if (input.observation) {
-      await input.applyObservation(input.observation).catch((err) => {
+      try {
+        await input.applyObservation(input.observation);
+        observationOutcome = "applied";
+      } catch (err) {
+        observationOutcome = "failed";
         // Projection refresh is deliberately independent from notification
         // delivery. A temporary projection failure must not suppress an
         // otherwise valid card or make a provider retry duplicate it.
@@ -74,9 +91,9 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
           },
           "failed to apply SCM entity observation",
         );
-      });
+      }
     }
-    if (!input.event) return { outcome: "provider_only", providerResult };
+    if (!input.event) return { outcome: "provider_only", observationOutcome, providerResult };
 
     const audience = await input.resolveAudience(input.event);
     if (audience.targets.length === 0) {
@@ -93,11 +110,11 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
         },
         "SCM webhook audience empty, skipping",
       );
-      return { outcome: "audience_empty", reason, providerResult };
+      return { outcome: "audience_empty", reason, observationOutcome, providerResult };
     }
 
     const deliveryStats = await input.deliver(input.event, audience);
-    return { outcome: "delivered", deliveryStats, providerResult };
+    return { outcome: "delivered", deliveryStats, observationOutcome, providerResult };
   } catch (err) {
     if (deliveryId) {
       await unclaimEvent(input.db, deliveryId, input.ingress.provider).catch((unclaimErr) => {

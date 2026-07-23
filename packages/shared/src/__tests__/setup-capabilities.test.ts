@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  GITLAB_CONNECTION_READINESS,
+  gitlabConnectionReadinessSchema,
   setupActionKindSchema,
   setupBlockerCodeSchema,
   setupBlockerSchema,
@@ -68,6 +70,9 @@ describe("TeamSetupCapabilities public contract", () => {
     expect(setupBlockerCodeSchema.parse("github_webhook_events_missing")).toBe("github_webhook_events_missing");
     expect(setupBlockerCodeSchema.parse("gitlab_merge_request_event_not_seen")).toBe(
       "gitlab_merge_request_event_not_seen",
+    );
+    expect(gitlabConnectionReadinessSchema.parse(GITLAB_CONNECTION_READINESS.routingVerified)).toBe(
+      GITLAB_CONNECTION_READINESS.routingVerified,
     );
   });
 

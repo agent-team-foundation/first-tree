@@ -80,9 +80,7 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
         instanceOrigin: "https://gitlab.acme.test",
         endpointSeen: true,
         health: {
-          lastValidInboundAt: "2026-07-23T00:00:00.000Z",
-          lastSystemHookMergeRequestInboundAt: "2026-07-23T00:00:00.000Z",
-          lastProcessingFailureAt: null,
+          readiness: "routing_verified",
         },
       },
     },
@@ -388,9 +386,7 @@ describe("Settings Setup overview", () => {
         instanceOrigin: "https://gitlab.acme.test",
         endpointSeen: true,
         health: {
-          lastValidInboundAt: "2026-07-23T00:00:00.000Z",
-          lastSystemHookMergeRequestInboundAt: null,
-          lastProcessingFailureAt: null,
+          readiness: "transport_received" as const,
         },
       },
     };
@@ -449,7 +445,7 @@ describe("Settings Setup overview", () => {
     });
   });
 
-  it("gives an equal-time GitLab processing failure precedence over MR readiness", () => {
+  it("renders the Server-projected GitLab processing state", () => {
     const providers = buildSetupRows(
       facts({
         github: { state: "ready", value: null },
@@ -460,9 +456,7 @@ describe("Settings Setup overview", () => {
             instanceOrigin: "https://gitlab.acme.test",
             endpointSeen: true,
             health: {
-              lastValidInboundAt: "2026-07-23T00:01:00.000Z",
-              lastSystemHookMergeRequestInboundAt: "2026-07-23T00:01:00.000Z",
-              lastProcessingFailureAt: "2026-07-23T00:01:00.000Z",
+              readiness: "needs_attention",
             },
           },
         },
@@ -553,8 +547,9 @@ describe("Settings Setup overview", () => {
         instanceOrigin: "https://gitlab.acme.test",
         endpointSeen: true,
         health: {
+          readiness: "transport_received",
           lastValidInboundAt: "2026-07-23T00:00:00.000Z",
-          lastSystemHookMergeRequestInboundAt: null,
+          lastSystemHookMergeRequestInboundAt: "2026-07-23T00:01:00.000Z",
           lastProcessingFailureAt: null,
         },
       },

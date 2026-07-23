@@ -1,3 +1,4 @@
+import { GITLAB_CONNECTION_READINESS, type GitlabConnectionReadiness } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bot, CircleCheck, FolderGit2, GitFork, Laptop, type LucideIcon, Webhook } from "lucide-react";
 import { Link, useNavigate } from "react-router";
@@ -10,7 +11,6 @@ import { getContextTreeSetting } from "../../api/org-settings.js";
 import { listTeamResourcesForOrg } from "../../api/resources.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
-import { GITLAB_CONNECTION_READINESS, gitlabConnectionReadiness } from "../../lib/gitlab-connection-readiness.js";
 import { cn } from "../../lib/utils.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 
@@ -46,9 +46,7 @@ export type SetupFacts = {
     instanceOrigin: string;
     endpointSeen: boolean;
     health: {
-      lastValidInboundAt: string | null;
-      lastSystemHookMergeRequestInboundAt: string | null;
-      lastProcessingFailureAt: string | null;
+      readiness: GitlabConnectionReadiness;
     };
   } | null>;
 };
@@ -139,7 +137,7 @@ function gitlabOriginLabel(origin: string): string {
 function gitlabConnectionIssue(
   gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
 ): string | null {
-  const readiness = gitlabConnectionReadiness(gitlab);
+  const readiness = gitlab.health.readiness;
   if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "Processing issue";
   if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "Waiting for System Hook";
   if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "Waiting for merge request event";
@@ -475,9 +473,7 @@ export function SettingsSetupPage() {
                   instanceOrigin: gitlab.value[0].instanceOrigin,
                   endpointSeen: gitlab.value[0].endpointSeen,
                   health: {
-                    lastValidInboundAt: gitlab.value[0].health.lastValidInboundAt,
-                    lastSystemHookMergeRequestInboundAt: gitlab.value[0].health.lastSystemHookMergeRequestInboundAt,
-                    lastProcessingFailureAt: gitlab.value[0].health.lastProcessingFailureAt,
+                    readiness: gitlab.value[0].health.readiness,
                   },
                 }
               : null,

@@ -24,14 +24,13 @@ import {
   withCurrentGitlabConnectionFence,
   withGitlabIngressFence,
 } from "../services/gitlab-connections.js";
-import {
-  declareGitlabEntityFollow,
-  observeGitlabEntityAndResolveFollowers,
-  removeGitlabEntityFollow,
-} from "../services/gitlab-entity-follow.js";
+import * as gitlabEntityFollowService from "../services/gitlab-entity-follow.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+
+const { declareGitlabEntityFollow, observeGitlabEntityAndResolveFollowers, removeGitlabEntityFollow } =
+  gitlabEntityFollowService;
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 
@@ -610,6 +609,7 @@ describe("GitLab Stage 2A backend", () => {
     expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
       endpointSeen: true,
       health: {
+        readiness: "needs_attention",
         lastValidInboundAt: expect.any(String),
         lastSystemHookMergeRequestInboundAt: null,
         lastProcessingFailureAt: expect.any(String),
@@ -654,10 +654,87 @@ describe("GitLab Stage 2A backend", () => {
     expect(terminalMr.statusCode).toBe(200);
     expect(terminalMr.json()).toMatchObject({ outcome: "provider_only" });
     expect((await getGitlabConnectionSummary(app.db, first.connectionId)).health).toMatchObject({
+      readiness: "routing_verified",
       lastSystemHookMergeRequestInboundAt: expect.any(String),
       lastProcessingFailureAt: null,
       lastProcessingFailureCode: null,
     });
+  });
+
+  it("records observation failure against stale or missing MR evidence and recovers on a later MR", async () => {
+    const app = getApp();
+    const readyConnection = await connection(app);
+    const firstReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(71), {
+      stableId: `ready-before-observation-failure-${randomUUID()}`,
+    });
+    expect(firstReady.statusCode).toBe(200);
+    const readyBeforeFailure = await getGitlabConnectionSummary(app.db, readyConnection.connectionId);
+    expect(readyBeforeFailure.health).toMatchObject({
+      readiness: "routing_verified",
+      lastSystemHookMergeRequestInboundAt: expect.any(String),
+      lastProcessingFailureAt: null,
+    });
+
+    const observationSpy = vi.spyOn(gitlabEntityFollowService, "observeGitlabEntityAndResolveFollowers");
+    try {
+      observationSpy.mockRejectedValueOnce(new Error("entity observation unavailable"));
+      const failedDeliveryId = `ready-observation-failure-${randomUUID()}`;
+      const failedAfterReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(72), {
+        stableId: failedDeliveryId,
+      });
+      expect(failedAfterReady.statusCode).toBe(200);
+      expect(failedAfterReady.json()).toMatchObject({ outcome: "audience_empty" });
+      expect(await getGitlabConnectionSummary(app.db, readyConnection.connectionId)).toMatchObject({
+        health: {
+          readiness: "needs_attention",
+          lastSystemHookMergeRequestInboundAt: readyBeforeFailure.health.lastSystemHookMergeRequestInboundAt,
+          lastProcessingFailureAt: expect.any(String),
+          lastProcessingFailureCode: "processing_failed",
+        },
+      });
+
+      const duplicate = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(72), {
+        stableId: failedDeliveryId,
+      });
+      expect(duplicate.statusCode).toBe(200);
+      expect(duplicate.json()).toMatchObject({ outcome: "duplicate" });
+
+      const freshConnection = await connection(app, { isolatedOrg: true });
+      observationSpy.mockRejectedValueOnce(new Error("first entity observation unavailable"));
+      const failedFirstMr = await postWebhook(app, freshConnection.bearer, mergeRequestPayload(73), {
+        stableId: `fresh-observation-failure-${randomUUID()}`,
+      });
+      expect(failedFirstMr.statusCode).toBe(200);
+      expect(await getGitlabConnectionSummary(app.db, freshConnection.connectionId)).toMatchObject({
+        health: {
+          readiness: "needs_attention",
+          lastSystemHookMergeRequestInboundAt: null,
+          lastProcessingFailureAt: expect.any(String),
+          lastProcessingFailureCode: "processing_failed",
+        },
+      });
+
+      const recoveredReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(74), {
+        stableId: `ready-recovery-${randomUUID()}`,
+      });
+      const recoveredFresh = await postWebhook(app, freshConnection.bearer, mergeRequestPayload(75), {
+        stableId: `fresh-recovery-${randomUUID()}`,
+      });
+      expect(recoveredReady.statusCode).toBe(200);
+      expect(recoveredFresh.statusCode).toBe(200);
+      expect((await getGitlabConnectionSummary(app.db, readyConnection.connectionId)).health).toMatchObject({
+        readiness: "routing_verified",
+        lastProcessingFailureAt: null,
+        lastProcessingFailureCode: null,
+      });
+      expect((await getGitlabConnectionSummary(app.db, freshConnection.connectionId)).health).toMatchObject({
+        readiness: "routing_verified",
+        lastProcessingFailureAt: null,
+        lastProcessingFailureCode: null,
+      });
+    } finally {
+      observationSpy.mockRestore();
+    }
   });
 
   it("allows one chat to follow the same type and IID in two numeric projects", async () => {

@@ -472,10 +472,11 @@ describe("settings panels", () => {
           lastSchemaAnomalyCode: null,
         },
         health: {
+          readiness: "routing_verified",
           lastValidInboundAt: "2026-05-28T11:00:00.000Z",
           lastSystemHookMergeRequestInboundAt: "2026-05-28T11:00:00.000Z",
-          lastProcessingFailureAt: null,
-          lastProcessingFailureCode: null,
+          lastProcessingFailureAt: "2026-05-28T11:00:00.000Z",
+          lastProcessingFailureCode: "processing_failed",
         },
         createdAt: NOW,
         updatedAt: NOW,

@@ -1,6 +1,7 @@
 import {
   type ContextTreeProvider,
   deriveRepoLocalPath,
+  GITLAB_CONNECTION_READINESS,
   resolveContextTreeProvider,
   resolveGitLabRepositoryWebIdentity,
 } from "@first-tree/shared";
@@ -23,7 +24,6 @@ import { Section } from "../components/ui/section.js";
 import { Select } from "../components/ui/select.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { Switch } from "../components/ui/switch.js";
-import { GITLAB_CONNECTION_READINESS, gitlabConnectionReadiness } from "../lib/gitlab-connection-readiness.js";
 import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.js";
 import { fetchAllAgents } from "./team/index.js";
 
@@ -261,7 +261,7 @@ function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organi
   const originMatches =
     connection !== null &&
     resolveGitLabRepositoryWebIdentity(repo, connection.instanceOrigin)?.originMatchesConnection === true;
-  const readiness = connection ? gitlabConnectionReadiness(connection) : null;
+  const readiness = connection?.health.readiness ?? null;
   const status = !connection
     ? "Degraded · no GitLab Webhook connection"
     : !originMatches
