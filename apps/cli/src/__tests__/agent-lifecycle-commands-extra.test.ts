@@ -48,6 +48,7 @@ const coreMocks = vi.hoisted(() => ({
   installGlobalLatest: vi.fn(),
   installGlobalSpec: vi.fn(),
   installPortableSpec: vi.fn(),
+  isSafeLocalAgentName: vi.fn(() => true),
   isServiceSupported: vi.fn(),
   listLiveClientRuntimeMarkers: vi.fn(),
   loadCredentials: vi.fn(),

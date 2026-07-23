@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { AGENT_NAME_REGEX } from "@first-tree/shared";
 import { defaultConfigDir, defaultDataDir } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -136,13 +137,66 @@ export function formatStaleReason(reason: StaleAliasReason): string {
 }
 
 /**
+ * Names accepted under the previous 1–100 agent-name rule. Same charset as
+ * `AGENT_NAME_REGEX`, longer length cap: rows created before the tighter
+ * 64-char rule are grandfathered (see `schemas/agent.ts`), and their local
+ * aliases must stay removable.
+ */
+const LEGACY_AGENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,99}$/;
+
+/**
+ * Whether `name` is safe to use as a local agent alias in filesystem
+ * paths: the canonical agent-name schema, or the grandfathered legacy
+ * form. Anything else (path separators, `..`, absolute paths, hidden
+ * dirs, uppercase, over-length) is rejected so deletion sinks can never
+ * be steered outside First Tree state (SEC-030).
+ */
+export function isSafeLocalAgentName(name: string): boolean {
+  return AGENT_NAME_REGEX.test(name) || LEGACY_AGENT_NAME_REGEX.test(name);
+}
+
+/**
+ * Delete `entryName` strictly as a direct child of `baseDir`.
+ *
+ * Containment is enforced immediately before the deletion: the base dir is
+ * resolved with `realpathSync` (so a relocated/symlinked First Tree home
+ * still works) and the target must resolve to `<realBase>/<entryName>`
+ * exactly — no separators, no `..`, no absolute-path override. If the
+ * entry itself is a symlink only the link inside the base is removed,
+ * never its target: `rmSync` does not follow the final path component.
+ */
+function removeContainedEntry(baseDir: string, entryName: string, opts: { recursive: boolean }): void {
+  let realBase: string;
+  try {
+    realBase = realpathSync(baseDir);
+  } catch (err: unknown) {
+    const isMissing = err instanceof Error && "code" in err && err.code === "ENOENT";
+    if (isMissing) return; // base dir absent → nothing to delete
+    throw err;
+  }
+  const target = resolve(realBase, entryName);
+  if (dirname(target) !== realBase || basename(target) !== entryName) {
+    throw new Error(`refusing to delete outside ${baseDir}: "${entryName}"`);
+  }
+  rmSync(target, { recursive: opts.recursive, force: true });
+}
+
+/**
  * Remove an agent's local footprint: the YAML alias dir, the workspace
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
  * separately so prune and the post-rotation override cleanup can share it.
+ *
+ * Fails closed on names outside the agent-name schema: this function
+ * recursively deletes, so a traversal name (`../…`) must never reach the
+ * filesystem (SEC-030). Callers wanting a friendly error should pre-check
+ * with `isSafeLocalAgentName`.
  */
 export function removeLocalAgent(name: string): void {
-  rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "workspaces", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "sessions", `${name}.json`), { force: true });
+  if (!isSafeLocalAgentName(name)) {
+    throw new Error(`invalid agent name "${name}" — refusing to delete local state`);
+  }
+  removeContainedEntry(join(defaultConfigDir(), "agents"), name, { recursive: true });
+  removeContainedEntry(join(defaultDataDir(), "workspaces"), name, { recursive: true });
+  removeContainedEntry(join(defaultDataDir(), "sessions"), `${name}.json`, { recursive: false });
 }
