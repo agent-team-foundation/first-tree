@@ -58,12 +58,16 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
 
   function openSocket(token: string, organizationId: string): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${wsUrl}/${encodeURIComponent(organizationId)}/ws/?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${wsUrl}/${encodeURIComponent(organizationId)}/ws/`);
       ws.once("open", () => {
         const onMessage = (raw: WebSocket.RawData) => {
           try {
             const msg = JSON.parse(raw.toString()) as { type?: string };
-            if (msg.type === "admin:connected") {
+            if (msg.type === "server:hello") {
+              ws.send(JSON.stringify({ type: "auth", token }));
+              return;
+            }
+            if (msg.type === "auth:ok") {
               ws.off("message", onMessage);
               resolve(ws);
             }

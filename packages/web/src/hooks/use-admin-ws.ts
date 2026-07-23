@@ -1,4 +1,4 @@
-import { type AgentChatStatus, agentChatStatusSchema } from "@first-tree/shared";
+import { type AgentChatStatus, agentChatStatusSchema, authControlFrameSchema } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { chatAgentStatusQueryKey } from "../api/agent-status.js";
@@ -8,6 +8,7 @@ import {
   getStoredTokens,
   refreshAccessToken,
 } from "../api/client.js";
+import { getPinnedServerAuthority } from "../api/server-authority.js";
 import { upsertAgentStatus } from "../lib/agent-status-view.js";
 
 type WsMessage = {
@@ -24,6 +25,8 @@ type UseAdminWsOptions = {
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30_000;
+const AUTH_EXPIRED_CLOSE_CODE = 4001;
+const AUTH_REJECTED_CLOSE_CODES = new Set([4401, 4403]);
 
 // Module-level singleton connection shared across all hook instances.
 type QC = ReturnType<typeof useQueryClient>;
@@ -33,6 +36,7 @@ let ws: WebSocket | null = null;
 let closing = false;
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let connectSequence = 0;
 const subscribers = new Set<Subscriber>();
 let latestQc: QC | null = null;
 let refCount = 0;
@@ -297,7 +301,34 @@ function broadcast(msg: WsMessage) {
   }
 }
 
-function connect() {
+function finishAuthenticatedOpen(socket: WebSocket): void {
+  if (socket !== ws) return;
+  // Capture before reset — drives the `ws:reconnect` sentinel below so we
+  // only fire it for genuine reconnects, not the first authenticated
+  // handshake of a fresh mount.
+  const isReconnect = reconnectAttempt > 0;
+  reconnectAttempt = 0;
+  // Catch up only after `auth:ok`. A TCP/WebSocket open is not authenticated
+  // and must not expose account cache state or report reconnect success.
+  if (latestQc) {
+    latestQc.invalidateQueries({ queryKey: ["activity"] });
+    latestQc.invalidateQueries({ queryKey: ["sessions"] });
+    latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-agent-status"] });
+    latestQc.invalidateQueries({ queryKey: ["session"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
+    latestQc.invalidateQueries({ queryKey: ["session-events"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
+    latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-messages"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-open-requests"] });
+    latestQc.invalidateQueries({ queryKey: ["chat-detail"] });
+  }
+  if (isReconnect) broadcast({ type: "ws:reconnect" });
+}
+
+function connect(): void {
+  const sequence = ++connectSequence;
   const tokens = getStoredTokens();
   if (!tokens?.accessToken) return;
 
@@ -310,109 +341,120 @@ function connect() {
   const orgId = getApiSelectedOrganizationId();
   if (!orgId) return;
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/orgs/${encodeURIComponent(orgId)}/ws/?token=${tokens.accessToken}`;
-  const socket = new WebSocket(wsUrl);
-  ws = socket;
+  void getPinnedServerAuthority()
+    .then((authority) => {
+      if (
+        sequence !== connectSequence ||
+        closing ||
+        refCount === 0 ||
+        getApiSelectedOrganizationId() !== orgId ||
+        getStoredTokens()?.accessToken !== tokens.accessToken
+      ) {
+        return;
+      }
 
-  socket.onmessage = (ev) => {
-    if (socket !== ws) return;
-    try {
-      const msg = JSON.parse(ev.data as string) as WsMessage;
-      broadcast(msg);
-    } catch {
-      // ignore malformed
-    }
-  };
-  socket.onopen = () => {
-    if (socket !== ws) return;
-    // Capture before reset — drives the `ws:reconnect` sentinel below so we
-    // only fire it for genuine reconnects, not the first handshake of a
-    // fresh mount (where subscribers' own mount-effects already cover the
-    // catch-up work).
-    const isReconnect = reconnectAttempt > 0;
-    reconnectAttempt = 0;
-    // Catch up on every (re)open — including initial connect after a
-    // sleep / network partition. Without this, push-only consumers would
-    // miss any frame that fired while the WS was down: the next inbound
-    // push would invalidate, but until then the local cache is stale.
-    // Invalidating broadly keeps every push-driven query (sessions, chat
-    // list, chat detail) in sync on reconnect.
-    if (latestQc) {
-      latestQc.invalidateQueries({ queryKey: ["activity"] });
-      latestQc.invalidateQueries({ queryKey: ["sessions"] });
-      latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
-      latestQc.invalidateQueries({ queryKey: ["chat-agent-status"] });
-      // Catch-up parity with the steady-state `session:state` /
-      // `session:event` branches: these prefixes back panels that used to
-      // self-poll, so reconnect must refresh them too.
-      latestQc.invalidateQueries({ queryKey: ["session"] });
-      latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
-      latestQc.invalidateQueries({ queryKey: ["session-events"] });
-      latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
-      latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
-      // `["chat-messages"]` used to recover from a WS gap via the 5s
-      // refetchInterval in ChatView; now that the poll is gone, reconnect
-      // must explicitly catch up the open chat's message timeline.
-      latestQc.invalidateQueries({ queryKey: ["chat-messages"] });
-      // Same reasoning for the window-independent open-requests source that
-      // backs the blocking takeover — catch it up after a WS gap too.
-      latestQc.invalidateQueries({ queryKey: ["chat-open-requests"] });
-      // The chat-first workspace reads `viewerMembershipKind` (and other
-      // viewer-scoped fields) off `["chat-detail", chatId]`. Without this,
-      // a frame that fired while the WS was down (e.g. the caller was
-      // added to / removed from a chat) wouldn't refresh the open chat's
-      // membership view until the next push or a manual refresh. Prefix
-      // invalidate so every cached chat-detail row catches up.
-      latestQc.invalidateQueries({ queryKey: ["chat-detail"] });
-    }
-    // Synthetic sentinel — lets subscribers (e.g. chat-by-id's markRead)
-    // re-run side effects that depend on data freshness after a WS gap.
-    // The query-cache invalidations above cover anything that re-derives
-    // off React-Query state, but `chat:message` frames the WS missed
-    // during the gap can leave the open chat's unread badge stale.
-    // Subscribers identify this frame by its `ws:reconnect` type — it's
-    // not a server-emitted shape and won't collide with any wire frame.
-    // Routed through `broadcast` so the parent try/catch contains
-    // subscriber errors. Gated on `isReconnect` so mount-time effects
-    // aren't double-fired on the very first handshake.
-    if (isReconnect) broadcast({ type: "ws:reconnect" });
-  };
-  socket.onclose = (ev) => {
-    // Only the current (latest) socket's close triggers reconnect.
-    // An aborted CONNECTING socket from strict-mode unmount will also close here
-    // but must not touch module state.
-    if (socket !== ws) return;
-    ws = null;
-    if (closing || refCount === 0) return;
-    // 4001 = server-side auth rejection (see ws-admin.ts close paths). The
-    // most common cause is an expired access token: the WS hook reads from
-    // `localStorage` but never round-trips through the HTTP refresh
-    // interceptor, so without this branch a stale token would loop forever
-    // (~3s cadence: handshake → 4001 → 2s backoff → repeat). Drive a refresh
-    // and reconnect immediately on success.
-    if (ev.code === 4001) {
-      refreshAccessToken().then((fresh) => {
-        if (closing || refCount === 0) return;
-        if (fresh) {
-          reconnectAttempt = 0;
-          connect();
-        } else {
-          // Refresh failed — fall through to standard backoff. The HTTP path
-          // will eventually surface a 401 on the next API call, dispatch
-          // `auth:logout`, and tear us down via refCount=0.
-          scheduleReconnect();
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl =
+        `${protocol}//${window.location.host}/api/v1/orgs/${encodeURIComponent(orgId)}/ws/` +
+        `?ft_authority=${encodeURIComponent(authority)}`;
+      const socket = new WebSocket(wsUrl);
+      let handshake: "opening" | "hello" | "auth-sent" | "authenticated" = "opening";
+      let closeDisposition: "default" | "refresh" | "retryable" | "terminal" = "default";
+      let retryAfterMs: number | undefined;
+      ws = socket;
+
+      const handleAuthControl = (msg: WsMessage): boolean => {
+        const parsed = authControlFrameSchema.safeParse(msg);
+        if (!parsed.success) return false;
+        if (parsed.data.type === "auth:expired") {
+          closeDisposition = "refresh";
+          socket.close(AUTH_EXPIRED_CLOSE_CODE, "auth-expired");
+          return true;
         }
-      });
-      return;
-    }
-    scheduleReconnect();
-  };
+        if (parsed.data.type === "auth:retryable") {
+          closeDisposition = "retryable";
+          retryAfterMs = parsed.data.retryAfterMs;
+          socket.close(1013, "auth-retryable");
+          return true;
+        }
+        closeDisposition = "terminal";
+        socket.close(4401, "auth-rejected");
+        return true;
+      };
+
+      socket.onopen = () => {
+        if (socket !== ws) return;
+        handshake = "hello";
+      };
+      socket.onmessage = (ev) => {
+        if (socket !== ws) return;
+        let msg: WsMessage;
+        try {
+          msg = JSON.parse(ev.data as string) as WsMessage;
+        } catch {
+          socket.close(4002, "malformed-frame");
+          return;
+        }
+        if (handleAuthControl(msg)) return;
+
+        if (handshake !== "authenticated") {
+          if (handshake === "hello" && msg.type === "server:hello" && msg.authority === authority) {
+            handshake = "auth-sent";
+            socket.send(JSON.stringify({ type: "auth", token: tokens.accessToken }));
+            return;
+          }
+          if (handshake === "auth-sent" && msg.type === "auth:ok") {
+            handshake = "authenticated";
+            finishAuthenticatedOpen(socket);
+            return;
+          }
+          socket.close(4002, "invalid-handshake");
+          return;
+        }
+        broadcast(msg);
+      };
+      socket.onclose = (ev) => {
+        // Only the current (latest) socket's close triggers reconnect.
+        // An aborted CONNECTING socket from strict-mode unmount will also close here
+        // but must not touch module state.
+        if (socket !== ws) return;
+        ws = null;
+        if (closing || refCount === 0) return;
+        if (closeDisposition === "terminal") return;
+        if (closeDisposition === "retryable") {
+          scheduleReconnect(retryAfterMs);
+          return;
+        }
+        // 4001 is reserved by the typed server contract for `auth:expired`.
+        // 4401/4403 are terminal credential/membership rejections. Prefer the
+        // frame-derived disposition, but preserve these close-code fallbacks
+        // when the final control frame itself was lost in transit.
+        if (closeDisposition === "default" && AUTH_REJECTED_CLOSE_CODES.has(ev.code)) return;
+        if (closeDisposition === "refresh" || (closeDisposition === "default" && ev.code === AUTH_EXPIRED_CLOSE_CODE)) {
+          refreshAccessToken().then((fresh) => {
+            if (closing || refCount === 0) return;
+            if (fresh) {
+              reconnectAttempt = 0;
+              connect();
+            } else {
+              scheduleReconnect();
+            }
+          });
+          return;
+        }
+        scheduleReconnect();
+      };
+    })
+    .catch(() => {
+      if (sequence === connectSequence && !closing && refCount > 0) scheduleReconnect();
+    });
 }
 
-function scheduleReconnect() {
+function scheduleReconnect(retryAfterMs?: number) {
   reconnectAttempt++;
-  const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
+  const backoff = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
+  const delay =
+    retryAfterMs === undefined ? backoff : Math.min(Math.max(retryAfterMs, RECONNECT_BASE_MS), RECONNECT_MAX_MS);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (!closing && refCount > 0) connect();
@@ -421,6 +463,7 @@ function scheduleReconnect() {
 
 function teardown() {
   closing = true;
+  connectSequence++;
   window.removeEventListener(ADMIN_WS_ORG_CHANGED_EVENT, reconnectForOrgChange);
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);

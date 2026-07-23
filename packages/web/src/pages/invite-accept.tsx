@@ -6,6 +6,7 @@ import { anonymousApi } from "../api/anonymous-client.js";
 import { api } from "../api/client.js";
 import { type AuthProvider, beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
+import { usePreparedFullPageApiNavigation } from "../auth/full-page-api-navigation.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -37,6 +38,13 @@ export function InviteAcceptPage() {
   const [previewState, setPreviewState] = useState<{ token: string; value: InvitationPreview } | null>(null);
   const [errorState, setErrorState] = useState<{ token: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const inviteNext = token ? `/invite/${token}` : null;
+  const continueOauthHref = usePreparedFullPageApiNavigation(
+    inviteNext ? `/api/v1/auth/github/start?next=${encodeURIComponent(inviteNext)}` : null,
+  );
+  const continueGoogleOauthHref = usePreparedFullPageApiNavigation(
+    inviteNext ? `/api/v1/auth/google/start?next=${encodeURIComponent(inviteNext)}` : null,
+  );
   // Current team name for the "you'll switch from X to Y" warning. Comes
   // straight from the auth context's selected membership — no extra fetch.
   // (`null` for unauthenticated visitors, which hides the warning.)
@@ -108,8 +116,10 @@ export function InviteAcceptPage() {
     }
   };
 
-  const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
-  const continueGoogleOauthHref = `/api/v1/auth/google/start?next=${encodeURIComponent(`/invite/${token}`)}`;
+  const navigationTargetsSettled =
+    providersSettled &&
+    (!providers.github || continueOauthHref !== null) &&
+    (!providers.google || continueGoogleOauthHref !== null);
 
   return (
     <InviteAcceptShell>
@@ -123,7 +133,7 @@ export function InviteAcceptPage() {
         googleOauthHref={continueGoogleOauthHref}
         googleAvailable={providers.google}
         githubAvailable={providers.github}
-        providersSettled={providersSettled}
+        providersSettled={navigationTargetsSettled}
         onAuthStart={(provider) => beginAuthAttempt(provider, `/invite/${token}`)}
       />
     </InviteAcceptShell>
@@ -167,8 +177,8 @@ export function InviteAcceptCard({
   currentTeamName: string | null;
   busy: boolean;
   onJoin: () => void;
-  oauthHref: string;
-  googleOauthHref?: string;
+  oauthHref: string | null;
+  googleOauthHref?: string | null;
   googleAvailable?: boolean;
   githubAvailable?: boolean;
   providersSettled?: boolean;
@@ -217,7 +227,17 @@ export function InviteAcceptCard({
               <>
                 {googleAvailable && (
                   <Button asChild className="w-full">
-                    <a href={googleOauthHref ?? oauthHref} onClick={() => onAuthStart?.("google")}>
+                    <a
+                      href={googleOauthHref ?? oauthHref ?? undefined}
+                      aria-disabled={(googleOauthHref ?? oauthHref) === null}
+                      onClick={(event) => {
+                        if ((googleOauthHref ?? oauthHref) === null) {
+                          event.preventDefault();
+                          return;
+                        }
+                        onAuthStart?.("google");
+                      }}
+                    >
                       <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
                       Continue with Google to join
                     </a>
@@ -225,7 +245,17 @@ export function InviteAcceptCard({
                 )}
                 {githubAvailable && (
                   <Button asChild variant="outline" className="w-full">
-                    <a href={oauthHref} onClick={() => onAuthStart?.("github")}>
+                    <a
+                      href={oauthHref ?? undefined}
+                      aria-disabled={oauthHref === null}
+                      onClick={(event) => {
+                        if (oauthHref === null) {
+                          event.preventDefault();
+                          return;
+                        }
+                        onAuthStart?.("github");
+                      }}
+                    >
                       <Github className="h-4 w-4" />
                       Continue with GitHub to join
                     </a>

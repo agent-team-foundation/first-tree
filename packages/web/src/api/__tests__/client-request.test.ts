@@ -3,6 +3,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.fn();
+const SERVER_AUTHORITY = "http://server.test/api/v1";
+
+vi.mock("../server-authority.js", () => ({
+  getPinnedServerAuthority: vi.fn(async () => SERVER_AUTHORITY),
+  expectedAuthorityHeaders: vi.fn((authority: string) => ({
+    "X-First-Tree-Expected-Authority": authority,
+  })),
+}));
 
 beforeEach(() => {
   const storage = createStorage();
@@ -54,12 +62,39 @@ describe("api client request flow", () => {
     await expect(api.get<{ ok: true }>("/me")).resolves.toEqual({ ok: true });
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       method: "GET",
-      headers: { Authorization: "Bearer access-1" },
+      cache: "no-store",
+      credentials: "omit",
+      headers: {
+        Authorization: "Bearer access-1",
+        "X-First-Tree-Expected-Authority": SERVER_AUTHORITY,
+      },
     });
 
     await expect(api.delete<void>("/clients/client-1")).resolves.toBeUndefined();
     clearStoredTokens();
     expect(getStoredTokens()).toBeNull();
+  });
+
+  it("uses the cookie jar only for exact OAuth-management kickoff routes", async () => {
+    const { api, setStoredTokens } = await import("../client.js");
+    setStoredTokens({ accessToken: "access-1", refreshToken: "refresh-1" });
+    fetchMock
+      .mockResolvedValueOnce(response(200, { installUrl: "https://github.example/install" }))
+      .mockResolvedValueOnce(response(200, { redirectUrl: "https://github.example/oauth" }))
+      .mockResolvedValueOnce(response(200, { ok: true }))
+      .mockResolvedValueOnce(response(200, { ok: true }));
+
+    await api.get("/orgs/org-1/github-app-installation/install-url?next=%2Fsettings");
+    await api.post("/me/auth-providers/github/link/start", {});
+    await api.get("/orgs/org-1/github-app-installation");
+    await api.post("/me/auth-providers/github/link/start/extra", {});
+
+    expect(fetchMock.mock.calls.map((call) => (call[1] as RequestInit | undefined)?.credentials)).toEqual([
+      "same-origin",
+      "same-origin",
+      "omit",
+      "omit",
+    ]);
   });
 
   it("refreshes on 401 and retries with the new access token", async () => {
@@ -73,8 +108,19 @@ describe("api client request flow", () => {
     await expect(api.get<{ ok: true }>("/me")).resolves.toEqual({ ok: true });
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/auth/refresh");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      cache: "no-store",
+      credentials: "omit",
+      headers: {
+        "Content-Type": "application/json",
+        "X-First-Tree-Expected-Authority": SERVER_AUTHORITY,
+      },
+    });
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
-      headers: { Authorization: "Bearer access-2" },
+      headers: {
+        Authorization: "Bearer access-2",
+        "X-First-Tree-Expected-Authority": SERVER_AUTHORITY,
+      },
     });
     expect(getStoredTokens()).toEqual({ accessToken: "access-2", refreshToken: "refresh-2" });
   });
@@ -141,13 +187,23 @@ describe("api client request flow", () => {
     await expect(res.text()).resolves.toBe("raw ok");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       method: "PUT",
-      headers: { Authorization: "Bearer expired", "Content-Type": "text/plain" },
+      cache: "no-store",
+      credentials: "omit",
+      headers: {
+        Authorization: "Bearer expired",
+        "Content-Type": "text/plain",
+        "X-First-Tree-Expected-Authority": SERVER_AUTHORITY,
+      },
       body: "raw-body",
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/auth/refresh");
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
       method: "PUT",
-      headers: { Authorization: "Bearer access-2", "Content-Type": "text/plain" },
+      headers: {
+        Authorization: "Bearer access-2",
+        "Content-Type": "text/plain",
+        "X-First-Tree-Expected-Authority": SERVER_AUTHORITY,
+      },
       body: "raw-body",
     });
     expect(getStoredTokens()).toEqual({ accessToken: "access-2", refreshToken: "refresh-1" });

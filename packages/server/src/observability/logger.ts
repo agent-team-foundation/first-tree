@@ -100,10 +100,10 @@ const outputStream = createLoggerOutputStream({
 
 /**
  * Custom `req` serializer that scrubs sensitive query-parameter values from
- * the URL before it lands in `incoming request` log lines. Stops JWTs that
- * arrive in `?token=…` (browser WebSocket can't set Authorization headers,
- * so the admin WS upgrade route accepts auth via query param) from leaking
- * into log files / log shippers.
+ * the URL before it lands in `incoming request` log lines. Admin WebSocket
+ * credentials now travel only in the post-upgrade auth frame, but query
+ * capabilities and legacy callers must still never leak into log files or
+ * log shippers.
  *
  * Pino stores serializers under a Symbol; fastify's `createPinoLogger` picks
  * them up via `prevLogger[serializersSym]` and merges them into the per-

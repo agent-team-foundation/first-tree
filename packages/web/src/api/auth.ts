@@ -1,23 +1,6 @@
 import type { LoginResponse } from "@first-tree/shared";
-
-const BASE_URL = "/api/v1";
+import { anonymousApi } from "./anonymous-client.js";
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
-  const res = await fetch(`${BASE_URL}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    let message: string;
-    try {
-      const json = JSON.parse(text) as { error?: string };
-      message = json.error ?? text;
-    } catch {
-      message = text;
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as LoginResponse;
+  return anonymousApi.post<LoginResponse>("/auth/login", { username, password });
 }

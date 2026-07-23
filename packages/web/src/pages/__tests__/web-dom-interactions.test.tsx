@@ -1285,6 +1285,19 @@ describe("web DOM interaction coverage", () => {
       }
       return originalGet<T>(path);
     };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            v: 1,
+            authority: "https://s1.example/api/v1",
+            viteGeneration: "0123456789abcdef0123456789abcdef",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
 
     try {
       Object.defineProperty(window, "location", {
@@ -1296,7 +1309,18 @@ describe("web DOM interaction coverage", () => {
       await waitForText("Continue with GitHub", local.container);
       await waitForText("Sign in uses your Google or GitHub identity.", local.container);
       await waitForText("Dev: skip GitHub", local.container);
-      expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
+      await waitForCondition(
+        () =>
+          local.container
+            .querySelector<HTMLAnchorElement>('a[href^="/api/v1/auth/github/start?ft_vite_nav="]')
+            ?.href.includes("ft_vite_nav=v1.0123456789abcdef0123456789abcdef.") === true,
+        "Expected authority-bound GitHub navigation",
+      );
+      expect(
+        local.container.querySelector<HTMLAnchorElement>(
+          'a[href^="/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User&ft_vite_nav="]',
+        ),
+      ).toBeTruthy();
       await unmountRoot(local.root);
 
       availability = { google: true, github: false };
@@ -1321,6 +1345,7 @@ describe("web DOM interaction coverage", () => {
       expect(authed.container.textContent).toBe("");
     } finally {
       anonymousApi.get = originalGet;
+      vi.unstubAllGlobals();
     }
   });
 

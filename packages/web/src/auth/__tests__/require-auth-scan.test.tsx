@@ -19,6 +19,7 @@ const SCAN_ATTEMPT_ID = "123e4567-e89b-42d3-a456-426614174000";
 const SCAN_URL =
   "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend" +
   `&attempt=${SCAN_ATTEMPT_ID}&variant=control`;
+const VITE_GENERATION = "0123456789abcdef0123456789abcdef";
 
 describe("scanCampaignOAuthNext", () => {
   it("returns the quickstart URL for a known campaign handoff", () => {
@@ -52,6 +53,19 @@ describe("RequireAuth — scan funnel login handoff", () => {
   beforeEach(() => {
     authMock.value = { isAuthenticated: false, meLoaded: false };
     window.sessionStorage.clear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            v: 1,
+            authority: "https://s1.example/api/v1",
+            viteGeneration: VITE_GENERATION,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
     replaceSpy = vi.spyOn(window.location, "replace").mockImplementation(() => undefined);
   });
 
@@ -59,6 +73,7 @@ describe("RequireAuth — scan funnel login handoff", () => {
     if (root) await act(async () => root?.unmount());
     root = null;
     replaceSpy.mockRestore();
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
   });
 
@@ -87,7 +102,16 @@ describe("RequireAuth — scan funnel login handoff", () => {
 
   it("sends an unauthenticated scan visitor straight to GitHub OAuth, skipping /login", async () => {
     const container = await renderRoute(SCAN_URL);
-    expect(replaceSpy).toHaveBeenCalledWith(`/api/v1/auth/github/start?next=${encodeURIComponent(SCAN_URL)}`);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const target = replaceSpy.mock.calls[0]?.[0];
+    expect(target).toMatch(
+      new RegExp(
+        `^/api/v1/auth/github/start\\?next=${encodeURIComponent(SCAN_URL)}&ft_vite_nav=v1\\.${VITE_GENERATION}\\.`,
+      ),
+    );
     expect(container.textContent).not.toContain("Login page");
     const stored = window.sessionStorage.getItem("first-tree:auth-attempt") ?? "";
     expect(JSON.parse(stored)).toMatchObject({
@@ -103,5 +127,22 @@ describe("RequireAuth — scan funnel login handoff", () => {
     const container = await renderRoute("/settings");
     expect(replaceSpy).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Login page");
+  });
+
+  it("does not record or navigate an acquisition attempt when navigation proof construction fails", async () => {
+    vi.stubGlobal(
+      "btoa",
+      vi.fn(() => {
+        throw new Error("proof encoder unavailable");
+      }),
+    );
+    const container = await renderRoute(SCAN_URL);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(replaceSpy).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
+    expect(container.textContent).not.toContain("Login page");
   });
 });

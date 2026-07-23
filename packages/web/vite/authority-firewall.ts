@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse, STATUS_CODES } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { Duplex } from "node:stream";
@@ -16,11 +16,15 @@ export const SERVER_AUTHORITY_PATH = "/api/v1/bootstrap/server-authority";
 export const EXPECTED_AUTHORITY_HEADER = EXPECTED_SERVER_AUTHORITY_HEADER;
 export const AVATAR_AUTHORITY_QUERY = AVATAR_AUTHORITY_QUERY_KEY;
 export const API_PROXY_CONTEXT = "^/api/v1(?:/|$|\\?)";
+export const VITE_GENERATION_PATTERN = /^[a-f0-9]{32}$/u;
+export const VITE_NAVIGATION_PROOF_QUERY = "ft_vite_nav";
 
 const PROBE_BODY_MAX_BYTES = SERVER_AUTHORITY_MAX_LENGTH + 128;
 const PROBE_TIMEOUT_MS = 2_000;
 const UPGRADE_TIMEOUT_MS = 5_000;
 const RAW_TARGET_MAX_BYTES = 2_048;
+const PROTECTED_NAVIGATION_TARGET_MAX_BYTES = 8_192;
+const BASE64URL_AUTHORITY_MAX_LENGTH = Math.ceil((SERVER_AUTHORITY_MAX_LENGTH * 4) / 3);
 const ENCODED_AUTHORITY_MAX_BYTES = SERVER_AUTHORITY_MAX_LENGTH * 3;
 const ADMIN_WS_RAW_TARGET_MAX_BYTES = ENCODED_AUTHORITY_MAX_BYTES + 256;
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -31,6 +35,28 @@ const AVATAR_TARGET_PATTERN =
 const ADMIN_WS_TARGET_PATTERN = new RegExp(
   `^/api/v1/orgs/([a-z0-9_-]{1,100})/ws/\\?ft_authority=([^&]{1,${ENCODED_AUTHORITY_MAX_BYTES}})$`,
 );
+const VITE_NAVIGATION_PROOF_PATTERN = new RegExp(
+  `^v1\\.([a-f0-9]{32})\\.([A-Za-z0-9_-]{1,${BASE64URL_AUTHORITY_MAX_LENGTH}})$`,
+);
+const SAFE_NAVIGATION_QUERY_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
+const PROTECTED_NAVIGATION_QUERY_KEYS = new Map<string, ReadonlySet<string>>([
+  ["/api/v1/auth/github/start", new Set(["next"])],
+  ["/api/v1/auth/google/start", new Set(["next"])],
+  [
+    "/api/v1/auth/github/dev-callback",
+    new Set([
+      "githubId",
+      "login",
+      "email",
+      "displayName",
+      "next",
+      "installationId",
+      "installationAccountType",
+      "installationAccountLogin",
+      "installationAccountGithubId",
+    ]),
+  ],
+]);
 
 type ProbeFailureReason = "transport" | "redirect" | "status" | "content-type" | "oversized" | "malformed";
 
@@ -54,6 +80,22 @@ type ParsedAdminWsTarget = {
   upstreamTarget: string;
   expectedAuthority: string;
 };
+
+type ParsedProtectedNavigationTarget = Readonly<{
+  expectedAuthority: string;
+  upstreamTarget: string;
+}>;
+
+type ProtectedNavigationTarget =
+  | Readonly<{ kind: "not-protected" }>
+  | Readonly<{ kind: "invalid" }>
+  | Readonly<{ kind: "valid"; target: ParsedProtectedNavigationTarget }>;
+
+type AuthorityErrorBody = Readonly<{
+  error: string;
+  offlineEligible: boolean;
+  viteGeneration?: string;
+}>;
 
 function readErrorProperty(error: object, property: "cause" | "code"): { ok: true; value: unknown } | { ok: false } {
   try {
@@ -181,6 +223,97 @@ function parseAdminWsTarget(rawTarget: string): ParsedAdminWsTarget | null {
   };
 }
 
+function classifyProtectedNavigationPath(rawPath: string): string | "invalid" | null {
+  if (PROTECTED_NAVIGATION_QUERY_KEYS.has(rawPath)) return rawPath;
+  if (!rawPath.includes("%")) return null;
+  try {
+    const decoded = decodeURIComponent(rawPath);
+    return PROTECTED_NAVIGATION_QUERY_KEYS.has(decoded) ? "invalid" : null;
+  } catch {
+    return rawPath.startsWith("/api/v1/auth/") ? "invalid" : null;
+  }
+}
+
+function decodeNavigationProof(rawProof: string, viteGeneration: string): string | null {
+  const match = VITE_NAVIGATION_PROOF_PATTERN.exec(rawProof);
+  if (!match || match[1] !== viteGeneration) return null;
+  const encodedAuthority = match[2];
+  if (!encodedAuthority) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(encodedAuthority, "base64url");
+  } catch {
+    return null;
+  }
+  if (bytes.length === 0 || bytes.toString("base64url") !== encodedAuthority) return null;
+  let authority: string;
+  try {
+    authority = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  return parseCanonicalServerAuthority(authority);
+}
+
+/**
+ * Parse the only API routes that a browser must enter through a full-page GET.
+ * Their proof is Vite-local transport binding, not application authority.
+ * Unknown, duplicated, encoded, or reordered query shapes fail closed.
+ */
+function parseProtectedNavigationTarget(
+  method: string | undefined,
+  rawTarget: string,
+  viteGeneration: string,
+): ProtectedNavigationTarget {
+  const queryIndex = rawTarget.indexOf("?");
+  const rawPath = queryIndex < 0 ? rawTarget : rawTarget.slice(0, queryIndex);
+  const classifiedPath = classifyProtectedNavigationPath(rawPath);
+  if (classifiedPath === null) return { kind: "not-protected" };
+  if (
+    classifiedPath === "invalid" ||
+    method !== "GET" ||
+    queryIndex < 0 ||
+    Buffer.byteLength(rawTarget, "utf8") > PROTECTED_NAVIGATION_TARGET_MAX_BYTES ||
+    rawTarget.includes("#")
+  ) {
+    return { kind: "invalid" };
+  }
+
+  const allowedKeys = PROTECTED_NAVIGATION_QUERY_KEYS.get(classifiedPath);
+  if (!allowedKeys) return { kind: "invalid" };
+  const fields = rawTarget.slice(queryIndex + 1).split("&");
+  if (fields.length === 0 || fields.some((field) => field.length === 0)) return { kind: "invalid" };
+  const seen = new Set<string>();
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index] ?? "";
+    const equals = field.indexOf("=");
+    const key = equals < 0 ? field : field.slice(0, equals);
+    const isProof = key === VITE_NAVIGATION_PROOF_QUERY;
+    if (
+      !SAFE_NAVIGATION_QUERY_KEY_PATTERN.test(key) ||
+      seen.has(key) ||
+      (!isProof && !allowedKeys.has(key)) ||
+      (isProof && (index !== fields.length - 1 || equals < 0))
+    ) {
+      return { kind: "invalid" };
+    }
+    seen.add(key);
+  }
+  if (!seen.has(VITE_NAVIGATION_PROOF_QUERY)) return { kind: "invalid" };
+  const proofField = fields.at(-1) ?? "";
+  const proofEquals = proofField.indexOf("=");
+  const expectedAuthority = decodeNavigationProof(proofField.slice(proofEquals + 1), viteGeneration);
+  if (!expectedAuthority) return { kind: "invalid" };
+  const businessFields = fields.slice(0, -1);
+  return {
+    kind: "valid",
+    target: Object.freeze({
+      expectedAuthority,
+      upstreamTarget: businessFields.length > 0 ? `${classifiedPath}?${businessFields.join("&")}` : classifiedPath,
+    }),
+  };
+}
+
 function rawHeaderValues(request: IncomingMessage, name: string): string[] {
   const expected = name.toLowerCase();
   const values: string[] = [];
@@ -299,11 +432,22 @@ function sanitizeAvatarRequest(request: IncomingMessage, upstreamTarget: string)
   request.url = upstreamTarget;
 }
 
+function sanitizeProtectedNavigationRequest(request: IncomingMessage, upstreamTarget: string): void {
+  // A top-level same-origin navigation automatically carries ambient cookies
+  // and may carry cached HTTP auth. These anonymous acquisition routes need
+  // neither. Rebuild an intentionally tiny request before the generic proxy.
+  const allowed = new Set(["host", "accept", "accept-language", "user-agent"]);
+  for (const key of Object.keys(request.headers)) {
+    if (!allowed.has(key)) delete request.headers[key];
+  }
+  request.url = upstreamTarget;
+}
+
 function endHttpJson(
   request: IncomingMessage,
   response: ServerResponse,
   status: 421 | 503,
-  body: { error: string; offlineEligible: boolean },
+  body: AuthorityErrorBody,
 ): void {
   request.resume();
   const payload = JSON.stringify(body);
@@ -314,8 +458,8 @@ function endHttpJson(
   response.end(payload);
 }
 
-function synthesizeAuthorityResponse(response: ServerResponse, authority: string): void {
-  const payload = JSON.stringify({ v: 1, authority });
+function synthesizeAuthorityResponse(response: ServerResponse, authority: string, viteGeneration: string): void {
+  const payload = JSON.stringify({ v: 1, authority, viteGeneration });
   response.statusCode = 200;
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -329,7 +473,7 @@ function assertPositiveInteger(value: number, name: string): void {
   }
 }
 
-function endUpgradeJson(socket: Duplex, status: 421 | 503, body: { error: string; offlineEligible: boolean }): void {
+function endUpgradeJson(socket: Duplex, status: 421 | 503, body: AuthorityErrorBody): void {
   if (socket.destroyed) return;
   const payload = JSON.stringify(body);
   const reason = STATUS_CODES[status] ?? "Error";
@@ -369,8 +513,9 @@ function forwardAdminUpgrade(args: {
   target: string;
   upstreamTarget: string;
   timeoutMs: number;
+  viteGeneration: string;
 }): void {
-  const { request, clientSocket, target, upstreamTarget, timeoutMs } = args;
+  const { request, clientSocket, target, upstreamTarget, timeoutMs, viteGeneration } = args;
   const key = websocketKey(request);
   if (!key || !websocketVersion(request)) {
     endUpgradeJson(clientSocket, 421, { error: "server_authority_mismatch", offlineEligible: false });
@@ -398,7 +543,11 @@ function forwardAdminUpgrade(args: {
     if (settled) return;
     settled = true;
     clearTimeout(timeout);
-    endUpgradeJson(clientSocket, 503, { error: "server_authority_unavailable", offlineEligible });
+    endUpgradeJson(clientSocket, 503, {
+      error: "server_authority_unavailable",
+      offlineEligible,
+      viteGeneration,
+    });
   };
   upstreamRequest.once("error", (error) => {
     fail(error === timeoutReason || isOfflineEligibleAuthorityTransportError(error));
@@ -417,7 +566,11 @@ function forwardAdminUpgrade(args: {
     const accept = response.headers["sec-websocket-accept"];
     if (typeof accept !== "string" || accept !== websocketAccept(key)) {
       upstreamSocket.destroy();
-      endUpgradeJson(clientSocket, 503, { error: "server_authority_unavailable", offlineEligible: false });
+      endUpgradeJson(clientSocket, 503, {
+        error: "server_authority_unavailable",
+        offlineEligible: false,
+        viteGeneration,
+      });
       return;
     }
     clientSocket.write(
@@ -447,6 +600,10 @@ function logRejected(server: ViteDevServer, transport: "http" | "ws", reason: st
  */
 export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): Plugin {
   const target = normalizeViteProxyTarget(options.target);
+  const viteGeneration = randomBytes(16).toString("hex");
+  if (!VITE_GENERATION_PATTERN.test(viteGeneration)) {
+    throw new Error("Vite authority generation could not be created");
+  }
   const probeTimeoutMs = options.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
   const probeBodyMaxBytes = options.probeBodyMaxBytes ?? PROBE_BODY_MAX_BYTES;
   const upgradeTimeoutMs = options.upgradeTimeoutMs ?? UPGRADE_TIMEOUT_MS;
@@ -471,15 +628,33 @@ export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): P
         // admission the downstream proxy's pipe resumes it exactly once.
         request.pause();
 
+        const protectedNavigation = parseProtectedNavigationTarget(request.method, rawTarget, viteGeneration);
+        if (protectedNavigation.kind === "invalid") {
+          logRejected(server, "http", "missing-or-malformed-navigation-proof");
+          endHttpJson(request, response, 421, { error: "server_authority_mismatch", offlineEligible: false });
+          return;
+        }
         const avatar = parseAvatarTarget(request.method, rawTarget);
         const isAuthorityRead = request.method === "GET" && rawTarget === SERVER_AUTHORITY_PATH;
-        const expectedAuthority = avatar ? null : isAuthorityRead ? null : readExpectedAuthority(request);
+        const expectedAuthority =
+          protectedNavigation.kind === "valid"
+            ? null
+            : avatar
+              ? null
+              : isAuthorityRead
+                ? null
+                : readExpectedAuthority(request);
+        if (protectedNavigation.kind === "valid" && hasRequestBodyFraming(request)) {
+          logRejected(server, "http", "navigation-body");
+          endHttpJson(request, response, 421, { error: "server_authority_mismatch", offlineEligible: false });
+          return;
+        }
         if (avatar && hasRequestBodyFraming(request)) {
           logRejected(server, "http", "avatar-body");
           endHttpJson(request, response, 421, { error: "server_authority_mismatch", offlineEligible: false });
           return;
         }
-        if (!avatar && !isAuthorityRead && !expectedAuthority) {
+        if (protectedNavigation.kind !== "valid" && !avatar && !isAuthorityRead && !expectedAuthority) {
           logRejected(server, "http", "missing-or-malformed-proof");
           endHttpJson(request, response, 421, { error: "server_authority_mismatch", offlineEligible: false });
           return;
@@ -491,12 +666,13 @@ export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): P
           endHttpJson(request, response, 503, {
             error: "server_authority_unavailable",
             offlineEligible: probe.offlineEligible,
+            viteGeneration,
           });
           return;
         }
         if (isAuthorityRead) {
           request.resume();
-          synthesizeAuthorityResponse(response, probe.authority);
+          synthesizeAuthorityResponse(response, probe.authority, viteGeneration);
           return;
         }
         if (avatar) {
@@ -506,6 +682,16 @@ export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): P
             return;
           }
           sanitizeAvatarRequest(request, avatar.upstreamTarget);
+          next();
+          return;
+        }
+        if (protectedNavigation.kind === "valid") {
+          if (protectedNavigation.target.expectedAuthority !== probe.authority) {
+            logRejected(server, "http", "navigation-authority-mismatch");
+            endHttpJson(request, response, 421, { error: "server_authority_mismatch", offlineEligible: false });
+            return;
+          }
+          sanitizeProtectedNavigationRequest(request, protectedNavigation.target.upstreamTarget);
           next();
           return;
         }
@@ -541,6 +727,7 @@ export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): P
             endUpgradeJson(socket, 503, {
               error: "server_authority_unavailable",
               offlineEligible: probe.offlineEligible,
+              viteGeneration,
             });
             return;
           }
@@ -555,6 +742,7 @@ export function firstTreeAuthorityFirewall(options: AuthorityFirewallOptions): P
             target,
             upstreamTarget: parsed.upstreamTarget,
             timeoutMs: upgradeTimeoutMs,
+            viteGeneration,
           });
         });
       };

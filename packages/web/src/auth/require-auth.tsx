@@ -3,6 +3,7 @@ import { Navigate, Outlet, useLocation } from "react-router";
 import { isKnownCampaign } from "../pages/quickstart/campaigns.js";
 import { beginAuthAttempt } from "./auth-analytics.js";
 import { useAuth } from "./auth-context.js";
+import { prepareFullPageApiNavigation } from "./full-page-api-navigation.js";
 
 /**
  * Lazy-loaded so the landing-page bundle (LandingPage shell + lucide
@@ -47,12 +48,23 @@ export function scanCampaignOAuthNext(loc: { pathname: string; search: string })
  * `<Navigate>`. Renders the neutral landing fallback while the browser leaves.
  */
 function OAuthStartRedirect({ next }: { next: string }) {
-  const startedRef = useRef(false);
+  const navigationSequence = useRef(0);
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    beginAuthAttempt("github", next);
-    window.location.replace(`/api/v1/auth/github/start?next=${encodeURIComponent(next)}`);
+    const sequence = navigationSequence.current + 1;
+    navigationSequence.current = sequence;
+    void prepareFullPageApiNavigation(`/api/v1/auth/github/start?next=${encodeURIComponent(next)}`)
+      .then((target) => {
+        if (navigationSequence.current !== sequence) return;
+        beginAuthAttempt("github", next);
+        window.location.replace(target);
+      })
+      .catch(() => {
+        // Stay on the neutral veil. A server/process proof failure must never
+        // fall back to the unbound OAuth route.
+      });
+    return () => {
+      if (navigationSequence.current === sequence) navigationSequence.current += 1;
+    };
   }, [next]);
   return <LandingFallback />;
 }

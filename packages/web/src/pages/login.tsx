@@ -2,6 +2,7 @@ import { ArrowLeft, Github, Lock, Zap } from "lucide-react";
 import { Navigate, useLocation } from "react-router";
 import { beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
+import { usePreparedFullPageApiNavigation } from "../auth/full-page-api-navigation.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
@@ -42,21 +43,25 @@ export function LoginPage() {
   // server's `?next=` instead — the server validates it via the same
   // safeRedirectPath helper and bakes it into the state JWT, so the
   // post-callback fragment carries it back to OAuthCompletePage.
-  const githubHref =
+  const githubTarget =
     redirectTo === "/"
       ? "/api/v1/auth/github/start"
       : `/api/v1/auth/github/start?next=${encodeURIComponent(redirectTo)}`;
-  const googleHref =
+  const googleTarget =
     redirectTo === "/"
       ? "/api/v1/auth/google/start"
       : `/api/v1/auth/google/start?next=${encodeURIComponent(redirectTo)}`;
+  const githubHref = usePreparedFullPageApiNavigation(githubTarget);
+  const googleHref = usePreparedFullPageApiNavigation(googleTarget);
 
   const availableProviderLabels = [...(providers.google ? ["Google"] : []), ...(providers.github ? ["GitHub"] : [])];
 
   // Stable dev identity — same id every time so reloads land on the same
   // user, agents, and conversations. Using `1` (not the more obvious 42)
   // makes test-suite collisions cheap to spot.
-  const devCallbackHref = "/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User";
+  const devCallbackHref = usePreparedFullPageApiNavigation(
+    "/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User",
+  );
 
   if (isAuthenticated) {
     return <Navigate to={redirectTo} replace />;
@@ -96,7 +101,17 @@ export function LoginPage() {
               <>
                 {providers.google && (
                   <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-                    <a href={googleHref} onClick={() => beginAuthAttempt("google", redirectTo)}>
+                    <a
+                      href={googleHref ?? undefined}
+                      aria-disabled={googleHref === null}
+                      onClick={(event) => {
+                        if (googleHref === null) {
+                          event.preventDefault();
+                          return;
+                        }
+                        beginAuthAttempt("google", redirectTo);
+                      }}
+                    >
                       <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
                       Continue with Google
                     </a>
@@ -104,7 +119,17 @@ export function LoginPage() {
                 )}
                 {providers.github && (
                   <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-                    <a href={githubHref} onClick={() => beginAuthAttempt("github", redirectTo)}>
+                    <a
+                      href={githubHref ?? undefined}
+                      aria-disabled={githubHref === null}
+                      onClick={(event) => {
+                        if (githubHref === null) {
+                          event.preventDefault();
+                          return;
+                        }
+                        beginAuthAttempt("github", redirectTo);
+                      }}
+                    >
                       <Github className="h-4 w-4" />
                       Continue with GitHub
                     </a>
@@ -161,7 +186,13 @@ export function LoginPage() {
                   <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
                 </div>
                 <Button asChild variant="outline" className="w-full">
-                  <a href={devCallbackHref}>
+                  <a
+                    href={devCallbackHref ?? undefined}
+                    aria-disabled={devCallbackHref === null}
+                    onClick={(event) => {
+                      if (devCallbackHref === null) event.preventDefault();
+                    }}
+                  >
                     <Zap className="h-4 w-4" />
                     Dev: skip GitHub
                   </a>

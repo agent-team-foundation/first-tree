@@ -235,9 +235,9 @@ export async function buildApp(config: Config) {
         const route = request.routeOptions?.url;
         const target = redactUrl(request.url.split("?")[0] ?? request.url);
         // `http.url` retains the query string for debugability but is run
-        // through `redactUrl` so JWTs in `?token=…` (admin WS upgrade) never
-        // reach the trace exporter — same vocabulary as the fastify logger's
-        // `req` serializer, see `observability/logger.ts`.
+        // through `redactUrl` so query capabilities and legacy token-shaped
+        // inputs never reach the trace exporter — same vocabulary as the
+        // fastify logger's `req` serializer, see `observability/logger.ts`.
         const attrs: Record<string, string | number | boolean> = {
           "http.method": request.method,
           "http.url": redactUrl(request.url),

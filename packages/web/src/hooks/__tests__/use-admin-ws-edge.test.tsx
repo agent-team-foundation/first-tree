@@ -13,8 +13,14 @@ const clientMocks = vi.hoisted(() => ({
   getApiSelectedOrganizationId: vi.fn(),
   ADMIN_WS_ORG_CHANGED_EVENT: "admin-ws:org-changed",
 }));
+const authorityMocks = vi.hoisted(() => ({
+  getPinnedServerAuthority: vi.fn(),
+}));
 
 vi.mock("../../api/client.js", () => clientMocks);
+vi.mock("../../api/server-authority.js", () => authorityMocks);
+
+const SERVER_AUTHORITY = "http://server.test/api/v1";
 
 type WsHandler = ((event: MessageEvent<string>) => void) | null;
 type CloseHandler = ((event: CloseEvent) => void) | null;
@@ -25,6 +31,7 @@ class FakeWebSocket {
   onopen: (() => void) | null = null;
   onclose: CloseHandler = null;
   closed = false;
+  readonly sent: string[] = [];
   readonly url: string;
 
   constructor(url: string) {
@@ -34,6 +41,10 @@ class FakeWebSocket {
 
   close(): void {
     this.closed = true;
+  }
+
+  send(frame: string): void {
+    this.sent.push(frame);
   }
 
   emitRaw(data: string): void {
@@ -46,6 +57,12 @@ class FakeWebSocket {
 
   open(): void {
     this.onopen?.();
+  }
+
+  authenticate(authority = SERVER_AUTHORITY): void {
+    this.open();
+    this.emit({ type: "server:hello", authority });
+    this.emit({ type: "auth:ok" });
   }
 
   closeWith(code: number): void {
@@ -97,6 +114,7 @@ beforeEach(() => {
   clientMocks.getStoredTokens.mockReturnValue({ accessToken: "access-1", refreshToken: "refresh-1" });
   clientMocks.getApiSelectedOrganizationId.mockReturnValue("org/one");
   clientMocks.refreshAccessToken.mockResolvedValue(null);
+  authorityMocks.getPinnedServerAuthority.mockResolvedValue(SERVER_AUTHORITY);
   queryClient = new QueryClient();
   root = null;
 });
@@ -126,7 +144,10 @@ describe("useAdminWs edge cases", () => {
     const onMessage = await renderHook();
     const first = FakeWebSocket.instances[0];
     if (!first) throw new Error("socket missing");
-    expect(first.url).toBe("ws://first-tree.test/api/v1/orgs/org%2Fone/ws/?token=access-1");
+    expect(first.url).toBe(
+      `ws://first-tree.test/api/v1/orgs/org%2Fone/ws/?ft_authority=${encodeURIComponent(SERVER_AUTHORITY)}`,
+    );
+    first.authenticate();
 
     clientMocks.getApiSelectedOrganizationId.mockReturnValue("org-two");
     await act(async () => {
@@ -134,10 +155,10 @@ describe("useAdminWs edge cases", () => {
     });
     const second = FakeWebSocket.instances[1];
     if (!second) throw new Error("second socket missing");
+    second.authenticate();
 
     await act(async () => {
       first.emit({ type: "chat:updated", chatId: "stale-chat" });
-      first.open();
       first.closeWith(1006);
     });
 
@@ -150,7 +171,9 @@ describe("useAdminWs edge cases", () => {
     });
 
     expect(FakeWebSocket.instances).toHaveLength(3);
-    expect(FakeWebSocket.instances[2]?.url).toBe("ws://first-tree.test/api/v1/orgs/org-two/ws/?token=access-1");
+    expect(FakeWebSocket.instances[2]?.url).toBe(
+      `ws://first-tree.test/api/v1/orgs/org-two/ws/?ft_authority=${encodeURIComponent(SERVER_AUTHORITY)}`,
+    );
   });
 
   it("falls back to reconnect backoff when token refresh fails", async () => {
@@ -171,6 +194,65 @@ describe("useAdminWs edge cases", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
+  it("backs off without refreshing on retryable auth and stops on invalid membership", async () => {
+    clientMocks.refreshAccessToken.mockClear();
+    await renderHook();
+    const retryable = FakeWebSocket.instances[0];
+    if (!retryable) throw new Error("socket missing");
+
+    retryable.open();
+    retryable.emit({ type: "server:hello", authority: SERVER_AUTHORITY });
+    retryable.emit({
+      type: "auth:retryable",
+      code: "auth_backend_unavailable",
+      retryAfterMs: 2_500,
+    });
+    retryable.closeWith(1013);
+
+    expect(clientMocks.refreshAccessToken).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(2_499);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+
+    const rejected = FakeWebSocket.instances[1];
+    if (!rejected) throw new Error("retry socket missing");
+    rejected.open();
+    rejected.emit({ type: "server:hello", authority: SERVER_AUTHORITY });
+    rejected.emit({
+      type: "auth:rejected",
+      code: "invalid_claims",
+      message: "Not an active member of this organization",
+    });
+    rejected.closeWith(4403);
+
+    expect(clientMocks.refreshAccessToken).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it.each([4401, 4403])("treats a close-only terminal rejection (%s) as terminal", async (closeCode) => {
+    clientMocks.refreshAccessToken.mockClear();
+    await renderHook();
+    const rejected = FakeWebSocket.instances[0];
+    if (!rejected) throw new Error("socket missing");
+
+    rejected.open();
+    rejected.emit({ type: "server:hello", authority: SERVER_AUTHORITY });
+    rejected.closeWith(closeCode);
+
+    expect(clientMocks.refreshAccessToken).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
   it("invalidates catch-up queries and broadcasts only reconnect opens", async () => {
     const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     const onMessage = await renderHook();
@@ -178,7 +260,7 @@ describe("useAdminWs edge cases", () => {
     if (!first) throw new Error("socket missing");
 
     await act(async () => {
-      first.open();
+      first.authenticate();
     });
     expect(onMessage).not.toHaveBeenCalledWith({ type: "ws:reconnect" });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-messages"] });
@@ -192,7 +274,7 @@ describe("useAdminWs edge cases", () => {
     if (!second) throw new Error("second socket missing");
 
     await act(async () => {
-      second.open();
+      second.authenticate();
     });
 
     expect(onMessage).toHaveBeenCalledWith({ type: "ws:reconnect" });
@@ -206,6 +288,7 @@ describe("useAdminWs edge cases", () => {
     await renderHook(onMessage);
     const socket = FakeWebSocket.instances[0];
     if (!socket) throw new Error("socket missing");
+    socket.authenticate();
 
     await act(async () => {
       socket.emit({ type: "session:runtime", chatId: "chat-1", status: { invalid: true } });

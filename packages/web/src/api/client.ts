@@ -1,3 +1,5 @@
+import { expectedAuthorityHeaders, getPinnedServerAuthority } from "./server-authority.js";
+
 const BASE_URL = "/api/v1";
 const TOKEN_KEY = "first-tree:tokens";
 
@@ -119,6 +121,20 @@ export class ApiError extends Error {
 
 let refreshPromise: Promise<StoredTokens | null> | null = null;
 
+const OAUTH_COOKIE_KICKOFF_PATTERNS = [
+  /^\/orgs\/[^/?#]+\/github-app-installation\/install-url(?:\?|$)/u,
+  /^\/me\/auth-providers\/(?:github|google)\/(?:link|unlink)\/start(?:\?|$)/u,
+] as const;
+
+/**
+ * OAuth-management kickoff responses set a short-lived HttpOnly nonce. Those
+ * exact endpoints need the same-origin cookie jar; ordinary bearer requests
+ * deliberately omit ambient cookies.
+ */
+function credentialsForAuthenticatedPath(path: string): RequestCredentials {
+  return OAUTH_COOKIE_KICKOFF_PATTERNS.some((pattern) => pattern.test(path)) ? "same-origin" : "omit";
+}
+
 /**
  * Refresh the stored access token via `/auth/refresh`. Reads the current
  * refresh token from `localStorage` and persists the new pair on success.
@@ -141,9 +157,18 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
 
   refreshPromise = (async () => {
     try {
+      const authority = await getPinnedServerAuthority();
       const res = await fetch(`${BASE_URL}/auth/refresh`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...expectedAuthorityHeaders(authority),
+        },
         body: JSON.stringify({ refreshToken }),
       });
       if (!res.ok) return null;
@@ -173,6 +198,7 @@ async function request<T>(
   options?: { method?: string; body?: unknown; signal?: AbortSignal },
 ): Promise<T> {
   const { method = "GET", body, signal } = options ?? {};
+  const authority = await getPinnedServerAuthority();
 
   // No path rewriting here — callers prefix org-scoped paths with `withOrg` /
   // `withOrgAt` before passing in; everything else (`/me/...`, `/auth/...`,
@@ -180,11 +206,18 @@ async function request<T>(
   // preview, bootstrap probe) bypass this wrapper entirely and call
   // `fetch()` directly without an Authorization header.
   const doFetch = (token?: string) => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      ...expectedAuthorityHeaders(authority),
+    };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(`${BASE_URL}${path}`, {
       method,
+      cache: "no-store",
+      credentials: credentialsForAuthenticatedPath(path),
+      referrerPolicy: "no-referrer",
+      redirect: "error",
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
@@ -242,10 +275,22 @@ export async function apiFetchRaw(
   path: string,
   init: { method?: string; body?: BodyInit; headers?: Record<string, string> } = {},
 ): Promise<Response> {
+  const authority = await getPinnedServerAuthority();
   const doFetch = (token?: string) => {
-    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    const headers: Record<string, string> = {
+      ...(init.headers ?? {}),
+      ...expectedAuthorityHeaders(authority),
+    };
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(`${BASE_URL}${path}`, { method: init.method ?? "GET", headers, body: init.body });
+    return fetch(`${BASE_URL}${path}`, {
+      method: init.method ?? "GET",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      redirect: "error",
+      headers,
+      body: init.body,
+    });
   };
 
   const tokens = getStoredTokens();

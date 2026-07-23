@@ -14,8 +14,14 @@ const clientMocks = vi.hoisted(() => ({
   getApiSelectedOrganizationId: vi.fn(),
   ADMIN_WS_ORG_CHANGED_EVENT: "admin-ws:org-changed",
 }));
+const authorityMocks = vi.hoisted(() => ({
+  getPinnedServerAuthority: vi.fn(),
+}));
 
 vi.mock("../../api/client.js", () => clientMocks);
+vi.mock("../../api/server-authority.js", () => authorityMocks);
+
+const SERVER_AUTHORITY = "https://server.test/api/v1";
 
 type WsHandler = ((event: MessageEvent<string>) => void) | null;
 type CloseHandler = ((event: CloseEvent) => void) | null;
@@ -26,6 +32,7 @@ class FakeWebSocket {
   onopen: (() => void) | null = null;
   onclose: CloseHandler = null;
   closed = false;
+  readonly sent: string[] = [];
   readonly url: string;
 
   constructor(url: string) {
@@ -37,12 +44,22 @@ class FakeWebSocket {
     this.closed = true;
   }
 
+  send(frame: string): void {
+    this.sent.push(frame);
+  }
+
   emit(data: unknown): void {
     this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(data) }));
   }
 
   open(): void {
     this.onopen?.();
+  }
+
+  authenticate(authority = SERVER_AUTHORITY): void {
+    this.open();
+    this.emit({ type: "server:hello", authority });
+    this.emit({ type: "auth:ok" });
   }
 
   closeWith(code: number): void {
@@ -127,6 +144,7 @@ beforeEach(() => {
   clientMocks.getApiSelectedOrganizationId.mockReturnValue("org-1");
   clientMocks.getStoredTokens.mockReturnValue({ accessToken: "access-1", refreshToken: "refresh-1" });
   clientMocks.refreshAccessToken.mockResolvedValue({ accessToken: "access-2", refreshToken: "refresh-2" });
+  authorityMocks.getPinnedServerAuthority.mockResolvedValue(SERVER_AUTHORITY);
   root = null;
   container = null;
 });
@@ -144,7 +162,16 @@ describe("useAdminWs", () => {
     const socket = FakeWebSocket.instances[0];
     if (!socket) throw new Error("socket missing");
 
-    expect(socket.url).toBe("wss://first-tree.test/api/v1/orgs/org-1/ws/?token=access-1");
+    expect(socket.url).toBe(
+      `wss://first-tree.test/api/v1/orgs/org-1/ws/?ft_authority=${encodeURIComponent(SERVER_AUTHORITY)}`,
+    );
+    socket.open();
+    expect(socket.sent).toEqual([]);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    socket.emit({ type: "server:hello", authority: SERVER_AUTHORITY });
+    expect(socket.sent).toEqual([JSON.stringify({ type: "auth", token: "access-1" })]);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    socket.emit({ type: "auth:ok" });
     queryClient.setQueryData(
       ["chat-agent-status", "chat-1"],
       [makeStatus({ agentId: "agent-1", main: "ready", working: false })],
@@ -187,9 +214,41 @@ describe("useAdminWs", () => {
     expect(second).toBeTruthy();
 
     await act(async () => {
-      second?.open();
+      second?.authenticate();
     });
     expect(onMessage).not.toHaveBeenCalledWith({ type: "ws:reconnect" });
+  });
+
+  it("refreshes only after an auth:expired control frame and never treats it as authenticated data", async () => {
+    clientMocks.refreshAccessToken.mockClear();
+    const onMessage = await renderHook();
+    const first = FakeWebSocket.instances[0];
+    if (!first) throw new Error("socket missing");
+    first.authenticate();
+
+    await act(async () => {
+      first.emit({ type: "auth:expired" });
+      first.closeWith(4001);
+    });
+    await flush();
+
+    expect(onMessage).not.toHaveBeenCalledWith({ type: "auth:expired" });
+    expect(clientMocks.refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("never sends the JWT or exposes cache state for a mismatched server hello", async () => {
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderHook();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error("socket missing");
+
+    socket.open();
+    socket.emit({ type: "server:hello", authority: "https://other-server.test/api/v1" });
+
+    expect(socket.sent).toEqual([]);
+    expect(socket.closed).toBe(true);
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
   it("skips disabled hooks and tears down the shared socket when the last subscriber unmounts", async () => {
@@ -207,7 +266,9 @@ describe("useAdminWs", () => {
     await renderHook();
     const first = FakeWebSocket.instances[0];
     if (!first) throw new Error("socket missing");
-    expect(first.url).toBe("wss://first-tree.test/api/v1/orgs/org-1/ws/?token=access-1");
+    expect(first.url).toBe(
+      `wss://first-tree.test/api/v1/orgs/org-1/ws/?ft_authority=${encodeURIComponent(SERVER_AUTHORITY)}`,
+    );
 
     // selectOrganization flips the API client's selected-org value and fires the
     // org-changed event; the shared socket must drop org-1 and reopen on org-2.
@@ -219,7 +280,9 @@ describe("useAdminWs", () => {
 
     expect(first.closed).toBe(true);
     const second = FakeWebSocket.instances[1];
-    expect(second?.url).toBe("wss://first-tree.test/api/v1/orgs/org-2/ws/?token=access-1");
+    expect(second?.url).toBe(
+      `wss://first-tree.test/api/v1/orgs/org-2/ws/?ft_authority=${encodeURIComponent(SERVER_AUTHORITY)}`,
+    );
   });
 
   it("ignores the org-changed event after the workspace socket has torn down", async () => {

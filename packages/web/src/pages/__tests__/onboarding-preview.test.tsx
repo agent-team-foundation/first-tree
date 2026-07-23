@@ -12,6 +12,13 @@ const PROD_BOOTSTRAP_COMMAND =
   "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 
 const authMock = vi.hoisted(() => ({ memberships: [] as unknown[] }));
+const SERVER_AUTHORITY = "https://preview.test/api/v1";
+const VITE_GENERATION = "0123456789abcdef0123456789abcdef";
+const originalFetch = globalThis.fetch;
+
+type PreviewWindow = Window & {
+  __ftOrigFetch?: typeof fetch;
+};
 
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => ({ logout: () => undefined, memberships: authMock.memberships }),
@@ -58,18 +65,32 @@ async function waitForText(container: ParentNode, text: string): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.resetModules();
   authMock.memberships = [];
   document.body.innerHTML = "";
   document.documentElement.className = "";
   window.history.replaceState(null, "", "/preview/onboarding");
   localStorage.clear();
   sessionStorage.clear();
+  delete (window as PreviewWindow).__ftOrigFetch;
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === "/api/v1/bootstrap/server-authority") {
+      return new Response(JSON.stringify({ v: 1, authority: SERVER_AUTHORITY, viteGeneration: VITE_GENERATION }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected preview network request: ${url}`);
+  });
 });
 
 afterEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
   localStorage.clear();
+  delete (window as PreviewWindow).__ftOrigFetch;
+  globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
 

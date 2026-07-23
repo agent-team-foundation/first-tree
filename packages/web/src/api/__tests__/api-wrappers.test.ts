@@ -4,10 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMock = vi.hoisted(() => ({
   delete: vi.fn(),
+  fetchRaw: vi.fn(),
   get: vi.fn(),
   patch: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
+}));
+const anonymousApiMock = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
 }));
 
 vi.mock("../client.js", async (importOriginal) => {
@@ -15,32 +20,19 @@ vi.mock("../client.js", async (importOriginal) => {
   return {
     ...actual,
     api: apiMock,
+    apiFetchRaw: apiMock.fetchRaw,
     withOrg: (path: string) => `/orgs/current${path}`,
     withOrgAt: (orgId: string, path: string) => `/orgs/${encodeURIComponent(orgId)}${path}`,
   };
 });
-
-function createStorage(): Storage {
-  const data = new Map<string, string>();
-  return {
-    get length() {
-      return data.size;
-    },
-    clear: () => data.clear(),
-    getItem: (key: string) => data.get(key) ?? null,
-    key: (index: number) => [...data.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      data.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      data.set(key, value);
-    },
-  };
-}
+vi.mock("../anonymous-client.js", () => ({
+  anonymousApi: anonymousApiMock,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
   apiMock.get.mockResolvedValue({});
+  apiMock.fetchRaw.mockResolvedValue(new Response(null, { status: 204 }));
   apiMock.post.mockResolvedValue({});
   apiMock.patch.mockResolvedValue({});
   apiMock.put.mockResolvedValue({});
@@ -347,18 +339,15 @@ describe("api wrapper paths", () => {
     apiMock.get.mockResolvedValueOnce({ repos: [{ fullName: "acme/web" }] });
     await expect(github.listGithubRepos()).resolves.toEqual([{ fullName: "acme/web" }]);
 
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ accessToken: "a", refreshToken: "r" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    anonymousApiMock.post.mockResolvedValueOnce({ accessToken: "a", refreshToken: "r" });
     await expect(auth.login("gandy", "secret")).resolves.toEqual({ accessToken: "a", refreshToken: "r" });
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "bad login" }), { status: 401 }));
+    expect(anonymousApiMock.post).toHaveBeenCalledWith("/auth/login", {
+      username: "gandy",
+      password: "secret",
+    });
+    anonymousApiMock.post.mockRejectedValueOnce(new Error("bad login"));
     await expect(auth.login("gandy", "bad")).rejects.toThrow("bad login");
-    fetchMock.mockResolvedValueOnce(new Response("plain failure", { status: 500 }));
+    anonymousApiMock.post.mockRejectedValueOnce(new Error("plain failure"));
     await expect(auth.login("gandy", "bad")).rejects.toThrow("plain failure");
 
     const file = new File(["hello"], "hello.txt", { type: "text/plain" });
@@ -410,15 +399,7 @@ describe("api wrapper paths", () => {
 
   it("uploads agent avatars with optional auth and maps avatar upload errors", async () => {
     const agents = await import("../agents.js");
-    const client = await import("../client.js");
-    const fetchMock = vi.fn();
-    const storage = createStorage();
-    Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-    vi.stubGlobal("fetch", fetchMock);
-
-    localStorage.setItem("first-tree:tokens", JSON.stringify({ accessToken: "access-1", refreshToken: "refresh-1" }));
-    fetchMock.mockResolvedValueOnce(
+    apiMock.fetchRaw.mockResolvedValueOnce(
       new Response(JSON.stringify({ avatarImageUrl: "/avatar.webp" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -427,23 +408,23 @@ describe("api wrapper paths", () => {
     await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"], { type: "image/webp" }))).resolves.toEqual({
       avatarImageUrl: "/avatar.webp",
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/agents/agent%2Fid/avatar",
-      expect.objectContaining({
-        method: "PUT",
-        headers: { "Content-Type": "image/webp", Authorization: "Bearer access-1" },
-      }),
-    );
+    expect(apiMock.fetchRaw).toHaveBeenCalledWith("/agents/agent%2Fid/avatar", {
+      method: "PUT",
+      headers: { "Content-Type": "image/webp" },
+      body: expect.any(Blob),
+    });
 
-    client.clearStoredTokens();
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "too large" }), { status: 413 }));
+    const { ApiError } = await import("../client.js");
+    apiMock.fetchRaw.mockRejectedValueOnce(new ApiError(413, "too large"));
     await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"]))).rejects.toMatchObject({
       status: 413,
       message: "too large",
     });
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ headers: { "Content-Type": "application/octet-stream" } });
+    expect(apiMock.fetchRaw.mock.calls[1]?.[1]).toMatchObject({
+      headers: { "Content-Type": "application/octet-stream" },
+    });
 
-    fetchMock.mockResolvedValueOnce(new Response("plain avatar failure", { status: 500 }));
+    apiMock.fetchRaw.mockRejectedValueOnce(new ApiError(500, "plain avatar failure"));
     await expect(agents.uploadAgentAvatar("agent/id", new Blob(["x"]))).rejects.toMatchObject({
       status: 500,
       message: "plain avatar failure",

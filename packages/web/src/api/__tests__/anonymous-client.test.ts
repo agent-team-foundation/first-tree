@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const VITE_GENERATION_1 = "0123456789abcdef0123456789abcdef";
+const VITE_GENERATION_2 = "fedcba9876543210fedcba9876543210";
+
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
-function unavailableResponse(offlineEligible: boolean): Response {
-  return new Response(JSON.stringify({ error: "server_authority_unavailable", offlineEligible }), {
+function authorityResponse(authority: string, viteGeneration?: string): Response {
+  return jsonResponse({ v: 1, authority, ...(viteGeneration === undefined ? {} : { viteGeneration }) });
+}
+
+function unavailableResponse(offlineEligible: boolean, viteGeneration = VITE_GENERATION_1): Response {
+  return new Response(JSON.stringify({ error: "server_authority_unavailable", offlineEligible, viteGeneration }), {
     status: 503,
     headers: { "Content-Type": "application/json" },
   });
@@ -55,8 +62,8 @@ describe("anonymous client and server authority pin", () => {
   it("never replaces a pinned authority after a retarget", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }))
-      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s2.example/api/v1" }));
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_1))
+      .mockResolvedValueOnce(authorityResponse("https://s2.example/api/v1", VITE_GENERATION_1));
     vi.stubGlobal("fetch", fetchMock);
 
     const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
@@ -72,9 +79,9 @@ describe("anonymous client and server authority pin", () => {
   it("distinguishes authority match, mismatch, and offline unavailability", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }))
-      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s2.example/api/v1" }))
-      .mockResolvedValueOnce(unavailableResponse(true));
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_1))
+      .mockResolvedValueOnce(authorityResponse("https://s2.example/api/v1", VITE_GENERATION_1))
+      .mockResolvedValueOnce(unavailableResponse(true, VITE_GENERATION_1));
     vi.stubGlobal("fetch", fetchMock);
 
     const { reconcilePinnedServerAuthority } = await import("../server-authority.js");
@@ -111,7 +118,7 @@ describe("anonymous client and server authority pin", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(unavailableResponse(true))
-      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }))
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_1))
       .mockResolvedValueOnce(unavailableResponse(true));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -126,6 +133,61 @@ describe("anonymous client and server authority pin", () => {
       kind: "unavailable",
       expected: "https://s1.example/api/v1",
     });
+  });
+
+  it("fails closed when an offline response belongs to a restarted Vite process", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_1))
+      .mockResolvedValueOnce(unavailableResponse(true, VITE_GENERATION_2));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow(
+      "requires a verified document authority",
+    );
+  });
+
+  it("fails closed when a reachable authority belongs to a restarted Vite process", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_1))
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1", VITE_GENERATION_2));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow(
+      "authority process changed",
+    );
+  });
+
+  it("does not treat a production authority pin as a Vite offline proof", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(authorityResponse("https://s1.example/api/v1"))
+      .mockResolvedValueOnce(unavailableResponse(true, VITE_GENERATION_1));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow(
+      "requires a verified document authority",
+    );
+  });
+
+  it("rejects a classified offline response without an exact Vite generation", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "server_authority_unavailable", offlineEligible: true }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow("failed closed");
   });
 
   it("never probes through a conflicting document pin", async () => {

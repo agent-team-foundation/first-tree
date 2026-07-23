@@ -3,7 +3,7 @@ import { createServer as createHttpServer, type IncomingHttpHeaders, type Server
 import type { AddressInfo } from "node:net";
 import { connect } from "node:net";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   API_PROXY_CONTEXT,
   avatarAuthorityTag,
@@ -13,6 +13,8 @@ import {
   normalizeViteProxyTarget,
   parseCanonicalServerAuthority,
   SERVER_AUTHORITY_PATH,
+  VITE_GENERATION_PATTERN,
+  VITE_NAVIGATION_PROOF_QUERY,
 } from "./authority-firewall.js";
 
 const S1_AUTHORITY = "http://s1.example.test/api/v1";
@@ -241,6 +243,35 @@ function expectOnlyAuthorityProbes(records: RequestRecord[]): void {
   expect(records.every((record) => record.headers.cookie === undefined)).toBe(true);
 }
 
+function navigationProof(authority: string, viteGeneration: string): string {
+  return `v1.${viteGeneration}.${Buffer.from(authority, "utf8").toString("base64url")}`;
+}
+
+async function readViteGeneration(origin: string): Promise<string> {
+  const response = await fetch(`${origin}${SERVER_AUTHORITY_PATH}`);
+  const payload = (await response.json()) as { viteGeneration: string };
+  expect(payload.viteGeneration).toMatch(VITE_GENERATION_PATTERN);
+  return payload.viteGeneration;
+}
+
+function createStorage(): Storage {
+  const data = new Map<string, string>();
+  return {
+    get length() {
+      return data.size;
+    },
+    clear: () => data.clear(),
+    getItem: (key: string) => data.get(key) ?? null,
+    key: (index: number) => [...data.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  };
+}
+
 describe("Vite server-authority firewall", () => {
   let upstream: FakeUpstream;
   let vite: ViteDevServer;
@@ -278,7 +309,11 @@ describe("Vite server-authority firewall", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-upstream-secret")).toBeNull();
-    expect(await response.json()).toEqual({ v: 1, authority: S1_AUTHORITY });
+    expect(await response.json()).toEqual({
+      v: 1,
+      authority: S1_AUTHORITY,
+      viteGeneration: expect.stringMatching(VITE_GENERATION_PATTERN),
+    });
     expect(upstream.requests).toHaveLength(1);
     const probe = upstream.requests[0];
     expect(probe?.url).toBe(SERVER_AUTHORITY_PATH);
@@ -289,6 +324,18 @@ describe("Vite server-authority firewall", () => {
     expect(probe?.headers[EXPECTED_AUTHORITY_HEADER]).toBeUndefined();
     expect(probe?.headers["x-browser-only"]).toBeUndefined();
     expect(probe?.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("uses one stable generation for every response from the same Vite process", async () => {
+    const first = (await (await fetch(`${viteOrigin}${SERVER_AUTHORITY_PATH}`)).json()) as {
+      viteGeneration: string;
+    };
+    const second = (await (await fetch(`${viteOrigin}${SERVER_AUTHORITY_PATH}`)).json()) as {
+      viteGeneration: string;
+    };
+
+    expect(first.viteGeneration).toMatch(VITE_GENERATION_PATTERN);
+    expect(second.viteGeneration).toBe(first.viteGeneration);
   });
 
   it("forwards a matched request only after the probe and preserves the body", async () => {
@@ -305,6 +352,202 @@ describe("Vite server-authority firewall", () => {
     expect(upstream.requests.map((record) => record.url)).toEqual([SERVER_AUTHORITY_PATH, "/api/v1/future/raw-stream"]);
     expect(upstream.requests[1]?.body.toString()).toBe("business-bytes");
     expect(upstream.requests[1]?.headers[EXPECTED_AUTHORITY_HEADER]).toBe(S1_AUTHORITY);
+  });
+
+  it("admits an exact full-page OAuth navigation, strips its proof, and forwards no ambient credentials", async () => {
+    const generation = await readViteGeneration(viteOrigin);
+    upstream.requests.length = 0;
+    const proof = navigationProof(S1_AUTHORITY, generation);
+    const response = await rawSocketRequest(
+      viteOrigin,
+      `GET /api/v1/auth/github/start?next=%2Finvite%2Fprivate&${VITE_NAVIGATION_PROOF_QUERY}=${proof} HTTP/1.1\r\n` +
+        "Host: {{HOST}}\r\n" +
+        "Connection: close\r\n" +
+        "Accept: text/html\r\n" +
+        "Accept-Language: en-US\r\n" +
+        "User-Agent: FirstTree-Test\r\n" +
+        "Cookie: oauth_state_nonce=stale; analytics=ambient\r\n" +
+        "Authorization: Bearer stale-access\r\n" +
+        "Proxy-Authorization: Basic stale\r\n" +
+        "Origin: http://127.0.0.1:5173\r\n" +
+        "Referer: http://127.0.0.1:5173/login\r\n" +
+        "X-Forwarded-For: 203.0.113.8\r\n" +
+        `X-First-Tree-Expected-Authority: ${S1_AUTHORITY}\r\n\r\n`,
+    );
+
+    expect(response).toContain(" 200 ");
+    expect(upstream.requests.map((record) => record.url)).toEqual([
+      SERVER_AUTHORITY_PATH,
+      "/api/v1/auth/github/start?next=%2Finvite%2Fprivate",
+    ]);
+    const forwarded = upstream.requests[1];
+    expect(forwarded?.body).toHaveLength(0);
+    expect(forwarded?.headers.accept).toBe("text/html");
+    expect(forwarded?.headers["accept-language"]).toBe("en-US");
+    expect(forwarded?.headers["user-agent"]).toBe("FirstTree-Test");
+    expect(forwarded?.headers.cookie).toBeUndefined();
+    expect(forwarded?.headers.authorization).toBeUndefined();
+    expect(forwarded?.headers["proxy-authorization"]).toBeUndefined();
+    expect(forwarded?.headers.origin).toBeUndefined();
+    expect(forwarded?.headers.referer).toBeUndefined();
+    expect(forwarded?.headers["x-forwarded-for"]).toBeUndefined();
+    expect(forwarded?.headers[EXPECTED_AUTHORITY_HEADER]).toBeUndefined();
+  });
+
+  it("admits Google start and dev-callback only through the same stripped navigation class", async () => {
+    const generation = await readViteGeneration(viteOrigin);
+    upstream.requests.length = 0;
+    const proof = navigationProof(S1_AUTHORITY, generation);
+
+    const google = await fetch(
+      `${viteOrigin}/api/v1/auth/google/start?next=%2Fteam&${VITE_NAVIGATION_PROOF_QUERY}=${proof}`,
+    );
+    expect(google.status).toBe(200);
+    const dev = await fetch(
+      `${viteOrigin}/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User&${VITE_NAVIGATION_PROOF_QUERY}=${proof}`,
+    );
+    expect(dev.status).toBe(200);
+    expect(upstream.requests.map((record) => record.url)).toEqual([
+      SERVER_AUTHORITY_PATH,
+      "/api/v1/auth/google/start?next=%2Fteam",
+      SERVER_AUTHORITY_PATH,
+      "/api/v1/auth/github/dev-callback?githubId=1&login=devuser&displayName=Dev+User",
+    ]);
+  });
+
+  it.each([
+    ["missing proof", "/api/v1/auth/github/start"],
+    ["generic header cannot bypass", "/api/v1/auth/github/start?next=%2Fteam"],
+    [
+      "encoded proof key",
+      `/api/v1/auth/github/start?%66t_vite_nav=v1.0123456789abcdef0123456789abcdef.${Buffer.from(S1_AUTHORITY).toString("base64url")}`,
+    ],
+    ["malformed proof", "/api/v1/auth/github/start?ft_vite_nav=v1.0123456789abcdef0123456789abcdef.not+base64"],
+    [
+      "unknown business key",
+      `/api/v1/auth/github/start?unknown=value&ft_vite_nav=v1.0123456789abcdef0123456789abcdef.${Buffer.from(S1_AUTHORITY).toString("base64url")}`,
+    ],
+  ])("rejects %s without touching the upstream", async (_label, target) => {
+    const response = await fetch(`${viteOrigin}${target}`, {
+      headers: { [EXPECTED_AUTHORITY_HEADER]: S1_AUTHORITY },
+    });
+    expect(response.status).toBe(421);
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("rejects an encoded protected-route alias before generic admission or upstream contact", async () => {
+    const response = await rawSocketRequest(
+      viteOrigin,
+      "GET /api/v1/%61uth/github/start?next=%2Finvite%2Fprivate HTTP/1.1\r\n" +
+        "Host: {{HOST}}\r\n" +
+        "Connection: close\r\n" +
+        "Content-Length: 14\r\n" +
+        "Cookie: oauth_state_nonce=ambient\r\n" +
+        "Authorization: Bearer ambient-access\r\n" +
+        `X-First-Tree-Expected-Authority: ${S1_AUTHORITY}\r\n\r\n` +
+        "business-bytes",
+    );
+
+    expect(response).toContain(" 421 ");
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("rejects duplicate or non-terminal navigation proofs without touching the upstream", async () => {
+    const generation = await readViteGeneration(viteOrigin);
+    upstream.requests.length = 0;
+    const proof = navigationProof(S1_AUTHORITY, generation);
+    const duplicate = await fetch(
+      `${viteOrigin}/api/v1/auth/github/start?${VITE_NAVIGATION_PROOF_QUERY}=${proof}&${VITE_NAVIGATION_PROOF_QUERY}=${proof}`,
+    );
+    const nonTerminal = await fetch(
+      `${viteOrigin}/api/v1/auth/github/start?${VITE_NAVIGATION_PROOF_QUERY}=${proof}&next=%2Fteam`,
+    );
+    expect(duplicate.status).toBe(421);
+    expect(nonTerminal.status).toBe(421);
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("lets a same-generation wrong-server proof expose only the fixed token-free probe", async () => {
+    const generation = await readViteGeneration(viteOrigin);
+    upstream.requests.length = 0;
+    const proof = navigationProof(S2_AUTHORITY, generation);
+    const response = await fetch(
+      `${viteOrigin}/api/v1/auth/github/start?next=%2Fprivate&${VITE_NAVIGATION_PROOF_QUERY}=${proof}`,
+      { headers: { Cookie: "ambient=secret", Authorization: "Bearer secret" } },
+    );
+    expect(response.status).toBe(421);
+    expectOnlyAuthorityProbes(upstream.requests);
+  });
+
+  it("rejects a V1/S1 navigation in V2 before probing reachable or unavailable S2", async () => {
+    const s1 = await createFakeUpstream();
+    const v1 = await createTestVite(s1.origin);
+    const s2 = await createFakeUpstream();
+    s2.authority = S2_AUTHORITY;
+    const v2 = await createTestVite(s2.origin);
+    let s2Closed = false;
+    try {
+      const v1Generation = await readViteGeneration(v1.origin);
+      const staleProof = navigationProof(S1_AUTHORITY, v1Generation);
+      s2.requests.length = 0;
+
+      const reachableMismatch = await fetch(
+        `${v2.origin}/api/v1/auth/github/start?next=%2Finvite%2Fsecret&${VITE_NAVIGATION_PROOF_QUERY}=${staleProof}`,
+        { headers: { Cookie: "ambient=secret", Authorization: "Bearer secret" } },
+      );
+      expect(reachableMismatch.status).toBe(421);
+      expect(s2.requests).toHaveLength(0);
+
+      await closeServer(s2.server);
+      s2Closed = true;
+      const unavailableRetarget = await fetch(
+        `${v2.origin}/api/v1/auth/github/start?next=%2Finvite%2Fsecret&${VITE_NAVIGATION_PROOF_QUERY}=${staleProof}`,
+      );
+      expect(unavailableRetarget.status).toBe(421);
+      expect(s2.requests).toHaveLength(0);
+    } finally {
+      await v1.server.close();
+      await v2.server.close();
+      await closeServer(s1.server);
+      if (!s2Closed) await closeServer(s2.server);
+    }
+  });
+
+  it("admits the real current-session client and blocks its body after an S1 to S2 authority change", async () => {
+    const nativeFetch = globalThis.fetch;
+    const storage = createStorage();
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => {
+      const target = typeof input === "string" && input.startsWith("/") ? `${viteOrigin}${input}` : input;
+      return nativeFetch(target, init);
+    });
+    vi.resetModules();
+    try {
+      const { api, setStoredTokens } = await import("../src/api/client.js");
+      setStoredTokens({ accessToken: "current-access", refreshToken: "current-refresh" });
+
+      await expect(api.post<{ forwarded: true }>("/future/current-client", { secret: "s1-body" })).resolves.toEqual({
+        forwarded: true,
+      });
+      expect(upstream.requests.map((record) => record.url)).toEqual([
+        SERVER_AUTHORITY_PATH,
+        SERVER_AUTHORITY_PATH,
+        "/api/v1/future/current-client",
+      ]);
+      expect(upstream.requests[2]?.headers.authorization).toBe("Bearer current-access");
+      expect(upstream.requests[2]?.headers[EXPECTED_AUTHORITY_HEADER]).toBe(S1_AUTHORITY);
+      expect(upstream.requests[2]?.body.toString()).toBe('{"secret":"s1-body"}');
+
+      upstream.requests.length = 0;
+      upstream.authority = S2_AUTHORITY;
+      await expect(api.get("/future/current-client")).rejects.toMatchObject({
+        status: 421,
+      });
+      expectOnlyAuthorityProbes(upstream.requests);
+    } finally {
+      vi.unstubAllGlobals();
+      Reflect.deleteProperty(globalThis, "localStorage");
+    }
   });
 
   it("returns 421 and forwards no business path, headers, or body on mismatch", async () => {
@@ -372,7 +615,11 @@ describe("Vite server-authority firewall", () => {
       headers: { "X-First-Tree-Expected-Authority": S1_AUTHORITY },
     });
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "server_authority_unavailable", offlineEligible: false });
+    expect(await response.json()).toEqual({
+      error: "server_authority_unavailable",
+      offlineEligible: false,
+      viteGeneration: expect.stringMatching(VITE_GENERATION_PATTERN),
+    });
     expect(upstream.requests).toHaveLength(1);
     expect(upstream.requests[0]?.url).toBe(SERVER_AUTHORITY_PATH);
   });
@@ -546,6 +793,7 @@ describe("Vite server-authority firewall", () => {
 
     expect(response).toContain(" 503 ");
     expect(response).toContain('"offlineEligible":false');
+    expect(response).toMatch(/"viteGeneration":"[a-f0-9]{32}"/u);
     expect(upstream.requests.map((record) => record.url)).toEqual([SERVER_AUTHORITY_PATH]);
     expect(upstream.upgrades).toHaveLength(1);
   });
@@ -664,9 +912,43 @@ describe("authority firewall validation", () => {
         headers: { "X-First-Tree-Expected-Authority": S1_AUTHORITY },
       });
       expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({ error: "server_authority_unavailable", offlineEligible: true });
+      expect(await response.json()).toEqual({
+        error: "server_authority_unavailable",
+        offlineEligible: true,
+        viteGeneration: expect.stringMatching(VITE_GENERATION_PATTERN),
+      });
     } finally {
       await running.server.close();
+    }
+  });
+
+  it("keeps one generation across an online probe and later same-process offline response", async () => {
+    const temporaryUpstream = await createFakeUpstream();
+    const running = await createTestVite(temporaryUpstream.origin, 100);
+    let upstreamClosed = false;
+    try {
+      const online = (await (await fetch(`${running.origin}${SERVER_AUTHORITY_PATH}`)).json()) as {
+        viteGeneration: string;
+      };
+      expect(online.viteGeneration).toMatch(VITE_GENERATION_PATTERN);
+
+      await closeServer(temporaryUpstream.server);
+      upstreamClosed = true;
+      const offlineResponse = await fetch(`${running.origin}${SERVER_AUTHORITY_PATH}`);
+      expect(offlineResponse.status).toBe(503);
+      const offline = (await offlineResponse.json()) as {
+        error: string;
+        offlineEligible: boolean;
+        viteGeneration: string;
+      };
+      expect(offline).toEqual({
+        error: "server_authority_unavailable",
+        offlineEligible: true,
+        viteGeneration: online.viteGeneration,
+      });
+    } finally {
+      await running.server.close();
+      if (!upstreamClosed) await closeServer(temporaryUpstream.server);
     }
   });
 
@@ -679,7 +961,11 @@ describe("authority firewall validation", () => {
         headers: { "X-First-Tree-Expected-Authority": S1_AUTHORITY },
       });
       expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({ error: "server_authority_unavailable", offlineEligible: true });
+      expect(await response.json()).toEqual({
+        error: "server_authority_unavailable",
+        offlineEligible: true,
+        viteGeneration: expect.stringMatching(VITE_GENERATION_PATTERN),
+      });
       expect(upstream.requests).toHaveLength(1);
       expect(upstream.requests[0]?.url).toBe(SERVER_AUTHORITY_PATH);
     } finally {

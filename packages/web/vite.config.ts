@@ -5,7 +5,7 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import { normalizeViteProxyTarget } from "./vite/authority-firewall.js";
+import { API_PROXY_CONTEXT, firstTreeAuthorityFirewall, normalizeViteProxyTarget } from "./vite/authority-firewall.js";
 
 const HUB_TARGET = normalizeViteProxyTarget(process.env.VITE_PROXY_TARGET ?? "http://localhost:8000");
 const SENTRY_WEB_PROJECT = "first-tree-web";
@@ -106,6 +106,7 @@ export default defineConfig({
     sourcemap: "hidden",
   },
   plugins: [
+    firstTreeAuthorityFirewall({ target: HUB_TARGET }),
     react(),
     tailwindcss(),
     versionManifestPlugin(buildId),
@@ -134,7 +135,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api/v1": { target: HUB_TARGET, changeOrigin: true, ws: true },
+      [API_PROXY_CONTEXT]: { target: HUB_TARGET, changeOrigin: true },
     },
   },
 });

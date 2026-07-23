@@ -1,8 +1,19 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY, type AgentChatStatus } from "@first-tree/shared";
+import {
+  AGENT_STATUSES,
+  AGENT_VISIBILITY,
+  type AgentChatStatus,
+  AUTH_REJECTED_CODES,
+  AUTH_RETRYABLE_CODES,
+  type AuthControlFrame,
+  type AuthRejectedCode,
+  type AuthRetryableCode,
+  WS_AUTH_FRAME_TIMEOUT_MS,
+  wsAuthFrameSchema,
+} from "@first-tree/shared";
 import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { jwtVerify } from "jose";
-import type { WebSocket } from "ws";
+import { errors, jwtVerify } from "jose";
+import type { RawData, WebSocket } from "ws";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
@@ -16,8 +27,35 @@ import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
 import { getChatAgentStatuses } from "../../services/agent-chat-status.js";
 import { getCachedAudience } from "../../services/chat-audience-cache.js";
 import type { Notifier } from "../../services/notifier.js";
+import { configuredServerAuthority } from "../../utils/server-authority.js";
 
 const log = createLogger("OrgWs");
+const ADMIN_AUTH_FRAME_MAX_BYTES = 16 * 1024;
+const ADMIN_WS_AUTH_EXPIRED_CLOSE_CODE = 4001;
+const ADMIN_WS_AUTH_REJECTED_CLOSE_CODE = 4401;
+const ADMIN_WS_FORBIDDEN_CLOSE_CODE = 4403;
+const ADMIN_WS_RETRYABLE_CLOSE_CODE = 1013;
+
+function parseAdminAuthFrame(raw: RawData, isBinary: boolean): { token: string } | null {
+  if (isBinary) return null;
+  let bytes: Buffer;
+  if (raw instanceof ArrayBuffer) {
+    bytes = Buffer.from(raw);
+  } else if (Array.isArray(raw)) {
+    bytes = Buffer.concat(raw);
+  } else {
+    bytes = raw;
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > ADMIN_AUTH_FRAME_MAX_BYTES) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return null;
+  }
+  const parsed = wsAuthFrameSchema.safeParse(value);
+  return parsed.success ? { token: parsed.data.token } : null;
+}
 
 /**
  * Class B — `/api/v1/orgs/:orgId/ws`. Real-time admin push channel.
@@ -221,6 +259,8 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
   }
 
   return async (app: FastifyInstance): Promise<void> => {
+    const serverAuthority = configuredServerAuthority(app.config);
+
     app.get<{ Params: { orgId: string } }>("/", { websocket: true }, async (socket, request) => {
       const ua = request.headers["user-agent"];
       startWsConnectionSpan(socket, {
@@ -229,66 +269,180 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
       });
 
       const orgIdFromPath = (request.params as { orgId?: string }).orgId;
-      const token = (request.query as Record<string, string>).token;
-      if (!token || !orgIdFromPath) {
-        socket.send(JSON.stringify({ type: "error", message: "Missing token or org" }));
-        socket.close(4001, "Missing token");
-        endWsConnectionSpan(socket, 4001);
+      if (!orgIdFromPath) {
+        socket.send(
+          JSON.stringify({
+            type: "auth:rejected",
+            code: AUTH_REJECTED_CODES.INVALID_CLAIMS,
+            message: "Missing org",
+          }),
+        );
+        socket.close(ADMIN_WS_AUTH_REJECTED_CLOSE_CODE, "Missing org");
+        endWsConnectionSpan(socket, ADMIN_WS_AUTH_REJECTED_CLOSE_CODE);
         return;
       }
 
-      let userId: string;
-      try {
-        const { payload } = await jwtVerify(token, secret);
-        if (payload.type !== "access" || typeof payload.sub !== "string") {
-          socket.send(JSON.stringify({ type: "error", message: "Invalid token type" }));
-          socket.close(4001, "Invalid token");
-          endWsConnectionSpan(socket, 4001);
-          return;
+      let authTimeout: ReturnType<typeof setTimeout> | null = null;
+      let tokenExpiryTimeout: ReturnType<typeof setTimeout> | null = null;
+      let authenticated = false;
+      let handshakeSettled = false;
+      let socketClosed = false;
+      const clearAuthTimeout = (): void => {
+        if (authTimeout !== null) {
+          clearTimeout(authTimeout);
+          authTimeout = null;
         }
-        userId = payload.sub;
-      } catch {
-        socket.send(JSON.stringify({ type: "error", message: "Invalid or expired token" }));
-        socket.close(4001, "Auth failed");
-        endWsConnectionSpan(socket, 4001);
-        return;
-      }
-
-      const organizationId = orgIdFromPath;
-      const [memberRow] = await app.db
-        .select({ id: members.id, role: members.role, agentId: members.agentId })
-        .from(members)
-        .where(
-          and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")),
-        )
-        .limit(1);
-      if (!memberRow) {
-        socket.send(JSON.stringify({ type: "error", message: "Not an active member of this organization" }));
-        socket.close(4403, "Not a member");
-        endWsConnectionSpan(socket, 4403);
-        return;
-      }
-      const memberId = memberRow.id;
-
-      setWsConnectionAttrs(socket, { organizationId, memberId });
-      rememberDb(app.db);
-
-      const visibleAgentIds = await loadVisibleAgentIds(app.db, organizationId, memberId);
-
-      const [humanAgentRow] = await app.db
-        .select({ uuid: agents.uuid })
-        .from(agents)
-        .where(eq(agents.uuid, memberRow.agentId))
-        .limit(1);
-      const humanAgentId = humanAgentRow?.uuid ?? memberRow.agentId;
-
-      adminSockets.set(socket, { organizationId, memberId, humanAgentId, visibleAgentIds });
-      socket.send(JSON.stringify({ type: "admin:connected" }));
+      };
+      const clearTokenExpiryTimeout = (): void => {
+        if (tokenExpiryTimeout !== null) {
+          clearTimeout(tokenExpiryTimeout);
+          tokenExpiryTimeout = null;
+        }
+      };
+      const sendControlAndClose = (frame: AuthControlFrame, closeCode: number, reason: string): void => {
+        if (socketClosed) return;
+        clearAuthTimeout();
+        clearTokenExpiryTimeout();
+        socket.send(JSON.stringify(frame));
+        socket.close(closeCode, reason);
+      };
+      const rejectAuth = (
+        message: string,
+        reason: string,
+        code: AuthRejectedCode = AUTH_REJECTED_CODES.INVALID_TOKEN,
+        closeCode = ADMIN_WS_AUTH_REJECTED_CLOSE_CODE,
+      ): void => {
+        if (handshakeSettled) return;
+        handshakeSettled = true;
+        sendControlAndClose({ type: "auth:rejected", code, message }, closeCode, reason);
+      };
+      const retryAuth = (message: string, reason: string, code: AuthRetryableCode): void => {
+        if (handshakeSettled) return;
+        handshakeSettled = true;
+        sendControlAndClose(
+          { type: "auth:retryable", code, message, retryAfterMs: 2_000 },
+          ADMIN_WS_RETRYABLE_CLOSE_CODE,
+          reason,
+        );
+      };
+      const expireAuth = (): void => {
+        if (socketClosed) return;
+        handshakeSettled = true;
+        sendControlAndClose({ type: "auth:expired" }, ADMIN_WS_AUTH_EXPIRED_CLOSE_CODE, "Auth expired");
+      };
 
       socket.on("close", (code) => {
+        socketClosed = true;
+        handshakeSettled = true;
+        clearAuthTimeout();
+        clearTokenExpiryTimeout();
         adminSockets.delete(socket);
         endWsConnectionSpan(socket, code);
       });
+
+      socket.once("message", (raw: RawData, isBinary: boolean) => {
+        const frame = parseAdminAuthFrame(raw, isBinary);
+        if (!frame) {
+          rejectAuth("Invalid authentication frame", "Invalid auth frame", "invalid_auth_frame");
+          return;
+        }
+        void (async () => {
+          let userId: string;
+          let expiresAtMs: number;
+          try {
+            const { payload } = await jwtVerify(frame.token, secret);
+            if (handshakeSettled) return;
+            if (payload.type !== "access") {
+              rejectAuth("Invalid token type", "Invalid token", AUTH_REJECTED_CODES.WRONG_TOKEN_TYPE);
+              return;
+            }
+            if (
+              typeof payload.sub !== "string" ||
+              payload.sub.length === 0 ||
+              typeof payload.exp !== "number" ||
+              !Number.isSafeInteger(payload.exp)
+            ) {
+              rejectAuth("Invalid token claims", "Invalid claims", AUTH_REJECTED_CODES.INVALID_CLAIMS);
+              return;
+            }
+            userId = payload.sub;
+            expiresAtMs = payload.exp * 1_000;
+            if (expiresAtMs <= Date.now()) {
+              expireAuth();
+              return;
+            }
+          } catch (error) {
+            if (error instanceof errors.JWTExpired) {
+              expireAuth();
+              return;
+            }
+            if (error instanceof errors.JWTClaimValidationFailed) {
+              rejectAuth("Invalid token claims", "Invalid claims", AUTH_REJECTED_CODES.INVALID_CLAIMS);
+              return;
+            }
+            rejectAuth("Invalid token", "Auth failed", AUTH_REJECTED_CODES.INVALID_TOKEN);
+            return;
+          }
+
+          const organizationId = orgIdFromPath;
+          const [memberRow] = await app.db
+            .select({ id: members.id, role: members.role, agentId: members.agentId })
+            .from(members)
+            .where(
+              and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")),
+            )
+            .limit(1);
+          if (handshakeSettled) return;
+          if (!memberRow) {
+            rejectAuth(
+              "Not an active member of this organization",
+              "Not a member",
+              AUTH_REJECTED_CODES.INVALID_CLAIMS,
+              ADMIN_WS_FORBIDDEN_CLOSE_CODE,
+            );
+            return;
+          }
+          const memberId = memberRow.id;
+
+          setWsConnectionAttrs(socket, { organizationId, memberId });
+          rememberDb(app.db);
+
+          const visibleAgentIds = await loadVisibleAgentIds(app.db, organizationId, memberId);
+          if (handshakeSettled) return;
+          const [humanAgentRow] = await app.db
+            .select({ uuid: agents.uuid })
+            .from(agents)
+            .where(eq(agents.uuid, memberRow.agentId))
+            .limit(1);
+          if (handshakeSettled) return;
+          const humanAgentId = humanAgentRow?.uuid ?? memberRow.agentId;
+
+          if (expiresAtMs <= Date.now()) {
+            expireAuth();
+            return;
+          }
+          socket.send(JSON.stringify({ type: "auth:ok" }));
+          handshakeSettled = true;
+          authenticated = true;
+          clearAuthTimeout();
+          adminSockets.set(socket, { organizationId, memberId, humanAgentId, visibleAgentIds });
+          tokenExpiryTimeout = setTimeout(expireAuth, expiresAtMs - Date.now());
+        })().catch((error) => {
+          if (handshakeSettled) return;
+          app.log.warn({ err: error }, "admin websocket authentication failed");
+          retryAuth(
+            "Authentication backend unavailable",
+            "Auth unavailable",
+            AUTH_RETRYABLE_CODES.AUTH_BACKEND_UNAVAILABLE,
+          );
+        });
+      });
+
+      authTimeout = setTimeout(() => {
+        if (authenticated) return;
+        retryAuth("Authentication timed out", "Auth timeout", AUTH_RETRYABLE_CODES.AUTH_TIMEOUT);
+      }, WS_AUTH_FRAME_TIMEOUT_MS);
+      socket.send(JSON.stringify({ type: "server:hello", authority: serverAuthority }));
     });
   };
 }

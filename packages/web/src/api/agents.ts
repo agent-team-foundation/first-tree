@@ -7,7 +7,7 @@ import type {
   SwitchAgentRuntime,
   UpdateAgent,
 } from "@first-tree/shared";
-import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
+import { api, apiFetchRaw, withOrg } from "./client.js";
 
 type PaginatedAgents = {
   items: Agent[];
@@ -147,25 +147,11 @@ export function deleteAgent(uuid: string): Promise<void> {
  * directly, bypassing the JSON `api` helper.
  */
 export async function uploadAgentAvatar(uuid: string, blob: Blob): Promise<{ avatarImageUrl: string }> {
-  const tokens = getStoredTokens();
-  const headers: Record<string, string> = { "Content-Type": blob.type || "application/octet-stream" };
-  if (tokens?.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`;
-  const res = await fetch(`/api/v1/agents/${encodeURIComponent(uuid)}/avatar`, {
+  const res = await apiFetchRaw(`/agents/${encodeURIComponent(uuid)}/avatar`, {
     method: "PUT",
-    headers,
+    headers: { "Content-Type": blob.type || "application/octet-stream" },
     body: blob,
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let message = text;
-    try {
-      const json = JSON.parse(text) as { error?: string };
-      if (json.error) message = json.error;
-    } catch {
-      // fall through with raw text
-    }
-    throw new ApiError(res.status, message);
-  }
   return (await res.json()) as { avatarImageUrl: string };
 }
 

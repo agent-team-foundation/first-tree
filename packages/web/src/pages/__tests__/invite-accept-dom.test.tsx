@@ -70,6 +70,7 @@ vi.mock("react-router", async (importOriginal) => {
 let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 let providerAvailability = { google: true, github: true };
+const VITE_GENERATION = "0123456789abcdef0123456789abcdef";
 
 function preview(overrides: Partial<InvitationPreview> = {}): InvitationPreview {
   return {
@@ -153,6 +154,19 @@ beforeEach(() => {
   providerAvailability = { google: true, github: true };
   clientMocks.post.mockReset();
   onboardingMocks.markOnboardingResume.mockReset();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          v: 1,
+          authority: "https://s1.example/api/v1",
+          viteGeneration: VITE_GENERATION,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+  );
   clientMocks.get.mockImplementation(async (path: string) => {
     if (path === "/bootstrap/config") return { authProviders: providerAvailability };
     if (path === "/invitations/token-1/preview") return preview();
@@ -173,6 +187,7 @@ afterEach(async () => {
   queryClient?.clear();
   queryClient = null;
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -205,6 +220,7 @@ describe("InviteAcceptPage", () => {
     await waitForText(publicPage, "Continue with GitHub to join");
     const link = publicPage.querySelector<HTMLAnchorElement>("a[href^='/api/v1/auth/github/start']");
     expect(link?.href).toContain("next=%2Finvite%2Ftoken-1");
+    expect(link?.href).toContain(`ft_vite_nav=v1.${VITE_GENERATION}.`);
     expect(clientMocks.get).toHaveBeenCalledWith("/bootstrap/config");
     await act(async () => root?.unmount());
     root = null;
