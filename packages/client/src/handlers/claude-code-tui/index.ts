@@ -316,6 +316,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     }
 
     transcriptTailer = new TranscriptTailer(transcriptPathFor(cwd, sessionId));
+    // A resumed transcript already holds the full session history — start
+    // the tail at EOF so the first pre-flush doesn't synchronously read and
+    // parse (only to discard) the entire historical file.
+    if (resumeSessionId) transcriptTailer.seekToEnd();
     return sessionId;
   }
 
@@ -405,7 +409,9 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     try {
       // Pre-flush whatever's already in the transcript (the prior turn's
       // tail end) so it doesn't pollute this turn's text accumulation.
-      transcriptTailer.drainEntries();
+      // Seek instead of drain-and-discard: no buffer allocation, read, or
+      // parse for data nobody consumes.
+      transcriptTailer.seekToEnd();
 
       await pasteText(tmuxSessionName, text);
       sessionCtx.recordProviderActivity();

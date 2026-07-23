@@ -61,6 +61,19 @@ export class TranscriptTailer {
     this.path = path;
   }
 
+  /**
+   * Skip everything currently in the file without reading or parsing it.
+   * Used to initialize a resume tail at EOF (the historical transcript is
+   * never consumed) and to pre-flush a prior turn's leftover entries.
+   * A missing file is a no-op — the tailer still starts at offset 0 for
+   * the not-yet-created transcript.
+   */
+  seekToEnd(): void {
+    if (!existsSync(this.path)) return;
+    this.offset = statSync(this.path).size;
+    this.partial = "";
+  }
+
   /** Read raw JSONL entries appended since the last call. Best-effort. */
   drainEntries(): RawTranscriptEntry[] {
     if (!existsSync(this.path)) return [];

@@ -79,4 +79,45 @@ describe("TranscriptTailer", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ type: "user" });
   });
+
+  it("seekToEnd skips existing content without parsing it", () => {
+    // Simulate a resumed transcript: a full history, including a malformed
+    // line that would fail JSON.parse if it were read.
+    writeFileSync(filePath, `${JSON.stringify({ type: "user", message: { content: "old" } })}\nnot json\n`);
+    const tailer = new TranscriptTailer(filePath);
+
+    tailer.seekToEnd();
+    expect(tailer.drainEntries()).toEqual([]);
+
+    appendFileSync(filePath, `${JSON.stringify({ type: "assistant", message: { content: [] } })}\n`);
+    const entries = tailer.drainEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ type: "assistant" });
+  });
+
+  it("seekToEnd discards a buffered partial line", () => {
+    writeFileSync(filePath, "");
+    const tailer = new TranscriptTailer(filePath);
+
+    appendFileSync(filePath, '{"type":"user","message":{"content":"half');
+    expect(tailer.drainEntries()).toEqual([]);
+
+    tailer.seekToEnd();
+
+    // The leftover partial is gone: completing it must not surface the old
+    // fragment, only genuinely new entries are returned.
+    appendFileSync(filePath, ' message"}}\n');
+    expect(tailer.drainEntries()).toEqual([]);
+    appendFileSync(filePath, `${JSON.stringify({ type: "assistant", message: { content: [] } })}\n`);
+    expect(tailer.drainEntries()).toHaveLength(1);
+  });
+
+  it("seekToEnd tolerates a missing file and still tails once it appears", () => {
+    const tailer = new TranscriptTailer(filePath);
+
+    expect(() => tailer.seekToEnd()).not.toThrow();
+
+    writeFileSync(filePath, `${JSON.stringify({ type: "user", message: { content: "first" } })}\n`);
+    expect(tailer.drainEntries()).toHaveLength(1);
+  });
 });
