@@ -1,13 +1,47 @@
 // @vitest-environment happy-dom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSetupRows, type SetupFacts, SetupOverview } from "../setup.js";
+import { MemoryRouter, useLocation } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSetupRows, SettingsSetupPage, type SetupFacts, SetupOverview } from "../setup.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+const activityMocks = vi.hoisted(() => ({ listClients: vi.fn() }));
+const contextTreeMocks = vi.hoisted(() => ({ getContextTreeSnapshot: vi.fn() }));
+const githubMocks = vi.hoisted(() => ({ getGithubAppInstallation: vi.fn() }));
+const gitlabMocks = vi.hoisted(() => ({ listGitlabConnectionsAt: vi.fn() }));
+const onboardingEventMocks = vi.hoisted(() => ({ reportOnboardingEvent: vi.fn() }));
+const orgSettingsMocks = vi.hoisted(() => ({ getContextTreeSetting: vi.fn() }));
+const resourceMocks = vi.hoisted(() => ({ listTeamResourcesForOrg: vi.fn() }));
+const authMock = vi.hoisted(() => ({
+  value: {
+    role: "admin",
+    organizationId: "org-1",
+    teamDisplayName: "Acme",
+    currentOrgHasUsableAgent: true,
+    currentOrgHasPersonalAgent: true,
+    meLoaded: true,
+    onboardingStep: "completed" as "connect" | "create_agent" | "completed" | null,
+    onboardingDismissedAt: null as string | null,
+    onboardingCompletedAt: "2026-07-23T00:00:00.000Z" as string | null,
+    restoreOnboarding: vi.fn(async () => undefined),
+  },
+}));
+
+vi.mock("../../../api/activity.js", () => activityMocks);
+vi.mock("../../../api/context-tree.js", () => contextTreeMocks);
+vi.mock("../../../api/github-app.js", () => githubMocks);
+vi.mock("../../../api/gitlab-connections.js", () => ({
+  ...gitlabMocks,
+  gitlabConnectionsQueryKey: (organizationId: string | null) => ["gitlab-connections", organizationId],
+}));
+vi.mock("../../../api/onboarding-events.js", () => onboardingEventMocks);
+vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
+vi.mock("../../../api/resources.js", () => resourceMocks);
+vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => "xl",
 }));
@@ -18,6 +52,9 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     teamName: "Acme",
     hasUsableAgent: true,
     hasPersonalAgent: true,
+    onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
+    onboardingCompletedAt: "2026-07-23T00:00:00.000Z",
+    workspaceWillEnterOnboarding: false,
     computers: {
       state: "ready",
       value: { connected: 1, saved: 1, connectedHostname: "acme-mac" },
@@ -38,7 +75,15 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     },
     gitlab: {
       state: "ready",
-      value: { displayName: "Engineering", instanceOrigin: "https://gitlab.acme.test" },
+      value: {
+        displayName: "Engineering",
+        instanceOrigin: "https://gitlab.acme.test",
+        endpointSeen: true,
+        health: {
+          lastValidInboundAt: "2026-07-23T00:00:00.000Z",
+          lastProcessingFailureAt: null,
+        },
+      },
     },
     ...overrides,
   };
@@ -57,6 +102,85 @@ async function renderSetup(input: SetupFacts) {
   });
   return { host, root };
 }
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function renderSettingsSetupPage() {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  });
+  await act(async () => {
+    root.render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <SettingsSetupPage />
+          <LocationProbe />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  });
+  await flush();
+  return { host, root };
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-location>{location.pathname}</output>;
+}
+
+async function waitForRowText(
+  host: ParentNode,
+  title: string,
+  expected: string,
+  timeoutMs = 3000,
+): Promise<HTMLElement> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const row = [...host.querySelectorAll<HTMLElement>("section")].find((section) =>
+      section.textContent?.includes(title),
+    );
+    if (row?.textContent?.includes(expected)) return row;
+    await flush();
+  }
+  throw new Error(`Expected ${title} row to include "${expected}"`);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  activityMocks.listClients.mockResolvedValue([]);
+  resourceMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+  orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+    repo: null,
+    branch: null,
+  });
+  contextTreeMocks.getContextTreeSnapshot.mockResolvedValue({
+    snapshotStatus: "active",
+    contextStatus: { severity: "ok", label: "Available", detail: null },
+  });
+  githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+  gitlabMocks.listGitlabConnectionsAt.mockResolvedValue([]);
+  authMock.value = {
+    role: "admin",
+    organizationId: "org-1",
+    teamDisplayName: "Acme",
+    currentOrgHasUsableAgent: true,
+    currentOrgHasPersonalAgent: true,
+    meLoaded: true,
+    onboardingStep: "completed",
+    onboardingDismissedAt: null,
+    onboardingCompletedAt: "2026-07-23T00:00:00.000Z",
+    restoreOnboarding: vi.fn(async () => undefined),
+  };
+});
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -137,6 +261,80 @@ describe("Settings Setup overview", () => {
     await act(async () => view.root.unmount());
   });
 
+  it("routes an unsuppressed team-agent member through quick start instead of the workspace gate", async () => {
+    authMock.value = {
+      ...authMock.value,
+      role: "member",
+      currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: false,
+      onboardingStep: "completed",
+      onboardingDismissedAt: null,
+      onboardingCompletedAt: null,
+    };
+    const view = await renderSettingsSetupPage();
+    const workAccess = await waitForRowText(view.host, "Work access", "Can work now");
+
+    expect(workAccess.querySelector("a")?.textContent).toBe("Start a chat");
+    expect(workAccess.querySelector("a")?.getAttribute("href")).toBe("/onboarding");
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps a Resume setup path for suppressed onboarding that is not complete", () => {
+    const rows = buildSetupRows(
+      facts({
+        onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
+        onboardingCompletedAt: null,
+      }),
+    );
+
+    expect(rows.find((row) => row.key === "agent")?.action).toEqual({
+      label: "Resume setup",
+      to: "/onboarding",
+      intent: "resume-onboarding",
+    });
+  });
+
+  it("clears suppression before resuming incomplete setup", async () => {
+    let releaseRestore: (() => void) | undefined;
+    const restoreOnboarding = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRestore = resolve;
+        }),
+    );
+    authMock.value = {
+      ...authMock.value,
+      currentOrgHasPersonalAgent: true,
+      onboardingDismissedAt: "2026-07-23T00:00:00.000Z",
+      onboardingCompletedAt: null,
+      restoreOnboarding,
+    };
+    const view = await renderSettingsSetupPage();
+    const resume = [...view.host.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent === "Resume setup",
+    );
+
+    expect(resume).toBeDefined();
+    await act(async () => {
+      resume?.click();
+      await Promise.resolve();
+    });
+
+    expect(restoreOnboarding).toHaveBeenCalledOnce();
+    expect(onboardingEventMocks.reportOnboardingEvent).not.toHaveBeenCalled();
+    expect(view.host.querySelector("[data-location]")?.textContent).toBe("/");
+
+    await act(async () => {
+      releaseRestore?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith("resumed", { source: "settings" });
+    expect(view.host.querySelector("[data-location]")?.textContent).toBe("/onboarding");
+    await act(async () => view.root.unmount());
+  });
+
   it("uses actual availability instead of treating a Context Tree binding as healthy", () => {
     const input = facts({
       contextTree: {
@@ -181,6 +379,97 @@ describe("Settings Setup overview", () => {
     expect(both?.status.detail).toBe("acme · Engineering");
   });
 
+  it("keeps unverified GitLab inbound and either combined provider degradation neutral", () => {
+    const waitingGitlab = {
+      state: "ready" as const,
+      value: {
+        displayName: "Engineering",
+        instanceOrigin: "https://gitlab.acme.test",
+        endpointSeen: false,
+        health: {
+          lastValidInboundAt: null,
+          lastProcessingFailureAt: null,
+        },
+      },
+    };
+    const gitlabOnly = buildSetupRows(
+      facts({
+        github: { state: "ready", value: null },
+        gitlab: waitingGitlab,
+      }),
+    ).find((row) => row.key === "providers");
+    const combinedGitlabDegraded = buildSetupRows(
+      facts({
+        github: {
+          state: "ready",
+          value: { accountLogin: "acme", accountType: "Organization", suspended: false },
+        },
+        gitlab: waitingGitlab,
+      }),
+    ).find((row) => row.key === "providers");
+    const combinedGithubDegraded = buildSetupRows(
+      facts({
+        github: {
+          state: "ready",
+          value: { accountLogin: "acme", accountType: "Organization", suspended: true },
+        },
+      }),
+    ).find((row) => row.key === "providers");
+    const githubOnlySuspended = buildSetupRows(
+      facts({
+        github: {
+          state: "ready",
+          value: { accountLogin: "acme", accountType: "Organization", suspended: true },
+        },
+        gitlab: { state: "ready", value: null },
+      }),
+    ).find((row) => row.key === "providers");
+
+    expect(gitlabOnly?.status).toMatchObject({
+      label: "GitLab · Engineering",
+      detail: "Waiting for inbound webhook",
+      positive: false,
+    });
+    expect(combinedGitlabDegraded?.status).toMatchObject({
+      label: "GitHub + GitLab",
+      detail: "GitHub connected · GitLab waiting for inbound webhook",
+      positive: false,
+    });
+    expect(combinedGithubDegraded?.status).toMatchObject({
+      label: "GitHub + GitLab",
+      detail: "GitHub suspended · GitLab connected",
+      positive: false,
+    });
+    expect(githubOnlySuspended?.status).toMatchObject({
+      label: "GitHub · acme",
+      detail: "Connection suspended",
+      positive: false,
+    });
+  });
+
+  it("surfaces a current GitLab processing failure before first-inbound readiness", () => {
+    const providers = buildSetupRows(
+      facts({
+        github: { state: "ready", value: null },
+        gitlab: {
+          state: "ready",
+          value: {
+            displayName: "Engineering",
+            instanceOrigin: "https://gitlab.acme.test",
+            endpointSeen: false,
+            health: {
+              lastValidInboundAt: null,
+              lastProcessingFailureAt: "2026-07-23T00:01:00.000Z",
+            },
+          },
+        },
+      }),
+    ).find((row) => row.key === "providers");
+
+    expect(providers?.status.positive).toBe(false);
+    expect(providers?.status.detail).toBe("Processing issue");
+  });
+
   it("does not offer Connect until both provider queries prove there is no connection", () => {
     const loading = buildSetupRows(
       facts({
@@ -214,5 +503,43 @@ describe("Settings Setup overview", () => {
     ).find((row) => row.key === "computer");
 
     expect(computer?.status.detail).toBe("No computer connected");
+  });
+
+  it.each([
+    ["active", "Available"],
+    ["stale", "Available · update delayed"],
+    ["unavailable", "Bound · unavailable"],
+  ] as const)("maps a successful Context Tree %s snapshot through the real page", async (snapshotStatus, expected) => {
+    orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+      repo: "https://github.com/acme/context-tree",
+      branch: "main",
+    });
+    contextTreeMocks.getContextTreeSnapshot.mockResolvedValue({
+      snapshotStatus,
+      contextStatus: {
+        severity: snapshotStatus === "active" ? "warning" : "error",
+        label: "Diagnostic status",
+        detail: "Diagnostic detail",
+      },
+    });
+
+    const view = await renderSettingsSetupPage();
+    const row = await waitForRowText(view.host, "Context Tree", expected);
+    expect(row.textContent).toContain(expected);
+    await act(async () => view.root.unmount());
+  });
+
+  it("treats a Context Tree snapshot request failure as unknown status, not tree unavailability", async () => {
+    orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+      repo: "https://github.com/acme/context-tree",
+      branch: "main",
+    });
+    contextTreeMocks.getContextTreeSnapshot.mockRejectedValue(new Error("snapshot failed"));
+
+    const view = await renderSettingsSetupPage();
+    const row = await waitForRowText(view.host, "Context Tree", "This status could not be loaded.");
+    expect(row.textContent).toContain("Unavailable");
+    expect(row.textContent).not.toContain("Bound · unavailable");
+    await act(async () => view.root.unmount());
   });
 });

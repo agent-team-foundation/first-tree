@@ -13,6 +13,9 @@ function previewFacts(role: PreviewRole): SetupFacts {
       teamName: "Gandy's team",
       hasUsableAgent: true,
       hasPersonalAgent: false,
+      onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
+      onboardingCompletedAt: null,
+      workspaceWillEnterOnboarding: false,
       computers: {
         state: "ready",
         value: { connected: 0, saved: 0, connectedHostname: null },
@@ -44,6 +47,9 @@ function previewFacts(role: PreviewRole): SetupFacts {
     teamName: "Gandy's team",
     hasUsableAgent: true,
     hasPersonalAgent: true,
+    onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
+    onboardingCompletedAt: "2026-07-23T00:00:00.000Z",
+    workspaceWillEnterOnboarding: false,
     computers: {
       state: "ready",
       value: { connected: 1, saved: 1, connectedHostname: "Gandy-MacBook-Pro" },

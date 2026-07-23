@@ -1,15 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bot, CircleCheck, FolderGit2, GitFork, Laptop, type LucideIcon, Webhook } from "lucide-react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
 import { getContextTreeSnapshot } from "../../api/context-tree.js";
 import { getGithubAppInstallation } from "../../api/github-app.js";
 import { gitlabConnectionsQueryKey, listGitlabConnectionsAt } from "../../api/gitlab-connections.js";
+import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { listTeamResourcesForOrg } from "../../api/resources.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { cn } from "../../lib/utils.js";
+import { shouldEnterOnboarding } from "../onboarding/steps.js";
 
 type Fact<T> =
   | { state: "loading" }
@@ -31,11 +33,22 @@ export type SetupFacts = {
   teamName: string | null;
   hasUsableAgent: boolean;
   hasPersonalAgent: boolean;
+  onboardingSuppressedAt: string | null;
+  onboardingCompletedAt: string | null;
+  workspaceWillEnterOnboarding: boolean;
   computers: Fact<{ connected: number; saved: number; connectedHostname: string | null }>;
   repositories: Fact<number>;
   contextTree: Fact<ContextTreeFact>;
   github: Fact<{ accountLogin: string; accountType: string; suspended: boolean } | null>;
-  gitlab: Fact<{ displayName: string; instanceOrigin: string } | null>;
+  gitlab: Fact<{
+    displayName: string;
+    instanceOrigin: string;
+    endpointSeen: boolean;
+    health: {
+      lastValidInboundAt: string | null;
+      lastProcessingFailureAt: string | null;
+    };
+  } | null>;
 };
 
 export type SetupRowModel = {
@@ -51,6 +64,7 @@ export type SetupRowModel = {
   action?: {
     label: string;
     to: string;
+    intent?: "resume-onboarding";
   };
 };
 
@@ -58,6 +72,35 @@ function queryFact<T>(query: { data: T | undefined; isPending: boolean; isError:
   if (query.isPending) return { state: "loading" };
   if (query.isError || query.data === undefined) return { state: "error" };
   return { state: "ready", value: query.data };
+}
+
+function contextTreeFact(
+  setting: Fact<{ repo?: string | null; branch?: string | null }>,
+  snapshot: {
+    data?: { snapshotStatus: Exclude<ContextTreeFact["availability"], "checking"> };
+    isPending: boolean;
+  },
+): Fact<ContextTreeFact> {
+  if (setting.state !== "ready") return setting;
+
+  const base = {
+    bound: !!setting.value.repo,
+    repo: setting.value.repo ?? null,
+    branch: setting.value.branch ?? null,
+  };
+  if (!base.bound) {
+    return { state: "ready", value: { ...base, availability: "unavailable" } };
+  }
+  if (snapshot.data) {
+    return {
+      state: "ready",
+      value: { ...base, availability: snapshot.data.snapshotStatus },
+    };
+  }
+  if (snapshot.isPending) {
+    return { state: "ready", value: { ...base, availability: "checking" } };
+  }
+  return { state: "error" };
 }
 
 function pendingStatus(): SetupRowModel["status"] {
@@ -91,6 +134,16 @@ function gitlabOriginLabel(origin: string): string {
   }
 }
 
+function gitlabConnectionIssue(
+  gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
+): string | null {
+  // A valid inbound clears the failure fields server-side, so any remaining
+  // failure is current and takes precedence over first-inbound readiness.
+  if (gitlab.health.lastProcessingFailureAt) return "Processing issue";
+  if (!gitlab.endpointSeen) return "Waiting for inbound webhook";
+  return null;
+}
+
 /**
  * Converts server-backed facts into the six stable Setup rows. Keeping this
  * pure makes the role and optional-state rules independently testable.
@@ -98,6 +151,7 @@ function gitlabOriginLabel(origin: string): string {
 export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
   const isAdmin = facts.role === "admin";
   const reliesOnTeamAgent = facts.hasUsableAgent && !facts.hasPersonalAgent;
+  const resumeSetup = facts.onboardingSuppressedAt !== null && facts.onboardingCompletedAt === null;
 
   const computerStatus =
     facts.computers.state === "loading"
@@ -165,12 +219,18 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
 
   const github = facts.github.state === "ready" ? facts.github.value : null;
   const gitlab = facts.gitlab.state === "ready" ? facts.gitlab.value : null;
+  const gitlabIssue = gitlab ? gitlabConnectionIssue(gitlab) : null;
   const providerStatus: SetupRowModel["status"] =
     github && gitlab
       ? {
           label: "GitHub + GitLab",
-          detail: `${github.accountLogin} · ${gitlab.displayName}`,
-          positive: !github.suspended,
+          detail:
+            github.suspended || gitlabIssue
+              ? `${github.suspended ? "GitHub suspended" : "GitHub connected"} · ${
+                  gitlabIssue ? `GitLab ${gitlabIssue.toLowerCase()}` : "GitLab connected"
+                }`
+              : `${github.accountLogin} · ${gitlab.displayName}`,
+          positive: !github.suspended && gitlabIssue === null,
         }
       : github
         ? {
@@ -181,8 +241,8 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
         : gitlab
           ? {
               label: `GitLab · ${gitlab.displayName}`,
-              detail: gitlabOriginLabel(gitlab.instanceOrigin),
-              positive: true,
+              detail: gitlabIssue ?? gitlabOriginLabel(gitlab.instanceOrigin),
+              positive: gitlabIssue === null,
             }
           : facts.github.state === "loading" || facts.gitlab.state === "loading"
             ? pendingStatus()
@@ -214,7 +274,9 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
             positive: true,
           }
         : { label: "Agent needed", detail: "Set up an agent before starting work" },
-      action: facts.hasUsableAgent ? { label: "Start a chat", to: "/" } : { label: "Set up", to: "/onboarding" },
+      action: facts.hasUsableAgent
+        ? { label: "Start a chat", to: facts.workspaceWillEnterOnboarding ? "/onboarding" : "/" }
+        : { label: "Set up", to: "/onboarding" },
     },
     {
       key: "computer",
@@ -238,7 +300,11 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
             label: "Not set up",
             detail: facts.hasUsableAgent ? "Optional while a team agent is available" : "No agent managed by you",
           },
-      action: facts.hasPersonalAgent ? { label: "View", to: "/team" } : { label: "Set up", to: "/onboarding" },
+      action: resumeSetup
+        ? { label: "Resume setup", to: "/onboarding", intent: "resume-onboarding" }
+        : facts.hasPersonalAgent
+          ? { label: "View", to: "/team" }
+          : { label: "Set up", to: "/onboarding" },
     },
     {
       key: "repositories",
@@ -294,7 +360,19 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
 }
 
 export function SettingsSetupPage() {
-  const { role, organizationId, teamDisplayName, currentOrgHasUsableAgent, currentOrgHasPersonalAgent } = useAuth();
+  const navigate = useNavigate();
+  const {
+    role,
+    organizationId,
+    teamDisplayName,
+    currentOrgHasUsableAgent,
+    currentOrgHasPersonalAgent,
+    meLoaded,
+    onboardingStep,
+    onboardingDismissedAt,
+    onboardingCompletedAt,
+    restoreOnboarding,
+  } = useAuth();
 
   const computersQuery = useQuery({
     queryKey: ["clients", "me"],
@@ -343,6 +421,15 @@ export function SettingsSetupPage() {
     teamName: teamDisplayName,
     hasUsableAgent: currentOrgHasUsableAgent,
     hasPersonalAgent: currentOrgHasPersonalAgent,
+    onboardingSuppressedAt: onboardingDismissedAt,
+    onboardingCompletedAt,
+    workspaceWillEnterOnboarding: shouldEnterOnboarding({
+      meLoaded,
+      onboardingStep,
+      onboardingSuppressedAt: onboardingDismissedAt,
+      currentOrgHasPersonalAgent,
+      onboardingCompletedAt,
+    }),
     computers:
       computers.state === "ready"
         ? {
@@ -362,29 +449,7 @@ export function SettingsSetupPage() {
               .length,
           }
         : repositories,
-    contextTree:
-      contextSetting.state === "ready"
-        ? {
-            state: "ready",
-            value: {
-              bound: !!contextSetting.value.repo,
-              repo: contextSetting.value.repo ?? null,
-              branch: contextSetting.value.branch ?? null,
-              availability: !contextSetting.value.repo
-                ? "unavailable"
-                : contextSnapshotQuery.isPending
-                  ? "checking"
-                  : contextSnapshotQuery.isError || !contextSnapshotQuery.data
-                    ? "unavailable"
-                    : contextSnapshotQuery.data.snapshotStatus === "active" &&
-                        contextSnapshotQuery.data.contextStatus.severity === "ok"
-                      ? "active"
-                      : contextSnapshotQuery.data.snapshotStatus === "stale"
-                        ? "stale"
-                        : "unavailable",
-            },
-          }
-        : contextSetting,
+    contextTree: contextTreeFact(contextSetting, contextSnapshotQuery),
     github:
       github.state === "ready"
         ? {
@@ -406,21 +471,34 @@ export function SettingsSetupPage() {
               ? {
                   displayName: gitlab.value[0].displayName,
                   instanceOrigin: gitlab.value[0].instanceOrigin,
+                  endpointSeen: gitlab.value[0].endpointSeen,
+                  health: {
+                    lastValidInboundAt: gitlab.value[0].health.lastValidInboundAt,
+                    lastProcessingFailureAt: gitlab.value[0].health.lastProcessingFailureAt,
+                  },
                 }
               : null,
           }
         : gitlab,
   };
 
-  return <SetupOverview facts={facts} rows={buildSetupRows(facts)} />;
+  const resumeOnboarding = async () => {
+    await restoreOnboarding();
+    void reportOnboardingEvent("resumed", { source: "settings" });
+    navigate("/onboarding");
+  };
+
+  return <SetupOverview facts={facts} rows={buildSetupRows(facts)} onResumeOnboarding={resumeOnboarding} />;
 }
 
 export function SetupOverview({
   facts,
   rows,
+  onResumeOnboarding,
 }: {
   facts: Pick<SetupFacts, "role" | "teamName">;
   rows: SetupRowModel[];
+  onResumeOnboarding?: () => Promise<void>;
 }) {
   const viewport = useWorkspaceViewport();
   const narrow = viewport === "narrow";
@@ -439,14 +517,22 @@ export function SetupOverview({
 
       <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>
         {rows.map((row) => (
-          <SetupRow key={row.key} row={row} narrow={narrow} />
+          <SetupRow key={row.key} row={row} narrow={narrow} onResumeOnboarding={onResumeOnboarding} />
         ))}
       </div>
     </div>
   );
 }
 
-function SetupRow({ row, narrow }: { row: SetupRowModel; narrow: boolean }) {
+function SetupRow({
+  row,
+  narrow,
+  onResumeOnboarding,
+}: {
+  row: SetupRowModel;
+  narrow: boolean;
+  onResumeOnboarding?: () => Promise<void>;
+}) {
   const Icon = row.icon;
   return (
     <section
@@ -523,6 +609,14 @@ function SetupRow({ row, narrow }: { row: SetupRowModel; narrow: boolean }) {
         {row.action ? (
           <Link
             to={row.action.to}
+            onClick={
+              row.action.intent === "resume-onboarding" && onResumeOnboarding
+                ? async (event) => {
+                    event.preventDefault();
+                    await onResumeOnboarding();
+                  }
+                : undefined
+            }
             className={cn(
               "text-label inline-flex items-center font-medium text-fg-2 transition-colors",
               "rounded-[var(--radius-input)] hover:bg-bg-hover hover:text-foreground",
