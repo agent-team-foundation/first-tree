@@ -18,7 +18,7 @@ import {
   mobileRowsFromList,
   sortMobileChats,
 } from "./data.js";
-import { useLongPress } from "./use-long-press.js";
+import { longPressSurfaceStyle, useLongPress } from "./use-long-press.js";
 
 export function MobileNowPage() {
   const { agentId } = useAuth();
@@ -106,6 +106,7 @@ function MobileAttentionCard({
   const accent = mobileAccentColor(signal.tone);
   const cardStyle = {
     ...mobileCardStyle(actionLabel ? "priorityFeed" : "feed"),
+    ...longPressSurfaceStyle,
     textDecoration: "none",
     position: "relative" as const,
     // One pre-attentive priority cue: a left-edge accent in the state hue,
