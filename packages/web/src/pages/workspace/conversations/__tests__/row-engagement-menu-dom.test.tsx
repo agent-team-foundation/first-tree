@@ -198,7 +198,7 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
   });
 
-  it("delete warning says other members' schedules keep running (none of the caller's)", async () => {
+  it("delete warning says other members' schedules keep running but the deleted view stays hidden", async () => {
     cronApiMocks.listChatCronJobs.mockResolvedValue({
       items: [
         activeJob({ id: "job-a", ownerMemberId: "member-other" }),
@@ -211,6 +211,11 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(document.body.textContent).toContain("2 active schedules");
     expect(document.body.textContent).toContain("owned by other members");
     expect(document.body.textContent).toContain("does not pause them");
+    expect(document.body.textContent).toContain("they keep running");
+    // `deleted` is sticky: a later scheduled message revives only archived
+    // views, so the copy must never promise the caller's view reappears.
+    expect(document.body.textContent).toContain("stays hidden until you restore it");
+    expect(document.body.textContent).not.toContain("visible again");
     expect(document.body.textContent).not.toContain("Deleting pauses them first");
 
     await click(buttonByText("Delete chat"));
@@ -228,6 +233,8 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(document.body.textContent).toContain("Deleting pauses only your 1 active schedule first");
     expect(document.body.textContent).toContain("owned by other members keep running");
     expect(document.body.textContent).toContain("will not resume yours");
+    expect(document.body.textContent).toContain("stays hidden until you restore it");
+    expect(document.body.textContent).not.toContain("visible again");
   });
 
   it("cancel leaves the engagement unchanged", async () => {

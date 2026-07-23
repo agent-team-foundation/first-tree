@@ -269,6 +269,81 @@ describe("SchedulesSection owner actions", () => {
     expect(toastMock.addToast).toHaveBeenCalledWith({ title: "Schedule paused" });
   });
 
+  it("resume confirm stays disabled during a reopen's unresolved forced refetch", async () => {
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+
+    // First open succeeds, then cancel.
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+    expect(document.body.textContent).toContain("First run:");
+    await click(buttonByText("Cancel"));
+
+    // Reopen while the forced refetch is still in flight: TanStack keeps the
+    // old success data, but confirmation must wait for THIS open's fetch.
+    let resolveRefetch: ((value: CronPreviewResponse) => void) | null = null;
+    cronApiMocks.previewChatCronJobs.mockImplementationOnce(
+      () =>
+        new Promise<CronPreviewResponse>((resolve) => {
+          resolveRefetch = resolve;
+        }),
+    );
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Computing the first run…");
+    expect(buttonByText("Resume schedule")?.disabled).toBe(true);
+
+    await act(async () => resolveRefetch?.(previewResponse("2030-03-11T13:00:00.000Z")));
+    await flush();
+    expect(dialog?.textContent).toContain("First run:");
+    expect(dialog?.textContent).toContain("Mar 11, 2030");
+    expect(buttonByText("Resume schedule")?.disabled).toBe(false);
+  });
+
+  it("a failed refetch on reopen never falls back to the stale occurrence", async () => {
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+    expect(document.body.textContent).toContain("First run:");
+    await click(buttonByText("Cancel"));
+
+    cronApiMocks.previewChatCronJobs.mockRejectedValueOnce(new ApiError(500, "refetch failed"));
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("could not be loaded");
+    expect(dialog?.textContent).not.toContain("First run:");
+    expect(buttonByText("Resume schedule")?.disabled).toBe(true);
+  });
+
+  it("resume preview uses the job's CURRENT schedule after a config change", async () => {
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+    expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledWith("chat-1", {
+      schedule: "0 9 * * 1-5",
+      timezone: "America/New_York",
+    });
+    await click(buttonByText("Cancel"));
+
+    // The owning agent edits the schedule; the next resume must confirm
+    // against the new expression, not the cached old one.
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null, schedule: "0 10 * * *", revision: 4 })],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+    });
+    await flush();
+
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+    expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledWith("chat-1", {
+      schedule: "0 10 * * *",
+      timezone: "America/New_York",
+    });
+    await click(buttonByText("Resume schedule"));
+    expect(cronApiMocks.patchCronJob).toHaveBeenCalledWith("job-1", { state: "active" }, 4);
+  });
   it("resume dialog fetches a FRESH preview even when the expanded cache is warm", async () => {
     // Expanded detail fills the shared preview cache with occurrences A…
     cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2020-01-05T14:00:00.000Z"));

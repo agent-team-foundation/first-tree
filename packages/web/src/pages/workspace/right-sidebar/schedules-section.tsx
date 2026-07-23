@@ -534,20 +534,27 @@ function ResumeDialog({
   // confirm". This query MUST NOT share the expanded detail's preview cache:
   // that cache can be up to 30s stale, so a cached first occurrence may
   // already be in the past by the time the owner resumes. A dialog-scoped
-  // key + staleTime: 0 + always-refetch-on-mount guarantees the displayed
-  // time is computed now, by the Server (the only Croner evaluator).
+  // key (including the current schedule/timezone, so a config change can
+  // never be confirmed against a previous occurrence) + staleTime: 0 +
+  // always-refetch-on-mount guarantees the displayed time is computed now,
+  // by the Server (the only Croner evaluator).
   const preview = useQuery({
-    queryKey: ["chat-right-sidebar", "cron-preview-resume", chatId, job.id],
+    queryKey: ["chat-right-sidebar", "cron-preview-resume", chatId, job.id, job.schedule, job.timezone],
     queryFn: () => previewChatCronJobs(chatId, { schedule: job.schedule, timezone: job.timezone }),
     enabled: open,
     staleTime: 0,
     refetchOnMount: "always",
   });
   const first = preview.data?.occurrences[0];
-  // Confirm stays disabled until a FRESH preview has succeeded — resuming
-  // without seeing the actual first run is not allowed. On failure the owner
-  // gets an explicit Retry; there is no silent "resume anyway" path.
-  const confirmDisabled = pending || !preview.isSuccess;
+  // Confirm stays disabled until the CURRENT open's fetch has completed
+  // successfully. TanStack keeps previous data during a forced refetch
+  // (reopen: isSuccess=true, isFetching=true, data=old) and reports a failed
+  // refetch as isRefetchError with the old data still attached — both must
+  // block confirmation, or a stale occurrence could be confirmed against.
+  const computing = preview.isLoading || preview.isFetching;
+  const failed = !computing && (preview.isError || preview.isRefetchError);
+  const ready = !computing && !failed && preview.isSuccess && first !== undefined;
+  const confirmDisabled = pending || !ready;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -559,11 +566,11 @@ function ResumeDialog({
           <DialogDescription style={{ color: "var(--fg-2)" }}>
             The schedule becomes active again on <span className="mono">{job.schedule}</span> ({job.timezone}).
           </DialogDescription>
-          {preview.isLoading || preview.isFetching ? (
+          {computing ? (
             <p className="text-body" style={{ color: "var(--fg-2)" }}>
               Computing the first run…
             </p>
-          ) : preview.isError ? (
+          ) : failed ? (
             <div className="space-y-2">
               <p className="text-body" style={{ color: "var(--state-error)" }}>
                 The first run time could not be loaded. Resume is only available once it can be shown.
@@ -572,7 +579,7 @@ function ResumeDialog({
                 Retry
               </Button>
             </div>
-          ) : first ? (
+          ) : ready && first ? (
             <p className="text-body" style={{ color: "var(--fg-2)" }}>
               First run: {formatAbsoluteInZone(first.at, job.timezone)}.
             </p>

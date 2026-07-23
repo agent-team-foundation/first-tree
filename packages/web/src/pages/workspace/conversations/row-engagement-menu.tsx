@@ -260,15 +260,17 @@ function ScheduleEngagementWarning({
   const noun = (n: number) => (n === 1 ? "schedule" : "schedules");
   // Delete copy is ownership-exact: the Server pauses only the CALLER's own
   // jobs on chat delete, so the dialog must never claim other members'
-  // schedules will stop.
+  // schedules will stop. It also must not promise revival: `deleted` is
+  // sticky — a later scheduled (or ordinary) message revives only ARCHIVED
+  // views, never the caller's deleted one.
   const deleteBody = () => {
     if (mine > 0 && others === 0) {
       return "Deleting pauses them first. Restoring the chat later will not resume them — you must resume each schedule from the chat details panel.";
     }
     if (mine === 0 && others > 0) {
-      return "They are owned by other members, so deleting your chat view does not pause them — they keep running, and the next scheduled message can make the chat visible again.";
+      return "They are owned by other members, so deleting your chat view does not pause them — they keep running. Your deleted chat view stays hidden until you restore it.";
     }
-    return `Deleting pauses only your ${mine} active ${noun(mine)} first; the ${others} ${noun(others)} owned by other members keep running. Restoring the chat later will not resume yours.`;
+    return `Deleting pauses only your ${mine} active ${noun(mine)} first; the ${others} ${noun(others)} owned by other members keep running. Restoring the chat later will not resume yours, and your deleted chat view stays hidden until you restore it.`;
   };
   return (
     <Dialog open={warning !== null} onOpenChange={(open) => (!open ? onCancel() : undefined)}>
