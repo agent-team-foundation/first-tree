@@ -1387,6 +1387,9 @@ describe("codex app-server handler", () => {
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
     handler.inject(makeMessage("m2", "second"));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
 
     completeTurn(fake, "turn-1", "first done");
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
@@ -1399,7 +1402,7 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
-  it("keeps newer injects behind an older no-custody steer until the next turn", async () => {
+  it("retries the ordered pending batch when input arrives during a no-custody steer", async () => {
     const fake = new FakeAppServerClient();
     fake.deferNextSteer();
     const finished: SessionMessage[][] = [];
@@ -1422,9 +1425,74 @@ describe("codex app-server handler", () => {
     expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
 
     fake.rejectSteer(activeTurnNotSteerableError());
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
+
+    const retriedSteer = fake.requests.filter((request) => request.method === "turn/steer")[1];
+    expect(JSON.stringify(retriedSteer?.params)).toContain("second");
+    expect(JSON.stringify(retriedSteer?.params)).toContain("third");
+
+    completeTurn(fake, "turn-1", "all done");
+    await startPromise;
+    await waitFor(() => finished.length === 1);
+
+    expect(fake.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2", "m3"]]);
+
+    await handler.shutdown();
+  });
+
+  it("retries a rejected pending prefix when a later input arrives", async () => {
+    const fake = new FakeAppServerClient();
+    fake.steerError = activeTurnNotSteerableError();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
     await flushAsync();
 
-    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    fake.steerError = null;
+    handler.inject(makeMessage("m3", "third"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
+
+    const retriedSteer = fake.requests.filter((request) => request.method === "turn/steer")[1];
+    expect(JSON.stringify(retriedSteer?.params)).toContain("second");
+    expect(JSON.stringify(retriedSteer?.params)).toContain("third");
+
+    completeTurn(fake, "turn-1", "all done");
+    await startPromise;
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2", "m3"]]);
+
+    await handler.shutdown();
+  });
+
+  it("batches repeatedly rejected pending inputs into the next turn", async () => {
+    const fake = new FakeAppServerClient();
+    fake.steerError = activeTurnNotSteerableError();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
+    handler.inject(makeMessage("m3", "third"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
 
     completeTurn(fake, "turn-1", "first done");
     await startPromise;
