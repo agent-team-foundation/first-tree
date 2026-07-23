@@ -1099,7 +1099,8 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
  * Filtering matches `listMeChats` for the corresponding tab so the badges
  * cannot drift from the list: same membership join, same `parent_chat_id IS
  * NULL` and `organization_id` scopes, same engagement view, same
- * `chat_user_state.unread_mention_count` source.
+ * `chat_user_state.unread_mention_count` source, and the optional watcher-only
+ * membership projection.
  */
 export async function listMeChatSourceCounts(
   db: Database,
@@ -1108,6 +1109,7 @@ export async function listMeChatSourceCounts(
   query: ListMeChatSourceCountsQuery,
 ): Promise<MeChatSourceCounts> {
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+  const filterWatchingOnly = query.watching === true;
 
   // GROUP BY 1 (select-list position) instead of the `source` alias or the
   // full CASE: `GROUP BY <alias>` doesn't transitively treat columns inside
@@ -1139,6 +1141,7 @@ export async function listMeChatSourceCounts(
         ON cus.chat_id = c.id AND cus.agent_id = ${humanAgentId}
      WHERE c.parent_chat_id IS NULL
        AND c.organization_id = ${organizationId}
+       AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${engagementPredicate}
      GROUP BY 1
   `)) as unknown as Array<{

@@ -3,7 +3,6 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { AlertCircle, ArrowRight, CircleHelp, Filter, Pin, Plus, Search, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { listMeChatSourceCounts, listMeChats } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
@@ -16,6 +15,7 @@ import { MobilePage, MobileSystemState, mobileCardStyle } from "./components.js"
 import { formatMobileAge, mobileCardContent, mobileChatSignal, mobileRowsFromList, sortMobileChats } from "./data.js";
 import { longPressSurfaceStyle, useLongPress } from "./use-long-press.js";
 import { type MobileWorkFilters, MobileWorkFiltersSheet } from "./work-filters-sheet.js";
+import { mobileWorkListQueryOptions, mobileWorkSourceCountsQueryOptions } from "./work-queries.js";
 
 type MobileWorkQuickView = "all" | "attention" | "unread" | "pinned";
 
@@ -67,7 +67,7 @@ export function MobileWorkPage() {
 }
 
 function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => void }) {
-  const { agentId } = useAuth();
+  const { agentId, organizationId } = useAuth();
   const [quickView, setQuickView] = useState<MobileWorkQuickView>("all");
   const [filters, setFilters] = useState<MobileWorkFilters>(DEFAULT_FILTERS);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -76,45 +76,18 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
   const [actionsRow, setActionsRow] = useState<MeChatRow | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const filter = quickView === "unread" ? "unread" : "all";
-  const watching = filters.watching ? true : undefined;
-  const chatsQuery = useInfiniteQuery({
-    queryKey: ["me", "chats", "mobile", "work", quickView, filters.engagement, watching ?? false],
-    queryFn: ({ pageParam, signal }) =>
-      listMeChats(
-        {
-          cursor: pageParam,
-          limit: 50,
-          engagement: filters.engagement,
-          filter,
-          watching,
-        },
-        { signal },
-      ),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    refetchInterval: 30_000,
+  const queryScope = {
+    organizationId: organizationId ?? null,
+    engagement: filters.engagement,
+    watching: filters.watching,
+  };
+  const allChatsQuery = useInfiniteQuery(mobileWorkListQueryOptions({ ...queryScope, filter: "all" }));
+  const unreadChatsQuery = useInfiniteQuery({
+    ...mobileWorkListQueryOptions({ ...queryScope, filter: "unread" }),
+    enabled: quickView === "unread",
   });
-
-  const countsQuery = useQuery({
-    queryKey: ["me", "chats", "mobile", "work-counts", filters.engagement, watching ?? false],
-    queryFn: ({ signal }) =>
-      listMeChats(
-        {
-          limit: 1,
-          engagement: filters.engagement,
-          filter: "all",
-          watching,
-        },
-        { signal },
-      ),
-    refetchInterval: 30_000,
-  });
-  const sourceCountsQuery = useQuery({
-    queryKey: ["me", "chats", "mobile", "work-unread-counts", filters.engagement],
-    queryFn: () => listMeChatSourceCounts({ engagement: filters.engagement }),
-    refetchInterval: 30_000,
-  });
+  const sourceCountsQuery = useQuery(mobileWorkSourceCountsQueryOptions(queryScope));
+  const chatsQuery = quickView === "unread" ? unreadChatsQuery : allChatsQuery;
 
   const allRows = useMemo(() => {
     const seen = new Set<string>();
@@ -156,8 +129,13 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
     return { attention, pinned, recent };
   }, [visibleRows]);
 
-  const attentionCount = countsQuery.data?.priorityRows.attention.length ?? 0;
-  const pinnedCount = countsQuery.data?.priorityRows.pinned.length ?? 0;
+  const priorityRows = allChatsQuery.data?.pages[0]?.priorityRows;
+  const attentionCount = priorityRows?.attention.length ?? 0;
+  const pinnedCount = new Set(
+    [...(priorityRows?.attention ?? []), ...(priorityRows?.pinned ?? [])]
+      .filter((row) => row.pinnedAt !== null)
+      .map((row) => row.chatId),
+  ).size;
   const unreadCount = Object.values(sourceCountsQuery.data?.counts ?? {}).reduce(
     (count, source) => count + source.unreadChatCount,
     0,
@@ -305,7 +283,7 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
           </div>
         )}
 
-        {chatsQuery.hasNextPage ? (
+        {(quickView === "all" || quickView === "unread") && chatsQuery.hasNextPage ? (
           <Button
             type="button"
             variant="outline"

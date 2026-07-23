@@ -22,7 +22,8 @@ const CHATS: PreviewChat[] = [
   {
     id: "release",
     title: "Release readiness",
-    summary: "Staging is green. Rollout timing still needs a final decision.",
+    summary:
+      "Staging is green, the migration rehearsal completed, and support has the runbook. Production rollout still needs a final approval after the launch owner checks the remaining mobile evidence.",
     evidence: "Please review the launch checklist and choose the rollout window.",
     time: "2m",
     state: "request",

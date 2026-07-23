@@ -1,10 +1,11 @@
 import { ChevronDown } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../components/ui/markdown.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../lib/utils.js";
 
-const MOBILE_SUMMARY_COLLAPSE_CHARS = 240;
+const MOBILE_SUMMARY_COLLAPSE_LINES = 4;
+const MOBILE_SUMMARY_FALLBACK_LINE_HEIGHT_PX = 20.3;
 
 export function MobileCurrentStateCard({
   description,
@@ -17,8 +18,44 @@ export function MobileCurrentStateCard({
 }) {
   const trimmed = description?.trim() ?? "";
   const plain = useMemo(() => stripInlineMarkdown(trimmed).replace(/\s+/g, " ").trim(), [trimmed]);
-  const expandable = plain.length > MOBILE_SUMMARY_COLLAPSE_CHARS || trimmed.split(/\r?\n/).length > 4;
+  const measurementRef = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => setExpanded(false), [trimmed]);
+
+  useLayoutEffect(() => {
+    const measurement = measurementRef.current;
+    if (!measurement || !plain) {
+      setOverflowing(false);
+      setMeasured(true);
+      return;
+    }
+
+    let active = true;
+    const measure = () => {
+      if (!active) return;
+      const parsedLineHeight = Number.parseFloat(window.getComputedStyle(measurement).lineHeight);
+      const lineHeight = Number.isFinite(parsedLineHeight) ? parsedLineHeight : MOBILE_SUMMARY_FALLBACK_LINE_HEIGHT_PX;
+      const nextOverflowing =
+        measurement.scrollHeight > lineHeight * MOBILE_SUMMARY_COLLAPSE_LINES + 1;
+      setOverflowing((current) => (current === nextOverflowing ? current : nextOverflowing));
+      setMeasured(true);
+    };
+
+    setMeasured(false);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(measurement);
+    window.addEventListener("resize", measure);
+    void document.fonts?.ready.then(measure);
+    return () => {
+      active = false;
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [plain]);
 
   if (!trimmed) return null;
 
@@ -32,6 +69,7 @@ export function MobileCurrentStateCard({
       aria-label="Current state"
       className="surface-raised"
       style={{
+        position: "relative",
         padding: "var(--sp-4)",
         marginBottom: "var(--sp-4)",
         background: unread ? "var(--bg-warn-soft)" : "var(--bg-raised)",
@@ -63,14 +101,37 @@ export function MobileCurrentStateCard({
         ) : null}
       </div>
 
-      {expandable && !expanded ? (
+      <div
+        ref={measurementRef}
+        aria-hidden
+        className="text-mobile-body"
+        style={{
+          position: "absolute",
+          visibility: "hidden",
+          pointerEvents: "none",
+          left: "var(--sp-4)",
+          right: "var(--sp-4)",
+          top: 0,
+          margin: 0,
+          overflowWrap: "anywhere",
+        }}
+        data-mobile-current-state-measure
+      >
+        <Markdown className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
+          {trimmed}
+        </Markdown>
+      </div>
+
+      {(!measured || overflowing) && !expanded ? (
         <p
           className="text-mobile-body"
+          data-mobile-current-state-collapsed
+          data-line-clamp={MOBILE_SUMMARY_COLLAPSE_LINES}
           style={{
             color: "var(--fg-2)",
             margin: 0,
             display: "-webkit-box",
-            WebkitLineClamp: 4,
+            WebkitLineClamp: MOBILE_SUMMARY_COLLAPSE_LINES,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
@@ -85,7 +146,7 @@ export function MobileCurrentStateCard({
         </div>
       )}
 
-      {expandable ? (
+      {measured && overflowing ? (
         <button
           type="button"
           aria-expanded={expanded}

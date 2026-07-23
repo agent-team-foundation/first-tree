@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 import { MobileWorkPage } from "../work.js";
 
-const authMock = vi.hoisted(() => ({ value: { agentId: "human-agent-self" } }));
+const authMock = vi.hoisted(() => ({ value: { agentId: "human-agent-self", organizationId: "org-1" } }));
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
   listMeChatSourceCounts: vi.fn(),
@@ -45,7 +45,8 @@ describe("mobile projections share the realtime invalidation prefix", () => {
     // so the invalidation queues a real refetch rather than coalescing with an
     // in-flight fetch.
     await harness.waitFor(() => expect(harness.container.textContent).toContain("No active work"));
-    expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(2);
+    expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(1);
+    expect(meChatMocks.listMeChatSourceCounts).toHaveBeenCalledTimes(1);
 
     // A realtime WS event (useAdminWs) or a chat send / ask-answer / new-chat
     // mutation invalidates the shared ["me", "chats"] prefix. The mobile Work
@@ -53,6 +54,7 @@ describe("mobile projections share the realtime invalidation prefix", () => {
     // instead of waiting for the 30s poll.
     await queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
 
-    await harness.waitFor(() => expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(4));
+    await harness.waitFor(() => expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(2));
+    await harness.waitFor(() => expect(meChatMocks.listMeChatSourceCounts).toHaveBeenCalledTimes(2));
   });
 });

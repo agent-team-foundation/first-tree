@@ -157,11 +157,29 @@ describe("mobile chat projection", () => {
       mobileCardContent(
         chatRow({
           description: summary,
-          lastMessagePreview: "Please approve the rollout",
+          lastMessagePreview: "Unrelated newer status message",
           openRequestCount: 1,
         }),
       ),
-    ).toEqual({ kind: "action", primary: "Please approve the rollout", secondary: null });
+    ).toEqual({
+      kind: "action",
+      primary: "An open question is waiting for your response. Open to review the full request.",
+      secondary: null,
+    });
+
+    expect(
+      mobileCardContent(
+        chatRow({
+          description: summary,
+          lastMessagePreview: "Unrelated message before the failure",
+          failedAgentIds: ["agent-1", "agent-2"],
+        }),
+      ),
+    ).toEqual({
+      kind: "action",
+      primary: "2 managed agent runs failed. Open to review the failures and recovery options.",
+      secondary: null,
+    });
 
     expect(
       mobileCardContent(

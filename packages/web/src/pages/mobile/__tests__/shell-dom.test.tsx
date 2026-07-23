@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 import { MobilePage, MobileSignalChip } from "../components.js";
 import { MobileShell } from "../shell.js";
+import { MobileWorkPage } from "../work.js";
 
 const authMock = vi.hoisted(() => {
   const memberships: MeMembership[] = [];
@@ -82,6 +83,21 @@ function renderShell(harness: DomHarness, path: string) {
   );
 }
 
+function renderUnifiedWorkShell(harness: DomHarness) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  harness.render(
+    <MemoryRouter initialEntries={["/m/work"]}>
+      <QueryClientProvider client={queryClient}>
+        <Routes>
+          <Route element={<MobileShell />}>
+            <Route path="/m/work" element={<MobileWorkPage />} />
+          </Route>
+        </Routes>
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("MobileShell", () => {
   let harness: DomHarness;
 
@@ -131,6 +147,23 @@ describe("MobileShell", () => {
     expect(shell).not.toBeNull();
     expect((shell as HTMLElement).style.height).toBe("");
     expect(shell?.className).toContain("pt-safe-top");
+  });
+
+  it("shares one active-list poller and one source-count poller between shell and Work", async () => {
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [],
+      priorityRows: { attention: [], pinned: [] },
+      nextCursor: null,
+    });
+    renderUnifiedWorkShell(harness);
+
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("No active work"));
+    expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(1);
+    expect(meChatMocks.listMeChatSourceCounts).toHaveBeenCalledTimes(1);
+    expect(meChatMocks.listMeChatSourceCounts).toHaveBeenCalledWith(
+      { engagement: "active", watching: undefined },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("uses the high-contrast token for needs-you signal text", () => {

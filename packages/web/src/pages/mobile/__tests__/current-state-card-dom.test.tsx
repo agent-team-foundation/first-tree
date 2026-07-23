@@ -44,16 +44,40 @@ describe("MobileCurrentStateCard", () => {
         lastReadAt="2026-07-23T17:00:00.000Z"
       />,
     );
+    await setMeasuredHeight(harness, 120);
 
     const card = harness.container.querySelector<HTMLElement>("[data-mobile-current-state]");
-    expect(card?.querySelector("p")?.getAttribute("style")).toContain("overflow: hidden");
+    expect(card?.querySelector("[data-mobile-current-state-collapsed]")?.getAttribute("style")).toContain(
+      "overflow: hidden",
+    );
     expect(card?.className).not.toContain("overflow");
     expect(card?.textContent).toContain("Updated");
 
     const toggle = card?.querySelector<HTMLButtonElement>('button[aria-expanded="false"]');
     await act(async () => toggle?.click());
     expect(card?.querySelector('button[aria-expanded="true"]')?.textContent).toContain("Show less");
-    expect(card?.querySelector("p")?.getAttribute("style") ?? "").not.toContain("overflow: hidden");
+    expect(card?.querySelector("[data-mobile-current-state-collapsed]")).toBeNull();
+  });
+
+  it("offers expansion when a sub-240-character CJK paragraph wraps beyond four rendered lines", async () => {
+    const wrappedCjk =
+      "移动端工作列表需要在窄屏上保持清晰稳定，让用户不用进入详情就能判断当前状态、失败原因、待处理请求以及下一步行动。".repeat(
+        2,
+      );
+    expect(wrappedCjk.length).toBeLessThan(240);
+
+    harness.render(
+      <MobileCurrentStateCard
+        description={wrappedCjk}
+        descriptionUpdatedAt="2026-07-23T18:00:00.000Z"
+        lastReadAt="2026-07-23T17:00:00.000Z"
+      />,
+    );
+    await setMeasuredHeight(harness, 120);
+
+    const card = harness.container.querySelector<HTMLElement>("[data-mobile-current-state]");
+    expect(card?.querySelector('button[aria-expanded="false"]')?.textContent).toContain("Show more");
+    expect(card?.querySelector("[data-mobile-current-state-collapsed]")?.getAttribute("data-line-clamp")).toBe("4");
   });
 
   it("renders nothing when no summary exists", () => {
@@ -61,3 +85,10 @@ describe("MobileCurrentStateCard", () => {
     expect(harness.container.querySelector("[data-mobile-current-state]")).toBeNull();
   });
 });
+
+async function setMeasuredHeight(harness: DomHarness, scrollHeight: number): Promise<void> {
+  const measurement = harness.container.querySelector<HTMLElement>("[data-mobile-current-state-measure]");
+  if (!measurement) throw new Error("Missing Current state measurement surface");
+  Object.defineProperty(measurement, "scrollHeight", { configurable: true, value: scrollHeight });
+  await act(async () => window.dispatchEvent(new Event("resize")));
+}

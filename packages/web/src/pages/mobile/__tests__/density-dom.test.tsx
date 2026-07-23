@@ -90,8 +90,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -200,6 +200,36 @@ describe("mobile density tiers", () => {
     expect(listCard.querySelector("[data-mobile-card-dynamic]")?.textContent).toContain("Working");
     expect(listCard.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
+  });
+
+  it("counts pinned attention rows and unread rows from the same Work projection", async () => {
+    const pinnedAttention = chatRow({
+      chatId: "pinned-attention",
+      title: "Pinned urgent work",
+      openRequestCount: 1,
+      pinnedAt: "2026-07-09T11:00:00.000Z",
+    });
+    const pinnedQuiet = chatRow({
+      chatId: "pinned-quiet",
+      title: "Pinned quiet work",
+      pinnedAt: "2026-07-09T10:00:00.000Z",
+    });
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [pinnedAttention, pinnedQuiet],
+      priorityRows: { attention: [pinnedAttention], pinned: [pinnedQuiet] },
+      nextCursor: null,
+    });
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({
+      counts: { manual: { chatCount: 3, unreadChatCount: 2 } },
+    });
+
+    renderWithClient(harness, <MobileWorkPage />, "/m/work");
+    await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Pinned urgent work"));
+
+    const chips = [...harness.container.querySelectorAll<HTMLButtonElement>("[data-mobile-work-quick-views] button")];
+    expect(chips.find((chip) => chip.textContent?.includes("Need you"))?.textContent).toContain("1");
+    expect(chips.find((chip) => chip.textContent?.includes("Unread"))?.textContent).toContain("2");
+    expect(chips.find((chip) => chip.textContent?.includes("Pinned"))?.textContent).toContain("2");
   });
 
   it("renders card previews with inline markdown peeled, not as literal markers", async () => {

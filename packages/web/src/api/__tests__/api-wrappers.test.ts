@@ -232,7 +232,7 @@ describe("api wrapper paths", () => {
       watching: true,
     });
     expect(listed.priorityRows).toEqual({ attention: [], pinned: [] });
-    await meChats.listMeChatSourceCounts({ engagement: "archived" });
+    await meChats.listMeChatSourceCounts({ engagement: "archived", watching: true });
     await meChats.createMeChat({ participantIds: ["agent-1"] });
     await meChats.createMeTaskChat({
       mode: "task",
@@ -308,6 +308,10 @@ describe("api wrapper paths", () => {
     });
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub%2Cagent&with=agent-1%2Cagent-2&watching=1",
+      undefined,
+    );
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/orgs/current/chats/source-counts?engagement=archived&watching=1",
       undefined,
     );
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/chats", {

@@ -110,7 +110,14 @@ export function mobileCardContent(row: MeChatRow): MobileCardContent {
   if (signal.attention) {
     return {
       kind: "action",
-      primary: latest || summary || "Open the chat to review this item.",
+      primary:
+        signal.tone === "error"
+          ? row.failedAgentIds.length === 1
+            ? "A managed agent run failed. Open to review the failure and recovery options."
+            : `${row.failedAgentIds.length} managed agent runs failed. Open to review the failures and recovery options.`
+          : row.openRequestCount === 1
+            ? "An open question is waiting for your response. Open to review the full request."
+            : `${row.openRequestCount} open questions are waiting for your response. Open to review them in order.`,
       secondary: null,
     };
   }

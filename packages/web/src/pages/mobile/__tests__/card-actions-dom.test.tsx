@@ -26,7 +26,9 @@ const chatMocks = vi.hoisted(() => ({
 }));
 const gitlabMocks = vi.hoisted(() => ({ listGitlabConnectionsAt: vi.fn() }));
 
-vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => ({ agentId: "human-agent-self" }) }));
+vi.mock("../../../auth/auth-context.js", () => ({
+  useAuth: () => ({ agentId: "human-agent-self", organizationId: "org-1" }),
+}));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
 vi.mock("../../../api/chats.js", () => chatMocks);
 vi.mock("../../../api/gitlab-connections.js", async (importOriginal) => ({
@@ -152,12 +154,13 @@ function renderPage(harness: DomHarness): QueryClient {
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
   queryClients.push(queryClient);
-  queryClient.setQueryData(["me", "chats", "mobile", "work", "all", "active", false], {
+  queryClient.setQueryData(["me", "chats", "mobile", "work-list", "org-1", "active", false, "all"], {
     pages: [listResponse],
     pageParams: [undefined],
   });
-  queryClient.setQueryData(["me", "chats", "mobile", "work-counts", "active", false], listResponse);
-  queryClient.setQueryData(["me", "chats", "mobile", "work-unread-counts", "active"], { counts: {} });
+  queryClient.setQueryData(["me", "chats", "mobile", "work-source-counts", "org-1", "active", false], {
+    counts: {},
+  });
   queryClient.setQueryData(["chat-open-requests", row.chatId], { items: [request] });
   queryClient.setQueryData(["chat-detail", row.chatId], detail);
   meChatMocks.listMeChats.mockResolvedValue(listResponse);
@@ -397,6 +400,27 @@ describe("mobile card behavior", () => {
 
     await click(buttonWithText("Unarchive"));
     await harness.waitFor(() => expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith(row.chatId, "active"));
+  });
+
+  it("uses the watching dimension for both the Work rows and unread-count projection", async () => {
+    renderPage(harness);
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+
+    await click(harness.container.querySelector('button[aria-label="Filter Work"]'));
+    await click(buttonWithText("Watching only"));
+
+    await harness.waitFor(() =>
+      expect(meChatMocks.listMeChats).toHaveBeenCalledWith(
+        expect.objectContaining({ engagement: "active", filter: "all", watching: true }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await harness.waitFor(() =>
+      expect(meChatMocks.listMeChatSourceCounts).toHaveBeenCalledWith(
+        { engagement: "active", watching: true },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
   });
 
   it("opens the question over Work, sends the answer, and never navigates into detail", async () => {
