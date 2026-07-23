@@ -12,8 +12,8 @@ export function registerCronCommands(program: Command): void {
   const cron = program
     .command("cron")
     .description(
-      "Scheduled jobs — create, preview, list, pause, resume, and delete cron-triggered messages in the current chat. " +
-        "Mutations require FIRST_TREE_CHAT_ID from the agent session.",
+      "Scheduled jobs — preview, create, list, show, update, pause, resume, and delete cron-triggered messages in the current chat. " +
+        "Every cron command requires FIRST_TREE_CHAT_ID from the agent session.",
     );
   registerCronPreviewCommand(cron);
   registerCronCreateCommand(cron);

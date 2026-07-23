@@ -1,6 +1,6 @@
 ---
 id: scheduled-message-journey
-description: Validate scheduled job create, trigger materialization, backlog skip, owner pause, DST skip, fail-closed authorization, and chat-delete auto-pause across CLI, server, and web read surfaces.
+description: Validate scheduled job create, trigger materialization, backlog skip, owner pause/resume/delete, timezone/DST, fail-closed authorization, and owner-scoped chat-delete pause across CLI, server, inbox, and web read surfaces.
 areas: [cross-surface]
 surfaces: [cli, client, server, web]
 ---
@@ -10,61 +10,111 @@ surfaces: [cli, client, server, web]
 ## Goal
 
 Confirm that an agent can preview and create a cron job in the control chat,
-the server worker materializes exactly one trigger message per due occurrence,
-backlog skips hold while the prior trigger is unacked, owners can pause/resume
-via CLI or web, nonexistent DST wall times are skipped, unauthorized callers
-are fail-closed, and owner chat delete pauses active jobs before engagement is
-deleted.
+the server worker materializes exactly one trigger message per due occurrence
+into the ordinary Inbox path, backlog skips hold while the prior trigger is
+unacked, owners can pause/resume/delete via CLI or web, nonexistent DST wall
+times are skipped, unauthorized callers are fail-closed, and deleting one
+owner's chat view pauses only that owner's active jobs.
+
+Deterministic unit/integration tests own schemas, Croner/DST math, advisory
+locking, and exact error envelopes. This case owns the live product loop:
+CLI/API → worker → message → Inbox → provider reply → ACK, plus lifecycle and
+multi-owner pause evidence on a real deployment.
 
 ## Preconditions
 
+- Isolated run cell with candidate Server, PostgreSQL, Cron worker, bound
+  Client/daemon, and candidate CLI. Prefer a combined Backend+Web tree when
+  Web Schedules evidence is in scope.
 - Deployment has `FIRST_TREE_CRON_JOBS_ENABLED=true` and
-  `runtime.pollingIntervalSeconds` in 1..10.
+  `FIRST_TREE_POLLING_INTERVAL_SECONDS` in `1..10`.
 - One human owner and one non-human agent in a flat control chat, both
-  speakers, agent runtime connected with fresh heartbeats.
-- Web desktop workspace access for the owner human.
+  speakers; agent runtime connected with fresh heartbeats and a
+  `one-turn-ready` provider when reply/ACK evidence is required.
+- For multi-owner pause: a second human owner who is also a speaker and can
+  own a distinct schedule in the same chat.
+- Web desktop workspace access for the owner human when Schedules sidebar
+  evidence is required. Mobile Cron management is out of scope for V1.
 
-## Steps (authoring — expand locally; not executed in CI)
+## Operate
 
-### Happy path
+- `operate cli`: from the bound agent session (`FIRST_TREE_CHAT_ID` set), run
+  `cron preview` then `cron create` with a `-F` prompt (byte-preserving). Do
+  not invent `--agent`, `--force`, `--yes`, or run-now flags. Confirm the job
+  via `cron list` / `cron show`.
+- `operate http-api` / worker: force `next_run_at` due (or wait) so the worker
+  accepts one occurrence; leave that trigger unacked for one later tick, then
+  ACK it; exercise a later future tick after ACK.
+- `operate cli` / web: owner `cron pause` (or Web Pause), confirm no further
+  materialization while paused, then `cron resume` (or Web Resume with a fresh
+  preview) and confirm the restored `nextRunAt` does not replay missed
+  occurrences.
+- `operate cli`: owner `cron delete` after a successful trigger; confirm hard
+  delete and that accepted messages/ACK history remain.
+- `operate multi-owner`: with two owners' active jobs in the same chat, delete
+  only owner A's chat view (engagement → deleted). Do not delete owner B's
+  view in the same step.
+- `operate timezone`: preview/create schedules that hit spring-forward gaps and
+  autumn overlaps in real IANA zones (for example America/New_York,
+  Europe/London); also try an invalid timezone and an invalid schedule.
+- `operate fail-closed`: attempt ordinary-message forgery of `cronTrigger`
+  metadata, stale `If-Match`, same-name divergent create, and mutate after
+  manager reassignment / non-speaker / deleted engagement when fixtures allow.
+- `operate fault` (optional when multi-replica is available): run two workers
+  against one due job and confirm a single accept.
 
-1. Agent runs `cron preview` then `cron create` with `-F` prompt (byte-preserving);
-   owner sees the job in Web Schedules sidebar and CLI `cron list`. No `--agent`,
-   `--force`, or `--yes` flags exist.
-2. Force `next_run_at` due (or wait); verify one markdown trigger with trusted
-   `cronTrigger` metadata and exactly one notify inbox row for the agent.
-   Multi-replica workers produce exactly one accept.
-3. Leave trigger unacked; verify next tick skips with no second message.
-4. ACK trigger; verify next future tick can accept again.
-5. Owner `cron pause` / Web pause; verify worker does not materialize while
-   paused; `cron resume` restores a future `nextRunAt` without replaying misses.
-6. Owner deletes chat view; verify active jobs pause with
-   `owner_chat_deleted` before engagement becomes deleted; restore never
-   auto-resumes.
+## Observe
 
-### Fail-closed / limitation branches
+- `observe http-api` / db: exactly one accepted occurrence per due fire → one
+  unique run key, one markdown trigger with trusted `cronTrigger` metadata,
+  one `notify=true` inbox row for the target agent. Unacked backlog produces
+  skip telemetry without a second message; ACK unlocks a later accept.
+- `observe runtime-event`: Inbox/WS delivery wakes the bound agent; after a
+  provider reply the trigger is ACKed (durable at-least-once semantics). If no
+  provider is `one-turn-ready`, stop at delivery evidence and classify the
+  model turn as `BLOCKED`, not a product `FAIL`.
+- `observe cli` / web: pause stops future accepts; resume restores a future
+  `nextRunAt` without backfill; Schedules sidebar (when in scope) shows
+  read-only schedule detail for readers and lifecycle controls only for the
+  owner.
+- `observe multi-owner`: after owner A deletes their chat view, only A's
+  active jobs pause with `owner_chat_deleted`; owner B's schedules remain
+  active and may still fire. A's sticky-deleted chat view does not auto-restore
+  when B's (or any) new trigger lands.
+- `observe errors`: invalid timezone → `CRON_JOB_INVALID_TIMEZONE`; invalid
+  schedule → `CRON_JOB_INVALID_SCHEDULE`; stale revision →
+  `CRON_JOB_REVISION_MISMATCH`; unauthorized mutate → `CRON_JOB_FORBIDDEN`;
+  reserved metadata → `CRON_TRIGGER_METADATA_RESERVED`.
+- `observe timezone`: spring-forward nonexistent wall times are skipped (not
+  shifted); autumn overlap fires once at the earlier instant.
+- `observe logs` (when available): `cron.occurrence.accepted`,
+  `cron.occurrence.skipped`, `cron.job.auto_paused`.
 
-7. Forge ordinary-message `cronTrigger` metadata → `CRON_TRIGGER_METADATA_RESERVED`.
-8. Invalid timezone preview → `CRON_JOB_INVALID_TIMEZONE`; invalid schedule /
-   `+MON` / `+9` → `CRON_JOB_INVALID_SCHEDULE`.
-9. Stale `If-Match` → `CRON_JOB_REVISION_MISMATCH`; same-name divergent create →
-   `CRON_JOB_NAME_CONFLICT`; identical concurrent create → same job id.
-10. Former manager after reassignment, non-speaker owner, and deleted engagement
-    cannot create/PATCH/DELETE (`CRON_JOB_FORBIDDEN`).
-11. Spring-forward nonexistent wall times (NY `0 2 8 3 *`, London `0 1 29 3 *`)
-    are skipped, not shifted; autumn overlap fires once.
-12. Malformed persisted schedule auto-pauses with `invalid_schedule` and does
-    not starve later due jobs.
-13. CLI/agent lifecycle mutations emit `chat:updated` so Web invalidates schedules.
-14. Already-active `{state:"active"}` and prompt-only edits keep `nextRunAt`
-    stable; compound pause still applies field changes.
+## Expected Result
+
+`PASS`: preview/create works through the First Tree `cron` namespace; each due
+occurrence materializes exactly once into the ordinary Chat+Inbox path; pause
+blocks future accepts only; resume does not replay misses; delete is
+irreversible while preserving accepted work; owner chat delete pauses only that
+owner's active jobs; sticky-deleted views stay deleted on new triggers; DST and
+fail-closed branches match the observe list.
+
+`FAIL`: duplicate materialization, provider-native scheduler fallback used as
+the product path, pause canceling already accepted/delivered/running work,
+chat delete pausing another owner's schedules, sticky-deleted view auto-restored
+by a cron trigger, or stable product error codes missing on the fail-closed
+branches above.
+
+`BLOCKED`: run cell cannot enable the kill switch / cadence gate, cannot bind a
+runtime, or (for reply/ACK extension) no provider is `one-turn-ready`.
+
+`INCONCLUSIVE`: delivery or lifecycle evidence is partial, unstable, or not
+attributable to the target refs.
 
 ## Evidence
 
-- Structured logs: `cron.occurrence.accepted`, `cron.occurrence.skipped`,
-  `cron.job.auto_paused`.
-- Chat message row + inbox entry status for the target agent only.
-- API `outstanding` projection null after ACK.
-- Stable error `code` fields on every fail-closed branch above.
-- Unit/integration: `cron-schedule.test.ts`, `cron-jobs.integration.test.ts`,
-  shared schema tests, briefing compactness.
+Keep redacted CLI JSON for preview/create/list/show/pause/resume/delete, the
+trigger message id + run key, inbox row status for the target agent, worker or
+structured-log lines for accept/skip/auto-pause, multi-owner state after chat
+delete, and timezone preview samples. Do not retain tokens or full private
+prompts beyond what the run needs.

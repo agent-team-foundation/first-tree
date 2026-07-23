@@ -42,6 +42,8 @@ describe("cron commands", () => {
     const root = new Command();
     registerCronCommands(root);
     const cron = command(root, "cron");
+    expect(cron.description()).toMatch(/preview, create, list, show, update, pause, resume, and delete/);
+    expect(cron.description()).toMatch(/Every cron command requires FIRST_TREE_CHAT_ID/);
     expect(cron.commands.map((entry) => entry.name()).sort()).toEqual([
       "create",
       "delete",
@@ -66,6 +68,12 @@ describe("cron commands", () => {
         from: "user",
       }),
     ).rejects.toThrow(/CRON_JOB_CHAT_REQUIRED/);
+    await expect(command(command(root, "cron"), "list").parseAsync([], { from: "user" })).rejects.toThrow(
+      /CRON_JOB_CHAT_REQUIRED/,
+    );
+    await expect(command(command(root, "cron"), "show").parseAsync(["job-1"], { from: "user" })).rejects.toThrow(
+      /CRON_JOB_CHAT_REQUIRED/,
+    );
   });
 
   it("previews through the bound chat and reports success", async () => {

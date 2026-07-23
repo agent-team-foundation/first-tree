@@ -548,6 +548,28 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(asking).not.toContain("--close");
   });
 
+  it("keeps Scheduled jobs briefing contract compact and fail-closed", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const scheduled = briefing.slice(
+      briefing.indexOf("## Scheduled jobs"),
+      briefing.indexOf("## GitHub Working Posture"),
+    );
+
+    expect(scheduled).toContain("cron` only");
+    expect(scheduled).toContain("never provider-native schedulers");
+    expect(scheduled).toContain("Current-Chat human instruction already authorizes");
+    expect(scheduled).toContain("no re-`chat ask`");
+    expect(scheduled).toContain("cron preview");
+    expect(scheduled).toContain("chat ask");
+    expect(scheduled).toContain("applied/not-applied");
+    expect(scheduled).toContain("cron list");
+    expect(scheduled).toContain("Pause blocks future accepts only");
+    expect(scheduled).toContain("accepted/delivered/running continue");
+    expect(scheduled).toContain("acceptedWorkPreserved");
+    expect(scheduled).toContain("FIRST_TREE_CHAT_ID");
+    expect(scheduled).not.toContain("CronCreate");
+  });
+
   it("keeps GitHub posture and follow-after-create rules inline", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const orderedHeadings = [
@@ -566,10 +588,6 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     }
 
     expect(briefing).toContain("try the host `gh` CLI first");
-    expect(briefing).toContain("cron preview");
-    expect(briefing).toContain("cron list");
-    expect(briefing).toContain("acceptedWorkPreserved");
-    expect(briefing).toContain("applied/not-applied");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
     expect(briefing).not.toContain("final provider `PATH`");
     expect(briefing).toContain("gh auth status");
