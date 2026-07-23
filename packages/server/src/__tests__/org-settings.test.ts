@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 import { connectDatabase, sslOptions } from "../db/connection.js";
+import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -12,6 +13,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
+import { INITIAL_CONTEXT_REVIEWER_PROMPT } from "../services/context-reviewer-provisioning.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { createGitlabConnection } from "../services/gitlab-connections.js";
 import * as orgSettingsService from "../services/org-settings.js";
@@ -225,7 +227,7 @@ describe("org-settings service", () => {
     });
   });
 
-  it("putInitializedOrgContextTreeBinding initializes a branch-only row", async () => {
+  it("putInitializedOrgContextTreeBinding initializes a branch-only row and provisions its Reviewer Agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await app.db.insert(organizationSettings).values({
@@ -241,7 +243,7 @@ describe("org-settings service", () => {
         app.db,
         admin.organizationId,
         { repo: "https://github.com/example/initialized.git", branch: "main" },
-        { expectedUnboundBranch: "legacy-branch", updatedBy: admin.userId },
+        { expectedUnboundBranch: "legacy-branch", managerId: admin.memberId, updatedBy: admin.userId },
       ),
     ).resolves.toEqual({ repo: "https://github.com/example/initialized.git", branch: "main" });
 
@@ -258,6 +260,134 @@ describe("org-settings service", () => {
       value: { repo: "https://github.com/example/initialized.git", branch: "main" },
       version: 5,
     });
+
+    const features = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features");
+    expect(features.contextReviewer).toMatchObject({
+      enabled: true,
+      reviewerAgent: {
+        name: "context-reviewer",
+        displayName: "Context Reviewer",
+      },
+    });
+    const reviewerUuid = features.contextReviewer.agentUuid;
+    expect(reviewerUuid).toBeTruthy();
+    const [reviewer] = await app.db
+      .select({
+        uuid: agents.uuid,
+        organizationId: agents.organizationId,
+        managerId: agents.managerId,
+        type: agents.type,
+        visibility: agents.visibility,
+        clientId: agents.clientId,
+      })
+      .from(agents)
+      .where(eq(agents.uuid, reviewerUuid ?? "missing"))
+      .limit(1);
+    expect(reviewer).toEqual({
+      uuid: reviewerUuid,
+      organizationId: admin.organizationId,
+      managerId: admin.memberId,
+      type: "agent",
+      visibility: "organization",
+      clientId: null,
+    });
+    const [promptBinding] = await app.db
+      .select({
+        type: agentResourceBindings.type,
+        mode: agentResourceBindings.mode,
+        inlinePromptBody: agentResourceBindings.inlinePromptBody,
+      })
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, reviewerUuid ?? "missing"))
+      .limit(1);
+    expect(promptBinding).toEqual({
+      type: "prompt",
+      mode: "include",
+      inlinePromptBody: INITIAL_CONTEXT_REVIEWER_PROMPT,
+    });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves an already configured Reviewer Agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const existingReviewer = await createReviewerAgent(app, {
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      name: "existing-context-reviewer",
+    });
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: existingReviewer.uuid } },
+      version: 3,
+      updatedBy: admin.userId,
+    });
+    const before = await app.db
+      .select({ uuid: agents.uuid })
+      .from(agents)
+      .where(and(eq(agents.organizationId, admin.organizationId), eq(agents.type, "agent")));
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { provider: "github", repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "main", managerId: admin.memberId, updatedBy: admin.userId },
+      ),
+    ).resolves.toEqual({
+      provider: "github",
+      repo: "https://github.com/example/initialized.git",
+      branch: "main",
+    });
+
+    const after = await app.db
+      .select({ uuid: agents.uuid })
+      .from(agents)
+      .where(and(eq(agents.organizationId, admin.organizationId), eq(agents.type, "agent")));
+    expect(after).toEqual(before);
+    await expect(
+      orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features"),
+    ).resolves.toMatchObject({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: existingReviewer.uuid,
+      },
+    });
+  });
+
+  it("putInitializedOrgContextTreeBinding replaces a suspended configured Reviewer Agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const suspendedReviewer = await createReviewerAgent(app, {
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      name: "suspended-context-reviewer",
+    });
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, suspendedReviewer.uuid));
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: suspendedReviewer.uuid } },
+      version: 3,
+      updatedBy: admin.userId,
+    });
+
+    await orgSettingsService.putInitializedOrgContextTreeBinding(
+      app.db,
+      admin.organizationId,
+      { provider: "github", repo: "https://github.com/example/initialized.git", branch: "main" },
+      { expectedUnboundBranch: "main", managerId: admin.memberId, updatedBy: admin.userId },
+    );
+
+    const features = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features");
+    expect(features.contextReviewer).toMatchObject({
+      enabled: true,
+      reviewerAgent: {
+        name: "context-reviewer",
+        displayName: "Context Reviewer",
+      },
+    });
+    expect(features.contextReviewer.agentUuid).not.toBe(suspendedReviewer.uuid);
   });
 
   it("putInitializedOrgContextTreeBinding preserves a branch changed after preflight", async () => {
@@ -277,7 +407,7 @@ describe("org-settings service", () => {
         app.db,
         admin.organizationId,
         { repo: "https://github.com/example/stale-initializer.git", branch: "main" },
-        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+        { expectedUnboundBranch: "main", managerId: admin.memberId, updatedBy: admin.userId },
       ),
     ).rejects.toThrow("Context Tree setting changed after tree initialization began");
 
@@ -310,7 +440,7 @@ describe("org-settings service", () => {
         app.db,
         admin.organizationId,
         { repo: "https://github.com/example/initialized.git", branch: "main" },
-        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+        { expectedUnboundBranch: "main", managerId: admin.memberId, updatedBy: admin.userId },
       ),
     ).rejects.toThrow("Context Tree setting changed after tree initialization began");
 
@@ -347,7 +477,7 @@ describe("org-settings service", () => {
         app.db,
         admin.organizationId,
         { repo: "https://github.com/example/initialized.git", branch: "main" },
-        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+        { expectedUnboundBranch: "main", managerId: admin.memberId, updatedBy: admin.userId },
       ),
     ).rejects.toThrow("Context Tree setting changed after tree initialization began");
 

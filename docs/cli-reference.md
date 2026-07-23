@@ -1366,8 +1366,12 @@ the setting is still unbound at exactly `expectedUnboundBranch`, the branch read
 during preflight. A competing full binding or branch-only change returns 409
 and is left unchanged. This dedicated endpoint also prevents an older Server
 from interpreting conditional finalization as an ordinary unconditional
-settings write. `--rebind` intentionally bypasses this compare-and-set path and
-uses the generic `PUT /api/v1/orgs/:orgId/settings/context_tree` with only
+settings write. When a new binding commits, the same transaction creates and
+assigns an organization-visible Context Reviewer Agent with a minimal
+`context-tree-review` instruction unless the Team already has a Reviewer
+assigned; an existing assignment is preserved. The new Reviewer starts without
+a Computer binding. `--rebind` intentionally bypasses this compare-and-set path
+and uses the generic `PUT /api/v1/orgs/:orgId/settings/context_tree` with only
 `repo` and `branch` to replace the binding directly. The CLI strictly validates
 the final response before reporting success.
 

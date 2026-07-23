@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -148,6 +149,24 @@ owners: [${ACCOUNT_LOGIN}]
 
     const setting = await getOrgContextTreeBinding(app.db, admin.organizationId);
     expect(setting).toEqual({ provider: "github", repo: CLONE_URL, branch: "main" });
+    const features = await getOrgSetting(app.db, admin.organizationId, "context_tree_features");
+    expect(features.contextReviewer).toMatchObject({
+      enabled: true,
+      reviewerAgent: {
+        name: "context-reviewer",
+        displayName: "Context Reviewer",
+      },
+    });
+    const [reviewer] = await app.db
+      .select({ managerId: agents.managerId, visibility: agents.visibility, clientId: agents.clientId })
+      .from(agents)
+      .where(eq(agents.uuid, features.contextReviewer.agentUuid ?? "missing"))
+      .limit(1);
+    expect(reviewer).toEqual({
+      managerId: admin.memberId,
+      visibility: "organization",
+      clientId: null,
+    });
   });
 
   it("does not let initialize overwrite a binding committed after its absent precheck", async () => {

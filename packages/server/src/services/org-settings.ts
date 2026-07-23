@@ -26,6 +26,7 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
+import { ensureInitializedContextReviewer } from "./context-reviewer-provisioning.js";
 import { type GitlabEgressAllowlistEntry, isGitlabOriginAuthorized } from "./gitlab-egress-policy.js";
 
 /**
@@ -468,6 +469,7 @@ export async function putInitializedOrgContextTreeBinding(
   rawInput: unknown,
   options: {
     updatedBy: string;
+    managerId: string;
     expectedUnboundBranch: string;
     gitlabEgressAllowlist?: readonly GitlabEgressAllowlistEntry[];
   },
@@ -528,6 +530,11 @@ export async function putInitializedOrgContextTreeBinding(
     if (!row) {
       throw new ConflictError("Context Tree setting changed after tree initialization began");
     }
+    await ensureInitializedContextReviewer(txDb, {
+      organizationId: orgId,
+      managerId: options.managerId,
+      updatedBy: options.updatedBy,
+    });
     return contextTreeActiveBindingSchema.parse(row.value);
   });
 }

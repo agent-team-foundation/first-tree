@@ -50,6 +50,7 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         scope.organizationId,
         { provider: input.provider, repo: input.repo, branch: input.branch },
         {
+          managerId: scope.memberId,
           updatedBy: scope.userId,
           expectedUnboundBranch: input.expectedUnboundBranch,
           gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],

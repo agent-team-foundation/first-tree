@@ -468,6 +468,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     let setting: ContextTreeActiveBinding;
     try {
       setting = await putInitializedOrgContextTreeBinding(app.db, finalScope.organizationId, initializedBinding.data, {
+        managerId: finalScope.memberId,
         expectedUnboundBranch: existing.branch,
         updatedBy: finalScope.userId,
         gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
