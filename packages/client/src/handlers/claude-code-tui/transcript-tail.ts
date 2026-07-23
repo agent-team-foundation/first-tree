@@ -45,20 +45,50 @@ export type RawTranscriptEntry = {
 };
 
 /**
+ * Fixed read-chunk size. Bounds the per-`drainEntries` peak allocation: new
+ * data is streamed through one reused buffer of this size instead of a single
+ * allocation proportional to the unread backlog.
+ */
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/** Newline as a byte. Never appears inside a multi-byte UTF-8 sequence. */
+const NEWLINE_BYTE = 0x0a;
+
+/**
  * Tail an append-only JSONL transcript. Each `drainEntries()` returns raw
  * entries appended since the last call. Tolerates the file not yet existing
  * (returns empty), partial lines across reads, and malformed JSON (single
  * bad line is skipped, not fatal).
+ *
+ * Pass `startAtEnd: true` to tail from the file's current end instead of
+ * offset zero — required for resumed sessions, whose transcript already
+ * contains the complete prior history. Reading that history would allocate
+ * and parse the entire file just to discard it (see PERF-016).
  *
  * NOT thread-safe across instances — each session should own one tailer.
  */
 export class TranscriptTailer {
   private readonly path: string;
   private offset = 0;
-  private partial = "";
+  /**
+   * Bytes of a trailing incomplete line carried to the next read, as a list
+   * of buffers so a line spanning many chunks is copied once when it
+   * completes instead of re-concatenated per chunk. Kept as bytes (not a
+   * string) so a multi-byte UTF-8 character split across two reads is
+   * reassembled instead of decoded into replacement characters. Invariant:
+   * never contains a newline byte.
+   */
+  private partialChunks: Buffer[] = [];
 
-  constructor(path: string) {
+  constructor(path: string, options?: { startAtEnd?: boolean }) {
     this.path = path;
+    if (options?.startAtEnd) {
+      try {
+        this.offset = statSync(path).size;
+      } catch {
+        // File not created yet (fresh session) — start from offset zero.
+      }
+    }
   }
 
   /** Read raw JSONL entries appended since the last call. Best-effort. */
@@ -67,29 +97,51 @@ export class TranscriptTailer {
     const stat = statSync(this.path);
     if (stat.size <= this.offset) return [];
 
+    const entries: RawTranscriptEntry[] = [];
     const fd = openSync(this.path, "r");
-    let chunk = "";
     try {
-      const buf = Buffer.allocUnsafe(stat.size - this.offset);
-      const read = readSync(fd, buf, 0, buf.length, this.offset);
-      this.offset += read;
-      chunk = this.partial + buf.subarray(0, read).toString("utf-8");
+      // Stream up to the stat-time size in bounded chunks. Data appended
+      // after the stat is picked up by the next drain.
+      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat.size - this.offset));
+      while (this.offset < stat.size) {
+        const toRead = Math.min(chunk.length, stat.size - this.offset);
+        const read = readSync(fd, chunk, 0, toRead, this.offset);
+        if (read <= 0) break; // truncated/raced — retry on the next drain
+        this.offset += read;
+        this.consumeChunk(chunk.subarray(0, read), entries);
+      }
     } finally {
       closeSync(fd);
     }
+    return entries;
+  }
 
-    const parts = chunk.split("\n");
-    this.partial = parts.pop() ?? "";
+  /**
+   * Split a chunk on newline bytes, parse complete lines, carry the rest.
+   * Only the new chunk is searched — the carry holds no newline by invariant.
+   */
+  private consumeChunk(chunk: Buffer, out: RawTranscriptEntry[]): void {
+    const lastNewline = chunk.lastIndexOf(NEWLINE_BYTE);
+    if (lastNewline === -1) {
+      // No line completed in this chunk. Copy — `chunk` views a reused
+      // read buffer that the next iteration overwrites.
+      this.partialChunks.push(Buffer.from(chunk));
+      return;
+    }
 
-    const entries: RawTranscriptEntry[] = [];
-    for (const raw of parts) {
+    const complete =
+      this.partialChunks.length > 0
+        ? Buffer.concat([...this.partialChunks, chunk.subarray(0, lastNewline)])
+        : chunk.subarray(0, lastNewline);
+    this.partialChunks = lastNewline + 1 < chunk.length ? [Buffer.from(chunk.subarray(lastNewline + 1))] : [];
+
+    for (const raw of complete.toString("utf-8").split("\n")) {
       if (!raw.trim()) continue;
       try {
-        entries.push(JSON.parse(raw) as RawTranscriptEntry);
+        out.push(JSON.parse(raw) as RawTranscriptEntry);
       } catch {
         // skip malformed line
       }
     }
-    return entries;
   }
 }

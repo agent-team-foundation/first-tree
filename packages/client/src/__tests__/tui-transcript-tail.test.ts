@@ -79,4 +79,60 @@ describe("TranscriptTailer", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ type: "user" });
   });
+
+  it("startAtEnd skips pre-existing history and returns only new entries (resume)", () => {
+    const history = Array.from({ length: 500 }, (_, i) =>
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `old ${i}` }] } }),
+    ).join("\n");
+    writeFileSync(filePath, `${history}\n`);
+
+    const tailer = new TranscriptTailer(filePath, { startAtEnd: true });
+    expect(tailer.drainEntries()).toEqual([]);
+
+    appendFileSync(filePath, `${JSON.stringify({ type: "user", message: { content: "fresh" } })}\n`);
+    const entries = tailer.drainEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ type: "user", message: { content: "fresh" } });
+  });
+
+  it("startAtEnd on a missing file behaves like a fresh tail from offset zero", () => {
+    const tailer = new TranscriptTailer(filePath, { startAtEnd: true });
+    expect(tailer.drainEntries()).toEqual([]);
+
+    writeFileSync(filePath, `${JSON.stringify({ type: "user", message: { content: "first" } })}\n`);
+    const entries = tailer.drainEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ type: "user", message: { content: "first" } });
+  });
+
+  it("parses entries larger than a single read chunk", () => {
+    writeFileSync(filePath, "");
+    const tailer = new TranscriptTailer(filePath);
+
+    // READ_CHUNK_BYTES is 64 KiB — make one line span several chunks.
+    const big = "x".repeat(256 * 1024);
+    appendFileSync(filePath, `${JSON.stringify({ type: "assistant", message: { content: big } })}\n`);
+    appendFileSync(filePath, `${JSON.stringify({ type: "user", message: { content: "after" } })}\n`);
+
+    const entries = tailer.drainEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ type: "assistant", message: { content: big } });
+    expect(entries[1]).toMatchObject({ type: "user", message: { content: "after" } });
+  });
+
+  it("reassembles a multi-byte UTF-8 character split across two drains", () => {
+    writeFileSync(filePath, "");
+    const tailer = new TranscriptTailer(filePath);
+
+    const line = Buffer.from(`${JSON.stringify({ type: "user", message: { content: "汉字🎉" } })}\n`, "utf-8");
+    // Split inside the multi-byte sequence of "汉" (well before the newline).
+    const splitAt = line.indexOf(Buffer.from("汉", "utf-8")) + 1;
+    appendFileSync(filePath, line.subarray(0, splitAt));
+    expect(tailer.drainEntries()).toEqual([]);
+
+    appendFileSync(filePath, line.subarray(splitAt));
+    const entries = tailer.drainEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ type: "user", message: { content: "汉字🎉" } });
+  });
 });

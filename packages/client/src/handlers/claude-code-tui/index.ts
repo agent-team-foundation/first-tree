@@ -315,7 +315,13 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       throw err;
     }
 
-    transcriptTailer = new TranscriptTailer(transcriptPathFor(cwd, sessionId));
+    // Tail from the file's current end. On resume the transcript already
+    // holds the complete prior history; starting at offset zero would make
+    // the first drain read and parse the whole file just to discard it
+    // (PERF-016). Anything already present is never consumed anyway — each
+    // turn preflushes-and-discards before pasting its prompt. For fresh
+    // sessions the file does not exist yet, so this is offset zero as before.
+    transcriptTailer = new TranscriptTailer(transcriptPathFor(cwd, sessionId), { startAtEnd: true });
     return sessionId;
   }
 
