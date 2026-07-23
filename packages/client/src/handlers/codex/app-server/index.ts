@@ -148,7 +148,12 @@ type CurrentTurn = {
   status: "inProgress" | "completed" | "failed" | "interrupted";
   primaryToken: DeliveryToken;
   acceptedMessages: SessionMessage[];
-  appendClosed: boolean;
+  /**
+   * Pending-input generation that Codex definitively refused to steer.
+   * Matching generations wait for the next turn; a newer input changes the
+   * generation and gives the still-ordered pending prefix one fresh attempt.
+   */
+  appendRejectedInputGeneration: number | null;
   inFlightAppend: Promise<void> | null;
   finalAgentText: string;
   completedItemIds: Set<string>;
@@ -212,6 +217,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let providerRetryFence = false;
   let pendingDrainInProgress = false;
   let pendingDrainScheduled = false;
+  let pendingInputGeneration = 0;
   let shutdownRequested = false;
   let pendingChatContextPrompt: string | null = null;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
@@ -1224,7 +1230,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       status: "inProgress",
       primaryToken: token,
       acceptedMessages: [...messages],
-      appendClosed: false,
+      appendRejectedInputGeneration: null,
       inFlightAppend: null,
       finalAgentText: "",
       completedItemIds: new Set(),
@@ -1525,7 +1531,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
     const turn = currentTurn;
     if (turn) {
-      if (turn.status !== "inProgress" || turn.appendClosed || turn.inFlightAppend) return;
+      if (
+        turn.status !== "inProgress" ||
+        turn.appendRejectedInputGeneration === pendingInputGeneration ||
+        turn.inFlightAppend
+      ) {
+        return;
+      }
     } else if (startupTurnPending || currentTurnPromise) {
       return;
     }
@@ -1547,7 +1559,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     pendingDrainInProgress = true;
     try {
       const turn = currentTurn;
-      if (turn && turn.status === "inProgress" && !turn.appendClosed) {
+      if (turn && turn.status === "inProgress" && turn.appendRejectedInputGeneration !== pendingInputGeneration) {
         await appendPendingInputsToTurn(turn, sessionCtx);
         return;
       }
@@ -1563,7 +1575,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   async function appendPendingInputsToTurn(turn: CurrentTurn, sessionCtx: SessionContext): Promise<void> {
     if (turn.inFlightAppend || pendingInputs.length === 0) return;
     const batch = pendingInputs.slice();
-    const appendPromise = appendBatchToTurn(turn, batch, sessionCtx);
+    const inputGeneration = pendingInputGeneration;
+    const appendPromise = appendBatchToTurn(turn, batch, inputGeneration, sessionCtx);
     const trackedAppend = appendPromise.finally(() => {
       if (turn.inFlightAppend === trackedAppend) turn.inFlightAppend = null;
     });
@@ -1574,6 +1587,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   async function appendBatchToTurn(
     turn: CurrentTurn,
     batch: readonly QueueEntry[],
+    inputGeneration: number,
     sessionCtx: SessionContext,
   ): Promise<void> {
     const client = appServer;
@@ -1597,7 +1611,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     if (currentTurn !== turn || turn.stopRequested || shutdownRequested) return;
-    if (turn.status !== "inProgress" || turn.appendClosed) return;
+    if (turn.status !== "inProgress" || turn.appendRejectedInputGeneration === pendingInputGeneration) {
+      return;
+    }
 
     try {
       await client.request("turn/steer", {
@@ -1612,11 +1628,20 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       removePendingPrefix(batch);
+      turn.appendRejectedInputGeneration = null;
       for (const entry of batch) entry.token.processingStarted(entry.message);
       turn.acceptedMessages.push(...batch.map((entry) => entry.message));
     } catch (err) {
       if (shouldFallbackSteerToNextTurn(err)) {
-        turn.appendClosed = true;
+        // The provider definitively did not accept this batch. Block only the
+        // queue generation that was attempted: a later input (including one
+        // that arrived while this request was in flight) re-opens one ordered
+        // steer attempt instead of poisoning the rest of a long-running turn.
+        turn.appendRejectedInputGeneration = inputGeneration;
+        sessionCtx.log(
+          `codex app-server turn/steer rejected without custody; pending generation ${inputGeneration} ` +
+            `will retry after newer input or the next turn: ${err instanceof Error ? err.message : String(err)}`,
+        );
         schedulePendingDrain();
       } else {
         const reason = isCodexAppServerTransientError(err)
@@ -1863,6 +1888,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       if (!ctx || shutdownRequested) return { kind: "rejected", reason: "no_active_context", retryable: true };
       const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
       pendingInputs.push({ message, token: deliveryToken });
+      pendingInputGeneration++;
       schedulePendingDrain();
       return { kind: "owned", mode: "queued" };
     },
