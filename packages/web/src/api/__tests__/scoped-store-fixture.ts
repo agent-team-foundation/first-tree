@@ -16,7 +16,6 @@ import {
   type SessionLockManager,
   type SessionLockOptions,
   type StorageArea,
-  scrubLegacyPersistence,
   type VerifiedCandidateMeResult,
   type ViewLease,
 } from "../../auth/session/index.js";
@@ -131,13 +130,11 @@ async function activateFromAnonymous(
   } finally {
     fetchSpy.mockRestore();
   }
-  const scrub = await scrubLegacyPersistence({ localStorage, sessionStorage, indexedDB: factory });
   const permit = await coordinator.reserveAcquisitionTransition(
     { generation: cursor.generation, revision: cursor.revision },
     verified.proof,
     activation,
     null,
-    scrub,
   );
   await coordinator.completeAcquisitionTransition(permit, verified.proof);
 
@@ -187,10 +184,15 @@ export async function createStoreFixture(
   locks: SessionLockManager = new ImmediateTestLocks(),
 ): Promise<StoreFixture> {
   const factory = new IDBFactory();
-  const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const coordinator = new AuthSessionCoordinator({
+    indexedDB: factory,
+    legacyPersistence: { indexedDB: factory, localStorage, sessionStorage },
+  });
   await coordinator.bootstrapAnonymous(`anonymous-${options.label}`);
   const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks });
-  return activateFromAnonymous(factory, coordinator, barrier, options, memoryStorage(), memoryStorage());
+  return activateFromAnonymous(factory, coordinator, barrier, options, localStorage, sessionStorage);
 }
 
 export async function replaceStoreFixture(source: StoreFixture, options: ActivateOptions): Promise<StoreFixture> {

@@ -1,3 +1,4 @@
+import { CROSS_DOCUMENT_AUTH_STORAGE_KEY } from "./cross-document-notices.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
 import { deleteDatabaseBarrier } from "./idb-delete-barrier.js";
 
@@ -15,6 +16,7 @@ export const LEGACY_LOCAL_STORAGE_KEYS = Object.freeze([
   "first-tree:selectedOrganizationId",
   "first-tree-hub:selectedOrganizationId",
   "onboarding:bannerDismissed",
+  CROSS_DOCUMENT_AUTH_STORAGE_KEY,
 ] as const);
 
 export const LEGACY_LOCAL_STORAGE_PREFIXES = Object.freeze([
@@ -58,44 +60,7 @@ export type LegacyScrubResult = LegacyStorageScrubResult &
     databasesDeleted: number;
   }>;
 
-const legacyScrubCompletionBrand: unique symbol = Symbol("first-tree.legacy-scrub-completion");
-
-export type LegacyScrubCompletion = LegacyScrubResult &
-  Readonly<{
-    [legacyScrubCompletionBrand]: true;
-  }>;
-
-type LegacyScrubCompletionState = {
-  receipt: string;
-  state: "available" | "claimed" | "consumed";
-};
-
-const legacyScrubCompletions = new WeakMap<LegacyScrubCompletion, LegacyScrubCompletionState>();
-
-/** Internal coordinator bridge. A caller-selected string can never stand in for a completed scrub. */
-export function claimLegacyScrubCompletion(value: unknown): Readonly<{
-  receipt: string;
-  settle: (committed: boolean) => void;
-}> {
-  if (typeof value !== "object" || value === null) {
-    throw new SessionError(sessionErrorCodes.invalidState, "Legacy scrub completion is malformed");
-  }
-  const completion = value as LegacyScrubCompletion;
-  const state = legacyScrubCompletions.get(completion);
-  if (!state || state.state !== "available") {
-    throw new SessionError(sessionErrorCodes.admissionDenied, "Legacy scrub completion is unavailable");
-  }
-  state.state = "claimed";
-  let settled = false;
-  return Object.freeze({
-    receipt: state.receipt,
-    settle: (committed: boolean): void => {
-      if (settled) return;
-      settled = true;
-      state.state = committed ? "consumed" : "available";
-    },
-  });
-}
+export type LegacyScrubCompletion = LegacyScrubResult & Readonly<{ receipt: string }>;
 
 function createLegacyScrubReceipt(): string {
   if (!globalThis.crypto?.randomUUID) {
@@ -179,7 +144,5 @@ export async function scrubLegacyPersistence(options: LegacyScrubOptions): Promi
     getIndexedDbFactory(options.indexedDB),
     options.onDatabaseBlocked,
   );
-  const completion = Object.freeze({ ...storage, databasesDeleted }) as LegacyScrubCompletion;
-  legacyScrubCompletions.set(completion, { receipt: createLegacyScrubReceipt(), state: "available" });
-  return completion;
+  return Object.freeze({ ...storage, databasesDeleted, receipt: createLegacyScrubReceipt() });
 }

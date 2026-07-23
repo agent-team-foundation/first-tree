@@ -3,12 +3,13 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "../session/candidate-tokens.js";
 import {
-  AuthSessionCoordinator,
+  AuthSessionCoordinator as BaseAuthSessionCoordinator,
+  type CoordinatorOptions,
   closeCoordinatorConnections,
   type VerifiedCandidateProof,
 } from "../session/coordinator.js";
 import { sessionErrorCodes } from "../session/errors.js";
-import { type StorageArea, scrubLegacyPersistence } from "../session/legacy-scrub.js";
+import type { StorageArea } from "../session/legacy-scrub.js";
 import { createAccountScopeKey } from "../session/scope.js";
 import {
   type AcquisitionSessionAttempt,
@@ -33,6 +34,20 @@ function memoryStorage(): StorageArea {
       values.delete(key);
     },
   };
+}
+
+class AuthSessionCoordinator extends BaseAuthSessionCoordinator {
+  public constructor(options: CoordinatorOptions = {}) {
+    const indexedDB = options.indexedDB;
+    super({
+      ...options,
+      legacyPersistence: options.legacyPersistence ?? {
+        localStorage: memoryStorage(),
+        sessionStorage: memoryStorage(),
+        ...(indexedDB === undefined ? {} : { indexedDB }),
+      },
+    });
+  }
 }
 
 function activation(label: string, generation: string): ActivationCertificate {
@@ -122,16 +137,8 @@ async function candidateProof(
   ).proof;
 }
 
-async function scrub(factory: IDBFactory) {
-  return scrubLegacyPersistence({
-    indexedDB: factory,
-    localStorage: memoryStorage(),
-    sessionStorage: memoryStorage(),
-  });
-}
-
 async function reserve(
-  factory: IDBFactory,
+  _factory: IDBFactory,
   coordinator: AuthSessionCoordinator,
   target: ActivationCertificate,
   attempt: AcquisitionSessionAttempt,
@@ -144,7 +151,6 @@ async function reserve(
     proof,
     target,
     null,
-    await scrub(factory),
   );
   return Object.freeze({ permit, proof });
 }
@@ -176,13 +182,20 @@ describe("auth transition crash recovery", () => {
       mode: "transition",
       generation: "generation-target",
     });
-    await expect(reloaded.cancelAcquisitionTransition(permit, "generation-recovered")).resolves.toMatchObject({
-      kind: "anonymous",
-      authority: { mode: "none", generation: "generation-recovered" },
+    const cancellation = await reloaded.cancelAcquisitionTransition(permit, "generation-recovered");
+    expect(cancellation).toMatchObject({
+      kind: "cleaning",
+      authority: { mode: "cleaning", generation: "generation-recovered" },
     });
+    if (cancellation.kind !== "cleaning") throw new Error("Expected source-free cleanup authority");
+    await expect(reloaded.readAuthority()).resolves.toMatchObject({
+      mode: "cleaning",
+      generation: "generation-recovered",
+    });
+    await reloaded.completeAnonymousCleanup(cancellation.authority, "generation-recovered-none");
     await expect(reloaded.readAuthority()).resolves.toMatchObject({
       mode: "none",
-      generation: "generation-recovered",
+      generation: "generation-recovered-none",
     });
   });
 
@@ -215,13 +228,19 @@ describe("auth transition crash recovery", () => {
       cancelledTarget,
       acquisitionAttempt("attempt-cancelled", "generation-anonymous", null),
     );
-    await cancelling.cancelAcquisitionTransition(cancellation.permit, "generation-cancelled");
+    const cancelled = await cancelling.cancelAcquisitionTransition(cancellation.permit, "generation-cancelled");
+    if (cancelled.kind !== "cleaning") throw new Error("Expected source-free cleanup authority");
     await expect(
       cancelling.completeAcquisitionTransition(cancellation.permit, cancellation.proof),
     ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
     await expect(cancelling.readAuthority()).resolves.toMatchObject({
-      mode: "none",
+      mode: "cleaning",
       generation: "generation-cancelled",
+    });
+    await cancelling.completeAnonymousCleanup(cancelled.authority, "generation-cancelled-none");
+    await expect(cancelling.readAuthority()).resolves.toMatchObject({
+      mode: "none",
+      generation: "generation-cancelled-none",
     });
   });
 

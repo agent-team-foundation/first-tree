@@ -139,6 +139,20 @@ export type AnonymousAuthority = Readonly<{
   revision: number;
 }>;
 
+/**
+ * Token-producing authority has been retired, but ambiguous legacy browser
+ * persistence has not yet produced a verified cleanup completion. This state
+ * is intentionally source-free and crash-recoverable across documents.
+ */
+export type CleaningAuthority = Readonly<{
+  v: 6;
+  mode: "cleaning";
+  generation: string;
+  revision: number;
+  cause: "anonymous_logout" | "transition_cancelled";
+  forbiddenGenerations: readonly [string] | readonly [string, string];
+}>;
+
 export type ActiveAuthority = Readonly<{
   v: 6;
   mode: "active";
@@ -165,11 +179,17 @@ export type RetiringAuthority = Readonly<{
   revision: number;
   source: ActivationCertificate;
   cause: RetirementCause;
+  forbiddenGenerations: readonly [] | readonly [string];
   phase: AuthorityPhase;
   cleanupReceipt?: string;
 }>;
 
-export type AuthAuthority = AnonymousAuthority | ActiveAuthority | TransitionAuthority | RetiringAuthority;
+export type AuthAuthority =
+  | AnonymousAuthority
+  | CleaningAuthority
+  | ActiveAuthority
+  | TransitionAuthority
+  | RetiringAuthority;
 
 export type CoordinatorSnapshot = Readonly<{
   authority: AuthAuthority;
@@ -525,6 +545,33 @@ export function validateAuthAuthority(value: unknown): AuthAuthority {
   const generation = requireOpaqueId(value.generation, "Auth generation");
   const revision = requireRevision(value.revision, "Authority revision");
   if (value.mode === "none") return Object.freeze({ v: 6, mode: "none", generation, revision });
+  if (value.mode === "cleaning") {
+    const cause = value.cause;
+    if (cause !== "anonymous_logout" && cause !== "transition_cancelled") {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Cleaning authority cause is malformed");
+    }
+    const expectedLength = cause === "anonymous_logout" ? 1 : 2;
+    if (!Array.isArray(value.forbiddenGenerations) || value.forbiddenGenerations.length !== expectedLength) {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Cleaning authority generations are malformed");
+    }
+    const forbiddenGenerations = value.forbiddenGenerations.map((item) =>
+      requireOpaqueId(item, "Forbidden auth generation"),
+    );
+    if (
+      new Set(forbiddenGenerations).size !== forbiddenGenerations.length ||
+      forbiddenGenerations.includes(generation)
+    ) {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Cleaning authority generations overlap");
+    }
+    return Object.freeze({
+      v: 6,
+      mode: "cleaning",
+      generation,
+      revision,
+      cause,
+      forbiddenGenerations: Object.freeze(forbiddenGenerations) as readonly [string] | readonly [string, string],
+    });
+  }
   if (value.mode === "active") {
     const session = validateActivationCertificate(value.session);
     if (session.authGeneration !== generation) {
@@ -543,10 +590,33 @@ export function validateAuthAuthority(value: unknown): AuthAuthority {
   if (value.mode === "retiring") {
     const source = validateActivationCertificate(value.source);
     const cause = validateRetirementCause(value.cause);
+    if (generation === source.authGeneration) {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Retiring authority did not rotate generation");
+    }
+    const expectedForbiddenLength = cause === "transition_cancelled" ? 1 : 0;
+    if (!Array.isArray(value.forbiddenGenerations) || value.forbiddenGenerations.length !== expectedForbiddenLength) {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Retiring authority generations are malformed");
+    }
+    const forbiddenGenerations = value.forbiddenGenerations.map((item) =>
+      requireOpaqueId(item, "Forbidden auth generation"),
+    );
+    if (forbiddenGenerations.includes(generation) || forbiddenGenerations.includes(source.authGeneration)) {
+      throw new SessionError(sessionErrorCodes.recoveryRequired, "Retiring authority generations overlap");
+    }
     const phase = validatePhase(value.phase);
     const cleanupReceipt =
       value.cleanupReceipt === undefined ? undefined : requireOpaqueId(value.cleanupReceipt, "Cleanup receipt", 2048);
-    return Object.freeze({ v: 6, mode: "retiring", generation, revision, source, cause, phase, cleanupReceipt });
+    return Object.freeze({
+      v: 6,
+      mode: "retiring",
+      generation,
+      revision,
+      source,
+      cause,
+      forbiddenGenerations: Object.freeze(forbiddenGenerations) as readonly [] | readonly [string],
+      phase,
+      cleanupReceipt,
+    });
   }
   throw new SessionError(sessionErrorCodes.recoveryRequired, "Auth authority mode is unsupported");
 }
@@ -626,6 +696,10 @@ export function validateCoordinatorSnapshot(value: unknown): CoordinatorSnapshot
     throw new SessionError(sessionErrorCodes.recoveryRequired, "Non-active authority cannot retain credentials");
   }
 
+  if ((authority.mode === "cleaning" || authority.mode === "retiring") && attempts.length !== 0) {
+    throw new SessionError(sessionErrorCodes.recoveryRequired, "Retired authority cannot retain session attempts");
+  }
+
   if (authority.mode === "transition") {
     if (
       authority.permit.permitId !== authority.permit.target.transitionPermitId ||
@@ -635,9 +709,12 @@ export function validateCoordinatorSnapshot(value: unknown): CoordinatorSnapshot
     }
     const attempt = attempts.find((item) => item.attemptId === authority.permit.attemptId);
     if (
+      attempts.length !== 1 ||
       !attempt ||
       attempt.kind !== "acquisition" ||
-      attempt.serverAuthority !== authority.permit.target.serverAuthority
+      attempt.serverAuthority !== authority.permit.target.serverAuthority ||
+      attempt.sourceEpoch !== (authority.source?.sessionEpoch ?? null) ||
+      authority.generation === (authority.source?.authGeneration ?? attempt.baselineGeneration)
     ) {
       throw new SessionError(sessionErrorCodes.recoveryRequired, "Transition does not own its exact attempt");
     }

@@ -119,7 +119,7 @@ describe("legacy persistence scrub", () => {
     for (const name of LEGACY_DATABASE_NAMES) (await rawOpen(factory, name)).close();
     const first = await scrubLegacyPersistence({ localStorage, sessionStorage, indexedDB: factory });
 
-    expect(first).toEqual({
+    expect(first).toMatchObject({
       localStorageKeysRemoved: 6,
       sessionStorageKeysRemoved: 6,
       databasesDeleted: LEGACY_DATABASE_NAMES.length,

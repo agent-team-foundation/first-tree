@@ -8,7 +8,7 @@ import { type CapturedAccountRuntimeFence, captureAccountRuntimeFence } from "./
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "./candidate-tokens.js";
 import { claimVerifiedPurgeCompletion, type VerifiedPurgeCompletion } from "./content-barrier.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
-import { claimLegacyScrubCompletion, type LegacyScrubCompletion } from "./legacy-scrub.js";
+import { type LegacyScrubOptions, scrubLegacyPersistence } from "./legacy-scrub.js";
 import { createAccountScopeKey } from "./scope.js";
 import {
   type AccountLease,
@@ -29,6 +29,7 @@ import {
   validateAccountLease,
   validateAcquisitionTransitionPermit,
   validateActivationCertificate,
+  validateAuthAuthority,
   validateCoordinatorSnapshot,
   validateCredentialCursor,
   validateSessionAttempt,
@@ -63,8 +64,12 @@ export type AuthorityCursor = Readonly<{
 export type RetirementResult = "retired" | "already_retiring" | "superseded";
 
 export type TransitionCancellationResult =
-  | Readonly<{ kind: "anonymous"; authority: AuthAuthority }>
+  | Readonly<{ kind: "cleaning"; authority: AuthAuthority }>
   | Readonly<{ kind: "retiring"; authority: AuthAuthority; source: ActivationCertificate }>
+  | Readonly<{ kind: "superseded"; authority: AuthAuthority }>;
+
+export type AnonymousCancellationResult =
+  | Readonly<{ kind: "cleaning"; authority: AuthAuthority }>
   | Readonly<{ kind: "superseded"; authority: AuthAuthority }>;
 
 export type ActiveSessionProjection = Readonly<{
@@ -91,6 +96,7 @@ const MAX_ACTIVE_ME_MEMBERSHIPS = 100_000;
 declare const activeDispatchAdmissionType: unique symbol;
 declare const verifiedCandidateProofType: unique symbol;
 declare const refreshResponseProofType: unique symbol;
+declare const accountRefreshResponseProofType: unique symbol;
 declare const verifiedActiveMeProofType: unique symbol;
 
 export type ActiveDispatchAdmission = Readonly<{ [activeDispatchAdmissionType]: never }>;
@@ -132,6 +138,19 @@ type RefreshResponseState = {
   state: "available" | "claimed" | "consumed";
 };
 
+type AccountRefreshResponseProof = Readonly<{ [accountRefreshResponseProofType]: never }>;
+
+type AccountRefreshResponseState = {
+  activation: ActivationCertificate;
+  expectedCredential: CredentialCursor;
+  capturedCredential: CredentialRecord;
+  replacement: CredentialRecord;
+  runtime: CapturedAccountRuntimeFence;
+  lifecycleGeneration: number;
+  assertOwnerCurrent?: () => void;
+  state: "available" | "claimed" | "consumed";
+};
+
 type VerifiedActiveMeEvidence = Readonly<{
   runtime: CapturedAccountRuntimeFence;
   membershipIds: readonly string[];
@@ -146,6 +165,21 @@ type VerifiedActiveMeProofState = {
   state: "available" | "claimed" | "consumed";
 };
 
+type ActiveMe401Evidence = Readonly<{
+  runtime: CapturedAccountRuntimeFence;
+  signal: AbortSignal;
+  capturedCredential: CredentialRecord;
+  expectedCredential: CredentialCursor;
+  lifecycleGeneration: number;
+  requestKey: string;
+  requestSequence: number;
+}>;
+
+type ActiveMe401State = {
+  evidence: ActiveMe401Evidence;
+  state: "available" | "claimed" | "consumed";
+};
+
 export type ClaimedVerifiedActiveMeProof = Readonly<{
   membershipIds: readonly string[];
   defaultOrganizationId: string | null;
@@ -156,8 +190,11 @@ export type ClaimedVerifiedActiveMeProof = Readonly<{
 const activeDispatchAdmissions = new WeakMap<ActiveDispatchAdmission, ActiveDispatchState>();
 const verifiedCandidateProofs = new WeakMap<VerifiedCandidateProof, CandidateProofState>();
 const refreshResponseProofs = new WeakMap<RefreshResponseProof, RefreshResponseState>();
+const accountRefreshResponseProofs = new WeakMap<AccountRefreshResponseProof, AccountRefreshResponseState>();
 const verifiedActiveMeProofs = new WeakMap<VerifiedActiveMeProof, VerifiedActiveMeProofState>();
+const activeMe401Rejections = new WeakMap<SessionError, ActiveMe401State>();
 const latestActiveMeRequests = new Map<string, number>();
+const activeMe401RefreshOwners = new Map<string, ActiveMe401State>();
 
 export type ActiveDispatch<T> = Readonly<{
   admission: ActiveDispatchAdmission;
@@ -181,6 +218,7 @@ function readActiveDispatchAdmission(value: unknown): ActiveDispatchState {
 export type CoordinatorOptions = Readonly<{
   indexedDB?: IDBFactory;
   onBlocked?: (databaseName: string) => void;
+  legacyPersistence?: LegacyScrubOptions;
 }>;
 
 const coordinatorConnections = new Set<IDBDatabase>();
@@ -193,6 +231,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requireActiveMeOrganizationId(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 512) {
     throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
+  }
+  return value;
+}
+
+function freezeParsedJson(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const pending: object[] = [value];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+    for (const key of Reflect.ownKeys(current)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(current, key);
+      if (!descriptor || !("value" in descriptor)) continue;
+      const child = descriptor.value;
+      if (typeof child === "object" && child !== null) pending.push(child);
+    }
+    Object.freeze(current);
   }
   return value;
 }
@@ -227,7 +283,7 @@ function parseActiveMeResponse(
   const defaultOrganizationId =
     defaultValue === null || defaultValue === undefined ? null : requireActiveMeOrganizationId(defaultValue);
   return Object.freeze({
-    payload: Object.freeze(value),
+    payload: freezeParsedJson(value),
     membershipIds: Object.freeze(membershipIds),
     defaultOrganizationId,
   });
@@ -391,6 +447,46 @@ function claimRefreshResponseProof(value: unknown): Readonly<{
   });
 }
 
+function assertAccountRefreshStateCurrent(state: AccountRefreshResponseState): void {
+  if (state.runtime.lease.signal.aborted || state.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+    throw new SessionError(sessionErrorCodes.staleOperation, "Account refresh crossed a lifecycle fence");
+  }
+  state.runtime.assertCurrent();
+  state.assertOwnerCurrent?.();
+}
+
+function createAccountRefreshResponseProof(
+  state: Omit<AccountRefreshResponseState, "state">,
+): AccountRefreshResponseProof {
+  const proof = Object.freeze({}) as AccountRefreshResponseProof;
+  accountRefreshResponseProofs.set(proof, { ...state, state: "available" });
+  return proof;
+}
+
+function claimAccountRefreshResponseProof(value: unknown): Readonly<{
+  state: AccountRefreshResponseState;
+  settle: (committed: boolean) => void;
+}> {
+  if (typeof value !== "object" || value === null) {
+    throw new SessionError(sessionErrorCodes.invalidState, "Account refresh response proof is malformed");
+  }
+  const state = accountRefreshResponseProofs.get(value as AccountRefreshResponseProof);
+  if (!state || state.state !== "available") {
+    throw new SessionError(sessionErrorCodes.admissionDenied, "Account refresh response proof is unavailable");
+  }
+  assertAccountRefreshStateCurrent(state);
+  state.state = "claimed";
+  let settled = false;
+  return Object.freeze({
+    state,
+    settle: (committed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      state.state = committed ? "consumed" : "available";
+    },
+  });
+}
+
 function invariantFailure(message: string): SessionError {
   return new SessionError(sessionErrorCodes.recoveryRequired, message);
 }
@@ -407,6 +503,19 @@ function requireCleanupReceipt(receipt: string): string {
     throw new SessionError(sessionErrorCodes.invalidState, "Cleanup receipt must be a non-empty bounded string");
   }
   return receipt;
+}
+
+function sameCleaningAuthority(
+  left: Extract<AuthAuthority, { mode: "cleaning" }>,
+  right: Extract<AuthAuthority, { mode: "cleaning" }>,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    left.revision === right.revision &&
+    left.cause === right.cause &&
+    left.forbiddenGenerations.length === right.forbiddenGenerations.length &&
+    left.forbiddenGenerations.every((generation, index) => generation === right.forbiddenGenerations[index])
+  );
 }
 
 function createVerifiedTransitionTarget(
@@ -541,7 +650,12 @@ function parseSnapshot(
     }
     return null;
   }
-  return validateCoordinatorSnapshot({ authority, credentials: credentialsValue, attempts: attemptsValue });
+  try {
+    return validateCoordinatorSnapshot({ authority, credentials: credentialsValue, attempts: attemptsValue });
+  } catch (error) {
+    if (error instanceof SessionError && error.code === sessionErrorCodes.recoveryRequired) throw error;
+    throw invariantFailure("Persisted auth coordinator snapshot is malformed");
+  }
 }
 
 function assertNextSnapshot(current: CoordinatorSnapshot | null, next: CoordinatorSnapshot): CoordinatorSnapshot {
@@ -701,6 +815,7 @@ function replaceCoordinatorSnapshot<T>(snapshot: CoordinatorSnapshot, value: T):
 export function closeCoordinatorConnections(): void {
   coordinatorLifecycleGeneration += 1;
   latestActiveMeRequests.clear();
+  activeMe401RefreshOwners.clear();
   for (const database of coordinatorConnections) database.close();
   coordinatorConnections.clear();
 }
@@ -874,10 +989,42 @@ function sameView(left: ViewLease, right: ViewLease): boolean {
 export class AuthSessionCoordinator {
   private readonly factory: IDBFactory;
   private readonly onBlocked: ((databaseName: string) => void) | undefined;
+  private readonly legacyPersistence: LegacyScrubOptions | undefined;
 
   public constructor(options: CoordinatorOptions = {}) {
-    this.factory = getIndexedDbFactory(options.indexedDB);
-    this.onBlocked = options.onBlocked;
+    const indexedDBOption = options.indexedDB;
+    const onBlocked = options.onBlocked;
+    const explicitLegacyPersistence = options.legacyPersistence;
+    this.factory = getIndexedDbFactory(indexedDBOption);
+    this.onBlocked = onBlocked;
+    const legacyPersistence =
+      explicitLegacyPersistence ??
+      (typeof localStorage === "undefined" || typeof sessionStorage === "undefined"
+        ? undefined
+        : { localStorage, sessionStorage, indexedDB: this.factory });
+    if (legacyPersistence !== undefined) {
+      const localStorage = legacyPersistence.localStorage;
+      const sessionStorage = legacyPersistence.sessionStorage;
+      const legacyIndexedDB = legacyPersistence.indexedDB;
+      const onDatabaseBlocked = legacyPersistence.onDatabaseBlocked;
+      this.legacyPersistence = Object.freeze({
+        localStorage,
+        sessionStorage,
+        indexedDB: legacyIndexedDB ?? this.factory,
+        ...(onDatabaseBlocked === undefined ? {} : { onDatabaseBlocked }),
+      });
+    }
+  }
+
+  private async scrubConfiguredLegacyPersistence() {
+    const persistence = this.legacyPersistence;
+    if (!persistence) {
+      throw new SessionError(
+        sessionErrorCodes.persistenceUnavailable,
+        "Legacy persistence targets are required for anonymous authority changes",
+      );
+    }
+    return scrubLegacyPersistence(persistence);
   }
 
   private async captureVerifiedCredential(
@@ -1018,6 +1165,9 @@ export class AuthSessionCoordinator {
     const signal = lease.signal;
     const lifecycleGeneration = coordinatorLifecycleGeneration;
     const requestKey = activeMeRequestKey(sourceLease);
+    if (activeMe401RefreshOwners.has(requestKey)) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity refresh already owns this runtime");
+    }
     const requestSequence = nextActiveMeSequence(requestKey);
     if (signal.aborted) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Account identity request lifecycle is stale");
@@ -1083,6 +1233,41 @@ export class AuthSessionCoordinator {
       assertActiveMeSequence(requestKey, requestSequence);
     };
 
+    const assertRejectedCredentialCurrent = async (): Promise<void> => {
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Account identity rejection crossed a lifecycle fence",
+        );
+      }
+      runtime.assertCurrent();
+      assertActiveMeSequence(requestKey, requestSequence);
+      const current = await this.captureVerifiedCredential(lease.activation, signal);
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Account identity rejection crossed a lifecycle fence",
+        );
+      }
+      runtime.assertCurrent();
+      assertActiveMeSequence(requestKey, requestSequence);
+      if (!sameCredentialRecord(current, captured)) {
+        throw new SessionError(
+          sessionErrorCodes.admissionDenied,
+          "Credential changed before account identity rejection delivery",
+        );
+      }
+      await this.finishCredentialAdmission(current, lease.activation, signal);
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Account identity rejection crossed a lifecycle fence",
+        );
+      }
+      runtime.assertCurrent();
+      assertActiveMeSequence(requestKey, requestSequence);
+    };
+
     let response: Response;
     try {
       response = await dispatch.request;
@@ -1092,7 +1277,27 @@ export class AuthSessionCoordinator {
     }
     await assertResponseCurrent();
     if (!response.ok) {
-      throw new SessionError(sessionErrorCodes.admissionDenied, `Account identity request failed (${response.status})`);
+      if (response.status === 401) await assertRejectedCredentialCurrent();
+      const error = new SessionError(
+        sessionErrorCodes.admissionDenied,
+        `Account identity request failed (${response.status})`,
+        Object.freeze({ kind: "active_me_http_status", status: response.status }),
+      );
+      if (response.status === 401) {
+        activeMe401Rejections.set(error, {
+          evidence: Object.freeze({
+            runtime,
+            signal,
+            capturedCredential: captured,
+            expectedCredential: credentialCursor(captured),
+            lifecycleGeneration,
+            requestKey,
+            requestSequence,
+          }),
+          state: "available",
+        });
+      }
+      throw error;
     }
     if (response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Account identity response is malformed");
@@ -1348,6 +1553,337 @@ export class AuthSessionCoordinator {
     }
   }
 
+  private async commitAccountRefreshResponse(proofValue: unknown): Promise<CredentialCursor> {
+    const claim = claimAccountRefreshResponseProof(proofValue);
+    const { activation, expectedCredential, capturedCredential, replacement, runtime } = claim.state;
+    const signal = runtime.lease.signal;
+    let committed = false;
+    try {
+      const result = await this.commit((snapshot): CoordinatorDecision<CredentialCursor> => {
+        assertAccountRefreshStateCurrent(claim.state);
+        const projection = activeProjection(snapshot, activation);
+        if (!sameCredentialCursor(projection.credential, expectedCredential)) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before account refresh commit");
+        }
+        const current = matchingCredential(snapshot, activation);
+        if (!current || !sameCredentialRecord(current, capturedCredential)) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before account refresh commit");
+        }
+        const nextAuthority: ActiveAuthority = {
+          ...projection.authority,
+          revision: projection.authority.revision + 1,
+        };
+        const nextCredential = credentialCursor(replacement);
+        return replaceCoordinatorSnapshot(nextSnapshot(snapshot, nextAuthority, [replacement]), nextCredential);
+      }, signal);
+      // A claimed active-/me rejection serializes newer identity requests for
+      // this request key until transaction completion, so its owner fence is
+      // still meaningful at the delivery boundary.
+      assertAccountRefreshStateCurrent(claim.state);
+      committed = true;
+      return result;
+    } finally {
+      claim.settle(committed);
+    }
+  }
+
+  private async retireAccountCredentialAfter401(
+    runtime: CapturedAccountRuntimeFence,
+    capturedCredential: CredentialRecord,
+    expectedCredential: CredentialCursor,
+    nextGeneration: string,
+    assertOwnerCurrent?: () => void,
+  ): Promise<RetirementResult> {
+    const { activation } = runtime.lease;
+    assertOwnerCurrent?.();
+    return this.commit((snapshot): CoordinatorDecision<RetirementResult> => {
+      assertOwnerCurrent?.();
+      if (runtime.lease.signal.aborted) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Owned 401 retirement crossed a lifecycle fence");
+      }
+      runtime.assertCurrent();
+      const authority = snapshot.authority;
+      if (authority.mode !== "active" || !sameActivation(authority.session, activation)) {
+        return keepCoordinatorSnapshot("superseded");
+      }
+      const current = matchingCredential(snapshot, activation);
+      if (
+        !current ||
+        !sameCredentialCursor(credentialCursor(current), expectedCredential) ||
+        !sameCredentialRecord(current, capturedCredential)
+      ) {
+        return keepCoordinatorSnapshot("superseded");
+      }
+      if (nextGeneration === authority.generation || nextGeneration === activation.authGeneration) {
+        throw new SessionError(sessionErrorCodes.invalidState, "Owned 401 retirement must rotate the auth generation");
+      }
+      const retiring: AuthAuthority = {
+        v: 6,
+        mode: "retiring",
+        generation: nextGeneration,
+        revision: authority.revision + 1,
+        source: activation,
+        cause: "owned_401",
+        forbiddenGenerations: Object.freeze([]),
+        phase: "revoked",
+      };
+      return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
+    }, runtime.lease.signal);
+  }
+
+  /**
+   * Cold-boot refresh owns the complete token-free request/response/CAS path.
+   * It is admitted only for the exact installed account runtime; callers can
+   * provide neither a response nor replacement credential bytes.
+   */
+  public async refreshAccountCredentialAfterActiveMe401(
+    leaseValue: unknown,
+    rejectionValue: unknown,
+    owned401GenerationValue: string,
+  ): Promise<CredentialCursor> {
+    const sourceLease = validateAccountLease(leaseValue);
+    const owned401Generation = requireGeneration(owned401GenerationValue);
+    if (!(rejectionValue instanceof SessionError)) {
+      throw new SessionError(sessionErrorCodes.invalidState, "Account identity rejection proof is unavailable");
+    }
+    const rejection = activeMe401Rejections.get(rejectionValue);
+    const evidence = rejection?.evidence;
+    if (
+      !rejection ||
+      rejection.state !== "available" ||
+      !evidence ||
+      evidence.lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
+      evidence.signal !== evidence.runtime.lease.signal
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity rejection proof is stale");
+    }
+    if (sourceLease.signal.aborted || evidence.signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity rejection crossed a lifecycle fence");
+    }
+    evidence.runtime.assertCurrent();
+    assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
+    if (activeMe401RefreshOwners.has(evidence.requestKey)) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account identity rejection proof is already claimed");
+    }
+    rejection.state = "claimed";
+    activeMe401RefreshOwners.set(evidence.requestKey, rejection);
+    const assertOwnerCurrent = (): void => {
+      if (
+        rejection.state !== "claimed" ||
+        activeMe401RefreshOwners.get(evidence.requestKey) !== rejection ||
+        evidence.signal.aborted ||
+        evidence.lifecycleGeneration !== coordinatorLifecycleGeneration
+      ) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Account identity rejection crossed a lifecycle fence",
+        );
+      }
+      evidence.runtime.assertCurrent();
+      assertActiveMeSequence(evidence.requestKey, evidence.requestSequence);
+    };
+    try {
+      return await this.refreshAccountCredentialOwned(
+        evidence.runtime,
+        evidence.expectedCredential,
+        owned401Generation,
+        evidence.capturedCredential,
+        assertOwnerCurrent,
+      );
+    } finally {
+      if (activeMe401RefreshOwners.get(evidence.requestKey) === rejection) {
+        activeMe401RefreshOwners.delete(evidence.requestKey);
+      }
+      rejection.state = "consumed";
+    }
+  }
+
+  public async refreshAccountCredential(
+    leaseValue: unknown,
+    expectedCredentialValue: unknown,
+    owned401GenerationValue: string,
+  ): Promise<CredentialCursor> {
+    const sourceLease = validateAccountLease(leaseValue);
+    const expectedCredential = validateCredentialCursor(expectedCredentialValue);
+    const owned401Generation = requireGeneration(owned401GenerationValue);
+    const runtime = captureAccountRuntimeFence(sourceLease);
+    if (!runtime) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account refresh runtime is stale");
+    }
+    return this.refreshAccountCredentialOwned(runtime, expectedCredential, owned401Generation);
+  }
+
+  private async refreshAccountCredentialOwned(
+    runtime: CapturedAccountRuntimeFence,
+    expectedCredential: CredentialCursor,
+    owned401Generation: string,
+    exactCapturedCredential?: CredentialRecord,
+    assertOwnerCurrent?: () => void,
+  ): Promise<CredentialCursor> {
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
+    const lease = runtime.lease;
+    const signal = lease.signal;
+    if (signal.aborted) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Account refresh lifecycle is stale");
+    }
+
+    const assertRuntimeCurrent = (): void => {
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Account refresh crossed a lifecycle fence");
+      }
+      runtime.assertCurrent();
+      assertOwnerCurrent?.();
+    };
+    assertRuntimeCurrent();
+    const captured = exactCapturedCredential ?? (await this.captureVerifiedCredential(lease.activation, signal));
+    if (exactCapturedCredential) await verifyCredentialBytes(exactCapturedCredential);
+    assertRuntimeCurrent();
+    if (!sameCredentialCursor(credentialCursor(captured), expectedCredential)) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Captured account refresh credential is stale");
+    }
+
+    const dispatch = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<Readonly<{ request: Promise<Response> }>> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        assertRuntimeCurrent();
+        const projection = activeProjection(snapshot, lease.activation);
+        const current = matchingCredential(snapshot, lease.activation);
+        if (
+          !sameCredentialCursor(projection.credential, expectedCredential) ||
+          !current ||
+          !sameCredentialRecord(current, captured)
+        ) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Account refresh dispatch credential is stale");
+        }
+        let request: Promise<Response>;
+        try {
+          request = fetch(REFRESH_ENDPOINT, {
+            method: "POST",
+            cache: "no-store",
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
+            redirect: "error",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              ...expectedAuthorityHeaders(lease.activation.serverAuthority),
+            },
+            body: JSON.stringify({ refreshToken: current.refreshToken }),
+            signal,
+          });
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+        assertRuntimeCurrent();
+        return keepCoordinatorSnapshot(Object.freeze({ request }));
+      },
+      signal,
+    );
+    assertRuntimeCurrent();
+
+    const assertResponseCurrent = async (): Promise<void> => {
+      assertRuntimeCurrent();
+      const current = await this.captureVerifiedCredential(lease.activation, signal);
+      assertRuntimeCurrent();
+      if (!sameCredentialRecord(current, captured)) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before account refresh delivery");
+      }
+      await this.finishCredentialAdmission(current, lease.activation, signal);
+      assertRuntimeCurrent();
+    };
+
+    let response: Response;
+    try {
+      response = await dispatch.request;
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh request is unavailable");
+    }
+    await assertResponseCurrent();
+    if (!response.ok) {
+      const retirement =
+        response.status === 401
+          ? await this.retireAccountCredentialAfter401(
+              runtime,
+              captured,
+              expectedCredential,
+              owned401Generation,
+              assertOwnerCurrent,
+            )
+          : undefined;
+      throw new SessionError(
+        sessionErrorCodes.admissionDenied,
+        `Refresh request failed (${response.status})`,
+        Object.freeze({
+          kind: "refresh_http_status",
+          status: response.status,
+          ...(retirement === undefined ? {} : { retirement }),
+        }),
+      );
+    }
+    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBoundedResponseText(response, MAX_REFRESH_RESPONSE_BYTES));
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+    await assertResponseCurrent();
+    if (!isRecord(body) || typeof body.accessToken !== "string" || typeof body.refreshToken !== "string") {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+
+    let fingerprinted: Awaited<ReturnType<typeof fingerprintCandidateTokenSnapshot>>;
+    try {
+      const tokenSnapshot = createCandidateTokenSnapshot({
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken,
+      });
+      fingerprinted = await fingerprintCandidateTokenSnapshot(tokenSnapshot, lease.activation.serverAuthority);
+    } catch {
+      await assertResponseCurrent();
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh response is malformed");
+    }
+    await assertResponseCurrent();
+    const now = Date.now();
+    if (
+      fingerprinted.accountIdCandidate !== lease.activation.accountId ||
+      fingerprinted.accessExpiresAt <= now ||
+      fingerprinted.refreshExpiresAt <= now
+    ) {
+      throw new SessionError(sessionErrorCodes.admissionDenied, "Refresh credential is invalid or expired");
+    }
+
+    const replacement = createCredentialRecord({
+      activation: lease.activation,
+      credentialRevision: expectedCredential.credentialRevision + 1,
+      credentialFingerprint: fingerprinted.credentialFingerprint,
+      accessToken: fingerprinted.accessToken,
+      refreshToken: fingerprinted.refreshToken,
+    });
+    await verifyCredentialBytes(replacement);
+    await assertResponseCurrent();
+    const proof = createAccountRefreshResponseProof({
+      activation: lease.activation,
+      expectedCredential,
+      capturedCredential: captured,
+      replacement,
+      runtime,
+      lifecycleGeneration,
+      ...(assertOwnerCurrent === undefined ? {} : { assertOwnerCurrent }),
+    });
+    return this.commitAccountRefreshResponse(proof);
+  }
+
   private async commitRefreshResponse(proofValue: unknown): Promise<CredentialCursor> {
     const claim = claimRefreshResponseProof(proofValue);
     const { activation, expectedCredential, capturedCredential, replacement, view } = claim.state;
@@ -1533,15 +2069,11 @@ export class AuthSessionCoordinator {
     proofValue: VerifiedCandidateProof,
     targetValue: unknown,
     sourceValue: unknown | null,
-    anonymousScrubValue?: LegacyScrubCompletion,
     now = Date.now(),
   ): Promise<AcquisitionTransitionPermit> {
     const evidence = readVerifiedCandidateProof(proofValue);
     const target = createVerifiedTransitionTarget(targetValue, evidence.serverAuthority, evidence.accountId);
     const source = sourceValue === null ? null : validateActivationCertificate(sourceValue);
-    if (source !== null && anonymousScrubValue !== undefined) {
-      throw new SessionError(sessionErrorCodes.invalidState, "Account replacement cannot consume an anonymous scrub");
-    }
     if (
       target.serverAuthority !== evidence.serverAuthority ||
       target.accountId !== evidence.accountId ||
@@ -1570,74 +2102,54 @@ export class AuthSessionCoordinator {
       throw new SessionError(sessionErrorCodes.admissionDenied, "Verified candidate is expired");
     }
 
-    let scrubClaim: ReturnType<typeof claimLegacyScrubCompletion> | undefined;
-    if (source === null) {
-      try {
-        scrubClaim = claimLegacyScrubCompletion(anonymousScrubValue);
-      } catch {
+    const cleanupReceipt = source === null ? (await this.scrubConfiguredLegacyPersistence()).receipt : undefined;
+    return this.commit((snapshot): CoordinatorDecision<AcquisitionTransitionPermit> => {
+      const commitTime = Math.max(now, Date.now());
+      if (evidence.signal.aborted || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate crossed a lifecycle fence");
+      }
+      const authority = snapshot.authority;
+      if (authority.generation !== expected.generation || authority.revision !== expected.revision) {
         throw new SessionError(
           sessionErrorCodes.admissionDenied,
-          "Verified legacy scrub is required before activation",
+          "Auth authority changed before transition reservation",
         );
       }
-    }
-    const cleanupReceipt = scrubClaim?.receipt;
-
-    try {
-      const result = await this.commit((snapshot): CoordinatorDecision<AcquisitionTransitionPermit> => {
-        const commitTime = Math.max(now, Date.now());
-        if (evidence.signal.aborted || evidence.lifecycleGeneration !== coordinatorLifecycleGeneration) {
-          throw new SessionError(sessionErrorCodes.staleOperation, "Verified candidate crossed a lifecycle fence");
-        }
-        const authority = snapshot.authority;
-        if (authority.generation !== expected.generation || authority.revision !== expected.revision) {
-          throw new SessionError(
-            sessionErrorCodes.admissionDenied,
-            "Auth authority changed before transition reservation",
-          );
-        }
-        const sourceMatches =
-          source === null
-            ? authority.mode === "none"
-            : authority.mode === "active" && sameActivation(authority.session, source);
-        if (!sourceMatches) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Transition source is no longer authoritative");
-        }
-        if (permit.target.authGeneration === authority.generation) {
-          throw new SessionError(sessionErrorCodes.invalidState, "Transition must rotate the auth generation");
-        }
-        const attempt = snapshot.attempts.find((item) => item.attemptId === permit.attemptId);
-        if (
-          !attempt ||
-          attempt.kind !== "acquisition" ||
-          !sameAcquisitionAttempt(attempt, evidence.attempt) ||
-          attempt.expiresAt <= commitTime ||
-          permit.expiresAt <= commitTime ||
-          attempt.baselineGeneration !== authority.generation ||
-          attempt.serverAuthority !== permit.target.serverAuthority ||
-          attempt.sourceEpoch !== (source?.sessionEpoch ?? null)
-        ) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Transition attempt is missing, expired, or stale");
-        }
-        const transition: AuthAuthority = {
-          v: 6,
-          mode: "transition",
-          generation: permit.target.authGeneration,
-          revision: authority.revision + 1,
-          permit,
-          source,
-          phase: source === null ? "source_purged" : "revoked",
-          ...(cleanupReceipt === undefined ? {} : { cleanupReceipt }),
-        };
-        return replaceCoordinatorSnapshot(nextSnapshot(snapshot, transition, [], [attempt]), permit);
-      }, evidence.signal);
-      return result;
-    } finally {
-      // A transaction may commit durably and then lose its realm-local result
-      // to pagehide/freeze. Treat every dispatched reservation as consuming
-      // the scrub proof so an ambiguous commit can never reuse it.
-      scrubClaim?.settle(true);
-    }
+      const sourceMatches =
+        source === null
+          ? authority.mode === "none"
+          : authority.mode === "active" && sameActivation(authority.session, source);
+      if (!sourceMatches) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Transition source is no longer authoritative");
+      }
+      if (permit.target.authGeneration === authority.generation) {
+        throw new SessionError(sessionErrorCodes.invalidState, "Transition must rotate the auth generation");
+      }
+      const attempt = snapshot.attempts.find((item) => item.attemptId === permit.attemptId);
+      if (
+        !attempt ||
+        attempt.kind !== "acquisition" ||
+        !sameAcquisitionAttempt(attempt, evidence.attempt) ||
+        attempt.expiresAt <= commitTime ||
+        permit.expiresAt <= commitTime ||
+        attempt.baselineGeneration !== authority.generation ||
+        attempt.serverAuthority !== permit.target.serverAuthority ||
+        attempt.sourceEpoch !== (source?.sessionEpoch ?? null)
+      ) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Transition attempt is missing, expired, or stale");
+      }
+      const transition: AuthAuthority = {
+        v: 6,
+        mode: "transition",
+        generation: permit.target.authGeneration,
+        revision: authority.revision + 1,
+        permit,
+        source,
+        phase: source === null ? "source_purged" : "revoked",
+        ...(cleanupReceipt === undefined ? {} : { cleanupReceipt }),
+      };
+      return replaceCoordinatorSnapshot(nextSnapshot(snapshot, transition, [], [attempt]), permit);
+    }, evidence.signal);
   }
 
   public async completeAcquisitionTransition(
@@ -1720,10 +2232,48 @@ export class AuthSessionCoordinator {
   }
 
   /**
+   * Explicit logout from an anonymous/recovery surface still retires every
+   * token-producing attempt. The exact none authority becomes a durable
+   * `cleaning` tombstone in one coordinator transaction before legacy cleanup
+   * can block; only a verified scrub may rotate it back to `none`.
+   */
+  public async cancelAnonymousAuthority(
+    expectedValue: unknown,
+    nextGenerationValue: string,
+  ): Promise<AnonymousCancellationResult> {
+    const expected = validateAuthAuthority(expectedValue);
+    const nextGeneration = requireGeneration(nextGenerationValue);
+    if (expected.mode !== "none") {
+      throw new SessionError(sessionErrorCodes.invalidState, "Anonymous cancellation requires a none authority");
+    }
+    return this.commit((snapshot): CoordinatorDecision<AnonymousCancellationResult> => {
+      const authority = snapshot.authority;
+      if (authority.mode !== "none" || authority.generation !== expected.generation) {
+        return keepCoordinatorSnapshot(Object.freeze({ kind: "superseded", authority }));
+      }
+      if (nextGeneration === authority.generation) {
+        throw new SessionError(sessionErrorCodes.invalidState, "Anonymous cancellation must rotate generation");
+      }
+      const cleaning: AuthAuthority = {
+        v: 6,
+        mode: "cleaning",
+        generation: nextGeneration,
+        revision: authority.revision + 1,
+        cause: "anonymous_logout",
+        forbiddenGenerations: Object.freeze([authority.generation]),
+      };
+      return replaceCoordinatorSnapshot(
+        nextSnapshot(snapshot, cleaning, [], []),
+        Object.freeze({ kind: "cleaning", authority: cleaning }),
+      );
+    });
+  }
+
+  /**
    * Deterministically abandons one exact persisted transition. Anonymous
-   * transitions converge directly to a fresh `none`; a transition that
-   * retired a source session becomes an ordinary retirement so its physical
-   * scope must still pass the verified purge barrier.
+   * transitions converge through a durable `cleaning` tombstone; a transition
+   * that retired a source session becomes an ordinary retirement so its
+   * physical scope must still pass the verified purge barrier.
    */
   public async cancelAcquisitionTransition(
     permitValue: unknown,
@@ -1749,15 +2299,17 @@ export class AuthSessionCoordinator {
         throw new SessionError(sessionErrorCodes.invalidState, "Transition cancellation must rotate generation");
       }
       if (authority.source === null) {
-        const anonymous: AuthAuthority = {
+        const cleaning: AuthAuthority = {
           v: 6,
-          mode: "none",
+          mode: "cleaning",
           generation,
           revision: authority.revision + 1,
+          cause: "transition_cancelled",
+          forbiddenGenerations: Object.freeze([attempt.baselineGeneration, authority.generation]),
         };
         return replaceCoordinatorSnapshot(
-          nextSnapshot(snapshot, anonymous, [], []),
-          Object.freeze({ kind: "anonymous", authority: anonymous }),
+          nextSnapshot(snapshot, cleaning, [], []),
+          Object.freeze({ kind: "cleaning", authority: cleaning }),
         );
       }
       const retiring: AuthAuthority = {
@@ -1767,6 +2319,7 @@ export class AuthSessionCoordinator {
         revision: authority.revision + 1,
         source: authority.source,
         cause: "transition_cancelled",
+        forbiddenGenerations: Object.freeze([authority.generation]),
         phase: authority.phase,
         ...(authority.cleanupReceipt === undefined ? {} : { cleanupReceipt: authority.cleanupReceipt }),
       };
@@ -1774,6 +2327,51 @@ export class AuthSessionCoordinator {
         nextSnapshot(snapshot, retiring, [], []),
         Object.freeze({ kind: "retiring", authority: retiring, source: authority.source }),
       );
+    });
+  }
+
+  /**
+   * Finish an exact source-free cleanup only after this document has deleted
+   * and verified every ambiguous legacy persistence target. A lost realm can
+   * never strand a false terminal `none`: another document reruns cleanup and
+   * completes the same durable `cleaning` authority.
+   */
+  public async completeAnonymousCleanup(cleaningValue: unknown, anonymousGenerationValue: string): Promise<void> {
+    const anonymousGeneration = requireGeneration(anonymousGenerationValue);
+    const requested = validateAuthAuthority(cleaningValue);
+    if (requested.mode !== "cleaning") {
+      throw new SessionError(sessionErrorCodes.invalidState, "Anonymous cleanup authority is malformed");
+    }
+    if (anonymousGeneration === requested.generation || requested.forbiddenGenerations.includes(anonymousGeneration)) {
+      throw new SessionError(sessionErrorCodes.invalidState, "Anonymous cleanup must rotate generation");
+    }
+    const cleaning = await executeCoordinatorTransaction(
+      this.factory,
+      "readonly",
+      false,
+      this.onBlocked,
+      (snapshot): CoordinatorDecision<Extract<AuthAuthority, { mode: "cleaning" }>> => {
+        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+        const authority = snapshot.authority;
+        if (authority.mode !== "cleaning" || !sameCleaningAuthority(authority, requested)) {
+          throw new SessionError(sessionErrorCodes.admissionDenied, "Anonymous cleanup authority changed");
+        }
+        return keepCoordinatorSnapshot(authority);
+      },
+    );
+    await this.scrubConfiguredLegacyPersistence();
+    await this.commit((snapshot): CoordinatorDecision<void> => {
+      const authority = snapshot.authority;
+      if (authority.mode !== "cleaning" || !sameCleaningAuthority(authority, cleaning)) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Anonymous cleanup authority changed");
+      }
+      const anonymous: AuthAuthority = {
+        v: 6,
+        mode: "none",
+        generation: anonymousGeneration,
+        revision: authority.revision + 1,
+      };
+      return replaceCoordinatorSnapshot(nextSnapshot(snapshot, anonymous, [], []), undefined);
     });
   }
 
@@ -1807,7 +2405,8 @@ export class AuthSessionCoordinator {
         generation,
         revision: authority.revision + 1,
         source: captured,
-        cause,
+        cause: ownsTransition ? "transition_cancelled" : cause,
+        forbiddenGenerations: ownsTransition ? Object.freeze([authority.generation]) : Object.freeze([]),
         phase: "revoked",
       };
       return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
@@ -1852,6 +2451,7 @@ export class AuthSessionCoordinator {
         revision: authority.revision + 1,
         source: admission.activation,
         cause: "owned_401",
+        forbiddenGenerations: Object.freeze([]),
         phase: "revoked",
       };
       return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
@@ -1952,7 +2552,11 @@ export class AuthSessionCoordinator {
       ) {
         throw new SessionError(sessionErrorCodes.admissionDenied, "Retirement cleanup receipt is not authoritative");
       }
-      if (generation === authority.generation || generation === captured.authGeneration) {
+      if (
+        generation === authority.generation ||
+        generation === captured.authGeneration ||
+        authority.forbiddenGenerations.some((forbidden) => forbidden === generation)
+      ) {
         throw new SessionError(
           sessionErrorCodes.invalidState,
           "Anonymous finalization must rotate the auth generation",
@@ -1971,7 +2575,11 @@ export class AuthSessionCoordinator {
   public async putAttempt(attemptValue: unknown): Promise<void> {
     const attempt = validateSessionAttempt(attemptValue);
     await this.commit((snapshot): CoordinatorDecision<void> => {
-      if (snapshot.authority.mode === "transition" || snapshot.authority.mode === "retiring") {
+      if (
+        snapshot.authority.mode === "cleaning" ||
+        snapshot.authority.mode === "transition" ||
+        snapshot.authority.mode === "retiring"
+      ) {
         throw new SessionError(sessionErrorCodes.admissionDenied, "Attempt writes are blocked during retirement");
       }
       if (attempt.baselineGeneration !== snapshot.authority.generation) {
@@ -1988,7 +2596,11 @@ export class AuthSessionCoordinator {
       throw new SessionError(sessionErrorCodes.invalidState, "Attempt id must not be empty");
     }
     return this.commit((snapshot): CoordinatorDecision<boolean> => {
-      if (snapshot.authority.mode === "transition" || snapshot.authority.mode === "retiring") {
+      if (
+        snapshot.authority.mode === "cleaning" ||
+        snapshot.authority.mode === "transition" ||
+        snapshot.authority.mode === "retiring"
+      ) {
         throw new SessionError(sessionErrorCodes.admissionDenied, "Attempt deletion is blocked during retirement");
       }
       if (!snapshot.attempts.some((attempt) => attempt.attemptId === attemptId)) {

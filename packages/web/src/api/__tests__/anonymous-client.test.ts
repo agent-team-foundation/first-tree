@@ -4,6 +4,13 @@ function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
+function unavailableResponse(offlineEligible: boolean): Response {
+  return new Response(JSON.stringify({ error: "server_authority_unavailable", offlineEligible }), {
+    status: 503,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("anonymous client and server authority pin", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -54,10 +61,87 @@ describe("anonymous client and server authority pin", () => {
 
     const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
     await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
-    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow(
-      "Server authority changed",
-    );
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).resolves.toEqual({
+      kind: "mismatch",
+      expected: "https://s1.example/api/v1",
+      observed: "https://s2.example/api/v1",
+    });
     await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+  });
+
+  it("distinguishes authority match, mismatch, and offline unavailability", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }))
+      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s2.example/api/v1" }))
+      .mockResolvedValueOnce(unavailableResponse(true));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).resolves.toEqual({
+      kind: "match",
+      authority: "https://s1.example/api/v1",
+    });
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).resolves.toEqual({
+      kind: "mismatch",
+      expected: "https://s1.example/api/v1",
+      observed: "https://s2.example/api/v1",
+    });
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).resolves.toEqual({
+      kind: "unavailable",
+      expected: "https://s1.example/api/v1",
+    });
+  });
+
+  it("fails closed for unclassified probe failures and offline-ineligible Vite responses", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("TLS or CORS failure"))
+      .mockResolvedValueOnce(unavailableResponse(false));
+    vi.stubGlobal("fetch", fetchMock);
+
+    let { reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow("failed closed");
+    vi.resetModules();
+    ({ reconcilePinnedServerAuthority } = await import("../server-authority.js"));
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow("failed closed");
+  });
+
+  it("allows offline recovery only after this document pinned the exact authority", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unavailableResponse(true))
+      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }))
+      .mockResolvedValueOnce(unavailableResponse(true));
+    vi.stubGlobal("fetch", fetchMock);
+
+    let { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).rejects.toThrow(
+      "requires a verified document authority",
+    );
+    vi.resetModules();
+    ({ getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js"));
+    await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+    await expect(reconcilePinnedServerAuthority("https://s1.example/api/v1")).resolves.toEqual({
+      kind: "unavailable",
+      expected: "https://s1.example/api/v1",
+    });
+  });
+
+  it("never probes through a conflicting document pin", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ v: 1, authority: "https://s1.example/api/v1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getPinnedServerAuthority, reconcilePinnedServerAuthority } = await import("../server-authority.js");
+    await expect(getPinnedServerAuthority()).resolves.toBe("https://s1.example/api/v1");
+    await expect(reconcilePinnedServerAuthority("https://s2.example/api/v1")).resolves.toEqual({
+      kind: "mismatch",
+      expected: "https://s2.example/api/v1",
+      observed: "https://s1.example/api/v1",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects malformed and secret-bearing authorities", async () => {
@@ -70,6 +154,10 @@ describe("anonymous client and server authority pin", () => {
     expect(() => canonicalizeServerAuthority("http://[::]/api/v1")).toThrow();
     expect(() => canonicalizeServerAuthority("http://*/api/v1")).toThrow();
     expect(() => canonicalizeServerAuthority(`https://tree.example/${"x".repeat(2048)}`)).toThrow();
+    const expandingIdn = `https://${Array.from({ length: 79 }, () => "é".repeat(19)).join(".")}/api/v1`;
+    expect(expandingIdn.length).toBeLessThan(2048);
+    expect(new TextEncoder().encode(new URL(expandingIdn).toString()).byteLength).toBeGreaterThan(2048);
+    expect(() => canonicalizeServerAuthority(expandingIdn)).toThrow();
     expect(canonicalizeServerAuthority("https://TREE.example:443/api/v1/")).toBe("https://tree.example/api/v1");
   });
 

@@ -596,8 +596,41 @@ export class ContentScopeBarrier {
     try {
       return await this.locks.request(lockName, { mode: "exclusive", signal: lifecycle.signal }, async () => {
         this.registry.assertGeneration(lifecycle.generation);
-        await this.coordinator.assertPurgeSource(source, lifecycle.signal);
+        const admittedAuthority = await this.coordinator.assertPurgeSource(source, lifecycle.signal);
         this.registry.assertGeneration(lifecycle.generation);
+        if (
+          (admittedAuthority.mode === "retiring" || admittedAuthority.mode === "transition") &&
+          admittedAuthority.phase === "source_purged" &&
+          admittedAuthority.cleanupReceipt
+        ) {
+          const existingReceipt = admittedAuthority.cleanupReceipt;
+          this.registry.invalidateEpoch(source.sessionEpoch);
+          this.registry.assertGeneration(lifecycle.generation);
+          // A fixed-version recovery must absorb residue that a still-running
+          // pre-fix document may have recreated after the first purge. Only
+          // ambiguous legacy databases are repeated here; scoped databases
+          // may already belong to a later same-account activation.
+          for (const databaseName of LEGACY_DATABASE_NAMES) {
+            this.registry.assertGeneration(lifecycle.generation);
+            await this.raceLifecycle(lifecycle, deleteDatabaseBarrier(this.factory, databaseName, options.onBlocked));
+          }
+          this.registry.assertGeneration(lifecycle.generation);
+          scrubLegacyWebStorage(options);
+          this.registry.assertGeneration(lifecycle.generation);
+          const verifiedAuthority = await this.coordinator.assertPurgeSource(source, lifecycle.signal);
+          this.registry.assertGeneration(lifecycle.generation);
+          if (
+            (verifiedAuthority.mode !== "retiring" && verifiedAuthority.mode !== "transition") ||
+            verifiedAuthority.phase !== "source_purged" ||
+            verifiedAuthority.cleanupReceipt !== existingReceipt
+          ) {
+            throw new SessionError(
+              sessionErrorCodes.admissionDenied,
+              "Purge authority changed during cleanup verification",
+            );
+          }
+          return existingReceipt;
+        }
         this.registry.invalidateEpoch(source.sessionEpoch);
         this.registry.closeScopeHandles(source.scopeKey);
 

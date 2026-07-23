@@ -31,6 +31,7 @@ export {
   type ActiveDispatchAdmission,
   type ActiveDispatchToken,
   type ActiveSessionProjection,
+  type AnonymousCancellationResult,
   AUTH_COORDINATOR_DATABASE_NAME,
   type AuthorityCursor,
   AuthSessionCoordinator,
@@ -44,6 +45,19 @@ export {
   type VerifiedCandidateMeResult,
   type VerifiedCandidateProof,
 } from "./coordinator.js";
+export {
+  type AuthorityAdvancedNotice,
+  CROSS_DOCUMENT_AUTH_CHANNEL_NAME,
+  CROSS_DOCUMENT_AUTH_STORAGE_KEY,
+  type CrossDocumentAuthNotice,
+  type CrossDocumentBroadcastChannel,
+  type CrossDocumentNoticeDelivery,
+  type CrossDocumentNoticeOptions,
+  type CrossDocumentNoticeStorage,
+  type CrossDocumentNoticeTransport,
+  installCrossDocumentAuthNotices,
+  type SourceRetiredNotice,
+} from "./cross-document-notices.js";
 export { SessionError, type SessionErrorCode, sessionErrorCodes, toSessionError } from "./errors.js";
 export {
   LEGACY_DATABASE_NAMES,
@@ -87,6 +101,7 @@ export {
   AUTHORITY_SCHEMA_VERSION,
   type AuthAuthority,
   type AuthorityPhase,
+  type CleaningAuthority,
   type CoordinatorSnapshot,
   type CredentialCursor,
   type CredentialRecord,

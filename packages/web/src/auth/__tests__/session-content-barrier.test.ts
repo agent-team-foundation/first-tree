@@ -24,12 +24,12 @@ import {
   installAccountStoreRuntime,
   installSessionLifecycleHooks,
   isDatabaseNameForScope,
+  LEGACY_DATABASE_NAMES,
   parseAccountScopeKey,
   SessionError,
   type SessionLockManager,
   type SessionLockMode,
   type SessionLockOptions,
-  scrubLegacyPersistence,
   sessionErrorCodes,
 } from "../session/index.js";
 
@@ -220,7 +220,14 @@ const CONTENT_SPEC: ContentDatabaseSpec = {
 
 async function activeFixture() {
   const factory = new IDBFactory();
-  const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+  const coordinator = new AuthSessionCoordinator({
+    indexedDB: factory,
+    legacyPersistence: {
+      indexedDB: factory,
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+    },
+  });
   await coordinator.bootstrapAnonymous("generation-0");
   const certificate = activation("a");
   const attempt = createSessionAttempt({
@@ -252,17 +259,11 @@ async function activeFixture() {
       signal: new AbortController().signal,
     })
   ).proof;
-  const scrub = await scrubLegacyPersistence({
-    localStorage: memoryStorage(),
-    sessionStorage: memoryStorage(),
-    indexedDB: factory,
-  });
   const permit = await coordinator.reserveAcquisitionTransition(
     { generation: "generation-0", revision: 1 },
     proof,
     certificate,
     null,
-    scrub,
   );
   await coordinator.completeAcquisitionTransition(permit, proof);
   const controller = new AbortController();
@@ -312,6 +313,21 @@ function rawOpen(
     request.onupgradeneeded = () => upgrade?.(request.result);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+}
+
+function transactionDone(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
+    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+  });
+}
+
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
   });
 }
 
@@ -544,6 +560,75 @@ describe("ContentScopeBarrier", () => {
     });
   });
 
+  it("reruns legacy-only cleanup for an existing source_purged receipt without deleting scoped databases", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-terminal-purge");
+    const receipt = await barrier.purgeAccountScope(fixture.certificate, purgeOptions());
+    const scopedName = createScopedDatabaseName("chat-content", 1, fixture.certificate.scopeKey);
+    const scoped = await rawOpen(fixture.factory, scopedName, 1, (database) => database.createObjectStore("rows"));
+    const scopedWrite = scoped.transaction("rows", "readwrite");
+    scopedWrite.objectStore("rows").put("new-session", "owner");
+    await transactionDone(scopedWrite);
+    scoped.close();
+    const recreatedLegacy = await rawOpen(fixture.factory, LEGACY_DATABASE_NAMES[0], 1, (database) =>
+      database.createObjectStore("rows"),
+    );
+    recreatedLegacy.close();
+    const deleteSpy = vi.spyOn(fixture.factory, "deleteDatabase");
+    const lateLocalStorage = memoryStorage({ "first-tree:tokens": "late-legacy-token" });
+
+    await expect(
+      barrier.purgeAccountScope(fixture.certificate, {
+        localStorage: lateLocalStorage,
+        sessionStorage: memoryStorage(),
+      }),
+    ).resolves.toBe(receipt);
+    expect(lateLocalStorage.getItem("first-tree:tokens")).toBeNull();
+    expect(deleteSpy.mock.calls.map(([name]) => name)).toEqual(LEGACY_DATABASE_NAMES);
+    expect(await databaseNames(fixture.factory)).toContain(scopedName);
+    expect(await databaseNames(fixture.factory)).not.toContain(LEGACY_DATABASE_NAMES[0]);
+    const preserved = await rawOpen(fixture.factory, scopedName, 1);
+    const preservedRead = preserved.transaction("rows", "readonly");
+    await expect(requestResult(preservedRead.objectStore("rows").get("owner"))).resolves.toBe("new-session");
+    preserved.close();
+  });
+
+  it("rejects an existing source_purged receipt when repeated legacy storage removal cannot be verified", async () => {
+    const fixture = await activeFixture();
+    const barrier = new ContentScopeBarrier({
+      coordinator: fixture.coordinator,
+      indexedDB: fixture.factory,
+      locks: new OrderedTestLocks(),
+    });
+    await fixture.coordinator.beginRetirement(fixture.certificate, "logout", "generation-terminal-purge-failure");
+    const receipt = await barrier.purgeAccountScope(fixture.certificate, purgeOptions());
+    const deleteSpy = vi.spyOn(fixture.factory, "deleteDatabase");
+    const failingStorage = {
+      length: 1,
+      key: () => "first-tree:tokens",
+      getItem: () => "late-legacy-token",
+      removeItem: () => undefined,
+    };
+
+    await expect(
+      barrier.purgeAccountScope(fixture.certificate, {
+        localStorage: failingStorage,
+        sessionStorage: memoryStorage(),
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.persistenceUnavailable });
+    expect(deleteSpy.mock.calls.map(([name]) => name)).toEqual(LEGACY_DATABASE_NAMES);
+    await expect(fixture.coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "retiring",
+      phase: "source_purged",
+      cleanupReceipt: receipt,
+    });
+  });
+
   it("rejects an old purge after a newer same-scope activation without deleting its database", async () => {
     const fixture = await activeFixture();
     const locks = new OrderedTestLocks();
@@ -593,18 +678,12 @@ describe("ContentScopeBarrier", () => {
         signal: new AbortController().signal,
       })
     ).proof;
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: fixture.factory,
-    });
     const beforeReservation = await fixture.coordinator.readAuthority();
     const nextPermit = await fixture.coordinator.reserveAcquisitionTransition(
       { generation: beforeReservation.generation, revision: beforeReservation.revision },
       nextProof,
       next,
       null,
-      scrub,
     );
     await fixture.coordinator.completeAcquisitionTransition(nextPermit, nextProof);
 

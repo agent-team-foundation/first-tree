@@ -8,8 +8,9 @@ import {
   type ActivationCertificate,
   AUTH_COORDINATOR_DATABASE_NAME,
   type AuthAuthority,
-  AuthSessionCoordinator,
+  AuthSessionCoordinator as BaseAuthSessionCoordinator,
   ContentScopeBarrier,
+  type CoordinatorOptions,
   type CoordinatorSnapshot,
   closeCoordinatorConnections,
   createAccountLease,
@@ -21,6 +22,7 @@ import {
   createViewLease,
   installAccountStoreRuntime,
   readVerifiedActiveMeProof,
+  SessionError,
   type SessionLockManager,
   type StorageArea,
   scrubLegacyPersistence,
@@ -45,15 +47,20 @@ function base64Url(value: string): string {
   return btoa(value).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
 }
 
-function jwt(accountId: string, kind: "access" | "refresh", marker: string): string {
+function jwt(accountId: string, kind: "access" | "refresh", marker: string, expiresAt = 2_100_000_000): string {
   return `${base64Url(JSON.stringify({ alg: "HS256", typ: "JWT" }))}.${base64Url(
-    JSON.stringify({ sub: accountId, type: kind, exp: 2_100_000_000, marker }),
+    JSON.stringify({ sub: accountId, type: kind, exp: expiresAt, marker }),
   )}.signature`;
 }
 
-async function credential(certificate: ActivationCertificate, revision = 0, suffix = certificate.sessionEpoch) {
-  const accessToken = jwt(certificate.accountId, "access", `access-${suffix}`);
-  const refreshToken = jwt(certificate.accountId, "refresh", `refresh-${suffix}`);
+async function credential(
+  certificate: ActivationCertificate,
+  revision = 0,
+  suffix = certificate.sessionEpoch,
+  expiresAt: Readonly<{ access: number; refresh: number }> = { access: 2_100_000_000, refresh: 2_100_000_000 },
+) {
+  const accessToken = jwt(certificate.accountId, "access", `access-${suffix}`, expiresAt.access);
+  const refreshToken = jwt(certificate.accountId, "refresh", `refresh-${suffix}`, expiresAt.refresh);
   const fingerprinted = await fingerprintCandidateTokenSnapshot(
     createCandidateTokenSnapshot({ accessToken, refreshToken }),
     certificate.serverAuthority,
@@ -85,6 +92,16 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 }
 
+async function sessionRejection(promise: Promise<unknown>): Promise<SessionError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof SessionError) return error;
+    throw error;
+  }
+  throw new Error("Expected a session rejection");
+}
+
 async function candidateProof(
   coordinator: AuthSessionCoordinator,
   candidateAttempt: AcquisitionSessionAttempt,
@@ -110,7 +127,7 @@ async function candidateProof(
 }
 
 async function activateAnonymous(
-  factory: IDBFactory,
+  _factory: IDBFactory,
   coordinator: AuthSessionCoordinator,
   certificate: ActivationCertificate,
   attemptId: string,
@@ -121,17 +138,11 @@ async function activateAnonymous(
   const beforeReservation = await coordinator.readAuthority();
   const targetCredential = await credential(certificate);
   const proof = await candidateProof(coordinator, candidateAttempt, targetCredential);
-  const legacyScrub = await scrubLegacyPersistence({
-    localStorage: memoryStorage(),
-    sessionStorage: memoryStorage(),
-    indexedDB: factory,
-  });
   const transition = await coordinator.reserveAcquisitionTransition(
     { generation: beforeReservation.generation, revision: beforeReservation.revision },
     proof,
     certificate,
     null,
-    legacyScrub,
   );
   await coordinator.completeAcquisitionTransition(transition, proof);
 }
@@ -206,6 +217,28 @@ async function replaceCoordinatorSnapshotForTest(
   }
 }
 
+async function writeRawCoordinatorSnapshotForTest(
+  factory: IDBFactory,
+  snapshot: Readonly<{ authority: unknown; credentials: readonly unknown[]; attempts: readonly unknown[] }>,
+): Promise<void> {
+  const database = await openCoordinatorDatabase(factory);
+  try {
+    const transaction = database.transaction(["authority", "credentials", "attempts"], "readwrite");
+    const authority = transaction.objectStore("authority");
+    const credentials = transaction.objectStore("credentials");
+    const attempts = transaction.objectStore("attempts");
+    authority.clear();
+    credentials.clear();
+    attempts.clear();
+    authority.put({ key: "head", authority: snapshot.authority });
+    for (const item of snapshot.credentials) credentials.put(item);
+    for (const item of snapshot.attempts) attempts.put(item);
+    await transactionDone(transaction);
+  } finally {
+    database.close();
+  }
+}
+
 function deferNextOpen(factory: IDBFactory): Readonly<{
   started: Promise<void>;
   release: () => void;
@@ -250,8 +283,8 @@ class ImmediateLocks implements SessionLockManager {
   }
 }
 
-function memoryStorage(): StorageArea {
-  const values = new Map<string, string>();
+function memoryStorage(initial: Readonly<Record<string, string>> = {}): StorageArea {
+  const values = new Map(Object.entries(initial));
   return {
     get length() {
       return values.size;
@@ -262,6 +295,20 @@ function memoryStorage(): StorageArea {
       values.delete(key);
     },
   };
+}
+
+class AuthSessionCoordinator extends BaseAuthSessionCoordinator {
+  public constructor(options: CoordinatorOptions = {}) {
+    const indexedDB = options.indexedDB;
+    super({
+      ...options,
+      legacyPersistence: options.legacyPersistence ?? {
+        localStorage: memoryStorage(),
+        sessionStorage: memoryStorage(),
+        ...(indexedDB === undefined ? {} : { indexedDB }),
+      },
+    });
+  }
 }
 
 async function purge(
@@ -363,7 +410,20 @@ describe("AuthSessionCoordinator", () => {
 
   it("does not mutate authority when legacy cleanup was skipped or failed", async () => {
     const factory = new IDBFactory();
-    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    const refusesRemoval: StorageArea = {
+      length: 1,
+      key: () => "first-tree:tokens",
+      getItem: () => "plaintext-secret",
+      removeItem: () => undefined,
+    };
+    const coordinator = new AuthSessionCoordinator({
+      indexedDB: factory,
+      legacyPersistence: {
+        indexedDB: factory,
+        localStorage: refusesRemoval,
+        sessionStorage: memoryStorage(),
+      },
+    });
     await coordinator.bootstrapAnonymous("generation-0");
     const candidateAttempt = attempt("candidate-a", "generation-0");
     await coordinator.putAttempt(candidateAttempt);
@@ -374,23 +434,116 @@ describe("AuthSessionCoordinator", () => {
 
     await expect(
       coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null),
-    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
-
-    const refusesRemoval: StorageArea = {
-      length: 1,
-      key: () => "first-tree:tokens",
-      getItem: () => "plaintext-secret",
-      removeItem: () => undefined,
-    };
-    await expect(
-      scrubLegacyPersistence({
-        localStorage: refusesRemoval,
-        sessionStorage: memoryStorage(),
-        indexedDB: factory,
-      }),
     ).rejects.toMatchObject({ code: sessionErrorCodes.persistenceUnavailable });
 
     expect(await readCoordinatorSnapshot(factory)).toEqual(before);
+  });
+
+  it("cannot substitute a decoy scrub for the coordinator's captured persistence targets", async () => {
+    const factory = new IDBFactory();
+    const realStorage = memoryStorage({ "first-tree:tokens": "plaintext-secret" });
+    const originalRemove = realStorage.removeItem;
+    realStorage.removeItem = () => undefined;
+    const coordinator = new AuthSessionCoordinator({
+      indexedDB: factory,
+      legacyPersistence: {
+        indexedDB: factory,
+        localStorage: realStorage,
+        sessionStorage: memoryStorage(),
+      },
+    });
+    await coordinator.bootstrapAnonymous("generation-bound-scrub");
+    const candidateAttempt = attempt("candidate-bound-scrub", "generation-bound-scrub");
+    await coordinator.putAttempt(candidateAttempt);
+    const before = await readCoordinatorSnapshot(factory);
+    const target = activation("bound-scrub", "generation-bound-scrub-target");
+    const proof = await candidateProof(coordinator, candidateAttempt, await credential(target));
+    await scrubLegacyPersistence({
+      localStorage: memoryStorage(),
+      sessionStorage: memoryStorage(),
+      indexedDB: new IDBFactory(),
+    });
+
+    await expect(
+      coordinator.reserveAcquisitionTransition(
+        { generation: before.authority.generation, revision: before.authority.revision },
+        proof,
+        target,
+        null,
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.persistenceUnavailable });
+    expect(realStorage.getItem("first-tree:tokens")).toBe("plaintext-secret");
+    expect(await readCoordinatorSnapshot(factory)).toEqual(before);
+    realStorage.removeItem = originalRemove;
+  });
+
+  it("captures every legacy persistence target once before callers can swap getter results", async () => {
+    const coordinatorFactory = new IDBFactory();
+    const realLegacyFactory = new IDBFactory();
+    const decoyLegacyFactory = new IDBFactory();
+    const realLocalStorage = memoryStorage({ "first-tree:tokens": "real-local-secret" });
+    const realSessionStorage = memoryStorage({ "first-tree:quickstart:agent": "real-session-secret" });
+    const decoyLocalStorage = memoryStorage({ "first-tree:tokens": "decoy-local-secret" });
+    const decoySessionStorage = memoryStorage({ "first-tree:quickstart:agent": "decoy-session-secret" });
+    let selectedLocalStorage = realLocalStorage;
+    let selectedSessionStorage = realSessionStorage;
+    let selectedLegacyFactory = realLegacyFactory;
+    const nestedReads = { localStorage: 0, sessionStorage: 0, indexedDB: 0 };
+    const realLegacyPersistence = {
+      get localStorage() {
+        nestedReads.localStorage += 1;
+        return selectedLocalStorage;
+      },
+      get sessionStorage() {
+        nestedReads.sessionStorage += 1;
+        return selectedSessionStorage;
+      },
+      get indexedDB() {
+        nestedReads.indexedDB += 1;
+        return selectedLegacyFactory;
+      },
+    };
+    const decoyLegacyPersistence = {
+      localStorage: decoyLocalStorage,
+      sessionStorage: decoySessionStorage,
+      indexedDB: decoyLegacyFactory,
+    };
+    let selectedLegacyPersistence = realLegacyPersistence;
+    const optionReads = { indexedDB: 0, legacyPersistence: 0 };
+    const coordinatorOptions = {
+      get indexedDB() {
+        optionReads.indexedDB += 1;
+        return coordinatorFactory;
+      },
+      get legacyPersistence() {
+        optionReads.legacyPersistence += 1;
+        return selectedLegacyPersistence;
+      },
+    } satisfies CoordinatorOptions;
+    const realDelete = vi.spyOn(realLegacyFactory, "deleteDatabase");
+    const decoyDelete = vi.spyOn(decoyLegacyFactory, "deleteDatabase");
+    const coordinator = new BaseAuthSessionCoordinator(coordinatorOptions);
+    selectedLegacyPersistence = decoyLegacyPersistence;
+    selectedLocalStorage = decoyLocalStorage;
+    selectedSessionStorage = decoySessionStorage;
+    selectedLegacyFactory = decoyLegacyFactory;
+
+    const anonymous = await coordinator.bootstrapAnonymous("generation-captured-persistence");
+    const cancellation = await coordinator.cancelAnonymousAuthority(
+      anonymous,
+      "generation-captured-persistence-cleaning",
+    );
+    if (cancellation.kind !== "cleaning") throw new Error("expected cleaning authority");
+    await coordinator.completeAnonymousCleanup(cancellation.authority, "generation-captured-persistence-none");
+
+    expect(optionReads).toEqual({ indexedDB: 1, legacyPersistence: 1 });
+    expect(nestedReads).toEqual({ localStorage: 1, sessionStorage: 1, indexedDB: 1 });
+    expect(realLocalStorage.getItem("first-tree:tokens")).toBeNull();
+    expect(realSessionStorage.getItem("first-tree:quickstart:agent")).toBeNull();
+    expect(decoyLocalStorage.getItem("first-tree:tokens")).toBe("decoy-local-secret");
+    expect(decoySessionStorage.getItem("first-tree:quickstart:agent")).toBe("decoy-session-secret");
+    expect(realDelete).toHaveBeenCalledWith("first-tree-chat-cache");
+    expect(decoyDelete).not.toHaveBeenCalled();
   });
 
   it("consumes every incompatible attempt when auth generation rotates", async () => {
@@ -403,24 +556,130 @@ describe("AuthSessionCoordinator", () => {
     const next = activation("a", "generation-a");
     const nextCredential = await credential(next);
     const proof = await candidateProof(coordinator, candidateAttempt, nextCredential);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
-    });
-
     const transition = await coordinator.reserveAcquisitionTransition(
       { generation: "generation-0", revision: 2 },
       proof,
       next,
       null,
-      scrub,
     );
     await coordinator.completeAcquisitionTransition(transition, proof);
 
     const snapshot = await readCoordinatorSnapshot(factory);
     expect(snapshot.authority).toMatchObject({ mode: "active", generation: "generation-a" });
     expect(snapshot.attempts).toEqual([]);
+  });
+
+  it("keeps anonymous logout in durable cleaning until an exact verified scrub completes", async () => {
+    const factory = new IDBFactory();
+    const values = new Map([["first-tree:tokens", "plaintext-secret"]]);
+    let removalAllowed = false;
+    const localStorage: StorageArea = {
+      get length() {
+        return values.size;
+      },
+      key: (index) => [...values.keys()][index] ?? null,
+      getItem: (key) => values.get(key) ?? null,
+      removeItem: (key) => {
+        if (removalAllowed) values.delete(key);
+      },
+    };
+    const coordinator = new AuthSessionCoordinator({
+      indexedDB: factory,
+      legacyPersistence: { indexedDB: factory, localStorage, sessionStorage: memoryStorage() },
+    });
+    const anonymous = await coordinator.bootstrapAnonymous("anonymous-cleaning-baseline");
+    const pending = attempt("anonymous-cleaning-attempt", anonymous.generation);
+    await coordinator.putAttempt(pending);
+    const expected = await coordinator.readAuthority();
+    const cancellation = await coordinator.cancelAnonymousAuthority(expected, "anonymous-cleaning-pending");
+    expect(cancellation).toMatchObject({
+      kind: "cleaning",
+      authority: { mode: "cleaning", generation: "anonymous-cleaning-pending" },
+    });
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: { mode: "cleaning" },
+      attempts: [],
+      credentials: [],
+    });
+    await expect(
+      coordinator.putAttempt(attempt("blocked-during-cleaning", "anonymous-cleaning-pending")),
+    ).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    await expect(
+      coordinator.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-terminal"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.persistenceUnavailable });
+    expect(await coordinator.readAuthority()).toEqual(cancellation.authority);
+
+    removalAllowed = true;
+    const cleaningSnapshot = await readCoordinatorSnapshot(factory);
+    for (const forbiddenGeneration of ["anonymous-cleaning-baseline", "anonymous-cleaning-pending"]) {
+      await expect(
+        coordinator.completeAnonymousCleanup(cancellation.authority, forbiddenGeneration),
+      ).rejects.toMatchObject({ code: sessionErrorCodes.invalidState });
+      expect(await readCoordinatorSnapshot(factory)).toEqual(cleaningSnapshot);
+    }
+    await coordinator.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-terminal");
+    expect(localStorage.getItem("first-tree:tokens")).toBeNull();
+    expect(await coordinator.readAuthority()).toMatchObject({
+      mode: "none",
+      generation: "anonymous-cleaning-terminal",
+    });
+    await expect(
+      coordinator.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-replay"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    await expect(
+      coordinator.putAttempt(attempt("anonymous-cleaning-stale-baseline", "anonymous-cleaning-baseline")),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+  });
+
+  it("cannot use a stale cleaning authority to finalize a later cleaning generation", async () => {
+    const factory = new IDBFactory();
+    const first = new AuthSessionCoordinator({ indexedDB: factory });
+    const second = new AuthSessionCoordinator({ indexedDB: factory });
+    const anonymous = await first.bootstrapAnonymous("anonymous-cleaning-race-baseline");
+    const cancellation = await first.cancelAnonymousAuthority(anonymous, "anonymous-cleaning-race-one");
+    if (cancellation.kind !== "cleaning") throw new Error("expected cleaning authority");
+
+    await second.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-race-winner");
+
+    await expect(
+      first.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-race-late"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    const winner = await first.readAuthority();
+    expect(winner).toMatchObject({ mode: "none", generation: "anonymous-cleaning-race-winner" });
+
+    const nextAttempt = attempt("anonymous-cleaning-bound-downgrade", winner.generation);
+    await first.putAttempt(nextAttempt);
+    const nextCancellation = await first.cancelAnonymousAuthority(winner, "anonymous-cleaning-race-two");
+    if (nextCancellation.kind !== "cleaning") throw new Error("expected next cleaning authority");
+    await expect(
+      first.completeAnonymousCleanup(cancellation.authority, "anonymous-cleaning-race-replay"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    expect(await first.readAuthority()).toEqual(nextCancellation.authority);
+
+    await first.completeAnonymousCleanup(nextCancellation.authority, "anonymous-cleaning-race-terminal");
+    expect(await first.readAuthority()).toMatchObject({
+      mode: "none",
+      generation: "anonymous-cleaning-race-terminal",
+    });
+  });
+
+  it("lets explicit logout cancel attempts added on the same anonymous generation", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    const captured = await coordinator.bootstrapAnonymous("anonymous-cancel-stale");
+    const newerAttempt = attempt("anonymous-cancel-newer-attempt", captured.generation);
+    await coordinator.putAttempt(newerAttempt);
+    await expect(coordinator.cancelAnonymousAuthority(captured, "anonymous-cancel-wins")).resolves.toMatchObject({
+      kind: "cleaning",
+      authority: { mode: "cleaning", generation: "anonymous-cancel-wins" },
+    });
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: { mode: "cleaning", generation: "anonymous-cancel-wins" },
+      attempts: [],
+      credentials: [],
+    });
   });
 
   it("binds transition completion to exact verified token bytes and permits a fresh exact proof", async () => {
@@ -432,17 +691,11 @@ describe("AuthSessionCoordinator", () => {
     const target = activation("a", "generation-a");
     const firstCredential = await credential(target, 0, "pair-one");
     const firstProof = await candidateProof(coordinator, candidateAttempt, firstCredential);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
-    });
     const transition = await coordinator.reserveAcquisitionTransition(
       { generation: "generation-0", revision: 1 },
       firstProof,
       target,
       null,
-      scrub,
     );
 
     const secondCredential = await credential(target, 0, "pair-two");
@@ -478,14 +731,9 @@ describe("AuthSessionCoordinator", () => {
     const targetCredential = await credential(target);
     const controller = new AbortController();
     const proof = await candidateProof(coordinator, candidateAttempt, targetCredential, controller.signal);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
-    });
     controller.abort();
     await expect(
-      coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null, scrub),
+      coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, proof, target, null),
     ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
     await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
 
@@ -493,13 +741,7 @@ describe("AuthSessionCoordinator", () => {
     const secondProof = await candidateProof(coordinator, candidateAttempt, targetCredential, secondController.signal);
     closeCoordinatorConnections();
     await expect(
-      coordinator.reserveAcquisitionTransition(
-        { generation: "generation-0", revision: 1 },
-        secondProof,
-        target,
-        null,
-        scrub,
-      ),
+      coordinator.reserveAcquisitionTransition({ generation: "generation-0", revision: 1 }, secondProof, target, null),
     ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
   });
 
@@ -573,7 +815,7 @@ describe("AuthSessionCoordinator", () => {
     await expect(coordinator.readAuthority()).resolves.toMatchObject({ mode: "none", revision: 1 });
   });
 
-  it("consumes a legacy scrub proof when reservation commits but pagehide loses its result", async () => {
+  it("recovers when reservation commits but pagehide loses its result", async () => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
     await coordinator.bootstrapAnonymous("generation-0");
@@ -582,12 +824,6 @@ describe("AuthSessionCoordinator", () => {
     const target = activation("a", "generation-a");
     const targetCredential = await credential(target);
     const proof = await candidateProof(coordinator, candidateAttempt, targetCredential);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
-    });
-
     const prototype = IDBObjectStore.prototype;
     const originalPut = prototype.put;
     let transitionWriteResolve = (): void => undefined;
@@ -611,7 +847,6 @@ describe("AuthSessionCoordinator", () => {
       proof,
       target,
       null,
-      scrub,
     );
     await transitionWrite;
     closeCoordinatorConnections();
@@ -622,9 +857,19 @@ describe("AuthSessionCoordinator", () => {
     const persisted = await reloaded.readAuthority();
     expect(persisted).toMatchObject({ mode: "transition", generation: "generation-a" });
     if (persisted.mode !== "transition") throw new Error("expected committed transition fixture");
-    await reloaded.cancelAcquisitionTransition(persisted.permit, "generation-recovered");
+    const cancellation = await reloaded.cancelAcquisitionTransition(persisted.permit, "generation-recovered");
+    expect(cancellation).toMatchObject({ kind: "cleaning", authority: { mode: "cleaning" } });
+    if (cancellation.kind !== "cleaning") throw new Error("expected source-free cleaning authority");
+    const cleaningSnapshot = await readCoordinatorSnapshot(factory);
+    for (const forbiddenGeneration of ["generation-0", "generation-a", "generation-recovered"]) {
+      await expect(
+        reloaded.completeAnonymousCleanup(cancellation.authority, forbiddenGeneration),
+      ).rejects.toMatchObject({ code: sessionErrorCodes.invalidState });
+      expect(await readCoordinatorSnapshot(factory)).toEqual(cleaningSnapshot);
+    }
+    await reloaded.completeAnonymousCleanup(cancellation.authority, "generation-recovered-none");
 
-    const nextAttempt = attempt("after-ambiguous-reserve", "generation-recovered");
+    const nextAttempt = attempt("after-ambiguous-reserve", "generation-recovered-none");
     await reloaded.putAttempt(nextAttempt);
     const nextTarget = activation("b", "generation-b");
     const nextProof = await candidateProof(reloaded, nextAttempt, await credential(nextTarget));
@@ -635,9 +880,8 @@ describe("AuthSessionCoordinator", () => {
         nextProof,
         nextTarget,
         null,
-        scrub,
       ),
-    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    ).resolves.toMatchObject({ target: nextTarget });
   });
 
   it("cancels an anonymous transition after proof loss or expiry and preserves a later authority", async () => {
@@ -650,17 +894,11 @@ describe("AuthSessionCoordinator", () => {
     const targetCredential = await credential(target);
     const controller = new AbortController();
     const proof = await candidateProof(coordinator, candidateAttempt, targetCredential, controller.signal);
-    const scrub = await scrubLegacyPersistence({
-      localStorage: memoryStorage(),
-      sessionStorage: memoryStorage(),
-      indexedDB: factory,
-    });
     const permit = await coordinator.reserveAcquisitionTransition(
       { generation: "generation-0", revision: 1 },
       proof,
       target,
       null,
-      scrub,
     );
     const expiryProof = await candidateProof(coordinator, candidateAttempt, targetCredential);
     await expect(
@@ -697,12 +935,13 @@ describe("AuthSessionCoordinator", () => {
 
     const reloaded = new AuthSessionCoordinator({ indexedDB: factory });
     await expect(reloaded.cancelAcquisitionTransition(permit, "generation-recovered")).resolves.toMatchObject({
-      kind: "anonymous",
-      authority: { mode: "none", generation: "generation-recovered" },
+      kind: "cleaning",
+      authority: { mode: "cleaning", generation: "generation-recovered" },
     });
     const recovered = await readCoordinatorSnapshot(factory);
     expect(recovered.credentials).toEqual([]);
     expect(recovered.attempts).toEqual([]);
+    await reloaded.completeAnonymousCleanup(recovered.authority, "generation-recovered-none");
 
     const next = activation("b", "generation-b");
     await activateAnonymous(factory, reloaded, next, "attempt-b");
@@ -767,12 +1006,59 @@ describe("AuthSessionCoordinator", () => {
       });
 
       const finalReceipt = receipt ?? (await purge(factory, recovering, source));
+      if (cancelled.kind !== "retiring") throw new Error("expected source retirement");
+      const retiringSnapshot = await readCoordinatorSnapshot(factory);
+      for (const forbiddenGeneration of [
+        source.authGeneration,
+        target.authGeneration,
+        cancelled.authority.generation,
+      ]) {
+        await expect(recovering.completeRetirement(source, finalReceipt, forbiddenGeneration)).rejects.toMatchObject({
+          code: sessionErrorCodes.invalidState,
+        });
+        expect(await readCoordinatorSnapshot(factory)).toEqual(retiringSnapshot);
+      }
       await recovering.completeRetirement(source, finalReceipt, `generation-none-${purgeBeforeCancel}`);
       await expect(recovering.readAuthority()).resolves.toMatchObject({
         mode: "none",
         generation: `generation-none-${purgeBeforeCancel}`,
       });
     }
+  });
+
+  it("keeps a directly retired source transition from finalizing as its target generation", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-direct-baseline");
+    const source = activation("direct-source", "generation-direct-source");
+    await activateAnonymous(factory, coordinator, source, "direct-source-attempt");
+    const target = activation("direct-target", "generation-direct-target");
+    const targetAttempt = attempt("direct-target-attempt", source.authGeneration, source.sessionEpoch);
+    await coordinator.putAttempt(targetAttempt);
+    const targetProof = await candidateProof(coordinator, targetAttempt, await credential(target));
+    const before = await coordinator.readAuthority();
+    await coordinator.reserveAcquisitionTransition(
+      { generation: before.generation, revision: before.revision },
+      targetProof,
+      target,
+      source,
+    );
+
+    await expect(coordinator.beginRetirement(source, "logout", "generation-direct-retiring")).resolves.toBe("retired");
+    const receipt = await purge(factory, coordinator, source);
+    const retiringSnapshot = await readCoordinatorSnapshot(factory);
+    for (const forbiddenGeneration of [source.authGeneration, target.authGeneration, "generation-direct-retiring"]) {
+      await expect(coordinator.completeRetirement(source, receipt, forbiddenGeneration)).rejects.toMatchObject({
+        code: sessionErrorCodes.invalidState,
+      });
+      expect(await readCoordinatorSnapshot(factory)).toEqual(retiringSnapshot);
+    }
+
+    await coordinator.completeRetirement(source, receipt, "generation-direct-none");
+    await expect(coordinator.readAuthority()).resolves.toMatchObject({
+      mode: "none",
+      generation: "generation-direct-none",
+    });
   });
 
   it("rejects a verified proof whose mapped attempt payload differs from stored X", async () => {
@@ -904,6 +1190,255 @@ describe("AuthSessionCoordinator", () => {
       code: sessionErrorCodes.admissionDenied,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an expired access credential only through the exact installed account runtime", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("generation-0");
+    const certificate = activation("account-refresh", "generation-account-refresh");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-account-refresh");
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    const expired = await credential(certificate, 0, "expired-account-refresh", {
+      access: nowSeconds - 60,
+      refresh: nowSeconds + 3_600,
+    });
+    await replaceCoordinatorSnapshotForTest(factory, (snapshot) => ({ ...snapshot, credentials: [expired] }));
+    const before = await coordinator.readActiveSession();
+    const replacement = await credential(certificate, 1, "rotated-account-refresh");
+    const controller = new AbortController();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-refresh",
+      ownerTabId: "owner-tab-refresh",
+      documentId: "document-refresh",
+      signal: controller.signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.headers).not.toHaveProperty("Authorization");
+      expect(init?.headers).not.toHaveProperty("Cookie");
+      expect(init?.headers).toMatchObject({ "X-First-Tree-Expected-Authority": SERVER_AUTHORITY });
+      expect(init?.credentials).toBe("omit");
+      expect(init?.signal).not.toBe(controller.signal);
+      expect(JSON.parse(String(init?.body))).toEqual({ refreshToken: expired.refreshToken });
+      return jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      coordinator.refreshAccountCredential(lease, before.credential, "owned-401-account-refresh"),
+    ).resolves.toEqual({
+      sessionEpoch: certificate.sessionEpoch,
+      credentialRevision: 1,
+      credentialFingerprint: replacement.credentialFingerprint,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/auth/refresh",
+      expect.objectContaining({ method: "POST", cache: "no-store", redirect: "error" }),
+    );
+    await expect(coordinator.admitAccountLease(lease)).resolves.toMatchObject({
+      credential: {
+        credentialRevision: 1,
+        credentialFingerprint: replacement.credentialFingerprint,
+      },
+    });
+    fetchMock.mockClear();
+    await expect(
+      coordinator.refreshAccountCredential(lease, before.credential, "owned-401-account-refresh-stale"),
+    ).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    disposeRuntime();
+  });
+
+  it.each([
+    ["network", () => Promise.reject(new Error("unavailable"))],
+    ["401", async () => new Response("unauthorized", { status: 401 })],
+    ["malformed", async () => new Response("not-json", { headers: { "Content-Type": "application/json" } })],
+  ])("does not commit an account refresh after a %s response", async (label, responseFactory) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-account-refresh-${label}`);
+    const certificate = activation(`account-refresh-${label}`, `generation-account-refresh-${label}`);
+    await activateAnonymous(factory, coordinator, certificate, `attempt-account-refresh-${label}`);
+    const before = await coordinator.readActiveSession();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-refresh-${label}`,
+      ownerTabId: `owner-tab-refresh-${label}`,
+      documentId: `document-refresh-${label}`,
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal("fetch", vi.fn(responseFactory));
+
+    await expect(
+      coordinator.refreshAccountCredential(lease, before.credential, `owned-401-account-${label}`),
+    ).rejects.toMatchObject(
+      label === "401"
+        ? {
+            code: sessionErrorCodes.admissionDenied,
+            detail: { kind: "refresh_http_status", status: 401, retirement: "retired" },
+          }
+        : { code: sessionErrorCodes.admissionDenied },
+    );
+    if (label === "401") {
+      await expect(coordinator.readAuthority()).resolves.toMatchObject({
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        phase: "revoked",
+      });
+    } else {
+      expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+    }
+    disposeRuntime();
+  });
+
+  it("does not commit a pending account refresh after its original lifecycle aborts", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-account-refresh-abort");
+    const certificate = activation("account-refresh-abort", "generation-account-refresh-abort");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-account-refresh-abort");
+    const before = await coordinator.readActiveSession();
+    const controller = new AbortController();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-refresh-abort",
+      ownerTabId: "owner-tab-refresh-abort",
+      documentId: "document-refresh-abort",
+      signal: controller.signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    let startedResolve = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            startedResolve();
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+              once: true,
+            });
+          }),
+      ),
+    );
+
+    const refresh = coordinator.refreshAccountCredential(lease, before.credential, "owned-401-account-abort");
+    await started;
+    controller.abort();
+    await expect(refresh).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+    disposeRuntime();
+  });
+
+  it("drops an account refresh response when its exact runtime is replaced", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-account-refresh-replaced");
+    const certificate = activation("account-refresh-replaced", "generation-account-refresh-replaced");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-account-refresh-replaced");
+    const before = await coordinator.readActiveSession();
+    const replacement = await credential(certificate, 1, "rotated-account-refresh-replaced");
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const firstController = new AbortController();
+    const firstLease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-refresh-first",
+      ownerTabId: "owner-tab-refresh-replaced",
+      documentId: "document-refresh-replaced",
+      signal: firstController.signal,
+    });
+    const disposeFirst = installAccountStoreRuntime({ barrier, lease: firstLease });
+    let resolveResponse = (_response: Response): void => undefined;
+    let requestStartedResolve = (): void => undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      requestStartedResolve = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveResponse = resolve;
+            requestStartedResolve();
+          }),
+      ),
+    );
+
+    const refresh = coordinator.refreshAccountCredential(firstLease, before.credential, "owned-401-account-replaced");
+    await requestStarted;
+    const secondLease = createAccountLease({
+      ...firstLease,
+      accountRevision: "account-revision-refresh-second",
+      signal: new AbortController().signal,
+    });
+    const disposeSecond = installAccountStoreRuntime({ barrier, lease: secondLease });
+    resolveResponse(jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }));
+
+    await expect(refresh).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+    disposeSecond();
+    disposeFirst();
+  });
+
+  it.each([
+    ["wrong subject", () => credential(activation("other-account", "other"), 1)],
+    [
+      "wrong token type",
+      async (certificate: ActivationCertificate) => ({
+        accessToken: jwt(certificate.accountId, "refresh", "wrong-access-kind"),
+        refreshToken: jwt(certificate.accountId, "refresh", "refresh-kind"),
+      }),
+    ],
+    [
+      "expired pair",
+      async (certificate: ActivationCertificate) => {
+        const expiredAt = Math.floor(Date.now() / 1_000) - 60;
+        return {
+          accessToken: jwt(certificate.accountId, "access", "expired-access", expiredAt),
+          refreshToken: jwt(certificate.accountId, "refresh", "expired-refresh", expiredAt),
+        };
+      },
+    ],
+  ])("rejects an account refresh response with a %s", async (label, replacementFactory) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-account-invalid-${label}`);
+    const certificate = activation(`account-invalid-${label}`, `generation-account-invalid-${label}`);
+    await activateAnonymous(factory, coordinator, certificate, `attempt-account-invalid-${label}`);
+    const before = await coordinator.readActiveSession();
+    const replacement = await replacementFactory(certificate);
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-invalid-${label}`,
+      ownerTabId: `owner-tab-invalid-${label}`,
+      documentId: `document-invalid-${label}`,
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken })),
+    );
+
+    await expect(
+      coordinator.refreshAccountCredential(lease, before.credential, `owned-401-account-invalid-${label}`),
+    ).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+    });
+    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
+    disposeRuntime();
   });
 
   it("drops a refresh replacement when its exact view aborts during credential hashing", async () => {
@@ -1263,6 +1798,354 @@ describe("AuthSessionCoordinator", () => {
     ).resolves.toMatchObject({ authority: { session: certificate } });
   });
 
+  it("classifies an active me 401 without exposing response content", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-active-me-401");
+    const certificate = activation("active-me-401", "generation-active-me-401");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me-401");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me-401",
+      ownerTabId: "owner-tab-active-me-401",
+      documentId: "document-active-me-401",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("sensitive provider error", { status: 401 })),
+    );
+
+    await expect(coordinator.requestActiveMe(lease)).rejects.toMatchObject({
+      code: sessionErrorCodes.admissionDenied,
+      detail: { kind: "active_me_http_status", status: 401 },
+    });
+    disposeRuntime();
+  });
+
+  it("accepts only the exact one-shot active me 401 error object as refresh authority", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-active-me-401-capability");
+    const certificate = activation("active-me-401-capability", "generation-active-me-401-capability");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me-401-capability");
+    const before = await coordinator.readActiveSession();
+    const replacement = await credential(certificate, 1, "active-me-401-capability-rotated");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me-401-capability",
+      ownerTabId: "owner-tab-active-me-401-capability",
+      documentId: "document-active-me-401-capability",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired", { status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    const prototypeCopy = Object.assign(Object.create(Object.getPrototypeOf(rejection)), rejection) as SessionError;
+    const lookalikes: unknown[] = [
+      { ...rejection },
+      new SessionError(rejection.code, rejection.message, rejection.detail),
+      prototypeCopy,
+    ];
+    for (const [index, lookalike] of lookalikes.entries()) {
+      await expect(
+        coordinator.refreshAccountCredentialAfterActiveMe401(lease, lookalike, `owned-401-lookalike-${String(index)}`),
+      ).rejects.toMatchObject({
+        code: index === 0 ? sessionErrorCodes.invalidState : sessionErrorCodes.staleOperation,
+      });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(lease, rejection, "owned-401-exact-capability"),
+    ).resolves.toEqual({
+      sessionEpoch: certificate.sessionEpoch,
+      credentialRevision: 1,
+      credentialFingerprint: replacement.credentialFingerprint,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const persisted = await readCoordinatorSnapshot(factory);
+    expect(persisted.credentials).toEqual([replacement]);
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(lease, rejection, "owned-401-reused-capability"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(before.credential.credentialRevision).toBe(0);
+    disposeRuntime();
+  });
+
+  it("rejects an exact active me 401 capability after its source lifecycle aborts", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-active-me-401-source-abort");
+    const certificate = activation("active-me-401-source-abort", "generation-active-me-401-source-abort");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me-401-source-abort");
+    const controller = new AbortController();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me-401-source-abort",
+      ownerTabId: "owner-tab-active-me-401-source-abort",
+      documentId: "document-active-me-401-source-abort",
+      signal: controller.signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    const fetchMock = vi.fn().mockResolvedValue(new Response("expired", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const rejection = await sessionRejection(coordinator.requestActiveMe(lease));
+
+    controller.abort();
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(lease, rejection, "owned-401-source-abort"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect((await coordinator.readActiveSession()).credential.credentialRevision).toBe(0);
+    disposeRuntime();
+  });
+
+  it.each([
+    "success",
+    "401",
+  ] as const)("drops a proof-owned %s refresh when its exact account runtime is replaced in flight", async (responseKind) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-active-me-401-runtime-replaced-${responseKind}`);
+    const certificate = activation(
+      `active-me-401-runtime-replaced-${responseKind}`,
+      `generation-active-me-401-runtime-replaced-${responseKind}`,
+    );
+    await activateAnonymous(
+      factory,
+      coordinator,
+      certificate,
+      `attempt-active-me-401-runtime-replaced-${responseKind}`,
+    );
+    const firstController = new AbortController();
+    const firstLease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-active-me-401-runtime-replaced-${responseKind}-first`,
+      ownerTabId: `owner-tab-active-me-401-runtime-replaced-${responseKind}`,
+      documentId: `document-active-me-401-runtime-replaced-${responseKind}`,
+      signal: firstController.signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeFirst = installAccountStoreRuntime({ barrier, lease: firstLease });
+    let resolveRefresh = (_response: Response): void => undefined;
+    const heldRefresh = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const replacement = await credential(certificate, 1, `runtime-replaced-${responseKind}`);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired", { status: 401 }))
+      .mockImplementationOnce(() => heldRefresh);
+    vi.stubGlobal("fetch", fetchMock);
+    const rejection = await sessionRejection(coordinator.requestActiveMe(firstLease));
+    const refreshing = coordinator.refreshAccountCredentialAfterActiveMe401(
+      firstLease,
+      rejection,
+      `owned-401-runtime-replaced-${responseKind}`,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const secondController = new AbortController();
+    const secondLease = createAccountLease({
+      ...firstLease,
+      accountRevision: `account-revision-active-me-401-runtime-replaced-${responseKind}-second`,
+      signal: secondController.signal,
+    });
+    const disposeSecond = installAccountStoreRuntime({ barrier, lease: secondLease });
+    resolveRefresh(
+      responseKind === "401"
+        ? new Response("stale expired refresh", { status: 401 })
+        : jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+    );
+
+    await expect(refreshing).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    const persisted = await readCoordinatorSnapshot(factory);
+    expect(persisted.authority).toMatchObject({ mode: "active", session: certificate });
+    expect(persisted.credentials[0]?.credentialRevision).toBe(0);
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(
+        firstLease,
+        rejection,
+        `owned-401-runtime-replaced-replay-${responseKind}`,
+      ),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    secondController.abort();
+    disposeSecond();
+    disposeFirst();
+  });
+
+  it("serializes a claimed active me 401 refresh through credential transaction completion", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-active-me-401-serialized");
+    const certificate = activation("active-me-401-serialized", "generation-active-me-401-serialized");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-active-me-401-serialized");
+    const replacement = await credential(certificate, 1, "active-me-401-serialized-rotated");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-active-me-401-serialized",
+      ownerTabId: "owner-tab-active-me-401-serialized",
+      documentId: "document-active-me-401-serialized",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    let resolveRefresh = (_response: Response): void => undefined;
+    const heldRefresh = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired", { status: 401 }))
+      .mockImplementationOnce(() => heldRefresh)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          user: { id: certificate.accountId },
+          memberships: [{ organizationId: "org-serialized" }],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const rejection = await sessionRejection(coordinator.requestActiveMe(lease));
+
+    const refreshing = coordinator.refreshAccountCredentialAfterActiveMe401(lease, rejection, "owned-401-serialized");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await expect(coordinator.requestActiveMe(lease)).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    resolveRefresh(jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }));
+    await expect(refreshing).resolves.toMatchObject({ credentialRevision: 1 });
+    const identity = await coordinator.requestActiveMe(lease);
+    expect(readVerifiedActiveMeProof(identity.proof, lease).membershipIds).toEqual(["org-serialized"]);
+    const persisted = await readCoordinatorSnapshot(factory);
+    expect(persisted.credentials).toEqual([replacement]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    disposeRuntime();
+  });
+
+  it.each([
+    "success",
+    "401",
+  ] as const)("does not let a stale proof-owned %s refresh overwrite or retire a concurrently committed credential", async (staleResponseKind) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-active-me-401-concurrent-${staleResponseKind}`);
+    const certificate = activation(
+      `active-me-401-concurrent-${staleResponseKind}`,
+      `generation-active-me-401-concurrent-${staleResponseKind}`,
+    );
+    await activateAnonymous(factory, coordinator, certificate, `attempt-active-me-401-concurrent-${staleResponseKind}`);
+    const before = await coordinator.readActiveSession();
+    const winner = await credential(certificate, 1, `active-me-401-winner-${staleResponseKind}`);
+    const stale = await credential(certificate, 1, `active-me-401-stale-${staleResponseKind}`);
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-active-me-401-concurrent-${staleResponseKind}`,
+      ownerTabId: `owner-tab-active-me-401-concurrent-${staleResponseKind}`,
+      documentId: `document-active-me-401-concurrent-${staleResponseKind}`,
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    let resolveStale = (_response: Response): void => undefined;
+    const heldStale = new Promise<Response>((resolve) => {
+      resolveStale = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("expired", { status: 401 }))
+      .mockImplementationOnce(() => heldStale)
+      .mockResolvedValueOnce(jsonResponse({ accessToken: winner.accessToken, refreshToken: winner.refreshToken }));
+    vi.stubGlobal("fetch", fetchMock);
+    const rejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    const staleRefresh = coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      rejection,
+      `owned-401-stale-${staleResponseKind}`,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await coordinator.refreshAccountCredential(lease, before.credential, `owned-401-winner-${staleResponseKind}`);
+    resolveStale(
+      staleResponseKind === "401"
+        ? new Response("expired stale refresh", { status: 401 })
+        : jsonResponse({ accessToken: stale.accessToken, refreshToken: stale.refreshToken }),
+    );
+
+    await expect(staleRefresh).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    const persisted = await readCoordinatorSnapshot(factory);
+    expect(persisted.authority).toMatchObject({ mode: "active", session: certificate });
+    expect(persisted.credentials).toEqual([winner]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    disposeRuntime();
+  });
+
+  it("does not mint active me 401 authority after the dispatched credential changes", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-stale-active-me-401");
+    const certificate = activation("stale-active-me-401", "generation-stale-active-me-401");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-stale-active-me-401");
+    const before = await coordinator.readActiveSession();
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-stale-active-me-401",
+      ownerTabId: "owner-tab-stale-active-me-401",
+      documentId: "document-stale-active-me-401",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    let resolveRejectedMe = (_response: Response): void => undefined;
+    const rejectedMe = new Promise<Response>((resolve) => {
+      resolveRejectedMe = resolve;
+    });
+    const replacement = await credential(certificate, 1, "newer-before-stale-401");
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => rejectedMe)
+      .mockResolvedValueOnce(
+        jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const staleRequest = coordinator.requestActiveMe(lease);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await coordinator.refreshAccountCredential(lease, before.credential, "unused-newer-credential-401");
+    resolveRejectedMe(new Response("expired old access", { status: 401 }));
+    let staleRejection: unknown;
+    try {
+      await staleRequest;
+    } catch (error) {
+      staleRejection = error;
+    }
+    expect(staleRejection).toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    expect(staleRejection).not.toMatchObject({ detail: { kind: "active_me_http_status", status: 401 } });
+
+    await expect(
+      coordinator.refreshAccountCredentialAfterActiveMe401(lease, staleRejection, "owned-401-must-not-refresh-newer"),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await coordinator.readActiveSession()).credential).toEqual({
+      sessionEpoch: certificate.sessionEpoch,
+      credentialRevision: 1,
+      credentialFingerprint: replacement.credentialFingerprint,
+    });
+    disposeRuntime();
+  });
+
   it("owns active me dispatch and lets only the newest exact account lifecycle prove memberships", async () => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
@@ -1451,6 +2334,161 @@ describe("AuthSessionCoordinator", () => {
     await expect(
       second.beginOwned401Retirement(currentDispatch.admission, view, "generation-current-401"),
     ).resolves.toBe("retired");
+  });
+
+  it("fails closed on impossible persisted cleaning, retirement, and transition graphs", async () => {
+    const cleaningFactory = new IDBFactory();
+    const cleaningCoordinator = new AuthSessionCoordinator({ indexedDB: cleaningFactory });
+    const anonymous = await cleaningCoordinator.bootstrapAnonymous("generation-validator-baseline");
+    const cleaningResult = await cleaningCoordinator.cancelAnonymousAuthority(
+      anonymous,
+      "generation-validator-cleaning",
+    );
+    if (cleaningResult.kind !== "cleaning") throw new Error("expected cleaning authority");
+    const cleaningSnapshot = await readCoordinatorSnapshot(cleaningFactory);
+
+    const transitionFactory = new IDBFactory();
+    const transitionCoordinator = new AuthSessionCoordinator({ indexedDB: transitionFactory });
+    await transitionCoordinator.bootstrapAnonymous("generation-validator-none");
+    const source = activation("validator-source", "generation-validator-source");
+    await activateAnonymous(transitionFactory, transitionCoordinator, source, "validator-source-attempt");
+    const target = activation("validator-target", "generation-validator-target");
+    const targetAttempt = attempt("validator-target-attempt", source.authGeneration, source.sessionEpoch);
+    await transitionCoordinator.putAttempt(targetAttempt);
+    const targetProof = await candidateProof(transitionCoordinator, targetAttempt, await credential(target));
+    const transitionCursor = await transitionCoordinator.readAuthority();
+    const transitionPermit = await transitionCoordinator.reserveAcquisitionTransition(
+      { generation: transitionCursor.generation, revision: transitionCursor.revision },
+      targetProof,
+      target,
+      source,
+    );
+    const transitionSnapshot = await readCoordinatorSnapshot(transitionFactory);
+    if (transitionSnapshot.authority.mode !== "transition") throw new Error("expected transition authority");
+    const persistedTransitionAttempt = transitionSnapshot.attempts[0];
+    if (!persistedTransitionAttempt) throw new Error("expected transition attempt");
+    const retirement = await transitionCoordinator.cancelAcquisitionTransition(
+      transitionPermit,
+      "generation-validator-retiring",
+    );
+    if (retirement.kind !== "retiring") throw new Error("expected retiring authority");
+    const retiringSnapshot = await readCoordinatorSnapshot(transitionFactory);
+    if (retiringSnapshot.authority.mode !== "retiring") throw new Error("expected persisted retirement");
+
+    const anonymousTransitionFactory = new IDBFactory();
+    const anonymousTransitionCoordinator = new AuthSessionCoordinator({ indexedDB: anonymousTransitionFactory });
+    await anonymousTransitionCoordinator.bootstrapAnonymous("generation-validator-anonymous-baseline");
+    const anonymousAttempt = attempt("validator-anonymous-target-attempt", "generation-validator-anonymous-baseline");
+    await anonymousTransitionCoordinator.putAttempt(anonymousAttempt);
+    const anonymousTarget = activation("validator-anonymous-target", "generation-validator-anonymous-target");
+    const anonymousProof = await candidateProof(
+      anonymousTransitionCoordinator,
+      anonymousAttempt,
+      await credential(anonymousTarget),
+    );
+    const anonymousCursor = await anonymousTransitionCoordinator.readAuthority();
+    await anonymousTransitionCoordinator.reserveAcquisitionTransition(
+      { generation: anonymousCursor.generation, revision: anonymousCursor.revision },
+      anonymousProof,
+      anonymousTarget,
+      null,
+    );
+    const anonymousTransitionSnapshot = await readCoordinatorSnapshot(anonymousTransitionFactory);
+    if (anonymousTransitionSnapshot.authority.mode !== "transition") {
+      throw new Error("expected anonymous transition authority");
+    }
+    const anonymousPersistedAttempt = anonymousTransitionSnapshot.attempts[0];
+    if (!anonymousPersistedAttempt) throw new Error("expected anonymous transition attempt");
+
+    const recycledTarget = {
+      ...transitionSnapshot.authority.permit.target,
+      authGeneration: source.authGeneration,
+    };
+    const malformedSnapshots: readonly unknown[] = [
+      {
+        ...cleaningSnapshot,
+        authority: { ...cleaningSnapshot.authority, cause: "invalid-cleaning-cause" },
+      },
+      {
+        ...cleaningSnapshot,
+        authority: { ...cleaningSnapshot.authority, forbiddenGenerations: [] },
+      },
+      {
+        ...cleaningSnapshot,
+        authority: {
+          ...cleaningSnapshot.authority,
+          cause: "transition_cancelled",
+          forbiddenGenerations: [anonymous.generation, anonymous.generation],
+        },
+      },
+      {
+        ...cleaningSnapshot,
+        authority: {
+          ...cleaningSnapshot.authority,
+          forbiddenGenerations: [cleaningResult.authority.generation],
+        },
+      },
+      {
+        ...retiringSnapshot,
+        authority: { ...retiringSnapshot.authority, generation: source.authGeneration },
+      },
+      {
+        ...retiringSnapshot,
+        authority: { ...retiringSnapshot.authority, forbiddenGenerations: [source.authGeneration] },
+      },
+      {
+        ...retiringSnapshot,
+        authority: {
+          ...retiringSnapshot.authority,
+          forbiddenGenerations: [retiringSnapshot.authority.generation],
+        },
+      },
+      { ...retiringSnapshot, attempts: [persistedTransitionAttempt] },
+      {
+        ...transitionSnapshot,
+        attempts: [
+          persistedTransitionAttempt,
+          attempt("validator-extra-transition-attempt", source.authGeneration, source.sessionEpoch),
+        ],
+      },
+      {
+        ...transitionSnapshot,
+        attempts: [{ ...persistedTransitionAttempt, sourceEpoch: "epoch-another-source" }],
+      },
+      {
+        ...transitionSnapshot,
+        authority: {
+          ...transitionSnapshot.authority,
+          generation: source.authGeneration,
+          permit: { ...transitionSnapshot.authority.permit, target: recycledTarget },
+        },
+      },
+      {
+        ...anonymousTransitionSnapshot,
+        attempts: [
+          {
+            ...anonymousPersistedAttempt,
+            baselineGeneration: anonymousTransitionSnapshot.authority.generation,
+          },
+        ],
+      },
+    ];
+    for (const malformed of malformedSnapshots) {
+      expect(() => validateCoordinatorSnapshot(malformed)).toThrowError(
+        expect.objectContaining({ code: sessionErrorCodes.recoveryRequired }),
+      );
+    }
+
+    const rawFactory = new IDBFactory();
+    const rawCoordinator = new AuthSessionCoordinator({ indexedDB: rawFactory });
+    await rawCoordinator.bootstrapAnonymous("generation-validator-raw");
+    await writeRawCoordinatorSnapshotForTest(rawFactory, {
+      ...cleaningSnapshot,
+      authority: { ...cleaningSnapshot.authority, forbiddenGenerations: [""] },
+    });
+    await expect(rawCoordinator.readAuthority()).rejects.toMatchObject({
+      code: sessionErrorCodes.recoveryRequired,
+    });
   });
 
   it("rejects a persisted token swap that retains the old cursor and never dispatches it", async () => {
