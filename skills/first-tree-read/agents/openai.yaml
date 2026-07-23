@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree Read"
-  short_description: "Read repo context through the tree CLI"
-  default_prompt: "Use $first-tree-read to select relevant Context Tree files with the tree CLI, then read their contents before acting."
+  short_description: "Read repo context and record decision influence"
+  default_prompt: "Use $first-tree-read to read relevant Context Tree files before acting, then attach a contextDecision receipt only when that context materially influences the final choice."
