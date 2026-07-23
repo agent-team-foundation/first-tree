@@ -4,6 +4,7 @@ import { GitHubSection } from "./github-section.js";
 import { GitLabSection } from "./gitlab-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 import { SidebarResizeHandle } from "./resize-handle.js";
+import { SchedulesSection } from "./schedules-section.js";
 
 /** Resizable inline-rail width (px). Default is a touch wider than the legacy
  *  320 so markdown descriptions breathe; the user can drag wider for long
@@ -56,7 +57,10 @@ function saveWidth(width: number): void {
  *   1. Participants — humans + agents (agents first, since their live status
  *      is the glanceable pulse). Caps the visible roster; rest behind
  *      "Show all".
- *   2. Provider bindings — read-only GitHub and GitLab entities bound to this
+ *   2. Schedules — the chat's cron jobs: read facts for every reader,
+ *      pause/resume/delete for the owning member. Hidden when the chat has
+ *      none.
+ *   3. Provider bindings — read-only GitHub and GitLab entities bound to this
  *      chat. Each provider section is hidden when it has no bindings.
  *
  * Width: the inline rail is drag-resizable (left-edge handle) and remembers
@@ -133,6 +137,10 @@ export function ChatRightSidebar({
           onAdded={onAdded}
           readOnly={readOnly}
         />
+        {/* Keyed like Participants: row expansion and any open dialog are
+            per-chat state that must reset on chat switch, and a pending
+            mutation must never target the newly-selected chat. */}
+        <SchedulesSection key={`schedules:${chatId}`} chatId={chatId} participants={participants} />
         <GitHubSection chatId={chatId} />
         <GitLabSection chatId={chatId} />
       </div>

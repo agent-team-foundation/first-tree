@@ -1,227 +1,310 @@
 // @vitest-environment happy-dom
 
+import type { CronJob } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, type ReactElement } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RowEngagementMenu } from "../row-engagement-menu.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const chatApiMocks = vi.hoisted(() => ({
+  patchChatEngagement: vi.fn(),
+}));
+
+const cronApiMocks = vi.hoisted(() => ({
+  listChatCronJobs: vi.fn(),
+}));
 
 const meChatMocks = vi.hoisted(() => ({
   markMeChatUnread: vi.fn(),
   pinMeChat: vi.fn(),
 }));
 
-const chatMocks = vi.hoisted(() => ({
-  patchChatEngagement: vi.fn(),
+const toastMock = vi.hoisted(() => ({
+  addToast: vi.fn(),
 }));
 
-vi.mock("../../../../api/me-chats.js", () => meChatMocks);
-vi.mock("../../../../api/chats.js", () => ({
-  patchChatEngagement: chatMocks.patchChatEngagement,
+const authMock = vi.hoisted(() => ({
+  memberId: "member-owner" as string | null,
 }));
-// The menu's pin mutation surfaces failures via a toast; the harness renders no
-// ToastProvider, so stub the hook (its addToast is exercised in a failure test).
-const toastMocks = vi.hoisted(() => ({ addToast: vi.fn() }));
-vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => toastMocks }));
+
+vi.mock("../../../../api/chats.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../api/chats.js")>()),
+  patchChatEngagement: chatApiMocks.patchChatEngagement,
+}));
+
+vi.mock("../../../../api/cron-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../api/cron-jobs.js")>()),
+  listChatCronJobs: cronApiMocks.listChatCronJobs,
+}));
+
+vi.mock("../../../../api/me-chats.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../api/me-chats.js")>()),
+  markMeChatUnread: meChatMocks.markMeChatUnread,
+  pinMeChat: meChatMocks.pinMeChat,
+}));
+
+vi.mock("../../../../auth/auth-context.js", () => ({
+  useAuth: () => ({ memberId: authMock.memberId }),
+}));
+
+vi.mock("../../../../components/ui/toast.js", () => ({
+  useToast: () => ({ addToast: toastMock.addToast }),
+}));
+
+function activeJob(overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id: overrides.id ?? "job-1",
+    ownerMemberId: overrides.ownerMemberId ?? "member-owner",
+    controlChatId: "chat-1",
+    agentId: "agent-1",
+    name: "Daily summary",
+    chatMode: "reuse_control_chat",
+    schedule: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize.",
+    state: overrides.state ?? "active",
+    stateReason: null,
+    revision: 1,
+    nextRunAt: "2030-01-02T09:00:00.000Z",
+    outstanding: null,
+    createdAt: "2030-01-01T00:00:00.000Z",
+  };
+}
 
 let root: Root | null = null;
-let queryClient: QueryClient | null = null;
-
-function createClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, refetchOnWindowFocus: false },
-      mutations: { retry: false },
-    },
-  });
-}
-
-async function render(element: ReactElement): Promise<HTMLElement> {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  root = createRoot(container);
-  const client = createClient();
-  queryClient = client;
-  await act(async () => {
-    root?.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
-  });
-  return container;
-}
+let queryClient: QueryClient;
 
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
-async function click(element: Element | null): Promise<void> {
-  if (!element) throw new Error("Expected element to click");
+async function renderMenu(status: "active" | "archived"): Promise<void> {
+  const { RowEngagementMenu } = await import("../row-engagement-menu.js");
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
   await act(async () => {
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    root?.render(
+      <QueryClientProvider client={queryClient}>
+        <RowEngagementMenu chatId="chat-1" status={status} hasUnread={false} pinned={false} />
+      </QueryClientProvider>,
+    );
   });
   await flush();
 }
 
-function manageButton(rootNode: ParentNode): HTMLButtonElement | null {
-  return rootNode.querySelector<HTMLButtonElement>('button[aria-label="Manage chat"]');
+async function click(el: Element | null | undefined): Promise<void> {
+  if (!el) throw new Error("Expected element to click");
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  });
+  await flush();
 }
 
-function menuItem(label: string): HTMLButtonElement {
-  const button = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-    (item) => item.textContent === label,
-  );
-  if (!button) throw new Error(`Missing menu item ${label}`);
-  return button;
+async function selectMenuItem(label: string): Promise<void> {
+  await click(document.querySelector('button[aria-label="Manage chat"]'));
+  const item = [...document.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === label);
+  await click(item);
+}
+
+function buttonByText(text: string): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
 }
 
 beforeEach(() => {
-  document.body.innerHTML = "";
   vi.clearAllMocks();
-  meChatMocks.markMeChatUnread.mockResolvedValue(undefined);
-  meChatMocks.pinMeChat.mockResolvedValue({ chatId: "chat", pinnedAt: null });
-  chatMocks.patchChatEngagement.mockResolvedValue(undefined);
-  root = null;
-  queryClient = null;
+  authMock.memberId = "member-owner";
+  chatApiMocks.patchChatEngagement.mockResolvedValue({ chatId: "chat-1", engagementStatus: "archived" });
+  cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
+  document.body.innerHTML = "";
 });
 
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
+  root = null;
   document.body.innerHTML = "";
-  queryClient?.clear();
 });
 
-describe("RowEngagementMenu", () => {
-  it("marks active chats unread and invalidates chat caches", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
-    );
-    const invalidate = vi.spyOn(queryClient as QueryClient, "invalidateQueries");
+describe("RowEngagementMenu schedule warnings", () => {
+  it("archives immediately when the chat has no schedules (pre-change behavior)", async () => {
+    await renderMenu("active");
+    await selectMenuItem("Archive");
 
-    await click(manageButton(dom));
-    await click(menuItem("Mark as unread"));
-
-    expect(meChatMocks.markMeChatUnread).toHaveBeenCalledWith("chat-active");
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me", "chats"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-detail", "chat-active"] });
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(cronApiMocks.listChatCronJobs).toHaveBeenCalledWith("chat-1");
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(document.body.textContent).not.toContain("Archive this chat?");
   });
 
-  it("disables mark-unread when the active row already has unread work", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-unread" status="active" hasUnread={true} pinned={false} />,
-    );
+  it("archives immediately when every schedule is already paused", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob({ state: "paused" })] });
+    await renderMenu("active");
+    await selectMenuItem("Archive");
 
-    await click(manageButton(dom));
-    const markUnread = menuItem("Mark as unread");
-
-    expect(markUnread.disabled).toBe(true);
-    await click(markUnread);
-    expect(meChatMocks.markMeChatUnread).not.toHaveBeenCalled();
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(document.body.textContent).not.toContain("Archive this chat?");
   });
 
-  it("archives and deletes active chats through engagement mutations", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
-    );
+  it("warns before archiving a chat with active schedules, then proceeds on confirm", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [activeJob(), activeJob({ id: "job-2", ownerMemberId: "member-other" })],
+    });
+    await renderMenu("active");
+    await selectMenuItem("Archive");
 
-    await click(manageButton(dom));
-    await click(menuItem("Archive"));
-    await click(manageButton(dom));
-    await click(menuItem("Delete"));
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Archive this chat?");
+    expect(document.body.textContent).toContain("2 active schedules");
+    expect(document.body.textContent).toContain("keep running while the chat is archived");
+    expect(document.body.textContent).toContain("visible in your list again");
 
-    expect(chatMocks.patchChatEngagement.mock.calls).toEqual([
-      ["chat-active", "archived"],
-      ["chat-active", "deleted"],
-    ]);
+    await click(buttonByText("Archive chat"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
   });
 
-  it("offers archived-row recovery without the active-only mark-unread action", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-archived" status="archived" hasUnread={false} pinned={false} />,
-    );
+  it("always re-checks schedules at action time instead of trusting the sidebar cache", async () => {
+    await renderMenu("active");
+    // Seed a FRESH cached list containing an active job. If the guard reused
+    // the sidebar's 30s-fresh cache, it would warn; the forced-fresh lookup
+    // must instead re-request and see the current empty server state.
+    queryClient.setQueryData(["chat-right-sidebar", "cron-jobs", "chat-1"], { items: [activeJob()] });
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
 
-    await click(manageButton(dom));
-    expect(document.body.textContent).toContain("Unarchive");
-    expect(document.body.textContent).toContain("Delete");
-    expect(document.body.textContent).not.toContain("Mark as unread");
-    expect(document.body.textContent).not.toContain("Archive");
+    await selectMenuItem("Archive");
 
-    await click(menuItem("Unarchive"));
-
-    expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith("chat-archived", "active");
+    expect(cronApiMocks.listChatCronJobs).toHaveBeenCalledWith("chat-1");
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(document.body.textContent).not.toContain("Archive this chat?");
   });
 
-  it("renders no menu for deleted rows", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-deleted" status="deleted" hasUnread={false} pinned={false} />,
-    );
+  it("delete warning only promises to pause the caller's own schedules", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
 
-    expect(manageButton(dom)).toBeNull();
+    expect(document.body.textContent).toContain("Delete this chat?");
+    expect(document.body.textContent).toContain("1 active schedule");
+    expect(document.body.textContent).toContain("Deleting pauses them first");
+    expect(document.body.textContent).toContain("you must resume each schedule");
+
+    await click(buttonByText("Delete chat"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
   });
 
-  it("pins an unpinned chat and invalidates the list caches", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
-    );
-    const invalidate = vi.spyOn(queryClient as QueryClient, "invalidateQueries");
+  it("delete warning says other members' schedules keep running but the deleted view stays hidden", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [
+        activeJob({ id: "job-a", ownerMemberId: "member-other" }),
+        activeJob({ id: "job-b", ownerMemberId: "member-third" }),
+      ],
+    });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
 
-    await click(manageButton(dom));
-    await click(menuItem("Pin"));
+    expect(document.body.textContent).toContain("2 active schedules");
+    expect(document.body.textContent).toContain("owned by other members");
+    expect(document.body.textContent).toContain("does not pause them");
+    expect(document.body.textContent).toContain("they keep running");
+    // `deleted` is sticky: a later scheduled message revives only archived
+    // views, so the copy must never promise the caller's view reappears.
+    expect(document.body.textContent).toContain("stays hidden until you restore it");
+    expect(document.body.textContent).not.toContain("visible again");
+    expect(document.body.textContent).not.toContain("Deleting pauses them first");
 
-    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-active", true);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me", "chats"] });
-    // A success toast confirms the write — the row only regroups once the
-    // invalidate-driven refetch lands, so silence would read as a no-op.
-    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
+    await click(buttonByText("Delete chat"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
   });
 
-  it("offers Unpin on a pinned chat and toggles it off", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-pinned" status="active" hasUnread={false} pinned={true} />,
-    );
+  it("delete warning splits caller-owned and other-owned schedules in a mixed chat", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [activeJob(), activeJob({ id: "job-2", ownerMemberId: "member-other" })],
+    });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
 
-    await click(manageButton(dom));
-    expect(document.body.textContent).toContain("Unpin");
-    await click(menuItem("Unpin"));
-
-    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-pinned", false);
-    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Unpinned" }));
+    expect(document.body.textContent).toContain("(1 yours, 1 owned by others)");
+    expect(document.body.textContent).toContain("Deleting pauses only your 1 active schedule first");
+    expect(document.body.textContent).toContain("owned by other members keep running");
+    expect(document.body.textContent).toContain("will not resume yours");
+    expect(document.body.textContent).toContain("stays hidden until you restore it");
+    expect(document.body.textContent).not.toContain("visible again");
   });
 
-  it("shows an error toast when a pin write fails", async () => {
-    meChatMocks.pinMeChat.mockRejectedValueOnce(new Error("nope"));
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
-    );
+  it("cancel leaves the engagement unchanged", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
+    await click(buttonByText("Cancel"));
 
-    await click(manageButton(dom));
-    await click(menuItem("Pin"));
-
-    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't pin" }));
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("Delete this chat?");
   });
 
-  it("skips non-infinite me-chats caches (palette / mobile) instead of throwing on the optimistic apply", async () => {
-    const dom = await render(
-      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
-    );
-    // The command palette and mobile lists store a BARE `ListMeChatsResponse`
-    // (no `pages`) under the same `["me","chats"]` prefix the pin optimistic
-    // apply writes through. Feeding one to the InfiniteData transform would throw
-    // on `data.pages`; the `"pages" in old` guard must skip it. Without the guard
-    // `onMutate` throws before `pinMeChat` is ever called.
-    const palette = { priorityRows: { attention: [], pinned: [] }, rows: [], nextCursor: null };
-    (queryClient as QueryClient).setQueryData(["me", "chats", "palette"], palette);
+  it("a failed lookup fails safe: nothing applied until the owner chooses", async () => {
+    cronApiMocks.listChatCronJobs.mockRejectedValue(new Error("endpoint down"));
+    await renderMenu("active");
+    await selectMenuItem("Delete");
 
-    await click(manageButton(dom));
-    await click(menuItem("Pin"));
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Couldn't confirm schedules");
+    expect(document.body.textContent).toContain("Nothing has been applied");
 
-    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-active", true);
-    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
-    // The bare cache is left untouched (same reference) — it reconciles via the
-    // trailing invalidate, not the optimistic transform.
-    expect((queryClient as QueryClient).getQueryData(["me", "chats", "palette"])).toBe(palette);
+    // Retry re-runs the lookup; a healthy server then shows the real warning.
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    await click(buttonByText("Retry"));
+    expect(document.body.textContent).toContain("Delete this chat?");
+    expect(document.body.textContent).toContain("1 active schedule");
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+
+    await click(buttonByText("Delete chat"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+  });
+
+  it("proceed-anyway after a failed lookup is an explicit informed choice", async () => {
+    cronApiMocks.listChatCronJobs.mockRejectedValue(new Error("endpoint down"));
+    await renderMenu("active");
+    await selectMenuItem("Archive");
+
+    expect(document.body.textContent).toContain("Couldn't confirm schedules");
+    expect(document.body.textContent).toContain("any active schedules keep running");
+
+    await click(buttonByText("Archive anyway"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+  });
+
+  it("delete refreshes the chat's schedule projection — the server pause emits no chat:updated", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderMenu("active");
+    await selectMenuItem("Delete");
+    await click(buttonByText("Delete chat"));
+
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+  });
+
+  it("archive does not touch the schedule projection (no server-side pause happens)", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderMenu("active");
+    await selectMenuItem("Archive");
+
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+  });
+
+  it("unarchive never consults schedules", async () => {
+    await renderMenu("archived");
+    await selectMenuItem("Unarchive");
+
+    expect(cronApiMocks.listChatCronJobs).not.toHaveBeenCalled();
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "active");
   });
 });

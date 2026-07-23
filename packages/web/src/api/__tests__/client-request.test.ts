@@ -124,6 +124,40 @@ describe("api client request flow", () => {
     await expect(api.get("/plain-error")).rejects.toMatchObject({ status: 500, message: "plain failure" });
   });
 
+  it("merges caller headers into patch/delete and re-sends them after a 401 refresh", async () => {
+    const { api, setStoredTokens } = await import("../client.js");
+    setStoredTokens({ accessToken: "access-1", refreshToken: "refresh-1" });
+
+    fetchMock.mockResolvedValueOnce(response(200, { id: "job-1" }));
+    await expect(api.patch("/cron-jobs/job-1", { state: "paused" }, { headers: { "If-Match": "3" } })).resolves.toEqual(
+      { id: "job-1" },
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PATCH",
+      headers: { Authorization: "Bearer access-1", "Content-Type": "application/json", "If-Match": "3" },
+    });
+
+    // The revision guard must survive the 401-refresh retry verbatim — a
+    // dropped If-Match would silently become an unguarded mutation.
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: "expired" }))
+      .mockResolvedValueOnce(response(200, { accessToken: "access-2", refreshToken: "refresh-2" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await expect(api.delete<void>("/cron-jobs/job-1", { headers: { "If-Match": "4" } })).resolves.toBeUndefined();
+    // calls[1] is the 401 attempt, calls[2] the refresh POST, calls[3] the retry.
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({
+      method: "DELETE",
+      headers: { Authorization: "Bearer access-2", "If-Match": "4" },
+    });
+
+    // A stale revision surfaces as a 409 ApiError with the server's stable
+    // machine code — callers branch on this, never on message text.
+    fetchMock.mockResolvedValueOnce(response(409, { error: "Revision mismatch", code: "CRON_JOB_REVISION_MISMATCH" }));
+    await expect(
+      api.patch("/cron-jobs/job-1", { state: "active" }, { headers: { "If-Match": "3" } }),
+    ).rejects.toMatchObject({ status: 409, code: "CRON_JOB_REVISION_MISMATCH" });
+  });
+
   it("fetches raw payloads with refresh retry and fallback refresh token persistence", async () => {
     const { apiFetchRaw, getStoredTokens, setStoredTokens } = await import("../client.js");
     setStoredTokens({ accessToken: "expired", refreshToken: "refresh-1" });

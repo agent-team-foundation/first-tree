@@ -51,6 +51,17 @@ vi.mock("../../../api/chats.js", async (importOriginal) => ({
   listChatGitlabEntities: chatMocks.listChatGitlabEntities,
 }));
 
+const cronMocks = vi.hoisted(() => ({
+  listChatCronJobs: vi.fn(),
+}));
+
+// The rail now mounts SchedulesSection, which lists the chat's cron jobs;
+// default to an empty list so sidebar cases stay focused on their own data.
+vi.mock("../../../api/cron-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../api/cron-jobs.js")>()),
+  listChatCronJobs: cronMocks.listChatCronJobs,
+}));
+
 vi.mock("../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/sessions.js")>()),
   agentSessionsQueryKey: (agentId: string) => ["agent-sessions", agentId] as const,
@@ -283,6 +294,7 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.clearAllMocks();
   authMock.role = "admin";
+  cronMocks.listChatCronJobs.mockResolvedValue({ items: [] });
   pulseMock.value = {
     stale: false,
     aggregated: [
