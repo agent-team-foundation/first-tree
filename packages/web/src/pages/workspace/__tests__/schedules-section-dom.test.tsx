@@ -500,6 +500,82 @@ describe("SchedulesSection chat switching", () => {
   });
 });
 
+describe("SchedulesSection time freshness", () => {
+  // Fake-timer-aware render/click/flush: the shared helpers wait on a real
+  // setTimeout(0), which never fires once timers are faked.
+  async function flushFake(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  async function renderFake(jobs: CronJob[]): Promise<void> {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: jobs });
+    const { SchedulesSection } = await import("../right-sidebar/schedules-section.js");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    await act(async () => {
+      root?.render(
+        <QueryClientProvider client={queryClient}>
+          <SchedulesSection chatId="chat-1" participants={[OWNER_PARTICIPANT, TARGET_AGENT]} />
+        </QueryClientProvider>,
+      );
+    });
+    await flushFake(1);
+  }
+
+  async function clickFake(el: Element | null | undefined): Promise<void> {
+    if (!el) throw new Error("Expected element to click");
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flushFake(1);
+  }
+
+  it("relative next-run label keeps advancing while a row stays mounted", async () => {
+    vi.useFakeTimers();
+    try {
+      const nextRunAt = new Date(Date.now() + 120_000).toISOString();
+      await renderFake([makeJob({ nextRunAt })]);
+
+      expect(document.body.textContent).toContain("in 2 minutes");
+
+      // Structurally identical poll data cannot re-render by itself; the
+      // explicit clock must advance the label past the 60s poll. (The last
+      // tick at t=90s leaves 30s remaining, which rounds to one minute.)
+      await flushFake(95_000);
+      expect(document.body.textContent).toContain("in 1 minute");
+      expect(document.body.textContent).not.toContain("in 2 minutes");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expanded preview refetches on the interval so occurrences stay future", async () => {
+    vi.useFakeTimers();
+    try {
+      cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2030-01-05T14:00:00.000Z"));
+      await renderFake([makeJob()]);
+      await clickFake(document.querySelector("button[aria-expanded]"));
+
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(1);
+      expect(document.body.textContent).toContain("2030-01-05T14:00:00.000Z");
+
+      cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2030-02-11T14:00:00.000Z"));
+      await flushFake(60_000);
+
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
+      expect(document.body.textContent).toContain("2030-02-11T14:00:00.000Z");
+      // The row never collapsed/reopened to get there.
+      expect(document.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("schedules-section helpers", () => {
   it("formats future relative times without leaking browser-timezone absolutes", async () => {
     const { formatFutureRelative } = await import("../right-sidebar/schedules-section.js");

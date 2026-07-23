@@ -279,6 +279,27 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
   });
 
+  it("delete refreshes the chat's schedule projection — the server pause emits no chat:updated", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderMenu("active");
+    await selectMenuItem("Delete");
+    await click(buttonByText("Delete chat"));
+
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+  });
+
+  it("archive does not touch the schedule projection (no server-side pause happens)", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderMenu("active");
+    await selectMenuItem("Archive");
+
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+  });
+
   it("unarchive never consults schedules", async () => {
     await renderMenu("archived");
     await selectMenuItem("Unarchive");

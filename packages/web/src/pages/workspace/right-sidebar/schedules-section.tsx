@@ -1,7 +1,7 @@
 import type { ChatParticipantDetail, CronJob, CronPreviewResponse } from "@first-tree/shared";
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Pause, Play, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { deleteCronJob, listChatCronJobs, patchCronJob, previewChatCronJobs } from "../../../api/cron-jobs.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -141,6 +141,23 @@ export function activeJobCount(items: CronJob[]): number {
   return items.filter((job) => job.state === "active").length;
 }
 
+/**
+ * Re-render clock for time-derived labels. The schedule list polls every 60s,
+ * but structurally identical poll data (same `nextRunAt`) shares identity and
+ * never re-renders — without an explicit tick, "next in 5 minutes" would
+ * still say that an hour later. 30s keeps minute-granularity labels honest.
+ */
+export const NOW_TICK_MS = 30_000;
+
+function useNow(intervalMs: number = NOW_TICK_MS): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 function isRevisionConflict(err: unknown): boolean {
   // Branch on the stable machine code, not the bare status: any other 409 is
   // not a stale-revision signal and must not masquerade as one.
@@ -151,6 +168,7 @@ export function SchedulesSection({ chatId, participants }: { chatId: string; par
   const { memberId } = useAuth();
   const { items, isLoading, isError, retry } = useChatCronJobs(chatId);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const now = useNow();
 
   // First load gets an identifiable lightweight row: rendering nothing could
   // read as "this chat has no schedules" while the answer is still unknown.
@@ -222,6 +240,7 @@ export function SchedulesSection({ chatId, participants }: { chatId: string; par
             agentDisplayName={agentName(job.agentId)}
             isOwner={memberId !== null && memberId === job.ownerMemberId}
             expanded={expandedJobId === job.id}
+            now={now}
             onToggle={() => setExpandedJobId((current) => (current === job.id ? null : job.id))}
           />
         ))}
@@ -236,6 +255,7 @@ function ScheduleRow({
   agentDisplayName,
   isOwner,
   expanded,
+  now,
   onToggle,
 }: {
   chatId: string;
@@ -243,6 +263,7 @@ function ScheduleRow({
   agentDisplayName: string;
   isOwner: boolean;
   expanded: boolean;
+  now: number;
   onToggle: () => void;
 }) {
   const stateView = stateBadge(job);
@@ -300,7 +321,7 @@ function ScheduleRow({
               <>
                 {" · next "}
                 <span title={formatAbsoluteInZone(job.nextRunAt, job.timezone)}>
-                  {formatFutureRelative(job.nextRunAt)}
+                  {formatFutureRelative(job.nextRunAt, now)}
                 </span>
               </>
             ) : null}
@@ -308,7 +329,7 @@ function ScheduleRow({
           </span>
         </span>
       </button>
-      {expanded ? <ScheduleDetail chatId={chatId} job={job} isOwner={isOwner} /> : null}
+      {expanded ? <ScheduleDetail chatId={chatId} job={job} isOwner={isOwner} now={now} /> : null}
     </div>
   );
 }
@@ -317,13 +338,27 @@ function stateBadge(job: CronJob): { label: string; tone: DenseBadgeTone } {
   return job.state === "active" ? { label: "Active", tone: "accent" } : { label: "Paused", tone: "neutral" };
 }
 
-function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob; isOwner: boolean }) {
+function ScheduleDetail({
+  chatId,
+  job,
+  isOwner,
+  now,
+}: {
+  chatId: string;
+  job: CronJob;
+  isOwner: boolean;
+  now: number;
+}) {
   const preview = useQuery({
     queryKey: cronPreviewQueryKey(chatId, job.schedule, job.timezone),
     queryFn: () => previewChatCronJobs(chatId, { schedule: job.schedule, timezone: job.timezone }),
     // Active and paused jobs both show occurrences (paused is labeled
     // "if resumed"); the resume dialog fetches its own forced-fresh preview.
+    // The 60s poll keeps the five occurrences future while the row stays
+    // expanded — focus refetch is globally disabled, so staleTime alone
+    // would let the first occurrence slide into the past.
     staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 
   return (
@@ -341,7 +376,7 @@ function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob
           preserved; long content scrolls instead of breaking the rail. */}
       {job.state === "active" && job.nextRunAt ? (
         <div className="text-body" style={{ paddingTop: "var(--sp-2)", color: "var(--fg-2)" }}>
-          Next run: {formatFutureRelative(job.nextRunAt)} · {formatAbsoluteInZone(job.nextRunAt, job.timezone)}
+          Next run: {formatFutureRelative(job.nextRunAt, now)} · {formatAbsoluteInZone(job.nextRunAt, job.timezone)}
         </div>
       ) : null}
       <div style={{ paddingTop: job.state === "active" && job.nextRunAt ? 0 : "var(--sp-2)" }}>
