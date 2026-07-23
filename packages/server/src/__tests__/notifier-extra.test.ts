@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNotifier, notifyRecipients } from "../services/notifier.js";
+import { createNotifier, notifyRecipients, notifyRecipientsSettled } from "../services/notifier.js";
 
 type ListenHandler = (payload?: string) => void;
 
@@ -316,6 +316,18 @@ describe("createNotifier", () => {
     notifyRecipients(notifier as never, ["ok", "bad"], "msg_1");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(notifier.notify).toHaveBeenCalledWith("ok", "msg_1");
+    expect(notifier.notify).toHaveBeenCalledWith("bad", "msg_1");
+  });
+
+  it("settles recipient notifies and reports failures for observers", async () => {
+    const notifier = {
+      notify: vi.fn((inboxId: string) => (inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve())),
+    };
+
+    const result = await notifyRecipientsSettled(notifier as never, ["ok", "bad"], "msg_1");
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
     expect(notifier.notify).toHaveBeenCalledWith("ok", "msg_1");
     expect(notifier.notify).toHaveBeenCalledWith("bad", "msg_1");
   });

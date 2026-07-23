@@ -13,7 +13,7 @@ import { messages } from "../db/schema/messages.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createChat, ensureParticipant } from "../services/chat.js";
 import { createCronJob, deleteCronJob, updateCronJob } from "../services/cron-job.js";
-import { createCronScheduler } from "../services/cron-scheduler.js";
+import { computeDueToCommitMs, createCronScheduler, sweepCronJobs } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -99,6 +99,71 @@ describe("cron jobs integration", () => {
         },
       }),
     ).rejects.toThrow(/reserved/i);
+  });
+
+  it("claims due jobs exclusively across independent pools with a start barrier", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "hourly-barrier",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "check inbox",
+    });
+    expect(createRes.statusCode).toBe(201);
+    const job = createRes.json() as { id: string };
+    await app.db
+      .update(cronJobs)
+      .set({ nextRunAt: new Date(Date.now() - 5_000) })
+      .where(eq(cronJobs.id, job.id));
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+
+    const poolA = connectDatabase(
+      databaseUrlWithApplicationName(databaseUrl, `cron_sw_a_${crypto.randomUUID().slice(0, 8)}`),
+    );
+    const poolB = connectDatabase(
+      databaseUrlWithApplicationName(databaseUrl, `cron_sw_b_${crypto.randomUUID().slice(0, 8)}`),
+    );
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let arrived = 0;
+      let bothArrived!: () => void;
+      const bothReady = new Promise<void>((resolve) => {
+        bothArrived = resolve;
+      });
+      const beforeClaimForTest = async () => {
+        arrived += 1;
+        if (arrived >= 2) bothArrived();
+        await gate;
+      };
+
+      const staleSeconds = app.config.runtime.presenceCleanupSeconds;
+      const sweepA = sweepCronJobs(poolA, app.notifier, { staleSeconds, beforeClaimForTest });
+      const sweepB = sweepCronJobs(poolB, app.notifier, { staleSeconds, beforeClaimForTest });
+      await Promise.race([
+        bothReady,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("two-worker barrier timeout")), 10_000);
+        }),
+      ]);
+      expect(arrived).toBeGreaterThanOrEqual(2);
+      release();
+      await Promise.all([sweepA, sweepB]);
+
+      const rows = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+      const cronMessages = rows.filter((row) => {
+        const meta = row.metadata as Record<string, unknown>;
+        return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+      });
+      expect(cronMessages).toHaveLength(1);
+    } finally {
+      await poolA.end();
+      await poolB.end();
+    }
   });
 
   it("claims due jobs exclusively and materializes one trigger message", async () => {
@@ -1095,5 +1160,124 @@ describe("cron jobs integration", () => {
       await blocker.end();
       await observer.end();
     }
+  });
+
+  it("emits dueToCommitMs from scheduledFor to commit, not sweep-loop duration", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "latency-metric",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string };
+    const scheduledFor = new Date(Date.now() - 5_000);
+    await app.db.update(cronJobs).set({ nextRunAt: scheduledFor }).where(eq(cronJobs.id, job.id));
+
+    const seen: Array<{ kind: string; dueToCommitMs: number; latenessMs?: number }> = [];
+    await sweepCronJobs(app.db, app.notifier, {
+      staleSeconds: app.config.runtime.presenceCleanupSeconds,
+      onDecisionForTest: (fields) => {
+        seen.push(fields);
+      },
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.kind).toBe("accepted");
+    expect(seen[0]?.dueToCommitMs).toBeGreaterThanOrEqual(4_500);
+    expect(seen[0]?.latenessMs).toBeGreaterThanOrEqual(4_500);
+    // Must track scheduledFor→commit, not a near-zero sweep-slice clock.
+    expect(seen[0]?.dueToCommitMs).toBeGreaterThan(1_000);
+    expect(Math.abs((seen[0]?.dueToCommitMs ?? 0) - (seen[0]?.latenessMs ?? 0))).toBeLessThan(5_000);
+    expect(computeDueToCommitMs(scheduledFor, scheduledFor.getTime() + 5_012)).toBe(5_012);
+  });
+
+  it("rolls back pre-commit claim faults and delivers once after repair", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "precommit-fault",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string };
+    const dueAt = new Date(Date.now() - 5_000);
+    await app.db.update(cronJobs).set({ nextRunAt: dueAt }).where(eq(cronJobs.id, job.id));
+
+    const staleSeconds = app.config.runtime.presenceCleanupSeconds;
+    const first = await sweepCronJobs(app.db, app.notifier, {
+      staleSeconds,
+      afterClaimForTest: async () => {
+        throw new Error("injected pre-commit fault");
+      },
+    });
+    expect(first.processed).toBe(0);
+
+    const [afterFault] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(afterFault?.nextRunAt?.getTime()).toBe(dueAt.getTime());
+    expect(afterFault?.lastTriggerMessageId).toBeNull();
+
+    await sweepCronJobs(app.db, app.notifier, { staleSeconds });
+    const rows = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const cronMessages = rows.filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronMessages).toHaveLength(1);
+
+    await sweepCronJobs(app.db, app.notifier, { staleSeconds });
+    const rowsAgain = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const cronAgain = rowsAgain.filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronAgain).toHaveLength(1);
+  });
+
+  it("records post-commit notifier faults without rematerializing the occurrence", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "postcommit-notifier-fault",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string };
+    await app.db
+      .update(cronJobs)
+      .set({ nextRunAt: new Date(Date.now() - 5_000) })
+      .where(eq(cronJobs.id, job.id));
+
+    const failingNotifier = {
+      notify: async () => {
+        throw new Error("injected inbox notify failure");
+      },
+      notifyChatUpdated: async () => undefined,
+    };
+
+    const staleSeconds = app.config.runtime.presenceCleanupSeconds;
+    const accepted = await sweepCronJobs(app.db, failingNotifier as never, { staleSeconds });
+    expect(accepted.processed).toBe(1);
+    expect(accepted.postCommitFailures).toBe(1);
+
+    const rows = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const cronMessages = rows.filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronMessages).toHaveLength(1);
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.lastTriggerMessageId).toBe(cronMessages[0]?.id);
+    expect(row?.nextRunAt?.getTime()).toBeGreaterThan(Date.now() - 60_000);
+
+    // Backlog repair / later sweep must not rematerialize the same occurrence.
+    await sweepCronJobs(app.db, app.notifier, { staleSeconds });
+    const rowsAgain = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const cronAgain = rowsAgain.filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronAgain).toHaveLength(1);
   });
 });

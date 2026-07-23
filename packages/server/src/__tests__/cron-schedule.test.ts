@@ -7,6 +7,7 @@ import {
   matchesScheduledWallTime,
   previewOccurrences,
 } from "../services/cron-schedule.js";
+import { computeDueToCommitMs } from "../services/cron-scheduler.js";
 
 describe("cron-schedule", () => {
   it("lists five future occurrences with normalized schedule/timezone", () => {
@@ -75,5 +76,15 @@ describe("cron-schedule", () => {
     expect(() => assertSchedulable("0 0 31 2 *", "UTC", new Date("2026-01-01T00:00:00.000Z"))).toThrow(
       InvalidCronScheduleError,
     );
+  });
+});
+
+describe("computeDueToCommitMs", () => {
+  it("measures scheduledFor → commit, not sweep-loop start", () => {
+    const scheduledFor = new Date("2026-07-23T05:00:00.000Z");
+    const commitAt = Date.parse("2026-07-23T05:00:05.002Z");
+    expect(computeDueToCommitMs(scheduledFor, commitAt)).toBe(5_002);
+    // A near-zero sweep slice must not masquerade as due-to-commit latency.
+    expect(computeDueToCommitMs(scheduledFor, commitAt)).toBeGreaterThan(1_000);
   });
 });

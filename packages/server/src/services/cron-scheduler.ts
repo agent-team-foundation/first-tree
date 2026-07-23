@@ -27,7 +27,7 @@ import {
   runDeferredSendMessagePostCommitEffects,
   sendMessage,
 } from "./message.js";
-import { type Notifier, notifyRecipients } from "./notifier.js";
+import { type Notifier, notifyRecipientsSettled } from "./notifier.js";
 
 const log = createLogger("CronScheduler");
 
@@ -38,6 +38,30 @@ export type CronScheduler = {
   stop(): Promise<void>;
   /** Test/ops hook: run one sweep immediately. */
   sweepOnce(): Promise<void>;
+};
+
+/** `scheduledFor → commit/emit` latency (not sweep-loop wall time). */
+export function computeDueToCommitMs(scheduledFor: Date, committedAtMs: number = Date.now()): number {
+  return committedAtMs - scheduledFor.getTime();
+}
+
+export type SweepCronJobsOptions = {
+  staleSeconds: number;
+  /**
+   * Test hook: invoked inside the claim transaction after a due row is locked,
+   * before accept/skip/pause work. Throwing rolls back the claim (pre-commit).
+   */
+  afterClaimForTest?: (jobId: string) => Promise<void>;
+  /** Test hook: invoked after each committed decision with emitted latency fields. */
+  onDecisionForTest?: (fields: {
+    kind: "accepted" | "skipped" | "auto_paused";
+    jobId: string;
+    scheduledFor: Date;
+    dueToCommitMs: number;
+    latenessMs?: number;
+  }) => void;
+  /** Test hook: runs at the start of each claim attempt (before SELECT … SKIP LOCKED). */
+  beforeClaimForTest?: () => Promise<void>;
 };
 
 type DispatchOk = { ok: true };
@@ -153,8 +177,7 @@ type SweepDecision =
       scheduledFor: Date;
     };
 
-function emitSweepDecisionTelemetry(decision: Exclude<SweepDecision, { kind: "none" }>, sweepStartedAt: number): void {
-  const dueToCommitMs = Date.now() - sweepStartedAt;
+function emitSweepDecisionTelemetry(decision: Exclude<SweepDecision, { kind: "none" }>, dueToCommitMs: number): void {
   if (decision.kind === "accepted") {
     log.info(
       {
@@ -205,9 +228,16 @@ function emitSweepDecisionTelemetry(decision: Exclude<SweepDecision, { kind: "no
   );
 }
 
-async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<SweepDecision> {
+async function claimAndProcessOne(
+  db: Database,
+  staleSeconds: number,
+  hooks?: Pick<SweepCronJobsOptions, "afterClaimForTest" | "beforeClaimForTest">,
+): Promise<SweepDecision> {
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    if (hooks?.beforeClaimForTest) {
+      await hooks.beforeClaimForTest();
+    }
     const claimed = await txDb
       .select()
       .from(cronJobs)
@@ -218,6 +248,10 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
 
     const job = claimed[0] as CronJobRow | undefined;
     if (!job || !job.nextRunAt) return { kind: "none" as const };
+
+    if (hooks?.afterClaimForTest) {
+      await hooks.afterClaimForTest(job.id);
+    }
 
     const now = await databaseNow(txDb);
     const scheduledFor = job.nextRunAt;
@@ -353,14 +387,22 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
   });
 }
 
-export async function sweepCronJobs(db: Database, notifier: Notifier, opts: { staleSeconds: number }): Promise<void> {
+export async function sweepCronJobs(
+  db: Database,
+  notifier: Notifier,
+  opts: SweepCronJobsOptions,
+): Promise<{ processed: number; postCommitFailures: number }> {
   const sweepStartedAt = Date.now();
   let processed = 0;
+  let postCommitFailures = 0;
   try {
     for (let i = 0; i < MAX_JOBS_PER_SWEEP; i++) {
       let decision: SweepDecision;
       try {
-        decision = await claimAndProcessOne(db, opts.staleSeconds);
+        decision = await claimAndProcessOne(db, opts.staleSeconds, {
+          afterClaimForTest: opts.afterClaimForTest,
+          beforeClaimForTest: opts.beforeClaimForTest,
+        });
       } catch (err) {
         log.error({ err, metric: "cron_sweep_failures_total" }, "cron.sweep.failed");
         break;
@@ -368,13 +410,28 @@ export async function sweepCronJobs(db: Database, notifier: Notifier, opts: { st
       if (decision.kind === "none") break;
       processed += 1;
       // Decision telemetry only after the claim txn committed successfully.
-      emitSweepDecisionTelemetry(decision, sweepStartedAt);
+      const dueToCommitMs = computeDueToCommitMs(decision.scheduledFor);
+      emitSweepDecisionTelemetry(decision, dueToCommitMs);
+      opts.onDecisionForTest?.({
+        kind: decision.kind,
+        jobId: decision.jobId,
+        scheduledFor: decision.scheduledFor,
+        dueToCommitMs,
+        latenessMs: decision.kind === "auto_paused" ? undefined : decision.latenessMs,
+      });
       if (decision.kind === "accepted") {
         try {
           await runDeferredSendMessagePostCommitEffects(db, decision.deferred);
-          notifyRecipients(notifier, decision.recipients, decision.messageId);
+          const notifyResult = await notifyRecipientsSettled(notifier, decision.recipients, decision.messageId);
+          if (notifyResult.failed > 0) {
+            throw Object.assign(new Error(`cron recipient notify failed (${notifyResult.failed})`), {
+              cause: notifyResult.errors[0],
+              failedRecipients: notifyResult.failed,
+            });
+          }
           await notifier.notifyChatUpdated(decision.controlChatId);
         } catch (err) {
+          postCommitFailures += 1;
           log.error(
             { err, jobId: decision.jobId, messageId: decision.messageId, metric: "cron_post_commit_failures_total" },
             "cron post-commit effects failed",
@@ -393,6 +450,7 @@ export async function sweepCronJobs(db: Database, notifier: Notifier, opts: { st
       "cron.sweep.finished",
     );
   }
+  return { processed, postCommitFailures };
 }
 
 export function createCronScheduler(app: FastifyInstance): CronScheduler {

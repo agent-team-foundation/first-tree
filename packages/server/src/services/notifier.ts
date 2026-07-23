@@ -782,3 +782,20 @@ export function notifyRecipients(notifier: Notifier, recipients: string[], messa
     notifier.notify(inboxId, messageId).catch(() => {});
   }
 }
+
+/**
+ * Await every recipient notify and report failures. Callers that need
+ * post-commit observability (e.g. cron sweeper) should use this instead of
+ * `notifyRecipients`, which swallows rejections.
+ */
+export async function notifyRecipientsSettled(
+  notifier: Notifier,
+  recipients: string[],
+  messageId: string,
+): Promise<{ failed: number; errors: unknown[] }> {
+  const results = await Promise.allSettled(recipients.map((inboxId) => notifier.notify(inboxId, messageId)));
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  return { failed: errors.length, errors };
+}
