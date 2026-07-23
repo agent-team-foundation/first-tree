@@ -1,3 +1,5 @@
+import type { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type {
   AgentSkills,
   AgentType,
@@ -29,7 +31,15 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
-import { BadRequestError, ClientRetiredError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import {
+  BadRequestError,
+  ClientRetiredError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ServiceUnavailableError,
+} from "../errors.js";
+import { createLogger } from "../observability/logger.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
 import {
@@ -37,7 +47,9 @@ import {
   agentNotLandingCampaignTrialCondition,
   agentVisibilityCondition,
 } from "./access-control.js";
+import { avatarObjectKey, type ObjectStorage } from "./object-storage.js";
 import { resolveDefaultOrgId } from "./organization.js";
+import { createByteLimitStream } from "./stream-limit.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
 /**
@@ -1302,68 +1314,135 @@ export async function deleteAgent(db: Database, uuid: string) {
 export const SUPPORTED_AVATAR_IMAGE_MIMES = ["image/webp", "image/png", "image/jpeg"] as const;
 export type SupportedAvatarImageMime = (typeof SUPPORTED_AVATAR_IMAGE_MIMES)[number];
 
-/** Hard server-side ceiling for the stored bytea blob. Client pre-resizes to ~50KB. */
+/** Hard server-side ceiling for the avatar payload. Client pre-resizes to ~50KB. */
 export const MAX_AVATAR_IMAGE_BYTES = 512 * 1024;
+
+const avatarLog = createLogger("AgentAvatar");
 
 function isSupportedAvatarMime(mime: string): mime is SupportedAvatarImageMime {
   return SUPPORTED_AVATAR_IMAGE_MIMES.find((m) => m === mime) !== undefined;
 }
 
 /**
- * Fetch the avatar image blob for an agent. Returns `null` when no image
- * is set (the column is NULL). The data + mime pair is always coherent
- * (set/cleared together by the service writes below).
+ * Fetch the avatar image descriptor for an agent. Returns `null` when no
+ * image is set. Exactly one payload location is populated: `objectKey`
+ * (object storage, key `avatars/<uuid>`) for migrated/new avatars, or the
+ * legacy inline `data` bytea for rows the migration command has not moved
+ * yet. mime + updatedAt are always coherent with whichever is set.
  */
 export async function getAgentAvatarImage(
   db: Database,
   uuid: string,
-): Promise<{ data: Buffer; mime: string; updatedAt: Date } | null> {
+): Promise<{ data: Buffer | null; objectKey: string | null; mime: string; updatedAt: Date } | null> {
   const [row] = await db
     .select({
       data: agents.avatarImageData,
+      objectKey: agents.avatarObjectKey,
       mime: agents.avatarImageMime,
       updatedAt: agents.avatarImageUpdatedAt,
     })
     .from(agents)
     .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
     .limit(1);
-  if (!row || !row.data || !row.mime || !row.updatedAt) return null;
-  return { data: row.data, mime: row.mime, updatedAt: row.updatedAt };
+  if (!row || !row.mime || !row.updatedAt || (!row.data && !row.objectKey)) return null;
+  return { data: row.data, objectKey: row.objectKey, mime: row.mime, updatedAt: row.updatedAt };
 }
 
-/** Replace (or set) an agent's avatar image. Validates mime + size. */
-export async function setAgentAvatarImage(db: Database, uuid: string, data: Buffer, mime: string): Promise<Date> {
-  if (!isSupportedAvatarMime(mime)) {
-    throw new BadRequestError(`Unsupported avatar image type "${mime}". Use PNG, JPEG, or WEBP.`);
+export type SetAgentAvatarImageOptions = {
+  mime: string;
+  /** Exact payload size from the request's Content-Length. */
+  contentLength: number;
+};
+
+/**
+ * Replace (or set) an agent's avatar image. Validates mime + size up
+ * front (from the declared Content-Length), then STREAMS the payload to
+ * object storage under the deterministic `avatars/<uuid>` key — overwrite
+ * in place, so replacements never accumulate objects — and records the
+ * key + mime + timestamp on the row. The legacy inline bytea is cleared on
+ * the way, so every avatar write converges rows toward the migrated shape.
+ */
+export async function setAgentAvatarImage(
+  db: Database,
+  objectStorage: ObjectStorage | null,
+  uuid: string,
+  body: Readable,
+  opts: SetAgentAvatarImageOptions,
+): Promise<Date> {
+  if (!isSupportedAvatarMime(opts.mime)) {
+    throw new BadRequestError(`Unsupported avatar image type "${opts.mime}". Use PNG, JPEG, or WEBP.`);
   }
-  if (data.length === 0) {
+  if (opts.contentLength === 0) {
     throw new BadRequestError("Avatar image payload is empty.");
   }
-  if (data.length > MAX_AVATAR_IMAGE_BYTES) {
-    throw new BadRequestError(`Avatar image is too large (${data.length} bytes; max ${MAX_AVATAR_IMAGE_BYTES}).`);
+  if (opts.contentLength > MAX_AVATAR_IMAGE_BYTES) {
+    throw new BadRequestError(
+      `Avatar image is too large (${opts.contentLength} bytes; max ${MAX_AVATAR_IMAGE_BYTES}).`,
+    );
   }
+  if (!objectStorage) {
+    throw new ServiceUnavailableError(
+      "Object storage is not configured (FIRST_TREE_S3_*); avatar uploads are unavailable",
+    );
+  }
+  const [existing] = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  if (!existing) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+
+  const key = avatarObjectKey(uuid);
+  const limiter = createByteLimitStream({
+    expectedBytes: opts.contentLength,
+    makeMismatchError: (seenBytes) =>
+      new BadRequestError(
+        `Avatar upload body does not match Content-Length (declared ${opts.contentLength}, saw ${seenBytes}${seenBytes > opts.contentLength ? "+" : ""} bytes)`,
+      ),
+  });
+  await Promise.all([
+    objectStorage.putObjectStream(key, limiter, { contentLength: opts.contentLength, contentType: opts.mime }),
+    pipeline(body, limiter),
+  ]);
+
   const now = new Date();
   const result = await db
     .update(agents)
     .set({
-      avatarImageData: data,
-      avatarImageMime: mime,
+      avatarObjectKey: key,
+      avatarImageData: null,
+      avatarImageMime: opts.mime,
       avatarImageUpdatedAt: now,
       updatedAt: now,
     })
     .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
     .returning({ uuid: agents.uuid });
   if (result.length === 0) {
+    // Agent vanished mid-upload; the just-written object is unreachable
+    // from any row, so remove it again (best-effort).
+    await objectStorage.deleteObject(key).catch(() => {});
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return now;
 }
 
-/** Clear an agent's avatar image (falls back to color + initial). */
-export async function clearAgentAvatarImage(db: Database, uuid: string): Promise<void> {
+/**
+ * Clear an agent's avatar image (falls back to color + initial). The row
+ * is cleared first so the UI converges immediately; the object delete is
+ * best-effort — a leftover object at the fixed key is unreachable and gets
+ * overwritten by the next upload.
+ */
+export async function clearAgentAvatarImage(
+  db: Database,
+  objectStorage: ObjectStorage | null,
+  uuid: string,
+): Promise<void> {
   const result = await db
     .update(agents)
     .set({
+      avatarObjectKey: null,
       avatarImageData: null,
       avatarImageMime: null,
       avatarImageUpdatedAt: null,
@@ -1373,6 +1452,12 @@ export async function clearAgentAvatarImage(db: Database, uuid: string): Promise
     .returning({ uuid: agents.uuid });
   if (result.length === 0) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+  if (objectStorage) {
+    // Idempotent whether or not this avatar ever lived in object storage.
+    await objectStorage.deleteObject(avatarObjectKey(uuid)).catch((error) => {
+      avatarLog.warn({ err: error, uuid }, "avatar object delete failed; next upload overwrites the key");
+    });
   }
 }
 

@@ -1,11 +1,24 @@
-import { ATTACHMENT_FILENAME_HEADER, ATTACHMENT_MIME_HEADER, MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
+import { Readable } from "node:stream";
+import {
+  ATTACHMENT_ERROR_CODES,
+  ATTACHMENT_FILENAME_HEADER,
+  ATTACHMENT_MIME_HEADER,
+  MAX_ATTACHMENT_BYTES,
+  ORG_ATTACHMENT_QUOTA_BYTES,
+  ORG_ATTACHMENT_QUOTA_COUNT,
+} from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { attachments } from "../db/schema/attachments.js";
 import { organizations } from "../db/schema/organizations.js";
-import { createAttachment } from "../services/attachment.js";
+import { createLegacyAttachment, reserveAttachment } from "../services/attachment.js";
 import { ensureMembership } from "../services/membership.js";
+import { attachmentObjectKey, createObjectStorage } from "../services/object-storage.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAdmin, createTestApp, useTestApp, workerObjectStorage } from "./helpers.js";
+
+const DEFAULT_QUOTA = { maxTotalBytes: ORG_ATTACHMENT_QUOTA_BYTES, maxObjectCount: ORG_ATTACHMENT_QUOTA_COUNT };
 
 type Admin = Awaited<ReturnType<typeof createTestAdmin>>;
 
@@ -38,7 +51,7 @@ function getAttachment(app: FastifyInstance, caller: Admin, id: string) {
 }
 
 describe("attachments route — upload + capability download", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ objectStorage: workerObjectStorage() });
 
   it("uploads then downloads via uploader", async () => {
     const app = getApp();
@@ -52,6 +65,16 @@ describe("attachments route — upload + capability download", () => {
     expect(body.sizeBytes).toBe(bytes.byteLength);
     expect(body.uploadedBy).toBe(admin.humanAgentUuid);
 
+    // The payload landed in object storage — the PG row holds metadata only.
+    const [row] = await app.db.select().from(attachments).where(eq(attachments.id, body.id));
+    expect(row?.state).toBe("stored");
+    expect(row?.organizationId).toBe(admin.organizationId);
+    expect(row?.objectKey).toBe(attachmentObjectKey(body.id));
+    expect(row?.data).toBeNull();
+    const storage = createObjectStorage(workerObjectStorage());
+    const object = await storage.getObjectStream(attachmentObjectKey(body.id));
+    expect(object).not.toBeNull();
+
     const download = await getAttachment(app, admin, body.id);
     expect(download.statusCode).toBe(200);
     expect(download.headers["content-type"]).toBe("image/png");
@@ -59,7 +82,7 @@ describe("attachments route — upload + capability download", () => {
     expect(download.headers["x-content-type-options"]).toBe("nosniff");
     expect(download.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
     expect(download.headers.etag).toBe(`"${body.id}"`);
-    expect(download.headers["content-disposition"]).toBe('inline; filename="kitten.png"');
+    expect(download.headers["content-disposition"]).toBe(`inline; filename="kitten.png"; filename*=UTF-8''kitten.png`);
     expect(download.rawPayload.equals(bytes)).toBe(true);
   });
 
@@ -145,16 +168,18 @@ describe("attachments route — upload + capability download", () => {
     expect(blankMime.statusCode).toBe(400);
 
     await expect(
-      createAttachment(app.db, {
+      reserveAttachment(app.db, {
+        organizationId: admin.organizationId,
         mimeType: "image/png",
         filename: " ",
-        data: Buffer.from("filename"),
+        sizeBytes: 8,
         uploadedBy: admin.humanAgentUuid,
+        quota: DEFAULT_QUOTA,
       }),
     ).rejects.toThrow("Attachment filename is required");
   });
 
-  it("surfaces an empty insert-returning result from the attachment store", async () => {
+  it("surfaces an empty insert-returning result from the legacy attachment writer", async () => {
     const fakeDb = {
       insert: () => ({
         values: () => ({
@@ -164,7 +189,7 @@ describe("attachments route — upload + capability download", () => {
     };
 
     await expect(
-      createAttachment(fakeDb as never, {
+      createLegacyAttachment(fakeDb as never, {
         mimeType: "image/png",
         filename: "x.png",
         data: Buffer.from("bytes"),
@@ -173,14 +198,53 @@ describe("attachments route — upload + capability download", () => {
     ).rejects.toThrow("Attachment insert returned no row");
   });
 
-  it("rejects oversize at bodyLimit (413) or service cap (400)", async () => {
+  it("rejects oversize uploads with 413 + stable code before reading the body", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `os-${crypto.randomUUID().slice(0, 6)}` });
-    // 1 KB over the cap — well under the route bodyLimit, so the service-
-    // layer cap is what fires.
     const oversize = Buffer.alloc(MAX_ATTACHMENT_BYTES + 1024);
     const reply = await postAttachment(app, admin, oversize);
-    expect([400, 413]).toContain(reply.statusCode);
+    expect(reply.statusCode).toBe(413);
+    expect((reply.json() as { code?: string }).code).toBe(ATTACHMENT_ERROR_CODES.tooLarge);
+  });
+
+  it("rejects uploads without Content-Length (chunked) with 411", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `cl-${crypto.randomUUID().slice(0, 6)}` });
+    const reply = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/attachments`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "content-type": "application/octet-stream",
+        [ATTACHMENT_MIME_HEADER]: "image/png",
+        [ATTACHMENT_FILENAME_HEADER]: "x.bin",
+      },
+      // A stream payload makes inject send chunked transfer encoding.
+      payload: Readable.from([Buffer.from("hi")]),
+    });
+    expect(reply.statusCode).toBe(411);
+  });
+
+  it("answers 503 when object storage is not configured", async () => {
+    const app = await createTestApp();
+    try {
+      const admin = await createTestAdmin(app, { username: `nos3-${crypto.randomUUID().slice(0, 6)}` });
+      const reply = await postAttachment(app, admin, Buffer.from("hi"));
+      expect(reply.statusCode).toBe(503);
+
+      // Legacy bytea rows still download without object storage.
+      const legacy = await createLegacyAttachment(app.db, {
+        mimeType: "text/plain",
+        filename: "legacy.txt",
+        data: Buffer.from("pre-migration"),
+        uploadedBy: admin.humanAgentUuid,
+      });
+      const download = await getAttachment(app, admin, legacy.id);
+      expect(download.statusCode).toBe(200);
+      expect(download.rawPayload.toString()).toBe("pre-migration");
+    } finally {
+      await app.close();
+    }
   });
 
   it("returns 404 for unknown attachment id", async () => {

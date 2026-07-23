@@ -42,6 +42,8 @@ export type PresignGetOptions = {
   filename: string;
   /** Logical MIME type, carried into `Content-Type` of the S3 response. */
   mimeType: string;
+  /** Disposition type; the download route serves inline like it always has. */
+  disposition: "inline" | "attachment";
 };
 
 /**
@@ -157,7 +159,7 @@ export function createObjectStorage(config: ObjectStorageConfig): ObjectStorage 
         Bucket: bucket,
         Key: key,
         ResponseContentType: opts.mimeType,
-        ResponseContentDisposition: contentDisposition(opts.filename),
+        ResponseContentDisposition: contentDisposition(opts.filename, opts.disposition),
       });
       return getSignedUrl(presignClient, command, { expiresIn: ATTACHMENT_PRESIGN_TTL_SECONDS });
     },
@@ -184,10 +186,11 @@ export function createObjectStorage(config: ObjectStorageConfig): ObjectStorage 
 
 /**
  * RFC 6266 / RFC 5987 Content-Disposition for arbitrary (possibly
- * non-ASCII) filenames: an ASCII fallback plus a UTF-8 `filename*`. Also
- * used by the proxy download path so both modes emit identical headers.
+ * non-ASCII) filenames: an ASCII fallback plus a UTF-8 `filename*`. Used by
+ * the proxy download path and presigned URLs so both modes emit identical
+ * headers.
  */
-export function contentDisposition(filename: string): string {
+export function contentDisposition(filename: string, disposition: "inline" | "attachment"): string {
   const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replaceAll('"', "'");
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
