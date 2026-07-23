@@ -132,13 +132,17 @@ export function SetupPreviewPage() {
   const state: PreviewState = searchParams.get("state") === "mixed" ? "mixed" : "ready";
   const facts = previewFacts(role, state);
   const capabilities = state === "mixed" ? MIXED_CAPABILITIES : PREVIEW_CAPABILITIES;
+  const snapshotStatus = state === "mixed" ? "stale" : "active";
   const queryClient = useMemo(() => {
     const client = new QueryClient({
       defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
     });
     client.setQueryData(setupCapabilitiesQueryKey("org-preview"), capabilities);
+    client.setQueryData(["context-tree-snapshot", "org-preview", "7d", false], {
+      snapshotStatus,
+    });
     return client;
-  }, [capabilities]);
+  }, [capabilities, snapshotStatus]);
   const auth = {
     isAuthenticated: true,
     meLoaded: true,
