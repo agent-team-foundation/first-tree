@@ -1,6 +1,20 @@
 import { GITLAB_CONNECTION_READINESS, type GitlabConnectionReadiness } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, CircleCheck, FolderGit2, GitFork, Laptop, type LucideIcon, Webhook } from "lucide-react";
+import {
+  Bot,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  CircleMinus,
+  Clock3,
+  FolderGit2,
+  GitFork,
+  Laptop,
+  LoaderCircle,
+  type LucideIcon,
+  MessageCircle,
+  Webhook,
+} from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
 import { getContextTreeSnapshot } from "../../api/context-tree.js";
@@ -28,6 +42,8 @@ type ContextTreeFact = {
   branch: string | null;
   availability: "active" | "stale" | "unavailable" | "checking";
 };
+
+export type SetupStatusKind = "ready" | "optional" | "loading" | "pending" | "attention" | "blocked" | "unknown";
 
 export type SetupFacts = {
   role: string | null;
@@ -59,7 +75,7 @@ export type SetupRowModel = {
   status: {
     label: string;
     detail?: string;
-    positive?: boolean;
+    kind: SetupStatusKind;
   };
   action?: {
     label: string;
@@ -103,12 +119,12 @@ function contextTreeFact(
   return { state: "error" };
 }
 
-function pendingStatus(): SetupRowModel["status"] {
-  return { label: "Checking…" };
+function loadingStatus(): SetupRowModel["status"] {
+  return { label: "Checking…", kind: "loading" };
 }
 
-function unavailableStatus(): SetupRowModel["status"] {
-  return { label: "Unavailable", detail: "This status could not be loaded." };
+function unknownStatus(): SetupRowModel["status"] {
+  return { label: "Status unavailable", detail: "We couldn't check this right now.", kind: "unknown" };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -136,12 +152,18 @@ function gitlabOriginLabel(origin: string): string {
 
 function gitlabConnectionIssue(
   gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
-): string | null {
+): "processing" | "waiting_system_hook" | "waiting_merge_request" | null {
   const readiness = gitlab.health.readiness;
-  if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "Processing issue";
-  if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "Waiting for System Hook";
-  if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "Waiting for merge request event";
+  if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "processing";
+  if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "waiting_system_hook";
+  if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "waiting_merge_request";
   return null;
+}
+
+function gitlabIssueLabel(issue: NonNullable<ReturnType<typeof gitlabConnectionIssue>>): string {
+  if (issue === "processing") return "Processing issue";
+  if (issue === "waiting_system_hook") return "Waiting for System Hook";
+  return "Waiting for merge request event";
 }
 
 /**
@@ -155,9 +177,9 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
 
   const computerStatus =
     facts.computers.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.computers.state === "error"
-        ? unavailableStatus()
+        ? unknownStatus()
         : facts.computers.value.connected > 0
           ? {
               label: `${facts.computers.value.connected} connected`,
@@ -165,7 +187,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
                 facts.computers.value.connected === 1 && facts.computers.value.connectedHostname
                   ? facts.computers.value.connectedHostname
                   : countLabel(facts.computers.value.connected, "computer"),
-              positive: true,
+              kind: "ready" as const,
             }
           : {
               label: "Not connected",
@@ -177,28 +199,29 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
                   : reliesOnTeamAgent
                     ? "Optional while a team agent is available"
                     : "No computer connected",
+              kind: reliesOnTeamAgent ? ("optional" as const) : ("attention" as const),
             };
 
   const repositoryStatus =
     facts.repositories.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.repositories.state === "error"
-        ? unavailableStatus()
+        ? unknownStatus()
         : facts.repositories.value > 0
           ? {
               label: `${facts.repositories.value} connected`,
               detail: countLabel(facts.repositories.value, "active repository", "active repositories"),
-              positive: true,
+              kind: "ready" as const,
             }
-          : { label: "None connected", detail: "Optional" };
+          : { label: "None connected", detail: "Optional", kind: "optional" as const };
 
   const contextStatus =
     facts.contextTree.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.contextTree.state === "error"
-        ? unavailableStatus()
+        ? unknownStatus()
         : !facts.contextTree.value.bound
-          ? { label: "Not set up", detail: "Optional" }
+          ? { label: "Not set up", detail: "Optional", kind: "optional" as const }
           : {
               label:
                 facts.contextTree.value.availability === "active"
@@ -214,12 +237,19 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
               ]
                 .filter(Boolean)
                 .join(" · "),
-              positive: facts.contextTree.value.availability === "active",
+              kind:
+                facts.contextTree.value.availability === "active"
+                  ? ("ready" as const)
+                  : facts.contextTree.value.availability === "checking"
+                    ? ("loading" as const)
+                    : ("blocked" as const),
             };
 
   const github = facts.github.state === "ready" ? facts.github.value : null;
   const gitlab = facts.gitlab.state === "ready" ? facts.gitlab.value : null;
   const gitlabIssue = gitlab ? gitlabConnectionIssue(gitlab) : null;
+  const providerIssueKind: SetupStatusKind =
+    github?.suspended || gitlabIssue === "processing" ? "blocked" : gitlabIssue ? "pending" : "ready";
   const providerStatus: SetupRowModel["status"] =
     github && gitlab
       ? {
@@ -227,28 +257,28 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
           detail:
             github.suspended || gitlabIssue
               ? `${github.suspended ? "GitHub suspended" : "GitHub connected"} · ${
-                  gitlabIssue ? `GitLab ${gitlabIssue.toLowerCase()}` : "GitLab connected"
+                  gitlabIssue ? `GitLab ${gitlabIssueLabel(gitlabIssue).toLowerCase()}` : "GitLab connected"
                 }`
               : `${github.accountLogin} · ${gitlab.displayName}`,
-          positive: !github.suspended && gitlabIssue === null,
+          kind: providerIssueKind,
         }
       : github
         ? {
             label: `GitHub · ${github.accountLogin}`,
             detail: github.suspended ? "Connection suspended" : github.accountType,
-            positive: !github.suspended,
+            kind: github.suspended ? "blocked" : "ready",
           }
         : gitlab
           ? {
               label: `GitLab · ${gitlab.displayName}`,
-              detail: gitlabIssue ?? gitlabOriginLabel(gitlab.instanceOrigin),
-              positive: gitlabIssue === null,
+              detail: gitlabIssue ? gitlabIssueLabel(gitlabIssue) : gitlabOriginLabel(gitlab.instanceOrigin),
+              kind: providerIssueKind,
             }
           : facts.github.state === "loading" || facts.gitlab.state === "loading"
-            ? pendingStatus()
+            ? loadingStatus()
             : facts.github.state === "error" || facts.gitlab.state === "error"
-              ? unavailableStatus()
-              : { label: "Not connected", detail: "Optional" };
+              ? unknownStatus()
+              : { label: "Not connected", detail: "Optional", kind: "optional" };
   const hasProvider = !!github || !!gitlab;
   const providersKnownAbsent =
     facts.github.state === "ready" &&
@@ -266,14 +296,14 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       key: "work-access",
       title: "Work access",
       description: "Whether this team has an agent you can use.",
-      icon: CircleCheck,
+      icon: MessageCircle,
       status: facts.hasUsableAgent
         ? {
             label: "Can work now",
             detail: facts.hasPersonalAgent ? "Your agent is available" : "A team agent is available",
-            positive: true,
+            kind: "ready",
           }
-        : { label: "Agent needed", detail: "Set up an agent before starting work" },
+        : { label: "Agent needed", detail: "Set up an agent before starting work", kind: "attention" },
       action: facts.hasUsableAgent
         ? { label: "Start a chat", to: facts.workspaceWillEnterOnboarding ? "/onboarding" : "/" }
         : { label: "Set up", to: "/onboarding" },
@@ -295,11 +325,14 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       description: "An agent managed by you for personal workflows.",
       icon: Bot,
       status: facts.hasPersonalAgent
-        ? { label: "Available", detail: "Managed by you", positive: true }
-        : {
-            label: "Not set up",
-            detail: facts.hasUsableAgent ? "Optional while a team agent is available" : "No agent managed by you",
-          },
+        ? { label: "Available", detail: "Managed by you", kind: "ready" }
+        : resumeSetup
+          ? { label: "Setup paused", detail: "Resume to create your agent", kind: "attention" }
+          : {
+              label: "Not set up",
+              detail: facts.hasUsableAgent ? "Optional while a team agent is available" : "No agent managed by you",
+              kind: facts.hasUsableAgent ? "optional" : "attention",
+            },
       action: resumeSetup
         ? { label: "Resume setup", to: "/onboarding", intent: "resume-onboarding" }
         : facts.hasPersonalAgent
@@ -523,6 +556,28 @@ export function SetupOverview({
   );
 }
 
+const SETUP_STATUS_PRESENTATION: Record<SetupStatusKind, { icon: LucideIcon; color: string; animate?: boolean }> = {
+  ready: { icon: CircleCheck, color: "var(--success)" },
+  optional: { icon: CircleMinus, color: "var(--fg-4)" },
+  loading: { icon: LoaderCircle, color: "var(--state-idle)", animate: true },
+  pending: { icon: Clock3, color: "var(--state-idle)" },
+  attention: { icon: CircleAlert, color: "var(--state-needs-you)" },
+  blocked: { icon: CircleAlert, color: "var(--state-blocked)" },
+  unknown: { icon: CircleHelp, color: "var(--fg-3)" },
+};
+
+function SetupStatusMark({ kind }: { kind: SetupStatusKind }) {
+  const presentation = SETUP_STATUS_PRESENTATION[kind];
+  const StatusIcon = presentation.icon;
+  return (
+    <StatusIcon
+      aria-hidden
+      className={cn("h-4 w-4 shrink-0", presentation.animate && "motion-safe:animate-spin")}
+      style={{ color: presentation.color }}
+    />
+  );
+}
+
 function SetupRow({
   row,
   narrow,
@@ -536,6 +591,7 @@ function SetupRow({
   return (
     <section
       aria-labelledby={`setup-${row.key}`}
+      data-setup-row={row.key}
       style={{
         display: "grid",
         gridTemplateColumns: narrow ? "minmax(0, 1fr)" : "minmax(0, 1fr) var(--sp-60) var(--sp-35)",
@@ -569,23 +625,9 @@ function SetupRow({
         </span>
       </div>
 
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}
-      >
+      <div data-setup-status-kind={row.status.kind} style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}>
         <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-          <span
-            aria-hidden
-            style={{
-              width: "var(--sp-2)",
-              height: "var(--sp-2)",
-              flexShrink: 0,
-              borderRadius: "var(--radius-full)",
-              background: row.status.positive ? "var(--color-success)" : "var(--border-strong)",
-            }}
-          />
+          <SetupStatusMark kind={row.status.kind} />
           <span className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
             {row.status.label}
           </span>
@@ -594,7 +636,7 @@ function SetupRow({
           <p
             className="text-caption truncate"
             title={row.status.detail}
-            style={{ margin: "var(--sp-0_5) 0 0 var(--sp-4)", color: "var(--fg-4)" }}
+            style={{ margin: "var(--sp-0_5) 0 0 var(--sp-6)", color: "var(--fg-4)" }}
           >
             {row.status.detail}
           </p>

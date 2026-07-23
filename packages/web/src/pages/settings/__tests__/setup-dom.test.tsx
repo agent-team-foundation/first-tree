@@ -186,9 +186,9 @@ afterEach(() => {
 });
 
 describe("Settings Setup overview", () => {
-  it("renders the six approved facts in order without completion or resource rows", async () => {
+  it("renders the six approved facts with separate capability and status icons", async () => {
     const view = await renderSetup(facts());
-    const titles = [...view.host.querySelectorAll("section > div:first-child .text-body")].map(
+    const titles = [...view.host.querySelectorAll("[data-setup-row] > div:first-child .text-body")].map(
       (node) => node.textContent,
     );
 
@@ -212,6 +212,79 @@ describe("Settings Setup overview", () => {
     expect(view.host.textContent).not.toContain("Your access and configuration");
     expect(view.host.textContent).not.toContain("finish setup");
     expect(view.host.textContent).not.toContain("complete setup");
+    expect(view.host.querySelector('[data-setup-row="work-access"] .lucide-message-circle')).not.toBeNull();
+    const readyMarks = view.host.querySelectorAll("[data-setup-status-kind='ready'] .lucide-circle-check");
+    expect(readyMarks).toHaveLength(6);
+    expect([...readyMarks].every((mark) => mark.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(view.host.querySelectorAll('[role="status"], [aria-live]')).toHaveLength(0);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("uses form and color together for ready, optional, attention, unknown, blocked, and pending facts", async () => {
+    const view = await renderSetup(
+      facts({
+        hasPersonalAgent: false,
+        onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
+        onboardingCompletedAt: null,
+        computers: {
+          state: "ready",
+          value: { connected: 0, saved: 0, connectedHostname: null },
+        },
+        repositories: { state: "error" },
+        contextTree: {
+          state: "ready",
+          value: {
+            bound: true,
+            repo: "https://github.com/acme/context-tree.git",
+            branch: "main",
+            availability: "stale",
+          },
+        },
+        github: { state: "ready", value: null },
+        gitlab: {
+          state: "ready",
+          value: {
+            displayName: "Engineering",
+            instanceOrigin: "https://gitlab.acme.test",
+            endpointSeen: false,
+            health: {
+              readiness: "waiting",
+            },
+          },
+        },
+      }),
+    );
+    const expectation = [
+      ["work-access", "ready", "circle-check", "--success"],
+      ["computer", "optional", "circle-minus", "--fg-4"],
+      ["agent", "attention", "circle-alert", "--state-needs-you"],
+      ["repositories", "unknown", "circle-question-mark", "--fg-3"],
+      ["context-tree", "blocked", "circle-alert", "--state-blocked"],
+      ["providers", "pending", "clock-3", "--state-idle"],
+    ] as const;
+
+    for (const [key, kind, glyph, token] of expectation) {
+      const status = view.host.querySelector<HTMLElement>(
+        `[data-setup-row="${key}"] [data-setup-status-kind="${kind}"]`,
+      );
+      expect(status?.querySelector(`.lucide-${glyph}`)).not.toBeNull();
+      expect(status?.querySelector("svg")?.getAttribute("style")).toContain(token);
+    }
+    expect(
+      view.host.querySelector('[data-setup-row="providers"] [data-setup-status-kind] svg')?.getAttribute("class"),
+    ).not.toContain("animate-spin");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("reserves a reduced-motion-safe spinner for transient loading", async () => {
+    const view = await renderSetup(facts({ computers: { state: "loading" } }));
+    const status = view.host.querySelector('[data-setup-row="computer"] [data-setup-status-kind="loading"]');
+    const icon = status?.querySelector(".lucide-loader-circle");
+
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("class")).toContain("motion-safe:animate-spin");
 
     await act(async () => view.root.unmount());
   });
@@ -255,7 +328,7 @@ describe("Settings Setup overview", () => {
     expect(actionByTitle.get("GitHub / GitLab")).toBeUndefined();
     expect(view.host.textContent).not.toContain("Manage");
     expect(view.host.querySelector("button[disabled]")).toBeNull();
-    expect(view.host.querySelectorAll('[role="status"][aria-live="polite"]')).toHaveLength(6);
+    expect(view.host.querySelectorAll('[role="status"], [aria-live]')).toHaveLength(0);
 
     await act(async () => view.root.unmount());
   });
@@ -281,6 +354,7 @@ describe("Settings Setup overview", () => {
   it("keeps a Resume setup path for suppressed onboarding that is not complete", () => {
     const rows = buildSetupRows(
       facts({
+        hasPersonalAgent: false,
         onboardingSuppressedAt: "2026-07-23T00:00:00.000Z",
         onboardingCompletedAt: null,
       }),
@@ -290,6 +364,11 @@ describe("Settings Setup overview", () => {
       label: "Resume setup",
       to: "/onboarding",
       intent: "resume-onboarding",
+    });
+    expect(rows.find((row) => row.key === "agent")?.status).toEqual({
+      label: "Setup paused",
+      detail: "Resume to create your agent",
+      kind: "attention",
     });
   });
 
@@ -349,7 +428,7 @@ describe("Settings Setup overview", () => {
     const row = buildSetupRows(input).find((candidate) => candidate.key === "context-tree");
 
     expect(row?.status.label).toBe("Bound · unavailable");
-    expect(row?.status.positive).not.toBe(true);
+    expect(row?.status.kind).toBe("blocked");
     expect(row?.status.detail).toBe("acme/context-tree · main branch");
   });
 
@@ -362,7 +441,7 @@ describe("Settings Setup overview", () => {
     );
     const providers = rows.find((row) => row.key === "providers");
 
-    expect(providers?.status).toEqual({ label: "Not connected", detail: "Optional" });
+    expect(providers?.status).toEqual({ label: "Not connected", detail: "Optional", kind: "optional" });
     expect(providers?.action).toEqual({ label: "Connect", to: "/settings/integrations" });
   });
 
@@ -378,7 +457,18 @@ describe("Settings Setup overview", () => {
     expect(both?.status.detail).toBe("acme · Engineering");
   });
 
-  it("keeps transport-only GitLab receipt and either combined provider degradation neutral", () => {
+  it("marks each incomplete GitLab routing stage as pending", () => {
+    const waitingSystemHook = {
+      state: "ready" as const,
+      value: {
+        displayName: "Engineering",
+        instanceOrigin: "https://gitlab.acme.test",
+        endpointSeen: false,
+        health: {
+          readiness: "waiting" as const,
+        },
+      },
+    };
     const waitingGitlab = {
       state: "ready" as const,
       value: {
@@ -396,6 +486,12 @@ describe("Settings Setup overview", () => {
         gitlab: waitingGitlab,
       }),
     ).find((row) => row.key === "providers");
+    const noInbound = buildSetupRows(
+      facts({
+        github: { state: "ready", value: null },
+        gitlab: waitingSystemHook,
+      }),
+    ).find((row) => row.key === "providers");
     const combinedGitlabDegraded = buildSetupRows(
       facts({
         github: {
@@ -411,6 +507,7 @@ describe("Settings Setup overview", () => {
           state: "ready",
           value: { accountLogin: "acme", accountType: "Organization", suspended: true },
         },
+        gitlab: waitingGitlab,
       }),
     ).find((row) => row.key === "providers");
     const githubOnlySuspended = buildSetupRows(
@@ -426,22 +523,26 @@ describe("Settings Setup overview", () => {
     expect(gitlabOnly?.status).toMatchObject({
       label: "GitLab · Engineering",
       detail: "Waiting for merge request event",
-      positive: false,
+      kind: "pending",
+    });
+    expect(noInbound?.status).toMatchObject({
+      detail: "Waiting for System Hook",
+      kind: "pending",
     });
     expect(combinedGitlabDegraded?.status).toMatchObject({
       label: "GitHub + GitLab",
       detail: "GitHub connected · GitLab waiting for merge request event",
-      positive: false,
+      kind: "pending",
     });
     expect(combinedGithubDegraded?.status).toMatchObject({
       label: "GitHub + GitLab",
-      detail: "GitHub suspended · GitLab connected",
-      positive: false,
+      detail: "GitHub suspended · GitLab waiting for merge request event",
+      kind: "blocked",
     });
     expect(githubOnlySuspended?.status).toMatchObject({
       label: "GitHub · acme",
       detail: "Connection suspended",
-      positive: false,
+      kind: "blocked",
     });
   });
 
@@ -463,7 +564,7 @@ describe("Settings Setup overview", () => {
       }),
     ).find((row) => row.key === "providers");
 
-    expect(providers?.status.positive).toBe(false);
+    expect(providers?.status.kind).toBe("blocked");
     expect(providers?.status.detail).toBe("Processing issue");
   });
 
@@ -482,8 +583,13 @@ describe("Settings Setup overview", () => {
     ).find((row) => row.key === "providers");
 
     expect(loading?.status.label).toBe("Checking…");
+    expect(loading?.status.kind).toBe("loading");
     expect(loading?.action).toBeUndefined();
-    expect(failed?.status.label).toBe("Unavailable");
+    expect(failed?.status).toEqual({
+      label: "Status unavailable",
+      detail: "We couldn't check this right now.",
+      kind: "unknown",
+    });
     expect(failed?.action).toBeUndefined();
   });
 
@@ -534,8 +640,8 @@ describe("Settings Setup overview", () => {
     contextTreeMocks.getContextTreeSnapshot.mockRejectedValue(new Error("snapshot failed"));
 
     const view = await renderSettingsSetupPage();
-    const row = await waitForRowText(view.host, "Context Tree", "This status could not be loaded.");
-    expect(row.textContent).toContain("Unavailable");
+    const row = await waitForRowText(view.host, "Context Tree", "We couldn't check this right now.");
+    expect(row.textContent).toContain("Status unavailable");
     expect(row.textContent).not.toContain("Bound · unavailable");
     await act(async () => view.root.unmount());
   });
