@@ -277,18 +277,25 @@ For a BYO task, use the activation receipt's binding repository and commit. Its
 detached snapshot is already exact and remote-backed. For a managed workspace,
 after the last hierarchy selector and before reading a candidate passage:
 
-1. record `git rev-parse HEAD`;
-2. read the candidate normal-content files;
-3. require HEAD to remain unchanged;
-4. require every cited path to exist in that commit and have no staged or
+1. resolve the current branch's upstream remote-tracking ref and the fetch
+   remote that owns it;
+2. require that fetch remote's URL to be canonically equal to the binding
+   repository declared by the workspace briefing;
+3. record `git rev-parse HEAD`;
+4. read the candidate normal-content files;
+5. require HEAD to remain unchanged;
+6. require every cited path to exist in that commit and have no staged or
    unstaged difference; and
-5. require the commit to be reachable from the bound branch's remote-tracking
-   ref produced by the same refresh.
+7. require the commit to be reachable from that same upstream remote-tracking
+   ref produced by the refresh.
 
 If another pull or process moves HEAD during those steps, re-read from a new
-stable commit before attributing influence. If repository, commit, remote
-reachability, or path identity cannot be established safely, omit the evidence
-row and do not attach the receipt when no valid evidence remains.
+stable commit before attributing influence. If the branch has no unambiguous
+upstream, its owning fetch remote is missing, or the canonical repository
+identities do not match, do not attribute the briefing's `repoUrl`. If
+repository, commit, remote reachability, or path identity cannot be established
+safely, omit the evidence row and do not attach the receipt when no valid
+evidence remains.
 
 The receipt is the agent's durable, reviewable attribution. It is not
 server-verified proof of causality, and the final prose must not claim that it

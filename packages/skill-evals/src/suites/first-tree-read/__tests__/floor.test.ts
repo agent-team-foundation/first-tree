@@ -51,8 +51,11 @@ describe("first-tree-read floor contract", () => {
     expect(skill).toContain("Choose the first matching category in this precedence\norder");
     expect(skill).toMatch(/`conflicted`[\s\S]+`redirected`[\s\S]+`constrained`[\s\S]+`confirmed`/);
     expect(skill).toContain("Cite at most three Tree-root-relative\nnormal node paths");
+    expect(skill).toContain("resolve the current branch's upstream remote-tracking ref");
+    expect(skill).toContain("fetch remote's URL to be canonically equal to the binding\n   repository");
     expect(skill).toContain("require HEAD to remain unchanged");
-    expect(skill).toContain("reachable from the bound branch's remote-tracking\n   ref");
+    expect(skill).toContain("reachable from that same upstream remote-tracking\n   ref");
+    expect(skill).toContain("canonical repository\nidentities do not match");
     expect(skill).toContain("canonical repository identity rather than raw string\nequality");
     expect(skill).toContain("Never persist a credential-bearing remote URL");
     expect(skill).toMatch(/It is not\s+server-verified proof of causality/);
