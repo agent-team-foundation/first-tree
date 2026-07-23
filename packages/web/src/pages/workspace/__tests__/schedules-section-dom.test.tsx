@@ -329,7 +329,9 @@ describe("SchedulesSection owner actions", () => {
     // The owning agent edits the schedule; the next resume must confirm
     // against the new expression, not the cached old one.
     cronApiMocks.listChatCronJobs.mockResolvedValue({
-      items: [makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null, schedule: "0 10 * * *", revision: 4 })],
+      items: [
+        makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null, schedule: "0 10 * * *", revision: 4 }),
+      ],
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
