@@ -28,6 +28,7 @@ import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
 import { channelConfig } from "../core/channel.js";
 import { setJsonMode } from "../core/output.js";
+import { runLegacyGithubScanMigration } from "../core/retire-github-scan-launchd.js";
 import { COMMAND_VERSION } from "../core/version.js";
 
 const program = new Command();
@@ -39,6 +40,14 @@ program
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")
   .hook("preAction", (thisCommand) => {
+    // Y owns this first-eligible-run boundary. Commander does not enter
+    // preAction for help/version rendering, including positional `help`.
+    try {
+      runLegacyGithubScanMigration();
+    } catch {
+      // Best-effort migration must never block the requested command.
+    }
+
     const opts = thisCommand.optsWithGlobals<{ json?: boolean; verbose?: boolean }>();
     const json = opts.json === true || process.env.FIRST_TREE_JSON === "1";
     setJsonMode(json);

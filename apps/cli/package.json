@@ -31,6 +31,7 @@
     "scripts/prune-codex-runtime-binary.mjs",
     "scripts/prune-claude-runtime-binary.mjs",
     "scripts/prune-claude-sdk-deps.mjs",
+    "scripts/retire-legacy-github-scan-launchd.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -45,7 +46,7 @@
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
     "prepack": "rm -rf skills && cp -R ../../skills .",
     "postpack": "rm -rf skills",
-    "postinstall": "node scripts/prune-codex-runtime-binary.mjs && node scripts/prune-claude-runtime-binary.mjs && node scripts/prune-claude-sdk-deps.mjs"
+    "postinstall": "node scripts/prune-codex-runtime-binary.mjs && node scripts/prune-claude-runtime-binary.mjs && node scripts/prune-claude-sdk-deps.mjs && node scripts/retire-legacy-github-scan-launchd.mjs"
   },
   "license": "Apache-2.0",
   "repository": {
