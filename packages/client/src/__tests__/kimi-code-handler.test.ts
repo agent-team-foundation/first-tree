@@ -503,7 +503,10 @@ describe("Kimi homeDir lifecycle", () => {
   });
 
   it("reuses the same harness after suspend when effective home is unchanged", async () => {
-    const session = new FakeSession("shared-session", [successfulTurn("shared-session")]);
+    const session = new FakeSession("shared-session", [
+      successfulTurn("shared-session"),
+      successfulTurn("shared-session"),
+    ]);
     let factoryCalls = 0;
     const closeFn = vi.fn().mockResolvedValue(undefined);
     const payload = {
@@ -543,7 +546,10 @@ describe("Kimi homeDir lifecycle", () => {
   });
 
   it("reuses the default harness across resume when KIMI_CODE_HOME is unset", async () => {
-    const session = new FakeSession("default-session", [successfulTurn("default-session")]);
+    const session = new FakeSession("default-session", [
+      successfulTurn("default-session"),
+      successfulTurn("default-session"),
+    ]);
     let factoryCalls = 0;
     const closeFn = vi.fn().mockResolvedValue(undefined);
     const payload = {
@@ -582,9 +588,14 @@ describe("Kimi homeDir lifecycle", () => {
   });
 
   it("closes old harness before creating a replacement when home changes across suspend/resume", async () => {
+    const firstSession = new FakeSession("s-1", [successfulTurn("s-1")]);
+    const secondSession = new FakeSession("s-2", [successfulTurn("s-2")]);
     let factoryCalls = 0;
     const homes: (string | undefined)[] = [];
-    const closeFn = vi.fn().mockResolvedValue(undefined);
+    let closeResolver: (() => void) | null = null;
+    const closePromise = new Promise<void>((resolve) => {
+      closeResolver = resolve;
+    });
     const payload = {
       kind: "kimi-code" as const,
       prompt: { append: "" },
@@ -602,31 +613,35 @@ describe("Kimi homeDir lifecycle", () => {
       kimiHarnessFactory: (options) => {
         factoryCalls++;
         homes.push(options.homeDir);
-        const id = `s-${factoryCalls}`;
         return {
-          createSession: async () => new FakeSession(id, [successfulTurn(id)]),
-          resumeSession: async () => new FakeSession(id, [successfulTurn(id)]),
-          close: closeFn,
+          createSession: async () => (factoryCalls === 1 ? firstSession : secondSession),
+          resumeSession: async () => (factoryCalls === 2 ? secondSession : firstSession),
+          close: factoryCalls === 1 ? async () => { await closePromise; } : async () => {},
         };
       },
     });
 
     await handler.start(message("m1", "hi"), makeContext([]), makeToken());
-    const startSessionId = "s-1";
     expect(factoryCalls).toBe(1);
     expect(homes).toEqual(["/old/kimi"]);
-    expect(closeFn).not.toHaveBeenCalled();
 
     // Simulate operator correcting KIMI_CODE_HOME after a credential/config failure.
     payload.env = [{ key: "KIMI_CODE_HOME", value: "/new/kimi" }];
 
     await handler.suspend("test");
-    expect(closeFn).not.toHaveBeenCalled();
 
-    await handler.resume(message("m2", "resume"), startSessionId, makeContext([]), makeToken());
+    // Kick off resume; the second harness factory must not fire before
+    // the first harness's close promise resolves.
+    const resumePromise = handler.resume(message("m2", "resume"), "s-1", makeContext([]), makeToken());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(factoryCalls).toBe(1);
+    expect(homes).toEqual(["/old/kimi"]);
+
+    if (closeResolver) closeResolver();
+    await resumePromise;
+
     expect(factoryCalls).toBe(2);
     expect(homes).toEqual(["/old/kimi", "/new/kimi"]);
-    expect(closeFn).toHaveBeenCalledTimes(1);
   });
 });
 
