@@ -157,8 +157,10 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
  *      the normalize pipeline (these events shouldn't fan out as cards)
  *   4. other events → installation.id → hub_organization_id reverse-lookup,
  *      then GitHub normalize → provider-neutral SCM processing seam →
- *      GitHub audience/delivery adapters. The seam best-effort unclaims on
- *      uncaught handler failure so GitHub's retry has a chance to clear.
+ *      GitHub audience/delivery adapters. The seam claims the delivery as
+ *      `pending`, marks it `done` on success, and best-effort unclaims on
+ *      uncaught handler failure; an expired `pending` claim is taken over
+ *      by the next delivery, so a crash mid-handler cannot lose the event.
  *
  * Routes return 200 for "ignored" cases (no installation context, not
  * bound, suspended, duplicate delivery) so GitHub doesn't accumulate

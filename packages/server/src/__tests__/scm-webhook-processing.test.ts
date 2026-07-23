@@ -1,5 +1,8 @@
 import type { NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import { processedEvents } from "../db/schema/processed-events.js";
+import { claimEvent } from "../services/event-dedup.js";
 import { processScmWebhookDelivery } from "../services/scm-webhook-processing.js";
 import { useTestApp } from "./helpers.js";
 
@@ -227,5 +230,143 @@ describe("processScmWebhookDelivery", () => {
         deliver: async () => ({ delivered: 0 }),
       }),
     ).rejects.toThrow("normalized SCM event does not match its ingress context");
+  });
+
+  it("marks the claim done on success so a redelivery dedupes against the done state", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-done");
+    const event = makeEvent(ingress);
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver: async () => ({ delivered: 1 }),
+    };
+
+    expect((await processScmWebhookDelivery(input)).outcome).toBe("delivered");
+
+    const rows = await app.db.select().from(processedEvents).where(eq(processedEvents.eventId, "delivery-done"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("done");
+    expect(rows[0]?.expiresAt).toBeNull();
+
+    expect((await processScmWebhookDelivery(input)).outcome).toBe("duplicate");
+  });
+
+  it("recovers an event whose claim leaked after a process crash once the TTL lapses", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-crashed");
+    const event = makeEvent(ingress);
+
+    // Crash injection: the claim landed but the process died before the
+    // handler completed — no markEventDone, no unclaimEvent.
+    expect(await claimEvent(app.db, "delivery-crashed", "github")).toBe(true);
+    // TTL lapses without any sweep or unclaim running.
+    await app.db.execute(
+      sql`UPDATE processed_events SET expires_at = now() - interval '1 second' WHERE event_id = ${"delivery-crashed"}`,
+    );
+
+    const deliver = vi.fn(async () => ({ delivered: 1 }));
+    const redelivered = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    });
+
+    // The lost-forever scenario is gone: the redelivery takes the expired
+    // claim over and processes the event.
+    expect(redelivered.outcome).toBe("delivered");
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("does not reprocess a redelivery while the crashed claim is still within its TTL", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-inflight");
+    const event = makeEvent(ingress);
+
+    // Same crash injection, but the redelivery arrives before the TTL
+    // lapses: it must dedupe, not double-process.
+    expect(await claimEvent(app.db, "delivery-inflight", "github")).toBe(true);
+
+    const deliver = vi.fn(async () => ({ delivered: 1 }));
+    const redelivered = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    });
+
+    expect(redelivered.outcome).toBe("duplicate");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("processes exactly once when two deliveries of the same id race", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-race");
+    const event = makeEvent(ingress);
+    const deliver = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { delivered: 1 };
+    });
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    };
+
+    const results = await Promise.all([processScmWebhookDelivery(input), processScmWebhookDelivery(input)]);
+
+    expect(results.map((r) => r.outcome).sort()).toEqual(["delivered", "duplicate"]);
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("processes exactly once when two deliveries race to take over an expired claim", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-takeover-race");
+    const event = makeEvent(ingress);
+
+    // A leaked claim whose TTL already lapsed.
+    expect(await claimEvent(app.db, "delivery-takeover-race", "github")).toBe(true);
+    await app.db.execute(
+      sql`UPDATE processed_events SET expires_at = now() - interval '1 second' WHERE event_id = ${"delivery-takeover-race"}`,
+    );
+
+    const deliver = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { delivered: 1 };
+    });
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    };
+
+    const results = await Promise.all([processScmWebhookDelivery(input), processScmWebhookDelivery(input)]);
+
+    expect(results.map((r) => r.outcome).sort()).toEqual(["delivered", "duplicate"]);
+    expect(deliver).toHaveBeenCalledOnce();
   });
 });

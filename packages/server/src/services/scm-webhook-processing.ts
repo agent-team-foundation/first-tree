@@ -1,7 +1,7 @@
 import type { NormalizedScmEvent, ScmEntityObservation, ScmIngressContext } from "@first-tree/shared";
 import type { Database } from "../db/connection.js";
 import { createLogger } from "../observability/index.js";
-import { claimEvent, unclaimEvent } from "./event-dedup.js";
+import { claimEvent, markEventDone, unclaimEvent } from "./event-dedup.js";
 
 const log = createLogger("ScmWebhookProcessing");
 
@@ -39,9 +39,17 @@ type ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult> = 
  *
  * The ingress adapter authenticates and normalizes first. This kernel owns
  * only the existing optional whole-request claim, provider work covered by
- * that claim, audience orchestration, and best-effort unclaim on an uncaught
- * top-level failure. Provider payloads, stores, mapping rules, card shapes,
- * and per-chat failure guards remain behind the supplied callbacks.
+ * that claim, audience orchestration, and claim lifecycle on exit. Provider
+ * payloads, stores, mapping rules, card shapes, and per-chat failure guards
+ * remain behind the supplied callbacks.
+ *
+ * Claim lifecycle (#317): a claimed delivery starts as `pending` with a TTL.
+ * Every successful outcome (delivered / audience_empty / provider_only)
+ * marks the claim `done`, which is what redeliveries dedupe against. An
+ * uncaught top-level failure still best-effort unclaims so GitHub's retry
+ * clears quickly — but correctness never depends on that delete: a crashed
+ * process leaves an expired `pending` claim that the next delivery takes
+ * over atomically (see event-dedup.ts).
  */
 export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProviderResult>(
   input: ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult>,
@@ -56,6 +64,19 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
       return { outcome: "duplicate" };
     }
   }
+
+  // Successful exit from the seam: flip the claim to `done` so redeliveries
+  // dedupe against a completed state rather than an in-flight one. If the
+  // update itself fails, the catch below best-effort unclaims and rethrows
+  // so the provider redelivers and the event is reprocessed.
+  const succeed = async (
+    result: ScmProcessingResult<TDeliveryStats, TProviderResult>,
+  ): Promise<ScmProcessingResult<TDeliveryStats, TProviderResult>> => {
+    if (deliveryId) {
+      await markEventDone(input.db, deliveryId, input.ingress.provider);
+    }
+    return result;
+  };
 
   try {
     const providerResult = await input.runProviderWork();
@@ -76,7 +97,7 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
         );
       });
     }
-    if (!input.event) return { outcome: "provider_only", providerResult };
+    if (!input.event) return succeed({ outcome: "provider_only", providerResult });
 
     const audience = await input.resolveAudience(input.event);
     if (audience.targets.length === 0) {
@@ -93,11 +114,11 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
         },
         "SCM webhook audience empty, skipping",
       );
-      return { outcome: "audience_empty", reason, providerResult };
+      return succeed({ outcome: "audience_empty", reason, providerResult });
     }
 
     const deliveryStats = await input.deliver(input.event, audience);
-    return { outcome: "delivered", deliveryStats, providerResult };
+    return succeed({ outcome: "delivered", deliveryStats, providerResult });
   } catch (err) {
     if (deliveryId) {
       await unclaimEvent(input.db, deliveryId, input.ingress.provider).catch((unclaimErr) => {

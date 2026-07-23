@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
+import * as eventDedupService from "./event-dedup.js";
 import * as inboxService from "./inbox.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
@@ -17,6 +18,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let claimSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -83,6 +85,22 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
+      // Webhook claim GC — runs every 60 seconds. `pending` processed_events
+      // rows whose TTL expired (the process died mid-handler) are deleted so
+      // a provider redelivery is never starved by a leaked claim and the
+      // table does not accumulate stuck rows. Takeover in claimEvent already
+      // unblocks redelivery; this sweep is the hygiene backstop (#317).
+      claimSweepTimer = setInterval(async () => {
+        try {
+          const swept = await eventDedupService.sweepExpiredClaims(app.db);
+          if (swept > 0) {
+            log.info({ swept }, "swept expired webhook event claims");
+          }
+        } catch (err) {
+          log.error({ err }, "failed to sweep expired webhook event claims");
+        }
+      }, 60_000);
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -101,6 +119,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (claimSweepTimer) {
+        clearInterval(claimSweepTimer);
+        claimSweepTimer = null;
       }
     },
   };

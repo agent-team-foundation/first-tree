@@ -26,8 +26,9 @@ export type DeliveryStats = {
   newChats: number;
   /**
    * Number of chats whose delivery threw and was caught by the per-chat
-   * guard. These chats did NOT receive a card; the webhook has already been
-   * claimed in `processed_events`, so GitHub will not retry. Surfaced in the
+   * guard. These chats did NOT receive a card; the webhook's claim in
+   * `processed_events` is still marked `done` once the handler completes,
+   * so GitHub will not retry. Surfaced in the
    * response + metric so a regression in single-chat reliability becomes
    * observable instead of silent.
    */
@@ -214,9 +215,10 @@ export async function deliverGithubEvent(
     } catch (err) {
       stats.failed += 1;
       // Per-chat failures are isolated so one bad chat doesn't poison the rest,
-      // but the webhook is already claimed in `processed_events` — GitHub will
-      // not retry. Emit a structured metric line so a regression in single-chat
-      // reliability is observable instead of silently swallowed. See #507.
+      // but the webhook's claim in `processed_events` is still marked `done`
+      // on success — GitHub will not retry. Emit a structured metric line so
+      // a regression in single-chat reliability is observable instead of
+      // silently swallowed. See #507.
       log.error(
         {
           err,
