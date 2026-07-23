@@ -470,14 +470,14 @@ describe("Kimi homeDir lifecycle", () => {
     expect(harnessOptions[0].homeDir).toBe("/custom/kimi");
   });
 
-  it("omits homeDir when KIMI_CODE_HOME is empty or whitespace-only", async () => {
+  it.each(["", "   "])("omits homeDir when KIMI_CODE_HOME is %j", async (rawValue) => {
     const harnessOptions: Array<Record<string, unknown>> = [];
     const payload = {
       kind: "kimi-code" as const,
       prompt: { append: "" },
       model: "",
       mcpServers: [],
-      env: [{ key: "KIMI_CODE_HOME", value: "   " }],
+      env: [{ key: "KIMI_CODE_HOME", value: rawValue }],
       gitRepos: [],
       resourceSkills: [],
     };
