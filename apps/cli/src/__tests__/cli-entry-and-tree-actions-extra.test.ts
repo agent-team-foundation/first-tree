@@ -31,6 +31,10 @@ const outputMocks = vi.hoisted(() => ({
   setJsonMode: vi.fn(),
 }));
 
+const legacyGithubScanMocks = vi.hoisted(() => ({
+  retireLegacyGithubScanRunner: vi.fn(),
+}));
+
 vi.mock("@first-tree/client", () => clientMocks);
 vi.mock("../commands/agent/index.js", () => ({ registerAgentCommands: registrationMocks.registerAgentCommands }));
 vi.mock("../commands/chat/index.js", () => ({ registerChatCommands: registrationMocks.registerChatCommands }));
@@ -47,6 +51,7 @@ vi.mock("../commands/status.js", () => ({ registerStatusCommand: registrationMoc
 vi.mock("../commands/tree/index.js", () => ({ registerTreeCommands: registrationMocks.registerTreeCommands }));
 vi.mock("../commands/upgrade.js", () => ({ registerUpgradeCommand: registrationMocks.registerUpgradeCommand }));
 vi.mock("../core/output.js", () => outputMocks);
+vi.mock("../core/legacy-github-scan.js", () => legacyGithubScanMocks);
 
 const originalCwd = process.cwd();
 const originalHome = process.env.FIRST_TREE_HOME;
@@ -132,9 +137,12 @@ describe("CLI entry and public exports", () => {
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenLastCalledWith({ level: "error", explicit: true });
     delete process.env.FIRST_TREE_JSON;
 
+    legacyGithubScanMocks.retireLegacyGithubScanRunner.mockClear();
     runPreAction({});
     expect(outputMocks.setJsonMode).toHaveBeenLastCalledWith(false);
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenLastCalledWith({ level: "warn" });
+    // One-shot legacy github-scan runner retirement rides every preAction (issue #995).
+    expect(legacyGithubScanMocks.retireLegacyGithubScanRunner).toHaveBeenCalledTimes(1);
   });
 
   it("loads the programmatic entrypoint exports", async () => {

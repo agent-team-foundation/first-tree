@@ -42,6 +42,15 @@ If your scripts call any of the deleted commands, replace them with:
 
 GitHub Scan is no longer part of the current CLI.
 
+If a pre-retirement github-scan launchd runner is still installed on your
+Mac, no manual `launchctl` surgery is needed: on the first run of a current
+CLI version, the legacy `com.first-tree.github-scan.runner.*` service is
+booted out of launchd and its plist directory under
+`~/.first-tree/github-scan/runner/launchd/` is removed (only runner files
+under this default path are removed; runners installed with a custom
+`GITHUB_SCAN_DIR` / `GITHUB_SCAN_HOME` are booted out by label). This ends
+the KeepAlive crash-loop and releases the legacy default port 7878.
+
 ## What's new in v1.0.0
 
 * Single CLI binary covers Context Tree and agent collaboration.
