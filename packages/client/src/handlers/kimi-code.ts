@@ -746,7 +746,8 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       const kimiHome = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value.trim() ?? null;
       const effectiveHomeDir = kimiHome !== null && kimiHome.length === 0 ? null : kimiHome;
       try {
-        session = await ensureHarness(effectiveHomeDir ?? undefined).createSession(options);
+        const activeHarness = await ensureHarness(effectiveHomeDir ?? undefined);
+        session = await activeHarness.createSession(options);
         sessionId = session.id;
         sessionActive = true;
         initialTurnPreparing = true;
@@ -775,7 +776,8 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       const kimiHome = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value.trim() ?? null;
       const effectiveHomeDir = kimiHome !== null && kimiHome.length === 0 ? null : kimiHome;
       try {
-        session = await ensureHarness(effectiveHomeDir ?? undefined).resumeSession(input);
+        const activeHarness = await ensureHarness(effectiveHomeDir ?? undefined);
+        session = await activeHarness.resumeSession(input);
         sessionId = session.id;
         await session.setPermission("yolo");
         if (prepared.payload.model) await session.setModel(prepared.payload.model);

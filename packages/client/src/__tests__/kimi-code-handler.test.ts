@@ -437,6 +437,199 @@ describe("Kimi Code handler", () => {
   });
 });
 
+describe("Kimi homeDir lifecycle", () => {
+  it("normalizes trimmed KIMI_CODE_HOME and forwards it as harness homeDir", async () => {
+    const harnessOptions: Array<Record<string, unknown>> = [];
+    const payload = {
+      kind: "kimi-code" as const,
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [{ key: "KIMI_CODE_HOME", value: "  /custom/kimi  " }],
+      gitRepos: [],
+      resourceSkills: [],
+    };
+    const handler = createKimiCodeHandler({
+      workspaceRoot,
+      runtimeProvider: "kimi-code",
+      agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
+      kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
+      kimiHarnessFactory: (options) => {
+        harnessOptions.push(options as Record<string, unknown>);
+        return {
+          createSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
+          resumeSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
+          close: async () => {},
+        };
+      },
+    });
+
+    await handler.start(message("m1", "hi"), makeContext([]), makeToken());
+
+    expect(harnessOptions).toHaveLength(1);
+    expect(harnessOptions[0].homeDir).toBe("/custom/kimi");
+  });
+
+  it("omits homeDir when KIMI_CODE_HOME is empty or whitespace-only", async () => {
+    const harnessOptions: Array<Record<string, unknown>> = [];
+    const payload = {
+      kind: "kimi-code" as const,
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [{ key: "KIMI_CODE_HOME", value: "   " }],
+      gitRepos: [],
+      resourceSkills: [],
+    };
+    const handler = createKimiCodeHandler({
+      workspaceRoot,
+      runtimeProvider: "kimi-code",
+      agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
+      kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
+      kimiHarnessFactory: (options) => {
+        harnessOptions.push(options as Record<string, unknown>);
+        return {
+          createSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
+          resumeSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
+          close: async () => {},
+        };
+      },
+    });
+
+    await handler.start(message("m1", "hi"), makeContext([]), makeToken());
+
+    expect(harnessOptions).toHaveLength(1);
+    expect(harnessOptions[0]).not.toHaveProperty("homeDir");
+  });
+
+  it("reuses the same harness after suspend when effective home is unchanged", async () => {
+    const session = new FakeSession("shared-session", [successfulTurn("shared-session")]);
+    let factoryCalls = 0;
+    const closeFn = vi.fn().mockResolvedValue(undefined);
+    const payload = {
+      kind: "kimi-code" as const,
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [{ key: "KIMI_CODE_HOME", value: "/custom/kimi" }],
+      gitRepos: [],
+      resourceSkills: [],
+    };
+    const handler = createKimiCodeHandler({
+      workspaceRoot,
+      runtimeProvider: "kimi-code",
+      agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
+      kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
+      kimiHarnessFactory: () => {
+        factoryCalls++;
+        return {
+          createSession: async () => session,
+          resumeSession: async () => session,
+          close: closeFn,
+        };
+      },
+    });
+
+    await handler.start(message("m1", "hi"), makeContext([]), makeToken());
+    expect(factoryCalls).toBe(1);
+    expect(closeFn).not.toHaveBeenCalled();
+
+    await handler.suspend("test");
+    expect(closeFn).not.toHaveBeenCalled();
+
+    await handler.resume(message("m2", "resume"), "shared-session", makeContext([]), makeToken());
+    expect(factoryCalls).toBe(1);
+    expect(closeFn).not.toHaveBeenCalled();
+  });
+
+  it("reuses the default harness across resume when KIMI_CODE_HOME is unset", async () => {
+    const session = new FakeSession("default-session", [successfulTurn("default-session")]);
+    let factoryCalls = 0;
+    const closeFn = vi.fn().mockResolvedValue(undefined);
+    const payload = {
+      kind: "kimi-code" as const,
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+    };
+    const handler = createKimiCodeHandler({
+      workspaceRoot,
+      runtimeProvider: "kimi-code",
+      agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
+      kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
+      kimiHarnessFactory: () => {
+        factoryCalls++;
+        return {
+          createSession: async () => session,
+          resumeSession: async () => session,
+          close: closeFn,
+        };
+      },
+    });
+
+    await handler.start(message("m1", "hi"), makeContext([]), makeToken());
+    expect(factoryCalls).toBe(1);
+
+    await handler.suspend("test");
+    expect(closeFn).not.toHaveBeenCalled();
+
+    await handler.resume(message("m2", "resume"), "default-session", makeContext([]), makeToken());
+    expect(factoryCalls).toBe(1);
+    expect(closeFn).not.toHaveBeenCalled();
+  });
+
+  it("closes old harness before creating a replacement when home changes across suspend/resume", async () => {
+    let factoryCalls = 0;
+    const homes: (string | undefined)[] = [];
+    const closeFn = vi.fn().mockResolvedValue(undefined);
+    const payload = {
+      kind: "kimi-code" as const,
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [{ key: "KIMI_CODE_HOME", value: "/old/kimi" }],
+      gitRepos: [],
+      resourceSkills: [],
+    };
+    const handler = createKimiCodeHandler({
+      workspaceRoot,
+      runtimeProvider: "kimi-code",
+      agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
+      kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
+      kimiHarnessFactory: (options) => {
+        factoryCalls++;
+        homes.push(options.homeDir);
+        const id = `s-${factoryCalls}`;
+        return {
+          createSession: async () => new FakeSession(id, [successfulTurn(id)]),
+          resumeSession: async () => new FakeSession(id, [successfulTurn(id)]),
+          close: closeFn,
+        };
+      },
+    });
+
+    await handler.start(message("m1", "hi"), makeContext([]), makeToken());
+    const startSessionId = "s-1";
+    expect(factoryCalls).toBe(1);
+    expect(homes).toEqual(["/old/kimi"]);
+    expect(closeFn).not.toHaveBeenCalled();
+
+    // Simulate operator correcting KIMI_CODE_HOME after a credential/config failure.
+    payload.env = [{ key: "KIMI_CODE_HOME", value: "/new/kimi" }];
+
+    await handler.suspend("test");
+    expect(closeFn).not.toHaveBeenCalled();
+
+    await handler.resume(message("m2", "resume"), startSessionId, makeContext([]), makeToken());
+    expect(factoryCalls).toBe(2);
+    expect(homes).toEqual(["/old/kimi", "/new/kimi"]);
+    expect(closeFn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("Kimi provider helpers", () => {
   it("only treats reads and proven read-only Bash commands as replay safe", () => {
     expect(kimiToolIsReadOnly("Read", { path: "NODE.md" })).toBe(true);
