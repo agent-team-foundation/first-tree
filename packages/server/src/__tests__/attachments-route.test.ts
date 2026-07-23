@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import {
   ATTACHMENT_ERROR_CODES,
   ATTACHMENT_FILENAME_HEADER,
@@ -19,6 +20,29 @@ import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, createTestApp, useTestApp, workerObjectStorage } from "./helpers.js";
 
 const DEFAULT_QUOTA = { maxTotalBytes: ORG_ATTACHMENT_QUOTA_BYTES, maxObjectCount: ORG_ATTACHMENT_QUOTA_COUNT };
+
+/** Total objects in this worker's bucket (files in a worker run sequentially). */
+async function countBucketObjects(): Promise<number> {
+  const target = workerObjectStorage();
+  const client = new S3Client({
+    region: target.region,
+    endpoint: target.endpoint,
+    forcePathStyle: true,
+    credentials: { accessKeyId: target.accessKeyId, secretAccessKey: target.secretAccessKey },
+  });
+  try {
+    let count = 0;
+    let token: string | undefined;
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: target.bucket, ContinuationToken: token }));
+      count += page.KeyCount ?? 0;
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return count;
+  } finally {
+    client.destroy();
+  }
+}
 
 type Admin = Awaited<ReturnType<typeof createTestAdmin>>;
 
@@ -223,6 +247,38 @@ describe("attachments route — upload + capability download", () => {
       payload: Readable.from([Buffer.from("hi")]),
     });
     expect(reply.statusCode).toBe(411);
+    expect((reply.json() as { code?: string }).code).toBe(ATTACHMENT_ERROR_CODES.lengthRequired);
+  });
+
+  it("cleans up the reservation and object when the body undershoots Content-Length", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `abrt-${crypto.randomUUID().slice(0, 6)}` });
+
+    const objectsBefore = await countBucketObjects();
+
+    // Declared 64 bytes, deliver 10, end normally — the byte-limit stream
+    // fails the upload at EOF (same cleanup path as a client abort).
+    const reply = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/attachments`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "content-type": "application/octet-stream",
+        "content-length": "64",
+        [ATTACHMENT_MIME_HEADER]: "application/octet-stream",
+        [ATTACHMENT_FILENAME_HEADER]: "truncated.bin",
+      },
+      payload: Readable.from([Buffer.alloc(10)]),
+    });
+    expect(reply.statusCode).toBe(400);
+    expect((reply.json() as { error: string }).error).toMatch(/does not match Content-Length/);
+
+    // No reservation survives for this uploader...
+    const rows = await app.db.select().from(attachments).where(eq(attachments.uploadedBy, admin.humanAgentUuid));
+    expect(rows).toHaveLength(0);
+    // ...and no object leaked into the bucket (files in one worker run
+    // sequentially, so the bucket count is stable across this test).
+    expect(await countBucketObjects()).toBe(objectsBefore);
   });
 
   it("redirect mode answers 302 with a working short-lived presigned URL", async () => {

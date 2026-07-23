@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -173,5 +174,103 @@ describe("migrate:attachments — bytea to object storage", () => {
     expect(second.avatarsMoved).toBe(0);
     expect(second.edgesInserted).toBe(0);
     expect(second.attachmentsRemaining).toBe(0);
+  });
+
+  it("0-row phase C swap keeps the object when a rival run already migrated the row", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const uploader = await createTestAgent(app, { name: `mig-rival-${uid}` });
+    const payload = Buffer.from(`rival-${uid}`);
+    const legacy = await createLegacyAttachment(app.db, {
+      mimeType: "text/plain",
+      filename: "rival.txt",
+      data: payload,
+      uploadedBy: uploader.agent.uuid,
+    });
+
+    const stats = await migrateAttachmentsToObjectStorage(app.db, storage(), {
+      beforeAttachmentUpdate: async (attachmentId) => {
+        // A rival run wins the swap between our PUT and our UPDATE.
+        await app.db
+          .update(attachments)
+          .set({ objectKey: attachmentObjectKey(attachmentId), data: null })
+          .where(eq(attachments.id, attachmentId));
+      },
+    });
+    expect(stats.attachmentsSkipped).toBe(1);
+
+    // The row owns the key — the object must have survived our 0-row branch.
+    const [row] = await app.db.select().from(attachments).where(eq(attachments.id, legacy.id));
+    expect(row?.objectKey).toBe(attachmentObjectKey(legacy.id));
+    const object = await storage().getObjectStream(attachmentObjectKey(legacy.id));
+    expect(object).not.toBeNull();
+    if (object) {
+      expect((await streamToBuffer(object.body)).equals(payload)).toBe(true);
+    }
+  });
+
+  it("0-row phase C swap deletes the object when the sweep destroyed the row mid-flight", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const uploader = await createTestAgent(app, { name: `mig-swept-${uid}` });
+    const legacy = await createLegacyAttachment(app.db, {
+      mimeType: "text/plain",
+      filename: "swept.txt",
+      data: Buffer.from(`swept-${uid}`),
+      uploadedBy: uploader.agent.uuid,
+    });
+
+    const stats = await migrateAttachmentsToObjectStorage(app.db, storage(), {
+      beforeAttachmentUpdate: async (attachmentId) => {
+        // Sweep tombstoned + destroyed the row while our PUT was in flight.
+        await app.db.delete(attachments).where(eq(attachments.id, attachmentId));
+      },
+    });
+    expect(stats.attachmentsSkipped).toBe(1);
+
+    // Ownerless object must not leak (no row → the sweep can never see it).
+    await expect(storage().getObjectStream(attachmentObjectKey(legacy.id))).resolves.toBeNull();
+  });
+
+  it("0-row phase D swap keeps the avatar a user uploaded mid-migration", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { agent } = await createTestAgent(app, { name: `mig-av-race-${uid}` });
+    await app.db
+      .update(agents)
+      .set({
+        avatarImageData: Buffer.from("old-avatar"),
+        avatarImageMime: "image/png",
+        avatarImageUpdatedAt: new Date(),
+      })
+      .where(eq(agents.uuid, agent.uuid));
+
+    const newAvatar = Buffer.from(`new-avatar-${uid}`);
+    const stats = await migrateAttachmentsToObjectStorage(app.db, storage(), {
+      beforeAvatarUpdate: async (agentUuid) => {
+        // An online avatar upload lands between our PUT and our UPDATE.
+        const { setAgentAvatarImage } = await import("../services/agent.js");
+        await setAgentAvatarImage(app.db, storage(), agentUuid, Readable.from([newAvatar]), {
+          mime: "image/png",
+          contentLength: newAvatar.byteLength,
+        });
+      },
+    });
+    expect(stats.avatarsSkipped).toBe(1);
+    expect(stats.avatarsMoved).toBe(0);
+
+    // The freshly uploaded avatar must survive: row keeps its key and the
+    // object holds the NEW bytes (the online upload wrote after our PUT).
+    const [row] = await app.db
+      .select({ objectKey: agents.avatarObjectKey, data: agents.avatarImageData })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid));
+    expect(row?.objectKey).toBe(avatarObjectKey(agent.uuid));
+    expect(row?.data).toBeNull();
+    const object = await storage().getObjectStream(avatarObjectKey(agent.uuid));
+    expect(object).not.toBeNull();
+    if (object) {
+      expect((await streamToBuffer(object.body)).equals(newAvatar)).toBe(true);
+    }
   });
 });

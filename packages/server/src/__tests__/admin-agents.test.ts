@@ -411,6 +411,39 @@ describe("Admin Agents API", () => {
     expect(okRes.statusCode).toBe(204);
   });
 
+  it("avatar serving stays proxied even in redirect download mode", async () => {
+    const { createTestApp, workerObjectStorage: workerStorage } = await import("./helpers.js");
+    const app = await createTestApp({
+      objectStorage: workerStorage(),
+      attachments: { downloadMode: "redirect" },
+    });
+    try {
+      const ctx = await createAdminContext(app);
+      const agent = await createAgent(app.db, {
+        name: `avatar-proxy-pin-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: ctx.memberId,
+        clientId: ctx.clientId,
+      });
+      const bytes = Buffer.from("avatar-proxy-pin");
+      const upload = await app.inject({
+        method: "PUT",
+        url: `/api/v1/agents/${agent.uuid}/avatar`,
+        headers: { authorization: `Bearer ${ctx.accessToken}`, "content-type": "image/png" },
+        payload: bytes,
+      });
+      expect(upload.statusCode).toBe(200);
+
+      // A presigned 302 would vary per request and defeat the immutable
+      // browser cache this surface depends on — avatars always proxy.
+      const serve = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar` });
+      expect(serve.statusCode).toBe(200);
+      expect(serve.rawPayload.equals(bytes)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves uploaded agent avatars publicly and clears them through the manage route", async () => {
     const app = getApp();
     const { ctx } = await authedRequest(app);

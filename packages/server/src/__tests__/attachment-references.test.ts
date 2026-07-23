@@ -267,6 +267,28 @@ describe("attachment reference lifecycle", () => {
     expect(await storage().getObjectStream(attachmentObjectKey(shared.id))).not.toBeNull();
   });
 
+  it("an invalid content imageId surfaces as a wire 400 on the chat message route", async () => {
+    const uid = crypto.randomUUID().slice(0, 6);
+    const app = getApp();
+    const { createTestAdmin } = await import("./helpers.js");
+    const admin = await createTestAdmin(app, { username: `ref-wire-${uid}` });
+    const { agent: peer } = await createTestAgent(app, { name: `ref-wire-peer-${uid}` });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [peer.uuid] });
+
+    const reply = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${chat.id}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "file",
+        content: { imageId: crypto.randomUUID(), mimeType: "image/png", filename: "ghost.png" },
+        metadata: { mentions: [peer.uuid] },
+      },
+    });
+    expect(reply.statusCode).toBe(400);
+    expect((reply.json() as { error: string }).error).toMatch(/unknown attachment/);
+  });
+
   it("destroyDeletingAttachments leaves S3-backed tombstones alone when storage is unavailable", async () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { app, sender, organizationId } = await setup(uid);
