@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { OrgContextTreeFeaturesOutput, OrgContextTreeOutput, OrgSourceReposOutput } from "@first-tree/shared";
+import type {
+  OrgContextTreeFeaturesOutput,
+  OrgContextTreeOutput,
+  OrgSourceReposOutput,
+  TeamSetupCapabilities,
+} from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -13,6 +18,8 @@ const authMock = vi.hoisted(() => ({
   value: {
     role: "admin" as "admin" | "member",
     organizationId: "org-1" as string | null,
+    currentOrgHasUsableAgent: true,
+    onboardingDismissedAt: null as string | null,
     onboardingCompletedAt: null as string | null,
     meLoaded: true,
   },
@@ -53,6 +60,11 @@ const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
 }));
 
+const setupCapabilitiesMocks = vi.hoisted(() => ({
+  setupCapabilitiesQueryKey: (organizationId: string | null) => ["setup-capabilities", organizationId] as const,
+  getTeamSetupCapabilitiesAt: vi.fn(),
+}));
+
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
 }));
@@ -69,11 +81,53 @@ vi.mock("../../api/github-app.js", () => githubAppMocks);
 
 vi.mock("../../api/gitlab-connections.js", () => gitlabConnectionMocks);
 
+vi.mock("../../api/setup-capabilities.js", () => setupCapabilitiesMocks);
+
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+
+function teamSetupCapabilities(): TeamSetupCapabilities {
+  return {
+    organizationId: "org-1",
+    repositoryAutomation: {
+      providers: [
+        {
+          provider: "github",
+          adoption: "enabled",
+          health: "ready",
+          blockers: [],
+          observedAt: NOW,
+        },
+        {
+          provider: "gitlab",
+          adoption: "available",
+          health: "not_observed",
+          blockers: [],
+          observedAt: NOW,
+        },
+      ],
+    },
+    contextTree: {
+      binding: {
+        state: "bound",
+        provider: "github",
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+      },
+      blockers: [],
+      automaticReview: {
+        adoption: "disabled",
+        health: "not_observed",
+        reviewerAgent: null,
+        blockers: [],
+        observedAt: NOW,
+      },
+    },
+  };
+}
 
 function contextTree(overrides: Partial<OrgContextTreeOutput> = {}): OrgContextTreeOutput {
   return {
@@ -274,8 +328,16 @@ function reviewerSwitch(container: ParentNode): HTMLButtonElement | null {
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { role: "admin", organizationId: "org-1", onboardingCompletedAt: null, meLoaded: true };
+  authMock.value = {
+    role: "admin",
+    organizationId: "org-1",
+    currentOrgHasUsableAgent: true,
+    onboardingDismissedAt: null,
+    onboardingCompletedAt: null,
+    meLoaded: true,
+  };
   viewportMock.value = "xl";
+  setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(teamSetupCapabilities());
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getRawContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
@@ -384,6 +446,65 @@ describe("settings panels", () => {
     expect(pageHeading?.classList.contains("sr-only")).toBe(true);
     expect(repositories.container.textContent).toContain("Repositories child");
     await act(async () => repositories.root.unmount());
+  });
+
+  it("marks desktop Setup only for role-actionable Team or personal attention", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const blocked = teamSetupCapabilities();
+    const blockedGithub = blocked.repositoryAutomation.providers[0];
+    if (!blockedGithub) throw new Error("Expected GitHub capability");
+    blockedGithub.health = "degraded";
+    blockedGithub.blockers = [
+      {
+        code: "github_app_suspended",
+        resolutionOwner: "admin",
+        actionKind: "manage_github_installation",
+      },
+    ];
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(blocked);
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => admin.container.querySelector("[data-setup-attention]") !== null,
+      "Expected Setup attention after the Team projection loads",
+    );
+    const adminSetupLink = admin.container.querySelector<HTMLAnchorElement>('aside a[href="/settings/setup"]');
+    expect(adminSetupLink?.getAttribute("aria-label")).toBe("Setup — Needs you");
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledWith("org-1");
+    await act(async () => admin.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "member" };
+    const member = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(member.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(member.container.querySelector('aside a[href="/settings/setup"]')?.getAttribute("aria-label")).toBeNull();
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledTimes(1);
+    await act(async () => member.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "admin" };
+    const optional = teamSetupCapabilities();
+    const optionalGitlab = optional.repositoryAutomation.providers[1];
+    if (!optionalGitlab) throw new Error("Expected GitLab capability");
+    optionalGitlab.blockers = [
+      {
+        code: "gitlab_webhook_not_seen",
+        resolutionOwner: "admin",
+        actionKind: "configure_gitlab_webhook",
+      },
+    ];
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(optional);
+    const optionalAdmin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 2,
+      "Expected optional Team projection to load",
+    );
+    expect(optionalAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => optionalAdmin.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "member", currentOrgHasUsableAgent: false };
+    const personal = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(personal.container.querySelector("[data-setup-attention]")).not.toBeNull();
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledTimes(2);
+    await act(async () => personal.root.unmount());
   });
 
   it("uses the preview pathname override for desktop and narrow navigation state", async () => {
