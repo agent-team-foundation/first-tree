@@ -20,7 +20,7 @@ import {
 } from "./context-reviewer-common.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
-import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
+import { getOrgContextReviewRuntime } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 import { formatContextReviewTopic } from "./scm-entity-chat-topic.js";
 
@@ -220,11 +220,22 @@ async function handleContextReviewerPrEventWithInfo(
   },
   info: PullRequestPayloadInfo,
 ): Promise<ContextReviewerPrResult> {
-  const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
-  const boundRepo = normalizeGithubRepo(contextTree?.repo);
-  if (!boundRepo) {
+  const runtime = await getOrgContextReviewRuntime(app.db, input.organizationId);
+  const boundRepo = normalizeGithubRepo(runtime.repo);
+  if (runtime.bindingState !== "bound" || !runtime.repo) {
     log.debug({ organizationId: input.organizationId }, "context reviewer skipped: context tree repo unset");
     return { handled: false, reason: "context_tree_repo_unset" };
+  }
+  if (runtime.provider !== "github" || !runtime.providerMatchesRepository || !boundRepo) {
+    log.debug(
+      {
+        organizationId: input.organizationId,
+        provider: runtime.provider,
+        providerMatchesRepository: runtime.providerMatchesRepository,
+      },
+      "context reviewer skipped: context tree is not an executable GitHub binding",
+    );
+    return { handled: false, reason: "repo_mismatch" };
   }
   const webhookRepo = normalizeGithubRepo(info.repoFullName);
   if (!webhookRepo || webhookRepo !== boundRepo) {
@@ -235,11 +246,10 @@ async function handleContextReviewerPrEventWithInfo(
     return { handled: false, reason: "repo_mismatch" };
   }
 
-  const features = await getOrgSetting(app.db, input.organizationId, "context_tree_features");
-  if (!features.contextReviewer.enabled) {
+  if (!runtime.contextReviewer.enabled) {
     return { handled: false, reason: "feature_disabled" };
   }
-  const reviewerAgentUuid = features.contextReviewer.agentUuid;
+  const reviewerAgentUuid = runtime.contextReviewer.agentUuid;
   if (!reviewerAgentUuid) {
     return { handled: false, reason: "reviewer_agent_missing" };
   }

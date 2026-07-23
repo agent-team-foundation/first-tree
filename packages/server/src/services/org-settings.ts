@@ -2,7 +2,6 @@ import {
   type ContextTreeActiveBinding,
   type ContextTreeProvider,
   type ContextTreeSettingState,
-  canonicalGitRepoIdentity,
   classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
   contextTreeBranchSchema,
@@ -262,6 +261,7 @@ export async function getOrgContextReviewRuntime(db: Database, orgId: string): P
       : null;
   const providerMatchesRepository =
     tree.kind !== "invalid" &&
+    resolution.provider !== null &&
     resolution.declaredProviderMatches &&
     (resolution.provider !== "gitlab" || gitlabIdentity?.originMatchesConnection === true);
 
@@ -403,7 +403,6 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
         orgId,
         contextTree,
         contextTreeInput,
-        current as OrgSettingStorage<"context_tree">,
       )) as OrgSettingStorage<K>;
       await assertContextTreeBindingTargetAuthorized(
         txDb,
@@ -582,6 +581,17 @@ async function assertContextReviewerAgentAllowed(
   }
 
   const runtime = await getOrgContextReviewRuntime(db, orgId);
+  if (
+    runtime.bindingState !== "bound" ||
+    !runtime.provider ||
+    !runtime.providerMatchesRepository ||
+    !runtime.repo ||
+    !runtime.branch
+  ) {
+    throw new BadRequestError(
+      "Context Reviewer requires a valid Context Tree binding with a resolved GitHub or GitLab provider",
+    );
+  }
   if (runtime.provider === "gitlab") {
     if (
       !runtime.providerMatchesRepository ||
@@ -597,6 +607,9 @@ async function assertContextReviewerAgentAllowed(
       );
     }
     return;
+  }
+  if (runtime.provider !== "github") {
+    throw new BadRequestError("Context Reviewer requires a supported Context Tree provider");
   }
   const [installation] = await db
     .select({ permissions: githubAppInstallations.permissions, suspendedAt: githubAppInstallations.suspendedAt })
@@ -615,7 +628,6 @@ async function resolveStoredContextTreeProvider(
   orgId: string,
   storage: OrgSettingStorage<"context_tree">,
   input: OrgSettingInput<"context_tree">,
-  previous: OrgSettingStorage<"context_tree">,
 ): Promise<OrgSettingStorage<"context_tree">> {
   if (!storage.repo) return { ...storage, provider: undefined };
   if (input.repo === undefined && input.provider === undefined) return storage;
@@ -631,23 +643,6 @@ async function resolveStoredContextTreeProvider(
     gitlabInstanceOrigin: connection?.instanceOrigin,
   });
   if (directlyResolved.provider) return { ...storage, provider: directlyResolved.provider };
-
-  const previousIdentity = canonicalGitRepoIdentity(previous.repo);
-  const nextIdentity = canonicalGitRepoIdentity(storage.repo);
-  const sameProviderHost =
-    input.provider === undefined &&
-    previous.provider !== undefined &&
-    previousIdentity !== null &&
-    nextIdentity !== null &&
-    previousIdentity.host === nextIdentity.host;
-  if (sameProviderHost) {
-    const retained = resolveContextTreeProvider({
-      repo: storage.repo,
-      declaredProvider: previous.provider,
-      gitlabInstanceOrigin: connection?.instanceOrigin,
-    });
-    if (retained.declaredProviderMatches) return { ...storage, provider: previous.provider };
-  }
 
   return { ...storage, provider: undefined };
 }

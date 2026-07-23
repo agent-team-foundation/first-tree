@@ -379,6 +379,19 @@ async function resolveContextTreeRoot(
     };
   }
 
+  if (!provider) {
+    return {
+      root: null,
+      reason: "The configured Context Tree repository provider could not be resolved.",
+      staleReason: null,
+      contentAvailability: {
+        status: "unavailable",
+        accessMode: "anonymous",
+        reason: "invalid_binding",
+      },
+    };
+  }
+
   let gitlabDestination: GitlabPinnedDestination | null = null;
   let anonymousGitlabRepo: string | null = null;
   if (provider === "gitlab") {

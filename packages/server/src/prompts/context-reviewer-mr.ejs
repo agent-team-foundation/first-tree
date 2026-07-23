@@ -3,6 +3,7 @@ You have been routed a Context Tree merge request event.
 Load the installed `context-tree-review` skill and strictly execute its GitLab adapter for this merge request. The facts below are webhook hints only; use local `glab` and `git` to resolve the latest live state before reviewing or mutating anything.
 
 GitLab instance: <%= instanceOrigin %>
+GitLab connection: <%= connectionId %>
 Repository: <%= projectPath %>
 Merge request: !<%= mrIid %>
 Title: <%= title %>

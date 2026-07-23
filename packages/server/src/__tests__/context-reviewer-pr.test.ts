@@ -353,6 +353,45 @@ describe("handleContextReviewerPrEvent", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("does not create a GitHub Reviewer run for GitLab or unresolved Context Tree bindings", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    for (const value of [
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.example/owner/context-tree.git",
+        branch: "main",
+      },
+      {
+        repo: "https://unknown-forge.example/owner/context-tree.git",
+        branch: "main",
+      },
+    ]) {
+      await app.db
+        .update(organizationSettings)
+        .set({ value })
+        .where(
+          and(
+            eq(organizationSettings.organizationId, admin.organizationId),
+            eq(organizationSettings.namespace, "context_tree"),
+          ),
+        );
+
+      await expect(
+        handleContextReviewerPrEvent(app, {
+          eventType: "pull_request",
+          payload: pullRequestPayload(),
+          organizationId: admin.organizationId,
+        }),
+      ).resolves.toEqual({ handled: false, reason: "repo_mismatch" });
+    }
+
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+  });
+
   it("routes PRs carrying the historical managed marker through the App reviewer", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);

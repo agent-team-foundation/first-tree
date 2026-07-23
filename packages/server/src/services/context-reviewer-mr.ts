@@ -50,6 +50,7 @@ export type ContextReviewerMrResult =
     };
 
 type ContextReviewerMrTemplateInput = {
+  connectionId: string;
   instanceOrigin: string;
   projectPath: string;
   mrIid: number;
@@ -135,6 +136,7 @@ export async function handleContextReviewerMrEvent(input: {
   const entityKey = `gitlab:${input.connection.id}:${entity.projectId}:pull_request:${entity.entityIid}`;
   const contextReviewRunId = uuidv7();
   const templateInput: ContextReviewerMrTemplateInput = {
+    connectionId: input.connection.id,
     instanceOrigin: input.connection.instanceOrigin,
     projectPath: entity.projectPath,
     mrIid: entity.entityIid,

@@ -104,6 +104,23 @@ describe("Context Tree snapshot service with mocked git", () => {
     }
   });
 
+  it("does not perform remote git operations for an unclassified HTTPS binding", async () => {
+    const repo = `https://unknown-forge.example/acme/context-${crypto.randomUUID()}.git`;
+    const { execFile, service } = await loadSnapshotServiceWithGit(() => {
+      throw new Error("unclassified remote must not reach git");
+    });
+
+    const snapshot = await service.getContextTreeSnapshot({ repo, branch: "main" });
+
+    expect(execFile).not.toHaveBeenCalled();
+    expect(snapshot.contentAvailability).toEqual({
+      status: "unavailable",
+      accessMode: "anonymous",
+      reason: "invalid_binding",
+    });
+    expect(snapshot.nodes).toHaveLength(0);
+  });
+
   it("isolates cached GitLab checkout from hostile ambient filter configuration", async () => {
     const repo = `https://gitlab.example/public/filter-${crypto.randomUUID()}.git`;
     const cacheRoot = join(tmpdir(), `first-tree-snapshot-filter-${crypto.randomUUID()}`);

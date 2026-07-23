@@ -173,6 +173,7 @@ describe("GitLab Stage 3 personnel routing", () => {
       contextReviewReviewerAgentUuid: delegate.uuid,
     });
     expect(reviewerMessages[0]?.metadata).not.toHaveProperty("contextReviewSubmission");
+    expect(reviewerMessages[0]?.content).toContain(`GitLab connection: ${connection.connectionId}`);
     expect(reviewerMessages[0]?.content).toContain("Never call `first-tree tree review`");
     expect(reviewerMessages[0]?.content).toContain("exact-SHA squash merge");
 

@@ -97,6 +97,20 @@ async function seedReviewerInstallation(
     },
     hubOrganizationId: organizationId,
   });
+  await app.db
+    .insert(organizationSettings)
+    .values({
+      organizationId,
+      namespace: "context_tree",
+      value: {
+        provider: "github",
+        repo: "https://github.com/example/context-tree.git",
+        branch: "main",
+      },
+      version: 1,
+      updatedBy: null,
+    })
+    .onConflictDoNothing();
 }
 
 describe("org-settings service", () => {
@@ -132,7 +146,7 @@ describe("org-settings service", () => {
         provider: null,
         repo: null,
         branch: "main",
-        providerMatchesRepository: true,
+        providerMatchesRepository: false,
         gitlabConnection: {
           id: connection.connectionId,
           instanceOrigin: "https://gitlab.internal:8443",
@@ -842,6 +856,17 @@ describe("org-settings service", () => {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "github",
+        repo: "https://github.com/example/context-tree.git",
+        branch: "main",
+      },
+      { updatedBy: admin.userId },
+    );
     await expect(
       orgSettingsService.putOrgSetting(
         app.db,
@@ -1594,7 +1619,7 @@ describe("org-settings API (admin gating + masking)", () => {
       bindingState: "bound",
       provider: null,
       providerSource: "unknown",
-      providerMatchesRepository: true,
+      providerMatchesRepository: false,
       repo: "git@unknown-forge.example:acme/context-tree.git",
       branch: "release",
     });
@@ -1609,6 +1634,59 @@ describe("org-settings API (admin gating + masking)", () => {
       );
     expect(stored?.value).toEqual({
       repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+  });
+
+  it("clears GitLab provider when an HTTPS replacement changes the exact forge port", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal:8443",
+    });
+    const initial = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal:8443/acme/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal:8443", addressPolicy: { kind: "public" } }],
+      },
+    );
+    expect(initial).toEqual({
+      provider: "gitlab",
+      repo: "https://gitlab.internal:8443/acme/context-tree.git",
+      branch: "main",
+    });
+
+    const replacement = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        repo: "https://gitlab.internal:9443/acme/context-tree.git",
+        branch: "release",
+      },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    expect(replacement).toEqual({
+      repo: "https://gitlab.internal:9443/acme/context-tree.git",
+      branch: "release",
+    });
+    await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+      bindingState: "bound",
+      provider: null,
+      providerMatchesRepository: false,
+      repo: "https://gitlab.internal:9443/acme/context-tree.git",
       branch: "release",
     });
   });
