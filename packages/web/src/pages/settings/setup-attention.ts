@@ -1,4 +1,4 @@
-import type { SetupBlocker, TeamSetupCapabilities } from "@first-tree/shared";
+import type { ContextTreeSnapshotStatus, SetupBlocker, TeamSetupCapabilities } from "@first-tree/shared";
 
 function hasAdminOwnedBlocker(blockers: SetupBlocker[]): boolean {
   return blockers.some((blocker) => blocker.resolutionOwner === "admin");
@@ -28,6 +28,13 @@ export function teamSetupNeedsAttention(
     hasAdminOwnedBlocker(capabilities.contextTree.automaticReview.blockers);
 
   return repositoryAutomationNeedsAttention || contextTreeNeedsAttention || automaticReviewNeedsAttention;
+}
+
+export function contextTreeSnapshotNeedsAttention(
+  snapshotStatus: ContextTreeSnapshotStatus | null | undefined,
+  role: string | null,
+): boolean {
+  return role === "admin" && snapshotStatus === "unavailable";
 }
 
 export function personalSetupNeedsAttention({

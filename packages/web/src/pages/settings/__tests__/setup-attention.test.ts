@@ -1,6 +1,10 @@
 import type { SetupBlocker, TeamSetupCapabilities } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { personalSetupNeedsAttention, teamSetupNeedsAttention } from "../setup-attention.js";
+import {
+  contextTreeSnapshotNeedsAttention,
+  personalSetupNeedsAttention,
+  teamSetupNeedsAttention,
+} from "../setup-attention.js";
 
 const OBSERVED_AT = "2026-07-23T08:00:00.000Z";
 const ADMIN_BLOCKER: SetupBlocker = {
@@ -122,6 +126,14 @@ describe("Setup navigation attention", () => {
       },
     ];
     expect(teamSetupNeedsAttention(review, "admin")).toBe(true);
+  });
+
+  it("uses the owner snapshot only for admin-recoverable unavailable Tree attention", () => {
+    expect(contextTreeSnapshotNeedsAttention("unavailable", "admin")).toBe(true);
+    expect(contextTreeSnapshotNeedsAttention("unavailable", "member")).toBe(false);
+    expect(contextTreeSnapshotNeedsAttention("stale", "admin")).toBe(false);
+    expect(contextTreeSnapshotNeedsAttention("active", "admin")).toBe(false);
+    expect(contextTreeSnapshotNeedsAttention(undefined, "admin")).toBe(false);
   });
 
   it("keeps personal access attention independent of Team role", () => {

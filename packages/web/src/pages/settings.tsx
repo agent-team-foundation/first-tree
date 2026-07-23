@@ -1,11 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
-import { personalSetupNeedsAttention, teamSetupNeedsAttention } from "./settings/setup-attention.js";
+import {
+  contextTreeSnapshotNeedsAttention,
+  personalSetupNeedsAttention,
+  teamSetupNeedsAttention,
+} from "./settings/setup-attention.js";
 
 /**
  * Settings layout — a flat desktop sidebar plus the active module.
@@ -74,6 +79,7 @@ export function SettingsLayout({ activePathname, children }: { activePathname?: 
     useAuth();
   const viewport = useWorkspaceViewport();
   const { pathname: routePathname } = useLocation();
+  const teamAttentionEnabled = meLoaded && viewport !== "narrow" && role === "admin" && organizationId !== null;
   const setupCapabilitiesQuery = useQuery({
     queryKey: setupCapabilitiesQueryKey(organizationId),
     queryFn: () => {
@@ -82,14 +88,31 @@ export function SettingsLayout({ activePathname, children }: { activePathname?: 
     },
     // The dot is desktop-only and members never receive Team actions. The
     // Setup page itself still reads this projection for every role.
-    enabled: meLoaded && viewport !== "narrow" && role === "admin" && organizationId !== null,
+    enabled: teamAttentionEnabled,
   });
+  const currentCapabilities =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess ? setupCapabilitiesQuery.data : undefined;
+  const contextBound = currentCapabilities?.contextTree.binding.state === "bound";
+  const contextTreeSnapshotQuery = useQuery({
+    queryKey: ["context-tree-snapshot", organizationId, "7d", false],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getContextTreeSnapshot(organizationId, "7d");
+    },
+    enabled: teamAttentionEnabled && contextBound,
+  });
+  const currentContextTreeSnapshotStatus =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess && contextBound && contextTreeSnapshotQuery.isSuccess
+      ? contextTreeSnapshotQuery.data.snapshotStatus
+      : undefined;
   const setupNeedsAttention =
     personalSetupNeedsAttention({
       currentOrgHasUsableAgent,
       onboardingDismissedAt,
       onboardingCompletedAt,
-    }) || teamSetupNeedsAttention(setupCapabilitiesQuery.data, role);
+    }) ||
+    teamSetupNeedsAttention(currentCapabilities, role) ||
+    contextTreeSnapshotNeedsAttention(currentContextTreeSnapshotStatus, role);
   // DEV preview galleries render this real layout below their own route. Let
   // those galleries supply the path whose heading/nav state they are showing;
   // production always follows the actual router location.

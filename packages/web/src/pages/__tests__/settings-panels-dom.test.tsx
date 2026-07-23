@@ -44,6 +44,7 @@ const onboardingEventMocks = vi.hoisted(() => ({
 }));
 
 const contextApiMocks = vi.hoisted(() => ({
+  getContextTreeSnapshot: vi.fn(),
   initializeContextTree: vi.fn(),
 }));
 
@@ -203,6 +204,7 @@ async function flush(): Promise<void> {
 async function renderDom(
   element: ReactElement,
   route = "/settings/context",
+  queryClient = createClient(),
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -210,7 +212,7 @@ async function renderDom(
   await act(async () => {
     root.render(
       <MemoryRouter initialEntries={[route]}>
-        <QueryClientProvider client={createClient()}>
+        <QueryClientProvider client={queryClient}>
           <Routes>
             <Route path="/settings/*" element={element}>
               <Route path="account" element={<div>Account child</div>} />
@@ -376,6 +378,9 @@ beforeEach(() => {
     branch: "main",
     nodePath: "NODE.md",
   });
+  contextApiMocks.getContextTreeSnapshot.mockResolvedValue({
+    snapshotStatus: "active",
+  });
   settingsMocks.getSourceReposSetting.mockResolvedValue(sourceRepos());
   settingsMocks.putSourceReposSetting.mockImplementation(async (_id: string, body: Partial<OrgSourceReposOutput>) =>
     sourceRepos(body),
@@ -505,6 +510,94 @@ describe("settings panels", () => {
     expect(personal.container.querySelector("[data-setup-attention]")).not.toBeNull();
     expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledTimes(2);
     await act(async () => personal.root.unmount());
+  });
+
+  it("marks desktop Setup for an unavailable bound Context Tree snapshot without another blocker", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValueOnce({
+      snapshotStatus: "unavailable",
+    });
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => admin.container.querySelector("[data-setup-attention]") !== null,
+      "Expected Setup attention after the bound Context Tree snapshot becomes unavailable",
+    );
+
+    expect(contextApiMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
+    expect(admin.container.querySelector('aside a[href="/settings/setup"]')?.getAttribute("aria-label")).toBe(
+      "Setup — Needs you",
+    );
+    await act(async () => admin.root.unmount());
+  });
+
+  it("ignores cached unavailable snapshots when the current owner facts are unbound or failed", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const snapshotKey = ["context-tree-snapshot", "org-1", "7d", false] as const;
+    const unbound = teamSetupCapabilities();
+    unbound.contextTree.binding = { state: "unbound" };
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(unbound);
+    const unboundClient = createClient();
+    unboundClient.setQueryData(snapshotKey, { snapshotStatus: "unavailable" });
+
+    const unboundAdmin = await renderDom(<SettingsLayout />, "/settings/account", unboundClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 1,
+      "Expected the unbound Team projection to load",
+    );
+    expect(unboundAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    await act(async () => unboundAdmin.root.unmount());
+
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockRejectedValueOnce(new Error("projection failed"));
+    const failedProjectionClient = createClient();
+    failedProjectionClient.setQueryData(snapshotKey, { snapshotStatus: "unavailable" });
+    const failedProjectionAdmin = await renderDom(<SettingsLayout />, "/settings/account", failedProjectionClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 2,
+      "Expected the failed Team projection read",
+    );
+    expect(failedProjectionAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    await act(async () => failedProjectionAdmin.root.unmount());
+
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(teamSetupCapabilities());
+    contextApiMocks.getContextTreeSnapshot.mockRejectedValueOnce(new Error("snapshot failed"));
+    const failedSnapshotAdmin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => contextApiMocks.getContextTreeSnapshot.mock.calls.length === 1,
+      "Expected the failed Context Tree snapshot read",
+    );
+    expect(failedSnapshotAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => failedSnapshotAdmin.root.unmount());
+  });
+
+  it("ignores cached Team attention after the current projection read fails", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const cached = teamSetupCapabilities();
+    const cachedGithub = cached.repositoryAutomation.providers[0];
+    if (!cachedGithub) throw new Error("Expected GitHub capability");
+    cachedGithub.health = "degraded";
+    cachedGithub.blockers = [
+      {
+        code: "github_app_suspended",
+        resolutionOwner: "admin",
+        actionKind: "manage_github_installation",
+      },
+    ];
+    const queryClient = createClient();
+    queryClient.setQueryData(["setup-capabilities", "org-1"], cached);
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockRejectedValueOnce(new Error("projection failed"));
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account", queryClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 1,
+      "Expected the cached Team projection to be rechecked",
+    );
+    await flush();
+
+    expect(admin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => admin.root.unmount());
   });
 
   it("uses the preview pathname override for desktop and narrow navigation state", async () => {
