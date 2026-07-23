@@ -627,13 +627,22 @@ function providerBindingsMatch(
 }
 
 function forgeActorLogin(provider: ContextTreeProvider, host: string): string {
-  const output =
-    provider === "github"
-      ? runCommand("gh", ["api", "user", "--hostname", host, "--jq", ".login"], process.cwd())
-      : runCommand("glab", ["api", "user", "--hostname", host, "--jq", ".username"], process.cwd(), {
-          GITLAB_HOST: host,
-        });
-  const login = output.trim();
+  let login: string;
+  if (provider === "github") {
+    login = runCommand("gh", ["api", "user", "--hostname", host, "--jq", ".login"], process.cwd()).trim();
+  } else {
+    const output = runCommand("glab", ["api", "user", "--hostname", host], process.cwd(), {
+      GITLAB_HOST: host,
+    });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      throw new Error("GitLab CLI returned an invalid current-user response.");
+    }
+    const username = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "username") : null;
+    login = typeof username === "string" ? username.trim() : "";
+  }
   const hasControlCharacter = [...login].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint <= 0x1f || codePoint === 0x7f;
@@ -672,7 +681,8 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
   const input = parseProviderInitOptions(options);
   const coordinate = resolveContextTreeForgeCoordinate(input.provider, input.repo);
   const reader = createMemberSdk();
-  const admission = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  const seedTarget = { provider: input.provider, repo: coordinate.repoUrl, branch: input.branch };
+  const admission = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
   if (admission.state.status === "bound") {
     if (!providerBindingsMatch(admission.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
       throw new Error(
@@ -750,7 +760,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     mkdirSync(treeRoot, { recursive: true });
   }
 
-  const beforeRemote = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  const beforeRemote = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
   if (beforeRemote.state.status === "bound") {
     if (providerBindingsMatch(beforeRemote.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
       printProviderInitSummary(context, {
@@ -791,7 +801,9 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     }
   } catch (error) {
     if (input.mode === "adopt") throw error;
-    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget }).catch(
+      () => null,
+    );
     const bindingTruth =
       current?.state.status === "bound"
         ? ` Team ${input.teamId} is now bound to ${current.state.binding.repo}#${current.state.binding.branch}.`
@@ -803,7 +815,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     );
   }
 
-  const beforeFinalize = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  const beforeFinalize = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
   if (beforeFinalize.state.status === "bound") {
     if (!providerBindingsMatch(beforeFinalize.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
       throw new Error(
@@ -845,7 +857,9 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
   } catch (error) {
     // A lost response has unknown mutation status. Reconcile once, read-only,
     // and converge only when the exact provider/repo/branch is now authoritative.
-    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget }).catch(
+      () => null,
+    );
     if (
       current?.state.status === "bound" &&
       providerBindingsMatch(current.state.binding, input.provider, coordinate.repoUrl, input.branch)
@@ -1221,16 +1235,16 @@ function configureInitCommand(command: Command): void {
     .option("--adopt", "adopt an existing readable Context Tree repository without overwriting history")
     .option(
       "--owner <login>",
-      "GitHub owner for the repo; in the bound path defaults to the team's App installation account (must match it), otherwise the authed gh user",
+      "deprecated legacy GitHub owner (removed in 0.6.0); use --provider/--repo/--branch/--create",
     )
-    .option("--name <repo>", "repository name; defaults to <team>-context-tree")
+    .option("--name <repo>", "deprecated legacy GitHub repo name (removed in 0.6.0); use --repo")
     .option("--title <team>", "team display name used in the root node title; defaults to the owner")
     .option("--public", "create a public repository (default: private)")
     .option("--dir <path>", "local directory to scaffold and push from; defaults to ./<name>")
     .option("--with-workflow", "also seed .github/workflows/validate-tree.yml (needs gh `workflow` scope)")
-    .option("--no-bind", "only create the repo: skip First Tree org binding and the installation-coverage check")
-    .option("--rebind", "replace an existing team Context Tree binding (default: refuse if one exists)")
-    .option("--org <orgId>", "legacy managed org selector; defaults to your selected/default org via /me")
+    .option("--no-bind", "deprecated legacy GitHub-only mode (removed in 0.6.0)")
+    .option("--rebind", "deprecated legacy direct rebind (removed in 0.6.0)")
+    .option("--org <orgId>", "deprecated legacy org selector (removed in 0.6.0); use --team")
     .option("--team <team-id>", "explicit Team for portable Seed; never falls back to default/current Team state");
 }
 

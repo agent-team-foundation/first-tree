@@ -45,6 +45,15 @@ describe("SCM automatic topics", () => {
     ).toBe("Issue project#18: Bug");
   });
 
+  it("renders stable Context Reviewer topics for both providers", () => {
+    expect(
+      formatContextReviewTopic({ provider: "github", repositoryPath: "owner/context-tree", changeNumber: 7 }),
+    ).toBe("Context Review · context-tree#7");
+    expect(
+      formatContextReviewTopic({ provider: "gitlab", repositoryPath: "group/platform/context-tree", changeNumber: 8 }),
+    ).toBe("Context Review · context-tree!8");
+  });
+
   it("refreshes title and project path while preserving the review head", () => {
     const entity = {
       entityType: "pull_request" as const,

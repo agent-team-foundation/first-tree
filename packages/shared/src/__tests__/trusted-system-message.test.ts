@@ -122,6 +122,31 @@ describe("trusted system message attribution", () => {
     ).toBe(true);
   });
 
+  it("keeps a complete GitLab Context Reviewer run trusted", () => {
+    const message = {
+      source: "gitlab",
+      format: "markdown",
+      content: "Review the exact GitLab Merge Request head.",
+      metadata: {
+        source: "gitlab",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-1",
+        contextReviewRepository: "gitlab.example/acme/context-tree",
+        contextReviewConnectionId: "connection-1",
+        contextReviewProjectId: 501,
+        contextReviewMrIid: 42,
+        contextReviewEntityUrl: "https://gitlab.example/acme/context-tree/-/merge_requests/42",
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+      },
+    };
+
+    expect(isTrustedGitlabDispatcherMessage(message)).toBe(true);
+    expect(resolveTrustedSystemSender(message)).toBe("gitlab");
+    expect(isTrustedGithubDispatcherMessage({ ...message, source: "github" })).toBe(false);
+  });
+
   it("rejects spoofed metadata without trusted provenance and card shape", () => {
     const metadataOnly = {
       source: "api",

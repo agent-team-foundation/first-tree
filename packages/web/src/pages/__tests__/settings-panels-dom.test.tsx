@@ -438,8 +438,13 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
-  it("shows GitLab provider and Webhook health while keeping the repo form editable", async () => {
+  it("uses the Server-resolved provider for a legacy GitLab binding and keeps the repo form editable", async () => {
     settingsMocks.getRawContextTreeSetting.mockResolvedValueOnce(
+      contextTree({
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      }),
+    );
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce(
       contextTree({
         provider: "gitlab",
         repo: "https://gitlab.internal/acme/platform/context-tree.git",
@@ -471,9 +476,11 @@ describe("settings panels", () => {
 
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Ready · inbound Webhook observed");
+    await waitForText(container, "Healthy · inbound Webhook observed");
 
     expect(container.textContent).toContain("gitlab");
+    expect(container.textContent).not.toContain("Provider unresolved");
+    expect(container.textContent).toContain("GitLab Webhook");
     expect(container.textContent).toContain("Automatic MR review");
     expect(container.textContent).toContain("last valid inbound 2026-05-28T11:00:00.000Z");
     await click(buttonByText(container, "Edit"));

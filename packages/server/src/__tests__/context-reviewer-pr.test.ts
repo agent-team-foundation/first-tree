@@ -511,6 +511,7 @@ describe("handleContextReviewerPrEvent", () => {
       contextTreeReviewer: true,
       reviewerAgentUuid: reviewer.uuid,
     });
+    expect(chat?.topic).toBe("Context Review · context-tree#123");
 
     const memberships = await app.db
       .select({ agentId: chatMembership.agentId, accessMode: chatMembership.accessMode })
@@ -595,9 +596,19 @@ describe("handleContextReviewerPrEvent", () => {
     if (!first.handled || !second.handled) throw new Error("expected handled results");
     expect(second.chatId).toBe(first.chatId);
     expect(second).toMatchObject({ handled: true, reused: true });
+    await app.db.update(chats).set({ topic: "Manual reviewer topic" }).where(eq(chats.id, first.chatId));
+    const third = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload(),
+      organizationId: admin.organizationId,
+    });
+    expect(third).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
+    expect((await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, first.chatId)))[0]?.topic).toBe(
+      "Manual reviewer topic",
+    );
 
     const messageRows = await app.db.select({ id: messages.id }).from(messages);
-    expect(messageRows).toHaveLength(2);
+    expect(messageRows).toHaveLength(3);
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
     expect(followUp?.content).toContain("Trigger event: pull_request.opened");
     expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");

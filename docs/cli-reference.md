@@ -1242,7 +1242,13 @@ reports the exact possibly-created remote, performs at most one read-only
 binding reconciliation, and never claims rollback or deletes a repository.
 
 For compatibility, invoking `first-tree tree init` without the provider-aware
-flags retains the legacy GitHub-only path. That path creates a brand-new team
+flags retains the legacy GitHub-only path through the 0.5.x line. This
+compatibility path and its `--owner`, `--name`, `--org`, `--no-bind`, and
+`--rebind` flags are deprecated and will be removed in First Tree 0.6.0;
+automation must migrate to the explicit
+`--team --provider --repo --branch --create|--adopt` contract before that
+release. No new provider behavior is added to the legacy implementation.
+That path creates a brand-new team
 Context Tree repository with the user's local `gh`: it creates the repo (one
 path for user- and org-owned repos),
 scaffolds a minimal valid tree (root `NODE.md` + members index + a creator member

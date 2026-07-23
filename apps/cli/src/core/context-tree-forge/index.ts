@@ -1,4 +1,4 @@
-import { type ContextTreeProvider, canonicalGitRepoIdentity } from "@first-tree/shared";
+import { type ContextTreeProvider, canonicalGitRepoIdentity, contextTreeRepoSchema } from "@first-tree/shared";
 
 export type ContextTreeForgeRunner = (
   command: string,
@@ -19,7 +19,11 @@ export function resolveContextTreeForgeCoordinate(
   provider: ContextTreeProvider,
   repoUrl: string,
 ): ContextTreeForgeCoordinate {
-  const identity = canonicalGitRepoIdentity(repoUrl);
+  const safeRepo = contextTreeRepoSchema.safeParse(repoUrl);
+  if (!safeRepo.success) {
+    throw new Error("--repo must be a credential-free HTTPS, ssh://, or scp-like SSH repository URL.");
+  }
+  const identity = canonicalGitRepoIdentity(safeRepo.data);
   if (!identity) throw new Error("--repo must be an exact HTTPS or SSH repository URL.");
   if (provider === "github" && (identity.host !== "github.com" || identity.path.split("/").length !== 2)) {
     throw new Error("GitHub Context Tree repositories must use github.com/<owner>/<repo>.");
@@ -30,7 +34,7 @@ export function resolveContextTreeForgeCoordinate(
   const host = repositoryCliHost(repoUrl, identity.host);
   return {
     provider,
-    repoUrl,
+    repoUrl: safeRepo.data,
     host,
     path: identity.path,
     webUrl: repositoryWebUrl(repoUrl, host, identity.path),

@@ -18,6 +18,7 @@ import type { NormalizedGitlabWebhook } from "./gitlab-webhook.js";
 import { type DeferredSendMessagePostCommitEffects, sendMessage } from "./message.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
+import { formatContextReviewTopic } from "./scm-entity-chat-topic.js";
 
 const log = createLogger("ContextReviewerMr");
 const require = createRequire(import.meta.url);
@@ -212,7 +213,11 @@ export async function handleContextReviewerMrEvent(input: {
     organizationId: input.connection.organizationId,
     initialRecipientAgentIds: [reviewer.uuid],
     contextParticipantAgentIds: [],
-    topic: `Context Review MR !${entity.entityIid}: ${templateInput.title}`,
+    topic: formatContextReviewTopic({
+      provider: "gitlab",
+      repositoryPath: entity.projectPath,
+      changeNumber: entity.entityIid,
+    }),
     onboardingKickoffKey: contextReviewerChatReservationKey(input.connection.organizationId, entityKey),
     initialMessage: {
       source: "gitlab",

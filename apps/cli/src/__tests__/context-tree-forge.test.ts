@@ -95,4 +95,15 @@ describe("Context Tree forge adapters", () => {
       /must use github\.com/u,
     );
   });
+
+  it.each([
+    "http://gitlab.example/acme/context-tree",
+    "ftp://gitlab.example/acme/context-tree",
+    "file:///tmp/context-tree",
+    "https://user:secret@gitlab.example/acme/context-tree",
+    "https://gitlab.example/acme/context-tree?token=secret",
+    "https://gitlab.example/acme/context-tree#fragment",
+  ])("rejects unsafe repository transport before any forge command: %s", (repo) => {
+    expect(() => resolveContextTreeForgeCoordinate("gitlab", repo)).toThrow("credential-free HTTPS, ssh://");
+  });
 });

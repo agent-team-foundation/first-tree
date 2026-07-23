@@ -389,7 +389,7 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
         contextTree,
         contextTreeInput,
       )) as OrgSettingStorage<K>;
-      await assertGitlabContextTreeBindingAuthorized(
+      await assertContextTreeBindingTargetAuthorized(
         txDb,
         orgId,
         merged as OrgSettingStorage<"context_tree">,
@@ -472,7 +472,7 @@ export async function putInitializedOrgContextTreeBinding(
     if (current.kind !== "unbound" || current.branch !== expectedUnboundBranch) {
       throw new ConflictError("Context Tree setting changed after tree initialization began");
     }
-    await assertGitlabContextTreeBindingAuthorized(txDb, orgId, binding, options.gitlabEgressAllowlist ?? []);
+    await assertContextTreeBindingTargetAuthorized(txDb, orgId, binding, options.gitlabEgressAllowlist ?? []);
     const now = new Date();
 
     const [row] = await tx
@@ -623,13 +623,21 @@ async function resolveStoredContextTreeProvider(
   return { ...storage, provider: resolved.provider ?? undefined };
 }
 
-async function assertGitlabContextTreeBindingAuthorized(
+export async function assertContextTreeBindingTargetAuthorized(
   db: Database,
   orgId: string,
   binding: OrgSettingStorage<"context_tree">,
   allowlist: readonly GitlabEgressAllowlistEntry[],
 ): Promise<void> {
-  if (binding.provider !== "gitlab" || !binding.repo) return;
+  if (!binding.provider || !binding.repo) return;
+  const resolution = resolveContextTreeProvider({
+    repo: binding.repo,
+    declaredProvider: binding.provider,
+  });
+  if (!resolution.declaredProviderMatches) {
+    throw new BadRequestError("Context Tree provider does not match the repository origin");
+  }
+  if (binding.provider !== "gitlab") return;
   const [connection] = await db
     .select({ instanceOrigin: gitlabConnections.instanceOrigin })
     .from(gitlabConnections)

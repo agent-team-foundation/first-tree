@@ -133,11 +133,18 @@ first-tree tree init --team "<selectedTeamId>" \
   --provider "<github|gitlab>" --repo "<exact-repository-url>" \
   --branch "<default-branch>" --create --dir "<treePath>"
 
-# Managed compatibility when no explicit Team was supplied
-first-tree tree init --provider "<github|gitlab>" \
+# Managed workspace (resolve the trusted task's Team id first)
+first-tree tree init --team "<selectedTeamId>" \
+  --provider "<github|gitlab>" \
   --repo "<exact-repository-url>" --branch "<default-branch>" \
   --create --dir "<workspaceRoot>/<manifest.tree>"
 ```
+
+Provider-aware `tree init` always requires `--team`, including in a managed
+workspace. Resolve that id from the trusted current task/Team briefing and
+repeat the live Server authority preflight for that exact Team. If no trusted
+Team id is available, ask the human for it and do not invoke `tree init`;
+never infer a default Team from local workspace state.
 
 Use `--adopt` instead of `--create` only when the explicit target repository
 already exists and is intended to become the tree. Adopt is non-destructive:

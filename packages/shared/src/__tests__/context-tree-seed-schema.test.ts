@@ -7,8 +7,23 @@ import {
 } from "../schemas/context-tree-seed.js";
 
 describe("Context Tree Seed preflight schemas", () => {
-  it("keeps the admission request empty so callers cannot choose authority", () => {
+  it("accepts only an optional intended repository target without caller-selected authority", () => {
     expect(contextTreeSeedPreflightRequestSchema.parse({})).toEqual({});
+    expect(
+      contextTreeSeedPreflightRequestSchema.parse({
+        target: {
+          provider: "gitlab",
+          repo: "ssh://git@gitlab.internal:2222/acme/context-tree.git",
+          branch: "main",
+        },
+      }),
+    ).toEqual({
+      target: {
+        provider: "gitlab",
+        repo: "ssh://git@gitlab.internal:2222/acme/context-tree.git",
+        branch: "main",
+      },
+    });
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ role: "admin" }).success).toBe(false);
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ binding: {} }).success).toBe(false);
   });
@@ -68,6 +83,7 @@ describe("Context Tree Seed preflight schemas", () => {
       "CONTEXT_TREE_SEED_AUTHORITY_FAILED",
       "CONTEXT_TREE_SEED_NEEDS_ADMIN",
       "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+      "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
     ]);
     for (const code of CONTEXT_TREE_SEED_PREFLIGHT_ERROR_CODES) {
       expect(contextTreeSeedPreflightErrorCodeSchema.parse(code)).toBe(code);

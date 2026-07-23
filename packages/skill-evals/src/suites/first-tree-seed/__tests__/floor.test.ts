@@ -46,6 +46,10 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("Never\ncreate or simulate an approval rule");
     expect(skillMarkdown).toContain("exact-SHA merge");
     expect(skillMarkdown).toContain("Never substitute `/settings/github`");
+    expect(skillMarkdown).toContain("Provider-aware `tree init` always requires `--team`");
+    const initCommands = [...skillMarkdown.matchAll(/^first-tree tree init .+$/gmu)].map((match) => match[0]);
+    expect(initCommands.length).toBeGreaterThan(0);
+    expect(initCommands.every((command) => command.includes("--team"))).toBe(true);
   });
 
   it("materializes declared source worktrees from the resolved source ref, not origin/main", () => {

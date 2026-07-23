@@ -13,7 +13,7 @@ import {
   treeSetupKickoffSchema,
 } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { ConflictError } from "../../errors.js";
+import { BadRequestError, ConflictError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import {
   ContextTreeRepoProvisionError,
@@ -45,6 +45,7 @@ import {
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
 import {
+  assertContextTreeBindingTargetAuthorized,
   getOrgContextReviewRuntime,
   getOrgContextTreeBinding,
   getOrgContextTreeSettingState,
@@ -176,7 +177,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
   });
 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/seed-preflight", async (request, reply) => {
-    contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
+    const body = contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
     const scope = await requireOrgMembership(request, app.db);
     if (scope.role !== "admin") {
       return reply.status(403).send({
@@ -191,6 +192,22 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
         code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
       });
+    }
+    if (body.target) {
+      try {
+        await assertContextTreeBindingTargetAuthorized(
+          app.db,
+          scope.organizationId,
+          body.target,
+          app.config.gitlab?.egressAllowlist ?? [],
+        );
+      } catch (error) {
+        if (!(error instanceof BadRequestError)) throw error;
+        return reply.status(409).send({
+          error: error.message,
+          code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
+        });
+      }
     }
 
     return reply.status(200).send(

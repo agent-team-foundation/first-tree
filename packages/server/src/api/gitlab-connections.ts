@@ -28,7 +28,7 @@ export async function gitlabConnectionRoutes(app: FastifyInstance): Promise<void
 
   app.post<{ Params: { connectionId: string } }>(
     "/:connectionId/replace",
-    { config: { otelRecordBody: true } },
+    { config: { otelRecordBody: true, rateLimit: undefined } },
     async (request) => {
       const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
       const body = gitlabConnectionCreateSchema.parse(request.body);

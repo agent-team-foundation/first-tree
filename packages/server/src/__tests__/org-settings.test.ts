@@ -1490,6 +1490,39 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(rawRead.json()).toEqual({ branch: "trunk" });
   });
 
+  it("projects the resolved GitLab provider for a legacy binding through the member-safe endpoint", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    const legacyBinding = {
+      repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      branch: "main",
+    };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: legacyBinding,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const response = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ provider: "gitlab", ...legacyBinding });
+    }
+  });
+
   it("fails closed for a repo-less historical row with an invalid branch", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);

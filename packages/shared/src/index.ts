@@ -450,10 +450,12 @@ export {
   type ContextTreeSeedPreflightRequest,
   type ContextTreeSeedPreflightResponse,
   type ContextTreeSeedPreflightState,
+  type ContextTreeSeedPreflightTarget,
   contextTreeSeedPreflightErrorCodeSchema,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
   contextTreeSeedPreflightStateSchema,
+  contextTreeSeedPreflightTargetSchema,
 } from "./schemas/context-tree-seed.js";
 export {
   CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES,

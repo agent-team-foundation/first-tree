@@ -40,7 +40,19 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     repo: "https://github.com/acme/context-tree.git",
     branch: "main",
   });
-  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue(null);
+  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue(
+    input.orgId
+      ? {
+          provider: "github",
+          repo: "https://github.com/acme/context-tree.git",
+          branch: "main",
+          providerSource: "declared",
+          providerMatchesRepository: true,
+          gitlabConnection: null,
+          contextReviewer: { enabled: false, agentUuid: null },
+        }
+      : null,
+  );
   const isOrgContextReviewRuntimeCurrent = vi.fn().mockResolvedValue(true);
   const getContextTreeSnapshot = vi.fn().mockResolvedValue(snapshot);
   const isGithubRemoteBinding = vi.fn().mockReturnValue(input.githubRemote ?? false);
@@ -157,6 +169,45 @@ describe("context tree snapshot user route with mocked dependencies", () => {
     expect(ctx.mocks.resolveOrgViewer).toHaveBeenCalledWith(ctx.app.db, "user-1", "org-1");
     expect(ctx.mocks.summarizeContextTreeUsage).toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).toHaveBeenCalled();
+    await ctx.app.close();
+  });
+
+  it("drives the snapshot from one live runtime tuple instead of a separately read stale binding", async () => {
+    const ctx = await setupRoute({ orgId: "org-1" });
+    ctx.mocks.getOrgContextTreeBinding.mockResolvedValue({
+      provider: "gitlab",
+      repo: "https://gitlab.example/acme/old-tree.git",
+      branch: "old-branch",
+    });
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValue({
+      provider: "gitlab",
+      repo: "https://gitlab.example/acme/new-tree.git",
+      branch: "new-branch",
+      providerSource: "declared",
+      providerMatchesRepository: true,
+      gitlabConnection: {
+        id: "connection-1",
+        instanceOrigin: "https://gitlab.example",
+        endpointSeen: true,
+        lastValidInboundAt: null,
+      },
+      contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+    });
+
+    const res = await ctx.app.inject({ method: "GET", url: "/snapshot" });
+
+    expect(res.statusCode).toBe(200);
+    expect(ctx.mocks.getOrgContextTreeBinding).not.toHaveBeenCalled();
+    expect(ctx.mocks.getContextTreeSnapshot).toHaveBeenCalledWith(
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.example/acme/new-tree.git",
+        branch: "new-branch",
+        githubToken: undefined,
+      },
+      "7d",
+      expect.objectContaining({ gitlabInstanceOrigin: "https://gitlab.example" }),
+    );
     await ctx.app.close();
   });
 });

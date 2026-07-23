@@ -19,7 +19,6 @@ import {
 } from "../services/github-app-token.js";
 import {
   getOrgContextReviewRuntime,
-  getOrgContextTreeBinding,
   isOrgContextReviewRuntimeCurrent,
   resolveUserPrimaryOrgId,
 } from "../services/org-settings.js";
@@ -37,9 +36,14 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     const query = timing.timeSync("parse_query", () => querySchema.parse(request.query));
     const { userId } = timing.timeSync("auth", () => requireUser(request));
     const orgId = await timing.time("resolve_primary_org", () => resolveUserPrimaryOrgId(app.db, userId));
-    const binding: ContextTreeBinding = orgId
-      ? ((await timing.time("binding", () => getOrgContextTreeBinding(app.db, orgId))) ?? {})
-      : {};
+    const reviewRuntime = orgId
+      ? await timing.time("context_tree_runtime", () => getOrgContextReviewRuntime(app.db, orgId))
+      : null;
+    const binding: ContextTreeBinding = {
+      ...(reviewRuntime?.provider ? { provider: reviewRuntime.provider } : {}),
+      ...(reviewRuntime?.repo ? { repo: reviewRuntime.repo } : {}),
+      ...(reviewRuntime?.branch ? { branch: reviewRuntime.branch } : {}),
+    };
     let mintResult: ContextTreeInstallationTokenResult | null = null;
     if (orgId && isGithubRemoteBinding(binding)) {
       mintResult = await timing.time("github_token", async () => {
@@ -48,9 +52,6 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       });
     }
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
-    const reviewRuntime = orgId
-      ? await timing.time("gitlab_runtime", () => getOrgContextReviewRuntime(app.db, orgId))
-      : null;
     const window = query.window ?? "7d";
     const snapshot = await timing.time("snapshot_build", () =>
       getContextTreeSnapshot({ ...binding, githubToken }, window, {

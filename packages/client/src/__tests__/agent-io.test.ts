@@ -293,6 +293,39 @@ describe("formatInboundContent", () => {
     );
   });
 
+  it("keeps a trusted Context Reviewer run attributed to GitLab", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "gitlab",
+      format: "markdown",
+      content: "Review this exact GitLab Merge Request head.",
+      metadata: {
+        source: "gitlab",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-1",
+        contextReviewRepository: "gitlab.example/acme/context-tree",
+        contextReviewConnectionId: "connection-1",
+        contextReviewProjectId: 501,
+        contextReviewMrIid: 42,
+        contextReviewEntityUrl: "https://gitlab.example/acme/context-tree/-/merge_requests/42",
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+      },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: GitLab · type=system]\n\nReview this exact GitLab Merge Request head.",
+    );
+  });
+
   it("does not trust a caller-provided systemSender marker", async () => {
     const cache = createParticipantCache(
       mkSdk(async () => participants),

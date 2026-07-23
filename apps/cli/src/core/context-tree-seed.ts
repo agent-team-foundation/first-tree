@@ -3,6 +3,7 @@ import {
   type ContextTreeSeedPreflightErrorCode,
   type ContextTreeSeedPreflightRequest,
   type ContextTreeSeedPreflightState,
+  type ContextTreeSeedPreflightTarget,
   contextTreeSeedPreflightErrorCodeSchema,
   contextTreeSeedPreflightResponseSchema,
 } from "@first-tree/shared";
@@ -26,6 +27,7 @@ export type ContextTreeSeedAuthorityReader = {
 
 export type PreflightContextTreeSeedInput = {
   teamId: string;
+  target?: ContextTreeSeedPreflightTarget;
 };
 
 export type ContextTreeSeedPreflight = {
@@ -67,7 +69,9 @@ export async function preflightContextTreeSeed(
 
   let rawAuthority: unknown;
   try {
-    rawAuthority = await reader.preflightMemberContextTreeSeed(teamId, {}, { retry: false });
+    rawAuthority = await reader.preflightMemberContextTreeSeed(teamId, input.target ? { target: input.target } : {}, {
+      retry: false,
+    });
   } catch (error) {
     throw classifyAuthorityFailure(error);
   }
@@ -130,10 +134,14 @@ function serverPreflightFailure(
       "Context Tree Seed needs an active Admin of the selected Team. Ask a Team Admin to continue with the same Team id.",
     CONTEXT_TREE_SEED_CONFIGURATION_INVALID:
       "The selected Team's Context Tree binding is invalid and must be repaired by an Admin before Seed can continue.",
+    CONTEXT_TREE_SEED_TARGET_UNAVAILABLE:
+      "The intended Context Tree repository is not compatible with the selected Team's current provider configuration.",
   };
+  const configurationFailure =
+    code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" || code === "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE";
   return new ContextTreeSeedPreflightCliError(code, messages[code], {
-    stage: code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" ? "configuration" : "authority",
-    exitCode: code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" ? 1 : 3,
+    stage: configurationFailure ? "configuration" : "authority",
+    exitCode: configurationFailure ? 1 : 3,
     httpStatus,
   });
 }

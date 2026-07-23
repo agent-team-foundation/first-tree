@@ -1852,7 +1852,9 @@ describe("tree init command action", () => {
     treeSharedMocks.runCommand.mockImplementation((tool: string, args: string[]) => {
       if (args[0] === "--version") return "";
       if (tool === "glab" && args[0] === "auth" && args[1] === "status") return "";
-      if (tool === "glab" && args[0] === "api" && args[1] === "user") return "gitlab-admin";
+      if (tool === "glab" && args[0] === "api" && args[1] === "user") {
+        return JSON.stringify({ username: "gitlab-admin" });
+      }
       if (tool === "glab" && args[0] === "repo" && args[1] === "view") {
         throw new Error("404 project not found");
       }
@@ -1864,6 +1866,13 @@ describe("tree init command action", () => {
         const url = String(input);
         if (url.endsWith("/api/v1/orgs/team_gitlab/context-tree/seed-preflight") && init?.method === "POST") {
           seedReads++;
+          expect(JSON.parse(String(init.body))).toEqual({
+            target: {
+              provider: "gitlab",
+              repo: "ssh://git@gitlab.example/acme/platform/context-tree.git",
+              branch: "main",
+            },
+          });
           return response({
             organizationId: "team_gitlab",
             state: { status: "unbound", branch: "main" },
@@ -1906,6 +1915,12 @@ describe("tree init command action", () => {
     );
     expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
       "glab",
+      ["api", "user", "--hostname", "gitlab.example"],
+      base,
+      { GITLAB_HOST: "gitlab.example" },
+    );
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "glab",
       ["repo", "create", "acme/platform/context-tree", "--private", "--defaultBranch", "main"],
       expect.any(String),
       { GITLAB_HOST: "gitlab.example" },
@@ -1924,5 +1939,72 @@ describe("tree init command action", () => {
       branch: "main",
       bound: true,
     });
+  });
+
+  it("stops before local auth or forge mutation when Server target admission rejects GitLab", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        expect(url).toMatch(/\/api\/v1\/orgs\/team_denied\/context-tree\/seed-preflight$/u);
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          target: {
+            provider: "gitlab",
+            repo: "https://gitlab.example/acme/context-tree.git",
+            branch: "main",
+          },
+        });
+        return response(
+          {
+            error: "The GitLab Context Tree origin is not authorized for this deployment.",
+            code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
+          },
+          { status: 409 },
+        );
+      }),
+    );
+
+    await initCommand.action(
+      context(
+        commandWithOptions({
+          team: "team_denied",
+          provider: "gitlab",
+          repo: "https://gitlab.example/acme/context-tree.git",
+          branch: "main",
+          create: true,
+          bind: true,
+        }),
+        true,
+      ),
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("not compatible with the selected Team");
+  });
+
+  it("requires an explicit Team for provider-aware init even in a managed working directory", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+
+    await initCommand.action(
+      context(
+        commandWithOptions({
+          provider: "gitlab",
+          repo: "https://gitlab.example/acme/context-tree.git",
+          branch: "main",
+          create: true,
+          bind: true,
+        }),
+        true,
+      ),
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(
+      "--team is required by the provider-aware Seed contract",
+    );
   });
 });

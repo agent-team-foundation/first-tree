@@ -8,6 +8,7 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { encryptValue } from "../services/crypto.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createGitlabConnection } from "../services/gitlab-connections.js";
 import { getOrgContextTreeBinding, getOrgSetting, putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -1225,6 +1226,82 @@ describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
   });
 });
 
+describe("POST /orgs/:orgId/context-tree/seed-preflight target admission", () => {
+  const getAllowedApp = useTestApp({
+    githubAppPrivateKeyPem,
+    gitlabEgressAllowlist: [
+      {
+        origin: "https://gitlab.example",
+        addressPolicy: { kind: "public" },
+      },
+    ],
+  });
+  const getDeniedApp = useTestApp({ githubAppPrivateKeyPem, gitlabEgressAllowlist: [] });
+
+  it("rejects a GitLab target before forge mutation when the current connection is missing or has another origin", async () => {
+    const app = getAllowedApp();
+    const admin = await createTestAdmin(app);
+    const target = {
+      provider: "gitlab" as const,
+      repo: "https://gitlab.example/platform/context-tree.git",
+      branch: "main",
+    };
+
+    const missing = await seedPreflight(app, admin.organizationId, admin.accessToken, { target });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
+
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Other GitLab",
+      instanceOrigin: "https://other-gitlab.example",
+    });
+    const wrongOrigin = await seedPreflight(app, admin.organizationId, admin.accessToken, { target });
+    expect(wrongOrigin.statusCode).toBe(409);
+    expect(wrongOrigin.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
+  });
+
+  it("rejects a deployment-denied GitLab target", async () => {
+    const deniedApp = getDeniedApp();
+    const deniedAdmin = await createTestAdmin(deniedApp);
+    await createGitlabConnection(deniedApp.db, {
+      organizationId: deniedAdmin.organizationId,
+      memberId: deniedAdmin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.example",
+    });
+    const target = {
+      provider: "gitlab" as const,
+      repo: "https://gitlab.example/platform/context-tree.git",
+      branch: "main",
+    };
+
+    const denied = await seedPreflight(deniedApp, deniedAdmin.organizationId, deniedAdmin.accessToken, { target });
+    expect(denied.statusCode).toBe(409);
+    expect(denied.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
+  });
+
+  it("accepts the exact deployment-authorized GitLab connection origin", async () => {
+    const allowedApp = getAllowedApp();
+    const allowedAdmin = await createTestAdmin(allowedApp);
+    await createGitlabConnection(allowedApp.db, {
+      organizationId: allowedAdmin.organizationId,
+      memberId: allowedAdmin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.example",
+    });
+    const target = {
+      provider: "gitlab" as const,
+      repo: "https://gitlab.example/platform/context-tree.git",
+      branch: "main",
+    };
+    const allowed = await seedPreflight(allowedApp, allowedAdmin.organizationId, allowedAdmin.accessToken, { target });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toMatchObject({ organizationId: allowedAdmin.organizationId });
+  });
+});
+
 describe("GET /orgs/:orgId/context-tree/installation", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem });
 
@@ -1293,12 +1370,17 @@ async function initialize(app: FastifyInstance, admin: Pick<TestAdmin, "organiza
   });
 }
 
-async function seedPreflight(app: FastifyInstance, organizationId: string, accessToken: string) {
+async function seedPreflight(
+  app: FastifyInstance,
+  organizationId: string,
+  accessToken: string,
+  payload: Record<string, unknown> = {},
+) {
   return app.inject({
     method: "POST",
     url: `/api/v1/orgs/${organizationId}/context-tree/seed-preflight`,
     headers: { authorization: `Bearer ${accessToken}` },
-    payload: {},
+    payload,
   });
 }
 

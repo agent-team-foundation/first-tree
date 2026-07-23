@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const RECORD_SEPARATOR = "\x1e";
 
-type GitHandler = (args: string[]) => string | Error | unknown;
+type GitHandler = (args: string[], options: unknown) => string | Error | unknown;
 
 async function loadSnapshotServiceWithGit(handler: GitHandler) {
   vi.resetModules();
@@ -17,7 +17,7 @@ async function loadSnapshotServiceWithGit(handler: GitHandler) {
       cb(new Error(`unexpected command ${command}`));
       return;
     }
-    const result = handler(args);
+    const result = handler(args, options);
     if (result instanceof Error || typeof result !== "string") {
       cb(result);
       return;
@@ -100,6 +100,65 @@ describe("Context Tree snapshot service with mocked git", () => {
       );
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates cached GitLab checkout from hostile ambient filter configuration", async () => {
+    const repo = `https://gitlab.example/public/filter-${crypto.randomUUID()}.git`;
+    const cacheRoot = join(tmpdir(), `first-tree-snapshot-filter-${crypto.randomUUID()}`);
+    const hostileGlobal = join(cacheRoot, "hostile.gitconfig");
+    const { execFile, service } = await loadSnapshotServiceWithGit(() => "");
+    const root = service.contextTreeSnapshotTestInternals.managedContextTreePath(repo, "main", cacheRoot);
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+    await writeFile(
+      hostileGlobal,
+      "[filter \"hostile\"]\n\tsmudge = sh -c 'touch /tmp/first-tree-hostile-filter'\n\trequired = true\n",
+    );
+    const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = hostileGlobal;
+
+    try {
+      await service.contextTreeSnapshotTestInternals.materializeRemoteContextTree(
+        repo,
+        "main",
+        cacheRoot,
+        undefined,
+        undefined,
+        "gitlab",
+        {
+          origin: "https://gitlab.example",
+          hostname: "gitlab.example",
+          port: 443,
+          addresses: ["8.8.8.8"],
+          pinnedAddress: "8.8.8.8",
+          curlResolve: "gitlab.example:443:8.8.8.8",
+        },
+        [{ origin: "https://gitlab.example", addressPolicy: { kind: "public" } }],
+        async () => [{ address: "8.8.8.8", family: 4 }],
+      );
+
+      const checkoutCall = execFile.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("checkout"));
+      expect(checkoutCall?.[1]).toEqual(
+        expect.arrayContaining(["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "checkout"]),
+      );
+      expect(checkoutCall?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_SYSTEM: "/dev/null",
+          }),
+        }),
+      );
+      expect((checkoutCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env?.GIT_CONFIG_GLOBAL).not.toBe(
+        hostileGlobal,
+      );
+    } finally {
+      if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+      await rm(cacheRoot, { recursive: true, force: true });
+      service.contextTreeSnapshotTestInternals.clearRemoteSyncState();
     }
   });
 

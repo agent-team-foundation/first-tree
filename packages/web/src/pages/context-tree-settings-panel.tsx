@@ -55,6 +55,11 @@ export function ContextTreeSettingsPanel() {
         : Promise.reject(new Error("no org")),
     enabled: !!organizationId,
   });
+  const resolvedSettingQuery = useQuery({
+    queryKey: ["org-setting", organizationId, "context_tree", "safe"],
+    queryFn: () => (organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no org"))),
+    enabled: isAdmin && !!organizationId,
+  });
 
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("");
@@ -62,7 +67,9 @@ export function ContextTreeSettingsPanel() {
   const [editing, setEditing] = useState(false);
   const hasBinding = !!settingQuery.data?.repo;
   const provider =
-    settingQuery.data?.provider ?? resolveContextTreeProvider({ repo: settingQuery.data?.repo ?? null }).provider;
+    resolvedSettingQuery.data?.provider ??
+    settingQuery.data?.provider ??
+    resolveContextTreeProvider({ repo: settingQuery.data?.repo ?? null }).provider;
 
   useEffect(() => {
     if (!settingQuery.data) return;
@@ -80,7 +87,7 @@ export function ContextTreeSettingsPanel() {
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["org-setting", organizationId, "context_tree", "raw"], next);
-      queryClient.setQueryData(["org-setting", organizationId, "context_tree", "safe"], next);
+      void queryClient.invalidateQueries({ queryKey: ["org-setting", organizationId, "context_tree", "safe"] });
       setSaved(true);
       setEditing(false);
       setTimeout(() => setSaved(false), 2000);
@@ -258,7 +265,7 @@ function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organi
     : !originMatches
       ? `Degraded · Webhook origin ${connection.instanceOrigin} does not match the repository origin`
       : connection.endpointSeen
-        ? "Ready · inbound Webhook observed"
+        ? "Healthy · inbound Webhook observed"
         : "Waiting · configure the project Webhook";
   return (
     <div
@@ -268,7 +275,7 @@ function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organi
         marginTop: "var(--sp-2)",
       }}
     >
-      Automatic MR review: {status}
+      GitLab Webhook: {status}
       {connection?.health.lastValidInboundAt ? ` · last valid inbound ${connection.health.lastValidInboundAt}` : ""}
     </div>
   );
