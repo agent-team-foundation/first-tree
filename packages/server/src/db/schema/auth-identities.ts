@@ -1,4 +1,5 @@
-import { index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigint, check, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { users } from "./users.js";
 
 /**
@@ -45,6 +46,12 @@ export const authIdentities = pgTable(
     credentialType: text("credential_type"),
     credentialPayload: jsonb("credential_payload").$type<Record<string, unknown>>(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    authorityRevision: bigint("authority_revision", { mode: "bigint" }).notNull().default(sql`1`),
+    credentialRevision: bigint("credential_revision", { mode: "bigint" }).notNull().default(sql`1`),
+    credentialState: text("credential_state"),
+    pendingRefreshOperationId: text("pending_refresh_operation_id"),
+    retiredSourceCredentialRevision: bigint("retired_source_credential_revision", { mode: "bigint" }),
+    credentialStateReason: text("credential_state_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -53,5 +60,52 @@ export const authIdentities = pgTable(
     index("idx_auth_identities_user").on(table.userId),
     index("idx_auth_identities_email").on(table.email),
     unique("uq_auth_identities_user_provider").on(table.userId, table.provider),
+    check("ck_auth_identities_authority_revision", sql`${table.authorityRevision} > 0`),
+    check("ck_auth_identities_credential_revision", sql`${table.credentialRevision} > 0`),
+    check(
+      "ck_auth_identities_retired_source_revision",
+      sql`${table.retiredSourceCredentialRevision} IS NULL OR ${table.retiredSourceCredentialRevision} > 0`,
+    ),
+    check(
+      "ck_auth_identities_credential_state",
+      sql`${table.credentialState} IN ('active', 'refresh_pending', 'reauth_required')`,
+    ),
+    check(
+      "ck_auth_identities_credential_state_reason",
+      sql`${table.credentialStateReason} IN ('refresh_uncertain', 'invalid_grant', 'corrupt')`,
+    ),
+    check(
+      "ck_auth_identities_credential_state_coherence",
+      sql`(
+        (
+          ${table.credentialState} IS NULL
+          AND ${table.pendingRefreshOperationId} IS NULL
+          AND ${table.retiredSourceCredentialRevision} IS NULL
+          AND ${table.credentialStateReason} IS NULL
+        )
+        OR (
+          ${table.credentialState} = 'active'
+          AND ${table.pendingRefreshOperationId} IS NULL
+          AND ${table.retiredSourceCredentialRevision} IS NULL
+          AND ${table.credentialStateReason} IS NULL
+        )
+        OR (
+          ${table.credentialState} = 'refresh_pending'
+          AND ${table.pendingRefreshOperationId} IS NOT NULL
+          AND ${table.retiredSourceCredentialRevision} IS NOT NULL
+          AND ${table.credentialRevision} > ${table.retiredSourceCredentialRevision}
+          AND ${table.credentialRevision} - ${table.retiredSourceCredentialRevision} = 1
+          AND ${table.credentialStateReason} IS NULL
+        )
+        OR (
+          ${table.credentialState} = 'reauth_required'
+          AND ${table.pendingRefreshOperationId} IS NULL
+          AND ${table.retiredSourceCredentialRevision} IS NOT NULL
+          AND ${table.credentialRevision} > ${table.retiredSourceCredentialRevision}
+          AND ${table.credentialRevision} - ${table.retiredSourceCredentialRevision} = 2
+          AND ${table.credentialStateReason} IS NOT NULL
+        )
+      )`,
+    ),
   ],
 );

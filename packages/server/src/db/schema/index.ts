@@ -7,6 +7,9 @@ export { attachments } from "./attachments.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
 export { attentions } from "./attentions.js";
 export { authIdentities } from "./auth-identities.js";
+export { authIdentityProviderHeads } from "./auth-identity-provider-heads.js";
+export { authIdentityRefreshOperations } from "./auth-identity-refresh-operations.js";
+export { authIdentityRetirementFences } from "./auth-identity-retirement-fences.js";
 export { chatMembership } from "./chat-membership.js";
 export { chatUserState } from "./chat-user-state.js";
 export { chats } from "./chats.js";
@@ -24,6 +27,7 @@ export { invitationRedemptions, invitations } from "./invitations.js";
 export { members } from "./members.js";
 export { messages } from "./messages.js";
 export { notifications } from "./notifications.js";
+export { oauthTransactions } from "./oauth-transactions.js";
 export { organizationSettings } from "./organization-settings.js";
 export { organizations } from "./organizations.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
