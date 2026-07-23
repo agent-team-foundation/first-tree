@@ -14,8 +14,19 @@ type LongPressHandlers = {
   onPointerLeave: () => void;
   onPointerMove: (event: PointerEvent<HTMLElement>) => void;
   onPointerUp: () => void;
-  style: { touchAction: "pan-y"; userSelect: "none"; WebkitTouchCallout: "none" };
+  style: typeof longPressTriggerStyle;
 };
+
+export const longPressSurfaceStyle = {
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  WebkitTouchCallout: "none",
+} as const;
+
+const longPressTriggerStyle = {
+  ...longPressSurfaceStyle,
+  touchAction: "pan-y",
+} as const;
 
 /**
  * Long-press is deliberately an enhancement to the card's normal click:
@@ -43,6 +54,14 @@ export function useLongPress(onLongPress: (trigger: HTMLElement) => void, onClic
     };
   }, [cancel]);
 
+  const openActions = (trigger: HTMLElement) => {
+    // iOS can establish a native text range before dispatching contextmenu.
+    // The card surface prevents new selection; clear any range already started
+    // so the system copy/lookup callout cannot outlive our action sheet.
+    window.getSelection()?.removeAllRanges();
+    onLongPress(trigger);
+  };
+
   return {
     "aria-description": "Long press for chat actions",
     "aria-haspopup": "dialog",
@@ -56,7 +75,7 @@ export function useLongPress(onLongPress: (trigger: HTMLElement) => void, onClic
         timerRef.current = null;
         lastLongPressAtRef.current = Date.now();
         suppressClickRef.current = true;
-        onLongPress(triggerRef.current ?? event.currentTarget);
+        openActions(triggerRef.current ?? event.currentTarget);
       }, LONG_PRESS_MS);
     },
     onPointerMove: (event) => {
@@ -82,14 +101,14 @@ export function useLongPress(onLongPress: (trigger: HTMLElement) => void, onClic
       // Mobile browsers may emit `contextmenu` immediately after our own
       // timer fires. Ignore only that synthetic companion event; a later
       // mouse right-click remains a fresh way to open the sheet.
-      if (Date.now() - lastLongPressAtRef.current > 750) onLongPress(event.currentTarget);
+      if (Date.now() - lastLongPressAtRef.current > 750) openActions(event.currentTarget);
     },
     onKeyDown: (event) => {
       if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
       event.preventDefault();
       cancel();
-      onLongPress(event.currentTarget);
+      openActions(event.currentTarget);
     },
-    style: { touchAction: "pan-y", userSelect: "none", WebkitTouchCallout: "none" },
+    style: longPressTriggerStyle,
   };
 }

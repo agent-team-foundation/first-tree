@@ -253,6 +253,9 @@ describe("mobile card behavior", () => {
     expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(card?.style.userSelect).toBe("none");
+    expect(Reflect.get(card?.style ?? {}, "WebkitUserSelect")).toBe("none");
+    expect(Reflect.get(card?.style ?? {}, "WebkitTouchCallout")).toBe("none");
     expect(card?.querySelector('[aria-haspopup="dialog"]')?.getAttribute("aria-description")).toBe(
       "Long press for chat actions",
     );
@@ -273,15 +276,25 @@ describe("mobile card behavior", () => {
     expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
     expect(card?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(card?.style.userSelect).toBe("none");
+    expect(Reflect.get(card?.style ?? {}, "WebkitUserSelect")).toBe("none");
+    expect(Reflect.get(card?.style ?? {}, "WebkitTouchCallout")).toBe("none");
+    expect(card?.style.touchAction).toBe("pan-y");
   });
 
   it("opens contextual triage on a Now long press and blocks archive while judgment is unresolved", async () => {
     renderPage(harness, "now");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
 
+    const selection = window.getSelection();
+    if (!selection) throw new Error("Missing document selection");
+    const removeAllRanges = vi.spyOn(selection, "removeAllRanges");
+
     await longPress(harness.container.querySelector('[data-mobile-card="feed"] > button'));
 
     expect(currentLocation).toBe("/m/now");
+    expect(removeAllRanges).toHaveBeenCalledOnce();
+    removeAllRanges.mockRestore();
     const actionsSheet = document.body.querySelector("[data-mobile-chat-actions]");
     expect(actionsSheet).not.toBeNull();
     expect(actionsSheet?.getAttribute("aria-label")).toBe(`Actions for ${row.title}`);
