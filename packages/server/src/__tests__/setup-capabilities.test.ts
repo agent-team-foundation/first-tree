@@ -938,14 +938,14 @@ describe("Team setup capabilities", () => {
           {
             provider: "gitlab",
             health: "degraded",
-            blockers: [{ code: "gitlab_processing_failed" }],
+            blockers: [{ code: "gitlab_processing_failed", actionKind: "configure_gitlab_webhook" }],
           },
         ],
       },
       contextTree: {
         automaticReview: {
           health: "degraded",
-          blockers: [{ code: "gitlab_processing_failed" }],
+          blockers: [{ code: "gitlab_processing_failed", actionKind: "configure_gitlab_webhook" }],
         },
       },
     });
@@ -967,14 +967,26 @@ describe("Team setup capabilities", () => {
             provider: "gitlab",
             adoption: "enabled",
             health: "degraded",
-            blockers: [{ code: "gitlab_processing_failed", resolutionOwner: "admin", actionKind: null }],
+            blockers: [
+              {
+                code: "gitlab_processing_failed",
+                resolutionOwner: "admin",
+                actionKind: "configure_gitlab_webhook",
+              },
+            ],
           },
         ],
       },
       contextTree: {
         automaticReview: {
           health: "degraded",
-          blockers: [{ code: "gitlab_processing_failed", resolutionOwner: "admin", actionKind: null }],
+          blockers: [
+            {
+              code: "gitlab_processing_failed",
+              resolutionOwner: "admin",
+              actionKind: "configure_gitlab_webhook",
+            },
+          ],
         },
       },
     });

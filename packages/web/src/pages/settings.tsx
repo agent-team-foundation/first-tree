@@ -1,8 +1,16 @@
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { getContextTreeSnapshot } from "../api/context-tree.js";
+import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
+import {
+  contextTreeSnapshotNeedsAttention,
+  personalSetupNeedsAttention,
+  teamSetupNeedsAttention,
+} from "./settings/setup-attention.js";
 
 /**
  * Settings layout — a flat desktop sidebar plus the active module.
@@ -67,9 +75,44 @@ const NARROW_GROUPS: ItemGroup[] = [
 ];
 
 export function SettingsLayout({ activePathname, children }: { activePathname?: string; children?: ReactNode } = {}) {
-  const { meLoaded, onboardingCompletedAt } = useAuth();
+  const { meLoaded, organizationId, role, currentOrgHasUsableAgent, onboardingDismissedAt, onboardingCompletedAt } =
+    useAuth();
   const viewport = useWorkspaceViewport();
   const { pathname: routePathname } = useLocation();
+  const teamAttentionEnabled = meLoaded && viewport !== "narrow" && role === "admin" && organizationId !== null;
+  const setupCapabilitiesQuery = useQuery({
+    queryKey: setupCapabilitiesQueryKey(organizationId),
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getTeamSetupCapabilitiesAt(organizationId);
+    },
+    // The dot is desktop-only and members never receive Team actions. The
+    // Setup page itself still reads this projection for every role.
+    enabled: teamAttentionEnabled,
+  });
+  const currentCapabilities =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess ? setupCapabilitiesQuery.data : undefined;
+  const contextBound = currentCapabilities?.contextTree.binding.state === "bound";
+  const contextTreeSnapshotQuery = useQuery({
+    queryKey: ["context-tree-snapshot", organizationId, "7d", false],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getContextTreeSnapshot(organizationId, "7d");
+    },
+    enabled: teamAttentionEnabled && contextBound,
+  });
+  const currentContextTreeSnapshotStatus =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess && contextBound && contextTreeSnapshotQuery.isSuccess
+      ? contextTreeSnapshotQuery.data.snapshotStatus
+      : undefined;
+  const setupNeedsAttention =
+    personalSetupNeedsAttention({
+      currentOrgHasUsableAgent,
+      onboardingDismissedAt,
+      onboardingCompletedAt,
+    }) ||
+    teamSetupNeedsAttention(currentCapabilities, role) ||
+    contextTreeSnapshotNeedsAttention(currentContextTreeSnapshotStatus, role);
   // DEV preview galleries render this real layout below their own route. Let
   // those galleries supply the path whose heading/nav state they are showing;
   // production always follows the actual router location.
@@ -162,6 +205,7 @@ export function SettingsLayout({ activePathname, children }: { activePathname?: 
               key={item.to}
               to={item.to}
               label={item.label}
+              attention={item === SETUP_ITEM && setupNeedsAttention}
               activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
             />
           ))}
@@ -201,10 +245,21 @@ function SettingsHeader({ item }: { item: Item | undefined }) {
   );
 }
 
-function SidebarLink({ to, label, activeOverride }: { to: string; label: string; activeOverride?: boolean }) {
+function SidebarLink({
+  to,
+  label,
+  attention = false,
+  activeOverride,
+}: {
+  to: string;
+  label: string;
+  attention?: boolean;
+  activeOverride?: boolean;
+}) {
   return (
     <NavLink
       to={to}
+      aria-label={attention ? `${label} — Needs you` : undefined}
       className={cn(
         "block text-body transition-colors",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -214,7 +269,7 @@ function SidebarLink({ to, label, activeOverride }: { to: string; label: string;
         const active = activeOverride ?? isActive;
         return (
           <span
-            className={cn("block", active && "font-medium")}
+            className={cn("flex items-center justify-between", active && "font-medium")}
             style={{
               padding: "var(--sp-2) var(--sp-3)",
               borderRadius: "var(--radius-input)",
@@ -222,7 +277,21 @@ function SidebarLink({ to, label, activeOverride }: { to: string; label: string;
               background: active ? "var(--bg-hover)" : "transparent",
             }}
           >
-            {label}
+            <span>{label}</span>
+            {attention ? (
+              <span
+                aria-hidden
+                data-setup-attention
+                title="Needs you"
+                style={{
+                  width: "var(--sp-2)",
+                  height: "var(--sp-2)",
+                  flexShrink: 0,
+                  borderRadius: "var(--radius-full)",
+                  background: "var(--state-needs-you)",
+                }}
+              />
+            ) : null}
           </span>
         );
       }}
