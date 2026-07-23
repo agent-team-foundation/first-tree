@@ -84,6 +84,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       const body = editMessageSchema.parse(request.body);
       const msg = await messageService.editMessage(
         app.db,
+        app.objectStorage,
         request.params.chatId,
         request.params.messageId,
         identity.uuid,

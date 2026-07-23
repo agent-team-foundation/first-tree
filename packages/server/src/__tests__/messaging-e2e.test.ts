@@ -195,7 +195,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     await ackAll(app, b2Before, b2.inboxId);
 
     const { editMessage } = await import("../services/message.js");
-    await editMessage(app.db, c1.id, m1.message.id, b1.uuid, { content: "first cut — revised" });
+    await editMessage(app.db, null, c1.id, m1.message.id, b1.uuid, { content: "first cut — revised" });
 
     // No new inbox entries should have been written — b2 pulls nothing.
     const b2After = await pollInbox(app.db, b2.inboxId, 10);

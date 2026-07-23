@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { ORG_ATTACHMENT_QUOTA_BYTES, ORG_ATTACHMENT_QUOTA_COUNT } from "../schemas/attachment.js";
 import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
@@ -213,6 +214,90 @@ export const serverConfigSchema = defineConfig({
       },
     }),
     provider: field(z.enum(["docker", "external"]).default("docker")),
+  },
+  /**
+   * S3-compatible object storage for binary payloads (attachments, agent
+   * avatars). Optional group: setting any member env activates it, and the
+   * required members (bucket, credentials) then fail loudly when missing.
+   * When the group is absent the attachment upload surface degrades to 503
+   * ("object storage not configured") while pre-migration bytea downloads
+   * keep working — see services/object-storage.ts for the boundary.
+   *
+   * Any S3-compatible backend works (AWS S3, Cloudflare R2, MinIO). MinIO
+   * needs `forcePathStyle: true`.
+   */
+  objectStorage: optional({
+    bucket: field(z.string().min(1), { env: "FIRST_TREE_S3_BUCKET" }),
+    accessKeyId: field(z.string().min(1), { env: "FIRST_TREE_S3_ACCESS_KEY_ID", secret: true }),
+    secretAccessKey: field(z.string().min(1), { env: "FIRST_TREE_S3_SECRET_ACCESS_KEY", secret: true }),
+    /** Custom endpoint URL (MinIO/R2). Omit for native AWS resolution. */
+    endpoint: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_S3_ENDPOINT" }),
+    region: field(z.string().min(1).default("us-east-1"), { env: "FIRST_TREE_S3_REGION" }),
+    forcePathStyle: field(z.boolean().default(false), { env: "FIRST_TREE_S3_FORCE_PATH_STYLE" }),
+    /**
+     * Endpoint used when presigning redirect-mode download URLs, for
+     * deployments where the server reaches storage over an internal address
+     * but browsers must use a public one. Falls back to `endpoint`.
+     */
+    publicEndpoint: field(optionalTrimmedStringSchema, { env: "FIRST_TREE_S3_PUBLIC_ENDPOINT" }),
+  }),
+  /**
+   * Attachment governance knobs. Quota semantics are hard-reject (413/422,
+   * no soft-warn mode); the values are deploy-tunable with governed
+   * defaults. Zero is deliberately rejected for the quota fields: 0-as-
+   * unlimited would silently disable governance and 0-as-reject-all is an
+   * operational footgun — disablement is not a supported mode.
+   */
+  attachments: {
+    /**
+     * How downloads serve S3-backed payloads. `proxy` streams bytes through
+     * the server and works with any bucket/network topology out of the box.
+     * `redirect` answers 302 with a short-lived presigned URL — cheaper at
+     * scale, but requires the bucket to be browser-reachable and to carry
+     * CORS config for the web app origin (attachments are fetched with
+     * authenticated XHR, not plain <img> tags).
+     */
+    downloadMode: field(z.enum(["proxy", "redirect"]).default("proxy"), {
+      env: "FIRST_TREE_ATTACHMENT_DOWNLOAD_MODE",
+    }),
+    orgQuotaBytes: field(z.coerce.number().int().positive().default(ORG_ATTACHMENT_QUOTA_BYTES), {
+      env: "FIRST_TREE_ATTACHMENT_ORG_QUOTA_BYTES",
+    }),
+    orgQuotaCount: field(z.coerce.number().int().positive().default(ORG_ATTACHMENT_QUOTA_COUNT), {
+      env: "FIRST_TREE_ATTACHMENT_ORG_QUOTA_COUNT",
+    }),
+    /**
+     * Orphan sweep cadence. 0 disables the background timer (tests drive the
+     * sweep explicitly). Runs concurrently on every replica — passes are
+     * SKIP LOCKED + idempotent, so no leader election is needed.
+     */
+    sweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(900), {
+      env: "FIRST_TREE_ATTACHMENT_SWEEP_INTERVAL_SECONDS",
+    }),
+    /**
+     * How long an attachment may stay unreferenced after upload before the
+     * sweep deletes it (governed default: 24h).
+     */
+    orphanGraceSeconds: field(z.coerce.number().int().positive().default(86_400), {
+      env: "FIRST_TREE_ATTACHMENT_ORPHAN_GRACE_SECONDS",
+    }),
+    /**
+     * How long a `pending` row (quota reservation whose upload never
+     * finalized) survives before the sweep reclaims it. Bounds reservation
+     * leakage from crashed uploads.
+     */
+    pendingTtlSeconds: field(z.coerce.number().int().positive().default(3600), {
+      env: "FIRST_TREE_ATTACHMENT_PENDING_TTL_SECONDS",
+    }),
+    /**
+     * Max parallel upload streams per uploader identity (humanAgentId — all
+     * of one person's agents share the budget), per server instance. Guards
+     * a single client holding unbounded concurrent streams; the global
+     * rate limiter still applies on top.
+     */
+    maxConcurrentUploadsPerUploader: field(z.coerce.number().int().positive().default(4), {
+      env: "FIRST_TREE_ATTACHMENT_MAX_CONCURRENT_UPLOADS_PER_UPLOADER",
+    }),
   },
   server: {
     port: field(z.number().default(8000), { env: "FIRST_TREE_PORT" }),

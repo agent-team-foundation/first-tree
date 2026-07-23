@@ -15,3 +15,5 @@ export const MAX_FORKS = Number.isFinite(envCap) && envCap > 0 ? envCap : isCi ?
 
 export const WORKER_DB_PREFIX = "vitest_w";
 export const TEMPLATE_DB = "vitest_template";
+// S3 bucket names must be DNS-safe: lowercase + hyphens (no underscores).
+export const WORKER_S3_BUCKET_PREFIX = "vitest-w";

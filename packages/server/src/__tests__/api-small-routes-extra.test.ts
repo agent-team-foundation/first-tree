@@ -683,6 +683,14 @@ describe("small API route handlers", () => {
         headers: { "content-type": "image/png" },
         params: { uuid: "agent_1" },
       }),
+    ).rejects.toThrow("Avatar uploads must declare Content-Length");
+
+    await expect(
+      route(routes, "PUT", "/:uuid/avatar").handler({
+        body: { not: "bytes" },
+        headers: { "content-type": "image/png", "content-length": "5" },
+        params: { uuid: "agent_1" },
+      }),
     ).rejects.toThrow("Avatar upload body must be raw image bytes.");
   });
 

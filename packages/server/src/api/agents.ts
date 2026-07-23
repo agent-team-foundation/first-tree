@@ -1,4 +1,6 @@
+import { Readable } from "node:stream";
 import {
+  ATTACHMENT_ERROR_CODES,
   agentPinnedMessageSchema,
   switchAgentRuntimeSchema,
   updateAgentSchema,
@@ -6,7 +8,7 @@ import {
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { BadRequestError, ForbiddenError } from "../errors.js";
+import { BadRequestError, ForbiddenError, LengthRequiredError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
 import * as agentService from "../services/agent.js";
 import {
@@ -286,46 +288,55 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   // ─── Avatar image (M2) ──────────────────────────────────────────────
   //
-  // PUT accepts the raw image bytes as `application/octet-stream` /
-  // `image/*` so we don't have to pull in `@fastify/multipart` for a
-  // single-field upload. The web client always pre-resizes to ~50KB WEBP;
-  // server enforces ≤ MAX_AVATAR_IMAGE_BYTES regardless.
+  // PUT accepts the raw image bytes as `image/*` so we don't have to pull
+  // in `@fastify/multipart` for a single-field upload. The parser hands
+  // the raw stream through and the service pipes it straight to object
+  // storage — the payload is never buffered in Node. Content-Length is
+  // required (411): the ≤ MAX_AVATAR_IMAGE_BYTES cap is enforced on the
+  // declared size before the body is consumed, then byte-exactly during
+  // the stream. The web client always pre-resizes to ~50KB WEBP.
   //
   // GET is intentionally public: `<img src>` cannot send the Authorization
   // header. The agent UUID is unguessable v7, and the surrounding ACL on
   // /api/v1/agents already keeps the UUID itself off public surfaces.
-  app.addContentTypeParser(/^image\//, { parseAs: "buffer" }, (_req, body, done) => {
-    done(null, body);
+  app.addContentTypeParser(/^image\//, (_req, payload, done) => {
+    done(null, payload);
   });
 
-  app.put<{ Params: { uuid: string } }>(
-    "/:uuid/avatar",
-    { bodyLimit: agentService.MAX_AVATAR_IMAGE_BYTES + 1024 },
-    async (request, reply) => {
-      const { agent } = await requireAgentAccess(request, app.db, "manage");
-      assertMutableAgentIsNotLandingCampaignTrial(agent);
-      const contentType = request.headers["content-type"];
-      if (typeof contentType !== "string" || !contentType.startsWith("image/")) {
-        throw new BadRequestError(
-          `Avatar upload requires an image/* Content-Type. Supported: ${SUPPORTED_AVATAR_IMAGE_MIMES.join(", ")}.`,
-        );
-      }
-      const mime = contentType.split(";")[0]?.trim() ?? "";
-      const body = request.body;
-      if (!Buffer.isBuffer(body)) {
-        throw new BadRequestError("Avatar upload body must be raw image bytes.");
-      }
-      const updatedAt = await agentService.setAgentAvatarImage(app.db, request.params.uuid, body, mime);
-      return reply.status(200).send({
-        avatarImageUrl: agentAvatarImageUrl(request.params.uuid, updatedAt),
+  app.put<{ Params: { uuid: string } }>("/:uuid/avatar", async (request, reply) => {
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(agent);
+    const contentType = request.headers["content-type"];
+    if (typeof contentType !== "string" || !contentType.startsWith("image/")) {
+      throw new BadRequestError(
+        `Avatar upload requires an image/* Content-Type. Supported: ${SUPPORTED_AVATAR_IMAGE_MIMES.join(", ")}.`,
+      );
+    }
+    const mime = contentType.split(";")[0]?.trim() ?? "";
+    const rawLength = request.headers["content-length"];
+    const contentLength = typeof rawLength === "string" ? Number.parseInt(rawLength, 10) : Number.NaN;
+    if (!Number.isFinite(contentLength) || contentLength < 0) {
+      throw new LengthRequiredError("Avatar uploads must declare Content-Length", {
+        code: ATTACHMENT_ERROR_CODES.lengthRequired,
       });
-    },
-  );
+    }
+    const body = request.body;
+    if (!(body instanceof Readable)) {
+      throw new BadRequestError("Avatar upload body must be raw image bytes.");
+    }
+    const updatedAt = await agentService.setAgentAvatarImage(app.db, app.objectStorage, request.params.uuid, body, {
+      mime,
+      contentLength,
+    });
+    return reply.status(200).send({
+      avatarImageUrl: agentAvatarImageUrl(request.params.uuid, updatedAt),
+    });
+  });
 
   app.delete<{ Params: { uuid: string } }>("/:uuid/avatar", async (request, reply) => {
     const { agent } = await requireAgentAccess(request, app.db, "manage");
     assertMutableAgentIsNotLandingCampaignTrial(agent);
-    await agentService.clearAgentAvatarImage(app.db, request.params.uuid);
+    await agentService.clearAgentAvatarImage(app.db, app.objectStorage, request.params.uuid);
     return reply.status(204).send();
   });
 
@@ -481,9 +492,46 @@ export async function publicAgentAvatarRoutes(app: FastifyInstance): Promise<voi
     // Strong cache: each upload bumps the `?v=<epoch>` suffix on the URL,
     // so immutable + 30d is safe and avoids round-trips from chat surfaces
     // that render the image hundreds of times per session.
-    reply.header("Content-Type", image.mime);
     reply.header("Cache-Control", "public, max-age=2592000, immutable");
     reply.header("ETag", `"${image.updatedAt.getTime()}"`);
-    return reply.send(image.data);
+
+    // Transitional branch: payload still inline in PG (pre-migration row).
+    if (image.data) {
+      reply.header("Content-Type", image.mime);
+      return reply.send(image.data);
+    }
+
+    const objectStorage = app.objectStorage;
+    if (!objectStorage || !image.objectKey) {
+      // objectKey is set whenever data is absent; a missing storage config
+      // for a migrated avatar is a deployment gap, not a client error.
+      request.log.error(
+        { uuid: request.params.uuid },
+        "avatar payload is in object storage but storage is unavailable",
+      );
+      return reply.status(503).send({ error: "Avatar storage unavailable" });
+    }
+
+    // Avatars are always proxied, regardless of `attachments.downloadMode`:
+    // a 302 to a presigned URL varies per request (fresh signature), which
+    // would defeat the immutable browser cache this surface depends on —
+    // chat surfaces render the same avatar hundreds of times per session.
+    // The payload is ≤ 512 KiB and streamed, so proxying stays cheap.
+    const object = await objectStorage.getObjectStream(image.objectKey);
+    if (!object) {
+      request.log.error(
+        { uuid: request.params.uuid, objectKey: image.objectKey },
+        "avatar payload missing from object storage",
+      );
+      return reply.status(404).send({ error: "Avatar not set" });
+    }
+    reply.header("Content-Type", image.mime);
+    if (object.contentLength !== undefined) {
+      reply.header("Content-Length", object.contentLength);
+    }
+    reply.raw.once("close", () => {
+      object.body.destroy();
+    });
+    return reply.send(object.body);
   });
 }

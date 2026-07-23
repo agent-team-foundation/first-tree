@@ -1,9 +1,46 @@
 import { execSync } from "node:child_process";
+import { CreateBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import postgres from "postgres";
-import { MAX_FORKS, TEMPLATE_DB, WORKER_DB_PREFIX } from "./test-config.js";
+import { GenericContainer, Wait } from "testcontainers";
+import { MAX_FORKS, TEMPLATE_DB, WORKER_DB_PREFIX, WORKER_S3_BUCKET_PREFIX } from "./test-config.js";
 
 let container: Awaited<ReturnType<PostgreSqlContainer["start"]>> | undefined;
+let minioContainer: Awaited<ReturnType<GenericContainer["start"]>> | undefined;
+
+/**
+ * Pinned MinIO release so local and CI runs exercise the same S3 dialect.
+ * Suites never require real cloud credentials — this container (or the
+ * `CI_S3_ENDPOINT` escape hatch) is the only storage backend tests touch.
+ */
+const MINIO_IMAGE = "minio/minio:RELEASE.2025-04-22T22-12-26Z";
+const MINIO_ROOT_USER = "vitest-minio";
+const MINIO_ROOT_PASSWORD = "vitest-minio-secret";
+
+async function startObjectStorage(): Promise<{ endpoint: string; accessKeyId: string; secretAccessKey: string }> {
+  // Escape hatch mirroring CI_DATABASE_URL: point tests at an externally
+  // provisioned S3-compatible server (e.g. a CI sidecar) instead of the
+  // testcontainers-managed MinIO.
+  const ciEndpoint = process.env.CI_S3_ENDPOINT;
+  if (ciEndpoint) {
+    return {
+      endpoint: ciEndpoint,
+      accessKeyId: process.env.CI_S3_ACCESS_KEY_ID ?? MINIO_ROOT_USER,
+      secretAccessKey: process.env.CI_S3_SECRET_ACCESS_KEY ?? MINIO_ROOT_PASSWORD,
+    };
+  }
+  minioContainer = await new GenericContainer(MINIO_IMAGE)
+    .withEnvironment({ MINIO_ROOT_USER, MINIO_ROOT_PASSWORD })
+    .withCommand(["server", "/data"])
+    .withExposedPorts(9000)
+    .withWaitStrategy(Wait.forHttp("/minio/health/ready", 9000))
+    .start();
+  return {
+    endpoint: `http://${minioContainer.getHost()}:${minioContainer.getMappedPort(9000)}`,
+    accessKeyId: MINIO_ROOT_USER,
+    secretAccessKey: MINIO_ROOT_PASSWORD,
+  };
+}
 
 export async function setup() {
   // CI fast path: a sidecar Postgres is already running (GitHub Actions
@@ -13,6 +50,8 @@ export async function setup() {
   // back to testcontainers as before.
   const ciUrl = process.env.CI_DATABASE_URL;
   let baseUrl: string;
+  // MinIO starts concurrently with PG — neither depends on the other.
+  const objectStoragePromise = startObjectStorage();
   if (ciUrl) {
     baseUrl = ciUrl;
   } else {
@@ -52,10 +91,40 @@ export async function setup() {
     await admin.end();
   }
 
+  // Per-worker buckets mirror the per-worker databases: file-parallel
+  // workers write to disjoint buckets, and object keys are UUID-derived so
+  // suites never collide within a worker either.
+  const objectStorage = await objectStoragePromise;
+  const s3 = new S3Client({
+    region: "us-east-1",
+    endpoint: objectStorage.endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: objectStorage.accessKeyId,
+      secretAccessKey: objectStorage.secretAccessKey,
+    },
+  });
+  try {
+    for (let i = 1; i <= MAX_FORKS; i++) {
+      try {
+        await s3.send(new CreateBucketCommand({ Bucket: `${WORKER_S3_BUCKET_PREFIX}${i}` }));
+      } catch (error) {
+        // Re-runs against a live CI sidecar hit BucketAlreadyOwnedByYou.
+        const name = typeof error === "object" && error !== null && "name" in error ? error.name : undefined;
+        if (name !== "BucketAlreadyOwnedByYou" && name !== "BucketAlreadyExists") throw error;
+      }
+    }
+  } finally {
+    s3.destroy();
+  }
+
   // Hand-off to per-worker setup.ts via env (workers inherit parent env at
   // spawn under the `forks` pool).
   process.env.VITEST_PG_BASE_URL = baseUrl;
   process.env.VITEST_PG_MAX_WORKERS = String(MAX_FORKS);
+  process.env.VITEST_S3_ENDPOINT = objectStorage.endpoint;
+  process.env.VITEST_S3_ACCESS_KEY_ID = objectStorage.accessKeyId;
+  process.env.VITEST_S3_SECRET_ACCESS_KEY = objectStorage.secretAccessKey;
   // Leave DATABASE_URL pointing at the template until setup.ts replaces it
   // per-worker; nothing reads DATABASE_URL between globalSetup and worker
   // bootstrap, so this is just a sane default if that ever changes.
@@ -66,4 +135,5 @@ export async function setup() {
 
 export async function teardown() {
   await container?.stop();
+  await minioContainer?.stop();
 }

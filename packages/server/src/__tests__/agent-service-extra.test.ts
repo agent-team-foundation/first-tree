@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { AGENT_STATUSES } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -26,8 +27,9 @@ import {
   updateAgentSkills,
 } from "../services/agent.js";
 import { createMember } from "../services/member.js";
+import { createObjectStorage } from "../services/object-storage.js";
 import { createOrganization } from "../services/organization.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, useTestApp, workerObjectStorage } from "./helpers.js";
 
 describe("agent service extra coverage", () => {
   const getApp = useTestApp();
@@ -436,29 +438,36 @@ describe("agent service extra coverage", () => {
       clientId: admin.clientId,
     });
 
-    await expect(getAgentAvatarImage(app.db, agent.uuid)).resolves.toBeNull();
-    await expect(setAgentAvatarImage(app.db, agent.uuid, Buffer.from("avatar"), "image/gif")).rejects.toBeInstanceOf(
-      BadRequestError,
-    );
-    await expect(setAgentAvatarImage(app.db, agent.uuid, Buffer.alloc(0), "image/png")).rejects.toBeInstanceOf(
-      BadRequestError,
-    );
-    await expect(
-      setAgentAvatarImage(app.db, agent.uuid, Buffer.alloc(MAX_AVATAR_IMAGE_BYTES + 1), "image/png"),
-    ).rejects.toBeInstanceOf(BadRequestError);
-    await expect(
-      setAgentAvatarImage(app.db, crypto.randomUUID(), Buffer.from("avatar"), "image/png"),
-    ).rejects.toBeInstanceOf(NotFoundError);
+    const storage = createObjectStorage(workerObjectStorage());
+    const avatarBody = (payload: Buffer) => Readable.from([payload]);
+    const setAvatar = (uuid: string, payload: Buffer, mime: string, contentLength = payload.byteLength) =>
+      setAgentAvatarImage(app.db, storage, uuid, avatarBody(payload), { mime, contentLength });
 
-    const updatedAt = await setAgentAvatarImage(app.db, agent.uuid, Buffer.from("avatar"), "image/png");
+    await expect(getAgentAvatarImage(app.db, agent.uuid)).resolves.toBeNull();
+    await expect(setAvatar(agent.uuid, Buffer.from("avatar"), "image/gif")).rejects.toBeInstanceOf(BadRequestError);
+    await expect(setAvatar(agent.uuid, Buffer.alloc(0), "image/png")).rejects.toBeInstanceOf(BadRequestError);
+    await expect(setAvatar(agent.uuid, Buffer.alloc(MAX_AVATAR_IMAGE_BYTES + 1), "image/png")).rejects.toBeInstanceOf(
+      BadRequestError,
+    );
+    await expect(setAvatar(crypto.randomUUID(), Buffer.from("avatar"), "image/png")).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    // Declared length is a contract: a mismatching body fails the stream.
+    await expect(setAvatar(agent.uuid, Buffer.from("avatar"), "image/png", 3)).rejects.toBeInstanceOf(BadRequestError);
+
+    const updatedAt = await setAvatar(agent.uuid, Buffer.from("avatar"), "image/png");
     await expect(getAgentAvatarImage(app.db, agent.uuid)).resolves.toEqual({
-      data: Buffer.from("avatar"),
+      data: null,
+      objectKey: `avatars/${agent.uuid}`,
       mime: "image/png",
       updatedAt,
     });
+    const stored = await storage.getObjectStream(`avatars/${agent.uuid}`);
+    expect(stored).not.toBeNull();
 
-    await clearAgentAvatarImage(app.db, agent.uuid);
+    await clearAgentAvatarImage(app.db, storage, agent.uuid);
     await expect(getAgentAvatarImage(app.db, agent.uuid)).resolves.toBeNull();
-    await expect(clearAgentAvatarImage(app.db, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
+    await expect(storage.getObjectStream(`avatars/${agent.uuid}`)).resolves.toBeNull();
+    await expect(clearAgentAvatarImage(app.db, storage, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
   });
 });

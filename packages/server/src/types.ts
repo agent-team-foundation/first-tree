@@ -2,6 +2,7 @@ import type { Database } from "./db/connection.js";
 import type { UserScope } from "./scope/types.js";
 import type { ConfigService } from "./services/config-service.js";
 import type { Notifier } from "./services/notifier.js";
+import type { ObjectStorage } from "./services/object-storage.js";
 import type { ResourcesService } from "./services/resources.js";
 
 export type AgentIdentity = {
@@ -16,6 +17,8 @@ declare module "fastify" {
   interface FastifyInstance {
     db: Database;
     config: import("./config.js").Config;
+    /** S3-compatible payload store; null until FIRST_TREE_S3_* is configured. */
+    objectStorage: ObjectStorage | null;
     notifier: Notifier;
     configService: ConfigService;
     resourcesService: ResourcesService;

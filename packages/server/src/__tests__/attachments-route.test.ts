@@ -1,11 +1,48 @@
-import { ATTACHMENT_FILENAME_HEADER, ATTACHMENT_MIME_HEADER, MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
+import { Readable } from "node:stream";
+import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+  ATTACHMENT_ERROR_CODES,
+  ATTACHMENT_FILENAME_HEADER,
+  ATTACHMENT_MIME_HEADER,
+  MAX_ATTACHMENT_BYTES,
+  ORG_ATTACHMENT_QUOTA_BYTES,
+  ORG_ATTACHMENT_QUOTA_COUNT,
+} from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { attachments } from "../db/schema/attachments.js";
 import { organizations } from "../db/schema/organizations.js";
-import { createAttachment } from "../services/attachment.js";
+import { createLegacyAttachment, reserveAttachment } from "../services/attachment.js";
 import { ensureMembership } from "../services/membership.js";
+import { attachmentObjectKey, createObjectStorage } from "../services/object-storage.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAdmin, createTestApp, useTestApp, workerObjectStorage } from "./helpers.js";
+
+const DEFAULT_QUOTA = { maxTotalBytes: ORG_ATTACHMENT_QUOTA_BYTES, maxObjectCount: ORG_ATTACHMENT_QUOTA_COUNT };
+
+/** Total objects in this worker's bucket (files in a worker run sequentially). */
+async function countBucketObjects(): Promise<number> {
+  const target = workerObjectStorage();
+  const client = new S3Client({
+    region: target.region,
+    endpoint: target.endpoint,
+    forcePathStyle: true,
+    credentials: { accessKeyId: target.accessKeyId, secretAccessKey: target.secretAccessKey },
+  });
+  try {
+    let count = 0;
+    let token: string | undefined;
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: target.bucket, ContinuationToken: token }));
+      count += page.KeyCount ?? 0;
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return count;
+  } finally {
+    client.destroy();
+  }
+}
 
 type Admin = Awaited<ReturnType<typeof createTestAdmin>>;
 
@@ -38,7 +75,7 @@ function getAttachment(app: FastifyInstance, caller: Admin, id: string) {
 }
 
 describe("attachments route — upload + capability download", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ objectStorage: workerObjectStorage() });
 
   it("uploads then downloads via uploader", async () => {
     const app = getApp();
@@ -52,6 +89,16 @@ describe("attachments route — upload + capability download", () => {
     expect(body.sizeBytes).toBe(bytes.byteLength);
     expect(body.uploadedBy).toBe(admin.humanAgentUuid);
 
+    // The payload landed in object storage — the PG row holds metadata only.
+    const [row] = await app.db.select().from(attachments).where(eq(attachments.id, body.id));
+    expect(row?.state).toBe("stored");
+    expect(row?.organizationId).toBe(admin.organizationId);
+    expect(row?.objectKey).toBe(attachmentObjectKey(body.id));
+    expect(row?.data).toBeNull();
+    const storage = createObjectStorage(workerObjectStorage());
+    const object = await storage.getObjectStream(attachmentObjectKey(body.id));
+    expect(object).not.toBeNull();
+
     const download = await getAttachment(app, admin, body.id);
     expect(download.statusCode).toBe(200);
     expect(download.headers["content-type"]).toBe("image/png");
@@ -59,7 +106,7 @@ describe("attachments route — upload + capability download", () => {
     expect(download.headers["x-content-type-options"]).toBe("nosniff");
     expect(download.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
     expect(download.headers.etag).toBe(`"${body.id}"`);
-    expect(download.headers["content-disposition"]).toBe('inline; filename="kitten.png"');
+    expect(download.headers["content-disposition"]).toBe(`inline; filename="kitten.png"; filename*=UTF-8''kitten.png`);
     expect(download.rawPayload.equals(bytes)).toBe(true);
   });
 
@@ -145,16 +192,18 @@ describe("attachments route — upload + capability download", () => {
     expect(blankMime.statusCode).toBe(400);
 
     await expect(
-      createAttachment(app.db, {
+      reserveAttachment(app.db, {
+        organizationId: admin.organizationId,
         mimeType: "image/png",
         filename: " ",
-        data: Buffer.from("filename"),
+        sizeBytes: 8,
         uploadedBy: admin.humanAgentUuid,
+        quota: DEFAULT_QUOTA,
       }),
     ).rejects.toThrow("Attachment filename is required");
   });
 
-  it("surfaces an empty insert-returning result from the attachment store", async () => {
+  it("surfaces an empty insert-returning result from the legacy attachment writer", async () => {
     const fakeDb = {
       insert: () => ({
         values: () => ({
@@ -164,7 +213,7 @@ describe("attachments route — upload + capability download", () => {
     };
 
     await expect(
-      createAttachment(fakeDb as never, {
+      createLegacyAttachment(fakeDb as never, {
         mimeType: "image/png",
         filename: "x.png",
         data: Buffer.from("bytes"),
@@ -173,14 +222,116 @@ describe("attachments route — upload + capability download", () => {
     ).rejects.toThrow("Attachment insert returned no row");
   });
 
-  it("rejects oversize at bodyLimit (413) or service cap (400)", async () => {
+  it("rejects oversize uploads with 413 + stable code before reading the body", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `os-${crypto.randomUUID().slice(0, 6)}` });
-    // 1 KB over the cap — well under the route bodyLimit, so the service-
-    // layer cap is what fires.
     const oversize = Buffer.alloc(MAX_ATTACHMENT_BYTES + 1024);
     const reply = await postAttachment(app, admin, oversize);
-    expect([400, 413]).toContain(reply.statusCode);
+    expect(reply.statusCode).toBe(413);
+    expect((reply.json() as { code?: string }).code).toBe(ATTACHMENT_ERROR_CODES.tooLarge);
+  });
+
+  it("rejects uploads without Content-Length (chunked) with 411", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `cl-${crypto.randomUUID().slice(0, 6)}` });
+    const reply = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/attachments`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "content-type": "application/octet-stream",
+        [ATTACHMENT_MIME_HEADER]: "image/png",
+        [ATTACHMENT_FILENAME_HEADER]: "x.bin",
+      },
+      // A stream payload makes inject send chunked transfer encoding.
+      payload: Readable.from([Buffer.from("hi")]),
+    });
+    expect(reply.statusCode).toBe(411);
+    expect((reply.json() as { code?: string }).code).toBe(ATTACHMENT_ERROR_CODES.lengthRequired);
+  });
+
+  it("cleans up the reservation and object when the body undershoots Content-Length", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `abrt-${crypto.randomUUID().slice(0, 6)}` });
+
+    const objectsBefore = await countBucketObjects();
+
+    // Declared 64 bytes, deliver 10, end normally — the byte-limit stream
+    // fails the upload at EOF (same cleanup path as a client abort).
+    const reply = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/attachments`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "content-type": "application/octet-stream",
+        "content-length": "64",
+        [ATTACHMENT_MIME_HEADER]: "application/octet-stream",
+        [ATTACHMENT_FILENAME_HEADER]: "truncated.bin",
+      },
+      payload: Readable.from([Buffer.alloc(10)]),
+    });
+    expect(reply.statusCode).toBe(400);
+    expect((reply.json() as { error: string }).error).toMatch(/does not match Content-Length/);
+
+    // No reservation survives for this uploader...
+    const rows = await app.db.select().from(attachments).where(eq(attachments.uploadedBy, admin.humanAgentUuid));
+    expect(rows).toHaveLength(0);
+    // ...and no object leaked into the bucket (files in one worker run
+    // sequentially, so the bucket count is stable across this test).
+    expect(await countBucketObjects()).toBe(objectsBefore);
+  });
+
+  it("redirect mode answers 302 with a working short-lived presigned URL", async () => {
+    const app = await createTestApp({
+      objectStorage: workerObjectStorage(),
+      attachments: { downloadMode: "redirect" },
+    });
+    try {
+      const admin = await createTestAdmin(app, { username: `rd-${crypto.randomUUID().slice(0, 6)}` });
+      const bytes = Buffer.from("redirect-me");
+      const uploadReply = await postAttachment(app, admin, bytes, { filename: "r.bin", mime: "text/plain" });
+      expect(uploadReply.statusCode).toBe(201);
+      const id = (uploadReply.json() as { id: string }).id;
+
+      const reply = await getAttachment(app, admin, id);
+      expect(reply.statusCode).toBe(302);
+      expect(reply.headers["cache-control"]).toBe("private, no-store");
+      const location = reply.headers.location;
+      expect(typeof location).toBe("string");
+      expect(String(location)).toContain("X-Amz-Signature");
+
+      // The presigned URL works without any Authorization header and pins
+      // the response content headers.
+      const fetched = await fetch(String(location));
+      expect(fetched.status).toBe(200);
+      expect(Buffer.from(await fetched.arrayBuffer()).equals(bytes)).toBe(true);
+      expect(fetched.headers.get("content-type")).toBe("text/plain");
+      expect(fetched.headers.get("content-disposition")).toContain("inline");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("answers 503 when object storage is not configured", async () => {
+    const app = await createTestApp();
+    try {
+      const admin = await createTestAdmin(app, { username: `nos3-${crypto.randomUUID().slice(0, 6)}` });
+      const reply = await postAttachment(app, admin, Buffer.from("hi"));
+      expect(reply.statusCode).toBe(503);
+
+      // Legacy bytea rows still download without object storage.
+      const legacy = await createLegacyAttachment(app.db, {
+        mimeType: "text/plain",
+        filename: "legacy.txt",
+        data: Buffer.from("pre-migration"),
+        uploadedBy: admin.humanAgentUuid,
+      });
+      const download = await getAttachment(app, admin, legacy.id);
+      expect(download.statusCode).toBe(200);
+      expect(download.rawPayload.toString()).toBe("pre-migration");
+    } finally {
+      await app.close();
+    }
   });
 
   it("returns 404 for unknown attachment id", async () => {

@@ -187,11 +187,15 @@ export {
   RUNTIME_STALE_MS,
 } from "./schemas/agent-status.js";
 export {
+  ATTACHMENT_ERROR_CODES,
   ATTACHMENT_FILENAME_HEADER,
   ATTACHMENT_MIME_HEADER,
+  ATTACHMENT_PRESIGN_TTL_SECONDS,
   type AttachmentMetadata,
   attachmentMetadataSchema,
   MAX_ATTACHMENT_BYTES,
+  ORG_ATTACHMENT_QUOTA_BYTES,
+  ORG_ATTACHMENT_QUOTA_COUNT,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
+import { sweepAttachments } from "./attachment-sweep.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import { createCronScheduler } from "./cron-scheduler.js";
@@ -18,6 +19,8 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let attachmentSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let attachmentSweepRunning = false;
   const cronScheduler = createCronScheduler(app);
 
   return {
@@ -70,6 +73,35 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
+      const attachmentSweepSeconds = app.config.attachments.sweepIntervalSeconds;
+      if (attachmentSweepSeconds > 0) {
+        attachmentSweepTimer = setInterval(async () => {
+          // Per-instance overlap latch only — cross-replica concurrency is
+          // safe by construction (SKIP LOCKED claims + idempotent destroy),
+          // but stacking runs on one slow instance would just add load.
+          if (attachmentSweepRunning) return;
+          attachmentSweepRunning = true;
+          try {
+            const stats = await sweepAttachments(app.db, app.objectStorage, {
+              orphanGraceSeconds: app.config.attachments.orphanGraceSeconds,
+              pendingTtlSeconds: app.config.attachments.pendingTtlSeconds,
+            });
+            if (
+              stats.pendingReclaimed > 0 ||
+              stats.orphansDeleted > 0 ||
+              stats.orphansVetoed > 0 ||
+              stats.tombstonesCleared > 0
+            ) {
+              log.info(stats, "attachment sweep pass completed");
+            }
+          } catch (err) {
+            log.error({ err }, "attachment sweep failed");
+          } finally {
+            attachmentSweepRunning = false;
+          }
+        }, attachmentSweepSeconds * 1000);
+      }
+
       cronScheduler.start();
 
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
@@ -90,6 +122,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (attachmentSweepTimer) {
+        clearInterval(attachmentSweepTimer);
+        attachmentSweepTimer = null;
       }
     },
   };

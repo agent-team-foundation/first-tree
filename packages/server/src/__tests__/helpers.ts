@@ -76,6 +76,12 @@ export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
   inbox?: Partial<NonNullable<Config["inbox"]>>;
+  /**
+   * Object storage config. Absent by default — suites that exercise the S3
+   * surface pass the per-worker MinIO target provisioned by global setup.
+   */
+  objectStorage?: Config["objectStorage"];
+  attachments?: Partial<Config["attachments"]>;
   runtimeHttpTokenEnforcement?: boolean;
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
@@ -97,6 +103,31 @@ export type CreateTestAppOptions = {
    */
   githubAppPrivateKeyPem?: string;
 };
+
+/**
+ * Object-storage config pointing at this worker's MinIO bucket (provisioned
+ * by global-setup, one bucket per pool slot — the S3 analogue of the
+ * per-worker database). Suites that exercise the attachment S3 surface pass
+ * the result as `createTestApp({ objectStorage: workerObjectStorage() })`.
+ */
+export function workerObjectStorage(): NonNullable<Config["objectStorage"]> {
+  const endpoint = process.env.VITEST_S3_ENDPOINT;
+  if (!endpoint) {
+    throw new Error("VITEST_S3_ENDPOINT not set — vitest global setup did not provision object storage");
+  }
+  const maxWorkers = Number.parseInt(process.env.VITEST_PG_MAX_WORKERS ?? "1", 10);
+  const rawId = Number.parseInt(process.env.VITEST_POOL_ID ?? "1", 10);
+  const slot = ((rawId - 1) % Math.max(1, maxWorkers)) + 1;
+  return {
+    bucket: `vitest-w${slot}`,
+    accessKeyId: process.env.VITEST_S3_ACCESS_KEY_ID ?? "",
+    secretAccessKey: process.env.VITEST_S3_SECRET_ACCESS_KEY ?? "",
+    endpoint,
+    region: "us-east-1",
+    forcePathStyle: true,
+    publicEndpoint: undefined,
+  };
+}
 
 export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
   const baseRateLimit = {
@@ -135,6 +166,19 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     database: {
       url: process.env.DATABASE_URL ?? "",
       provider: "external",
+    },
+    ...(opts.objectStorage !== undefined ? { objectStorage: opts.objectStorage } : {}),
+    attachments: {
+      downloadMode: "proxy",
+      orgQuotaBytes: 2 * 1024 * 1024 * 1024,
+      orgQuotaCount: 1000,
+      // Disabled by default in tests — sweep suites drive passes explicitly,
+      // mirroring archiveSweepIntervalSeconds below.
+      sweepIntervalSeconds: 0,
+      orphanGraceSeconds: 86_400,
+      pendingTtlSeconds: 3600,
+      maxConcurrentUploadsPerUploader: 4,
+      ...opts.attachments,
     },
     server: {
       port: 0,

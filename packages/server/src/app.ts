@@ -101,6 +101,7 @@ import { createConfigService } from "./services/config-service.js";
 import { backfillGitlabAttentionPairs } from "./services/gitlab-attention-backfill.js";
 import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
+import { createObjectStorage } from "./services/object-storage.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
 import { createResourcesService } from "./services/resources.js";
@@ -297,6 +298,14 @@ export async function buildApp(config: Config) {
   app.decorate("db", db);
   app.decorate("config", config);
 
+  // S3-compatible object storage for binary payloads. Optional at the
+  // config layer: when absent the attachment upload surface answers 503
+  // while legacy bytea downloads keep working — deployments configure
+  // storage, then run `migrate:attachments` (see the objectStorage group in
+  // shared server-config).
+  const objectStorage = config.objectStorage ? createObjectStorage(config.objectStorage) : null;
+  app.decorate("objectStorage", objectStorage);
+
   // Advisory Command-package version broadcast to every Client via the
   // `server:welcome` WS frame. The poller refreshes the advertised value
   // from the npm registry on `config.update.pollIntervalMinutes`, so the
@@ -351,12 +360,12 @@ export async function buildApp(config: Config) {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
   });
 
-  // Body parser for `application/octet-stream` — needed by the attachment
-  // upload route. Fastify's built-in parsers cover json / text only; without
-  // this registration `request.body` would be undefined on an octet-stream
-  // POST and the route would 415. Registered globally because Fastify only
-  // supports global content-type parsers; the route still owns its own
-  // `bodyLimit` so the byte cap is route-local.
+  // Default body parser for `application/octet-stream`. Fastify's built-in
+  // parsers cover json / text only; without a registration an octet-stream
+  // POST would 415. The attachment upload plugin overrides this in its own
+  // encapsulated context with a stream passthrough (see
+  // api/orgs/attachments.ts) — this buffering default covers everything
+  // else.
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });
@@ -708,6 +717,15 @@ export async function buildApp(config: Config) {
     const gitlabAttentionBackfill = await backfillGitlabAttentionPairs(db);
     if (gitlabAttentionBackfill.paired > 0 || gitlabAttentionBackfill.legacyRouteOnly > 0) {
       app.log.info(gitlabAttentionBackfill, "gitlab attention pair backfill complete");
+    }
+    if (objectStorage) {
+      // Dev/test convenience + fail-fast diagnostics; never blocks boot
+      // (ensureBucket degrades to warnings internally).
+      await objectStorage.ensureBucket();
+    } else {
+      app.log.warn(
+        "object storage is not configured (FIRST_TREE_S3_*); attachment uploads will be rejected with 503 until it is",
+      );
     }
     await notifier.start();
     backgroundTasks.start();

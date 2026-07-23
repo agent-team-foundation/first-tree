@@ -3,6 +3,7 @@ export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";
 export { agentResourceBindings } from "./agent-resource-bindings.js";
 export { agents } from "./agents.js";
+export { attachmentReferences } from "./attachment-references.js";
 export { attachments } from "./attachments.js";
 // Legacy audit table — kept for drizzle-kit parity only (see file header); not used at runtime.
 export { attentions } from "./attentions.js";
