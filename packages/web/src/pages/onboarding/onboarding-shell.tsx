@@ -86,7 +86,7 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
                 addToast({
                   title: "Setup paused",
                   description: "Pick up where you left off anytime in Settings → Setup.",
-                  action: { label: "Open Settings", onClick: () => navigate("/settings/onboarding") },
+                  action: { label: "Open Settings", onClick: () => navigate("/settings/setup") },
                 });
                 void finishLater();
               }}

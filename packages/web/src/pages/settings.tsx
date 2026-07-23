@@ -1,67 +1,17 @@
+import type { ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 
 /**
- * Settings layout — sidebar + main content. Replaces the earlier double-tab
- * pattern (global nav tabs + sub-tabs) which stacked two tab visuals against
- * each other.
+ * Settings layout — a flat desktop sidebar plus the active module.
  *
- * Why sidebar (and not another row of tabs / flat single page)?
- *   - Settings is an *index of independent modules*, not multiple views of a
- *     single entity. Industry pattern (GitHub / Linear / Stripe / Vercel) is
- *     left sidebar for settings; top tabs for entity-detail views.
- *   - Single-page flat layout scales poorly past ~5 sections; with Billing /
- *     Security / API keys / Webhooks on the roadmap, sidebar lets the list
- *     grow without redesign.
- *
- * Width: the main column inside still respects the shared 960 canvas (see
- * `components/layout.tsx`), the sidebar is an additional 200 on the left
- * (sidebar 200 + main 960 = 1160 total).
- * Layout opts out of the default 960 wrapper via `isSettings` so this whole
- * shell can centre itself at ~1180.
- *
- * Narrow viewport (<48rem): the sidebar would steal half the screen,
- * so it collapses into a horizontally-scrollable pill bar above the
- * `<Outlet/>`. Same NavLink semantics (active state via `isActive`), same
- * route targets — only the chrome shape changes.
- *
- * Page header lives HERE, not in each sub-page. The old pattern had every
- * sub-page render its own `PageHeader` whose title just repeated the active
- * nav label (`GitHub` → `GitHub` → `GitHub Connection`) — a redundant title
- * that was also rendered *smaller* (text-subtitle) than the section headings
- * beneath it (text-title), so it never functioned as a real page title.
- * The layout now owns a single accessible `<h1>` (visually hidden — the
- * sidebar already answers "where am I") plus an optional one-line lead drawn
- * from `ITEMS[].description`. Sourcing the label from `ITEMS` is also what
- * keeps the sidebar and the heading from drifting (they used to: `Onboarding`
- * in the nav vs `Setup` as the page title). Section headings are now the top
- * visible tier on every page.
- *
- * Sub-routes are grouped by scope so user-level configuration does not read
- * as if it changes with the selected team. The nav renders an eyebrow label
- * per group because the two scopes have different consequences: Personal
- * entries follow the signed-in user across every team, Team entries configure
- * the currently selected org.
- *
- *   Personal
- *     Account       — account-scoped: identity and sign-in methods (absorbed
- *                     the old standalone /user-settings page)
- *     Computers     — user-scoped: machines connected to First Tree
- *   Team
- *     Repositories  — provider-neutral Team code resources plus the separate
- *                     org-scoped Context Tree binding. Visible to all members
- *                     (read-only); only admins can edit.
- *     Resources     — org-scoped runtime resources (prompt / skill / mcp).
- *                     Visible to all members (read-only); only admins can manage.
- *     Integrations  — provider-specific GitHub/GitLab connections for events,
- *                     identity, and webhooks.
- *     Setup         — guided-setup stepper enable/disable (hidden once
- *                     onboarding is permanently completed)
- *
- * `/settings` lands on Account — the first sidebar row, so the entry point
- * and the highlighted nav state agree.
+ * Desktop deliberately has no Personal / Team headings. Setup is a permanent
+ * overview of the current member's access plus team capabilities, so it sits
+ * immediately after Account and remains visible after first-run onboarding is
+ * complete. The narrow pill navigation keeps its existing scope grouping;
+ * mobile Settings is outside this desktop IA change.
  */
 
 type Item = {
@@ -74,6 +24,8 @@ type Item = {
    * they carry no description.
    */
   description?: string;
+  /** The page renders its own visible title and team/role context. */
+  ownsHeader?: boolean;
 };
 
 type ItemGroup = {
@@ -81,65 +33,56 @@ type ItemGroup = {
   items: Item[];
 };
 
-const GROUPS: ItemGroup[] = [
+const ACCOUNT_ITEM: Item = {
+  to: "/settings/account",
+  label: "Account",
+  description: "Manage your profile and sign-in methods. These settings follow you across all your teams.",
+};
+const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup", ownsHeader: true };
+const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
+const REPOSITORIES_ITEM: Item = {
+  to: "/settings/repositories",
+  label: "Repositories",
+  description: "Manage code available to agents and the repository backing your team's Context Tree.",
+};
+const RESOURCES_ITEM: Item = {
+  to: "/settings/resources",
+  label: "Resources",
+  description: "Team defaults and opt-in resources your agents load when they start.",
+};
+const INTEGRATIONS_ITEM: Item = {
+  to: "/settings/integrations",
+  label: "Integrations",
+  description: "Connect providers for webhooks, identity, and event routing.",
+};
+const ITEMS: Item[] = [ACCOUNT_ITEM, SETUP_ITEM, COMPUTERS_ITEM, REPOSITORIES_ITEM, RESOURCES_ITEM, INTEGRATIONS_ITEM];
+
+// Preserve the existing narrow Settings IA; only desktop removes visible
+// scope groups. Every link still uses the canonical Setup route.
+const NARROW_GROUPS: ItemGroup[] = [
   {
     label: "Personal",
-    items: [
-      {
-        to: "/settings/account",
-        label: "Account",
-        description: "Manage your profile and sign-in methods. These settings follow you across all your teams.",
-      },
-      { to: "/settings/computers", label: "Computers" },
-    ],
+    items: [ACCOUNT_ITEM, COMPUTERS_ITEM],
   },
   {
     label: "Team",
-    items: [
-      {
-        to: "/settings/repositories",
-        label: "Repositories",
-        description: "Manage code available to agents and the repository backing your team's Context Tree.",
-      },
-      {
-        to: "/settings/resources",
-        label: "Resources",
-        description: "Team defaults and opt-in resources your agents load when they start.",
-      },
-      {
-        to: "/settings/integrations",
-        label: "Integrations",
-        description: "Connect providers for webhooks, identity, and event routing.",
-      },
-      { to: "/settings/onboarding", label: "Setup" },
-    ],
+    items: [REPOSITORIES_ITEM, RESOURCES_ITEM, INTEGRATIONS_ITEM, SETUP_ITEM],
   },
 ];
 
-const ITEMS = GROUPS.flatMap((group) => group.items);
-
-export function SettingsLayout({ activePathname }: { activePathname?: string } = {}) {
-  const { onboardingCompletedAt, meLoaded } = useAuth();
+export function SettingsLayout({ activePathname, children }: { activePathname?: string; children?: ReactNode } = {}) {
+  const { meLoaded, onboardingCompletedAt } = useAuth();
   const viewport = useWorkspaceViewport();
   const { pathname: routePathname } = useLocation();
   // DEV preview galleries render this real layout below their own route. Let
   // those galleries supply the path whose heading/nav state they are showing;
   // production always follows the actual router location.
   const pathname = activePathname ?? routePathname;
-  // Wait for `/me` to resolve before rendering the nav so role-dependent
-  // entries such as Onboarding do not flicker during a fresh page load.
+  // Wait for `/me` to resolve so team-aware Settings content does not flicker
+  // during a fresh page load.
   if (!meLoaded) {
     return null;
   }
-  // Once onboarding completes, the wizard is terminal and the entry is hidden.
-  // Direct URL access to /settings/onboarding still redirects out via the page's
-  // own guard.
-  const hasCompletedOnboarding = onboardingCompletedAt !== null;
-
-  const visibleGroups = GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => item.to !== "/settings/onboarding" || !hasCompletedOnboarding),
-  })).filter((group) => group.items.length > 0);
 
   // The active sub-route drives the single page `<h1>` (visually hidden) and
   // the optional lead. Match the longest `to` that prefixes the pathname so a
@@ -149,6 +92,14 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
     [...ITEMS].sort((a, b) => b.to.length - a.to.length).find((it) => pathname.startsWith(it.to)) ?? ITEMS[0];
 
   if (viewport === "narrow") {
+    // Mobile Settings is outside this desktop IA change. Preserve its existing
+    // one-shot Setup visibility while pointing incomplete users at the new
+    // canonical route.
+    const visibleNarrowGroups = NARROW_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item !== SETUP_ITEM || onboardingCompletedAt === null),
+    })).filter((group) => group.items.length > 0);
+
     return (
       <div className="flex flex-col" style={{ minHeight: "100%" }}>
         <nav
@@ -169,7 +120,7 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
             overflowX: "auto",
           }}
         >
-          {visibleGroups.map((group) => (
+          {visibleNarrowGroups.map((group) => (
             <div key={group.label} className="flex shrink-0 items-center" style={{ gap: "var(--sp-1)" }}>
               <span className="text-eyebrow shrink-0" style={{ color: "var(--fg-4)", padding: "0 var(--sp-1)" }}>
                 {group.label.toUpperCase()}
@@ -187,7 +138,7 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
         </nav>
         <div className="flex-1 min-w-0">
           <SettingsHeader item={activeItem} />
-          <Outlet />
+          {children ?? <Outlet />}
         </div>
       </div>
     );
@@ -209,33 +160,21 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
           overflowY: "auto",
         }}
       >
-        <nav className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-          {visibleGroups.map((group) => (
-            <div key={group.label}>
-              <div
-                className="text-eyebrow"
-                style={{ color: "var(--fg-4)", padding: "var(--sp-2) var(--sp-3) var(--sp-1)" }}
-              >
-                {group.label.toUpperCase()}
-              </div>
-              <div className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-                {group.items.map((item) => (
-                  <SidebarLink
-                    key={item.to}
-                    to={item.to}
-                    label={item.label}
-                    activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
-                  />
-                ))}
-              </div>
-            </div>
+        <nav className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+          {ITEMS.map((item) => (
+            <SidebarLink
+              key={item.to}
+              to={item.to}
+              label={item.label}
+              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+            />
           ))}
         </nav>
       </aside>
 
       <div className="flex-1 min-w-0">
         <SettingsHeader item={activeItem} />
-        <Outlet />
+        {children ?? <Outlet />}
       </div>
     </div>
   );
@@ -250,7 +189,7 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
  * a quiet one-line lead above the sub-page content.
  */
 function SettingsHeader({ item }: { item: Item | undefined }) {
-  if (!item) return null;
+  if (!item || item.ownsHeader) return null;
   return (
     <>
       <h1 className="sr-only">{item.label}</h1>

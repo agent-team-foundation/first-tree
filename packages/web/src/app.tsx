@@ -36,9 +36,9 @@ import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsGitlabPage } from "./pages/settings/gitlab.js";
 import { SettingsIntegrationsLayout } from "./pages/settings/integrations.js";
-import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsRepositoriesPage } from "./pages/settings/repositories.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
+import { SettingsSetupPage } from "./pages/settings/setup.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
@@ -152,6 +152,10 @@ const SettingsGithubPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/settings-github-preview.js").then((module) => ({ default: module.SettingsGithubPreviewPage })),
     )
+  : null;
+
+const SetupPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/setup-preview.js").then((module) => ({ default: module.SetupPreviewPage })))
   : null;
 
 // Public fixture preview for the BYO Context Tree handoff. It is compiled into
@@ -339,6 +343,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {SetupPreviewPage ? (
+                <Route
+                  path="/preview/setup"
+                  element={
+                    <Suspense fallback={null}>
+                      <SetupPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {OnboardingPreviewPage ? (
                 <Route
                   path="/preview/onboarding"
@@ -442,9 +456,8 @@ export function App() {
                   <Route path="team" element={<TeamPage />} />
                   <Route path="user-settings" element={<LegacyUserSettingsRedirect />} />
 
-                  {/* Settings master-detail. User-scoped Account + Computers
-                      and team-scoped setup/integration/resource surfaces share
-                      one shell, with scope made explicit by sidebar groups. */}
+                  {/* Settings master-detail. Setup is the permanent role-aware
+                      overview; /onboarding remains the standalone first-run flow. */}
                   <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="account" replace />} />
                     <Route path="team" element={<Navigate to="/settings/computers" replace />} />
@@ -459,10 +472,9 @@ export function App() {
                       <Route path="github" element={<SettingsGithubPage />} />
                       <Route path="gitlab" element={<SettingsGitlabPage />} />
                     </Route>
-                    <Route path="onboarding" element={<SettingsOnboardingPage />} />
-                    {/* Old name was "setup" — keep the redirect so existing
-                        in-app links / saved bookmarks keep working. */}
-                    <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
+                    <Route path="setup" element={<SettingsSetupPage />} />
+                    {/* Compatibility only. Setup is now the canonical route. */}
+                    <Route path="onboarding" element={<Navigate to="/settings/setup" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}

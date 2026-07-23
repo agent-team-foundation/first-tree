@@ -322,19 +322,16 @@ afterEach(() => {
 });
 
 describe("settings panels", () => {
-  it("renders settings layout variants and filters admin/onboarding nav entries", async () => {
+  it("renders the flat desktop IA and preserves the narrow navigation shape", async () => {
     const { SettingsLayout } = await import("../settings.js");
 
     const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
-    expect(desktop.container.textContent).toContain("PERSONAL");
-    expect(desktop.container.textContent).toContain("Account");
-    expect(desktop.container.textContent).toContain("Computers");
-    expect(desktop.container.textContent).toContain("Repositories");
-    expect(desktop.container.textContent).toContain("TEAM");
-    expect(desktop.container.textContent).toContain("Integrations");
-    // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
-    // so the sidebar label and the page heading no longer drift).
-    expect(desktop.container.textContent).toContain("Setup");
+    expect(desktop.container.textContent).not.toContain("PERSONAL");
+    expect(desktop.container.textContent).not.toContain("TEAM");
+    const desktopLinks = [...desktop.container.querySelectorAll<HTMLAnchorElement>("aside a")].map(
+      (link) => link.textContent,
+    );
+    expect(desktopLinks).toEqual(["Account", "Setup", "Computers", "Repositories", "Resources", "Integrations"]);
     expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
 
@@ -353,7 +350,14 @@ describe("settings panels", () => {
     expect(narrow.container.textContent).toContain("TEAM");
     expect(narrow.container.textContent).toContain("Integrations");
     expect(narrow.container.textContent).not.toContain("Setup");
+    expect(narrow.container.querySelector('a[href="/settings/setup"]')).toBeNull();
     await act(async () => narrow.root.unmount());
+
+    viewportMock.value = "xl";
+    const completedDesktop = await renderDom(<SettingsLayout />, "/settings/setup");
+    expect(completedDesktop.container.querySelector('aside a[href="/settings/setup"]')).not.toBeNull();
+    expect(completedDesktop.container.textContent).toContain("Setup");
+    await act(async () => completedDesktop.root.unmount());
 
     authMock.value = { ...authMock.value, meLoaded: false };
     const unloaded = await renderDom(<SettingsLayout />);
