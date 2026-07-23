@@ -1607,6 +1607,23 @@ server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.
 | `FIRST_TREE_AUTH_REFRESH_TOKEN_EXPIRY` | `30d` |
 | `FIRST_TREE_AUTH_CONNECT_TOKEN_EXPIRY` | `10m` |
 
+**Browser security headers:**
+
+The server stamps app-wide browser security headers (CSP, HSTS,
+`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`,
+`X-Frame-Options`) on every HTTP response. The header shape is code-owned
+(`packages/server/src/security-headers.ts`); configuration only pins the
+third-party origin allowlists inside the Content-Security-Policy. Each list
+variable accepts comma- or whitespace-separated `scheme://host[:port]`
+origins (optional leading `*.` wildcard) and **replaces** its default list.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_SECURITY_HEADERS_ENABLED` | Master switch for the app-wide header layer. Leave on; disable only while debugging a conflict with an edge-owned policy. | `true` |
+| `FIRST_TREE_CSP_SCRIPT_ORIGINS` | Extra CSP `script-src` origins beyond `'self'`. | GA4 + Clarity loader origins |
+| `FIRST_TREE_CSP_CONNECT_ORIGINS` | Extra CSP `connect-src` origins beyond `'self'` (same-origin API/WebSocket is always allowed). | GA4 collect, Clarity telemetry, Sentry ingest |
+| `FIRST_TREE_CSP_IMG_ORIGINS` | Extra CSP `img-src` origins beyond `'self' data: blob:`. | GitHub/Google avatar hosts, GA4 pixel |
+
 **GitHub App / OAuth:**
 
 | Variable | Purpose |

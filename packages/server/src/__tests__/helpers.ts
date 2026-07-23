@@ -1,5 +1,10 @@
 import type { AgentType, RuntimeProvider } from "@first-tree/shared";
-import { setConfig } from "@first-tree/shared/config";
+import {
+  DEFAULT_CSP_CONNECT_ORIGINS,
+  DEFAULT_CSP_IMG_ORIGINS,
+  DEFAULT_CSP_SCRIPT_ORIGINS,
+  setConfig,
+} from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -199,6 +204,12 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
         webhookSecret: "test-app-webhook-secret",
         slug: opts.omitGithubAppSlug ? undefined : "test-app-slug",
       },
+    },
+    security: {
+      headersEnabled: true,
+      cspScriptOrigins: [...DEFAULT_CSP_SCRIPT_ORIGINS],
+      cspConnectOrigins: [...DEFAULT_CSP_CONNECT_ORIGINS],
+      cspImgOrigins: [...DEFAULT_CSP_IMG_ORIGINS],
     },
     trustProxy: false,
     connectBootstrap: {

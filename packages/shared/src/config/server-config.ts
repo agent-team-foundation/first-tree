@@ -65,6 +65,73 @@ const gitlabEgressAllowlistSchema = z.preprocess(
   ),
 );
 
+/**
+ * One CSP source expression: an exact scheme://host[:port] origin, optionally
+ * with a `*.` leftmost-label wildcard (`https://*.clarity.ms`). Schemes are
+ * restricted to http(s)/ws(s) — CSP keyword sources (`'self'`, `'none'`, …)
+ * and scheme-only sources (`data:`, `blob:`) are owned by the server's header
+ * builder, not by configuration, so an operator cannot accidentally weaken
+ * the policy shape (e.g. sneak in `'unsafe-inline'`) through an origin list.
+ */
+const cspSourceSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^(?:https?|wss?):\/\/(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\d{1,5})?$/, {
+    message: "CSP origin must be scheme://host[:port] (http/https/ws/wss, optional leading *. wildcard)",
+  });
+
+/**
+ * Origin lists arrive from env vars as one string; accept comma- and/or
+ * whitespace-separated tokens. Setting a list env var REPLACES the default
+ * list for that directive (predictable per-environment pinning), it does not
+ * append to it.
+ */
+const cspOriginListSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  return value.split(/[\s,]+/).filter((entry) => entry.length > 0);
+}, z.array(cspSourceSchema));
+
+/**
+ * Default third-party origin allowlists for the app-wide Content-Security-Policy
+ * (`security` config group below). Exported so server code and tests reference
+ * the same single source of truth instead of copy-pasting origin arrays.
+ *
+ * Script: GA4 gtag loader + Microsoft Clarity — both production-hostname-gated
+ * in the web bundle, so keeping them in staging/dev CSP is inert but keeps one
+ * policy shape across channels.
+ */
+export const DEFAULT_CSP_SCRIPT_ORIGINS: readonly string[] = Object.freeze([
+  "https://www.googletagmanager.com",
+  "https://www.clarity.ms",
+]);
+
+/**
+ * Connect: GA4 collect endpoints (regional subdomains — Google requires the
+ * wildcards), Clarity telemetry, and Sentry ingest for the web bundle's error
+ * reporting. `'self'` (same-origin API + WebSocket) is code-owned, not listed.
+ */
+export const DEFAULT_CSP_CONNECT_ORIGINS: readonly string[] = Object.freeze([
+  "https://*.google-analytics.com",
+  "https://*.analytics.google.com",
+  "https://www.googletagmanager.com",
+  "https://*.clarity.ms",
+  "https://c.bing.com",
+  "https://*.ingest.sentry.io",
+  "https://*.ingest.us.sentry.io",
+]);
+
+/**
+ * Img: OAuth avatar hosts persisted by the GitHub/Google sign-in flows, plus
+ * the GA4 pixel fallback hosts. `'self' data: blob:` are code-owned.
+ */
+export const DEFAULT_CSP_IMG_ORIGINS: readonly string[] = Object.freeze([
+  "https://avatars.githubusercontent.com",
+  "https://lh3.googleusercontent.com",
+  "https://*.google-analytics.com",
+  "https://*.googletagmanager.com",
+]);
+
 const googleOauthConfig = optional({
   clientId: field(z.string().min(1), { env: "FIRST_TREE_GOOGLE_CLIENT_ID" }),
   clientSecret: field(z.string().min(1), {
@@ -344,6 +411,43 @@ export const serverConfigSchema = defineConfig({
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),
   }),
+  /**
+   * App-wide browser security headers (CSP, HSTS, frame protection, …) set by
+   * the server on every HTTP response — SPA shell, static assets, and API
+   * alike — so every environment carries the same testable guarantee instead
+   * of depending on invisible edge/CDN configuration (issue #1541).
+   *
+   * The header *shape* (which directives exist, keyword sources, HSTS
+   * lifetime, frame denial) is code-owned in
+   * `@first-tree/server/security-headers`. Configuration only pins the
+   * third-party origin allowlists per environment, so a new legitimate origin
+   * (analytics host, avatar CDN, object-storage host) is a deployment config
+   * change, not a code edit. Defaults cover the dependencies the production
+   * web bundle actually uses; each env var REPLACES its default list.
+   */
+  security: {
+    /**
+     * Master switch. Leave on everywhere; the escape hatch exists only for
+     * deployments that must temporarily defer to an edge-owned policy while
+     * debugging a conflict.
+     */
+    headersEnabled: field(z.boolean().default(true), { env: "FIRST_TREE_SECURITY_HEADERS_ENABLED" }),
+    /** Extra `script-src` origins beyond `'self'`. */
+    cspScriptOrigins: field(cspOriginListSchema.default([...DEFAULT_CSP_SCRIPT_ORIGINS]), {
+      env: "FIRST_TREE_CSP_SCRIPT_ORIGINS",
+    }),
+    /**
+     * Extra `connect-src` origins beyond `'self'` (which already covers the
+     * same-origin API and WebSocket).
+     */
+    cspConnectOrigins: field(cspOriginListSchema.default([...DEFAULT_CSP_CONNECT_ORIGINS]), {
+      env: "FIRST_TREE_CSP_CONNECT_ORIGINS",
+    }),
+    /** Extra `img-src` origins beyond `'self' data: blob:`. */
+    cspImgOrigins: field(cspOriginListSchema.default([...DEFAULT_CSP_IMG_ORIGINS]), {
+      env: "FIRST_TREE_CSP_IMG_ORIGINS",
+    }),
+  },
   /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
    * in production where First Tree sits behind Cloudflare / a reverse proxy — otherwise
