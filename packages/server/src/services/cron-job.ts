@@ -446,6 +446,25 @@ export async function updateCronJob(
 ): Promise<CronJob> {
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    const body = input.body;
+
+    // Global lock order matches pauseActiveJobsForOwnerChatDelete: advisory
+    // barrier before any cron row FOR UPDATE. Peek barrier keys without row
+    // lock when resume/activate is requested.
+    if (body.state === "active") {
+      assertMutationsAvailable(input.config);
+      const [peek] = await txDb
+        .select({
+          controlChatId: cronJobs.controlChatId,
+          ownerMemberId: cronJobs.ownerMemberId,
+        })
+        .from(cronJobs)
+        .where(eq(cronJobs.id, input.jobId))
+        .limit(1);
+      if (!peek) throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
+      await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
+    }
+
     const job = await lockJob(txDb, input.jobId);
     if (input.agentScope) {
       if (job.agentId !== input.agentScope.agentId || job.controlChatId !== input.agentScope.controlChatId) {
@@ -457,7 +476,6 @@ export async function updateCronJob(
     }
     assertRevision(job, input.expectedRevision);
 
-    const body = input.body;
     const name = body.name ?? job.name;
     const prompt = body.prompt ?? job.prompt;
     let schedule = body.schedule ?? job.cronExpression;
@@ -473,8 +491,6 @@ export async function updateCronJob(
       nextReason = "user_paused";
       nextRunAt = null;
     } else if (body.state === "active") {
-      assertMutationsAvailable(input.config);
-      await lockOwnerChatCronBarrier(txDb, job.controlChatId, job.ownerMemberId);
       const auth = await revalidateOwnerChatAgent(txDb, job);
       if (!auth.ok) {
         throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot resume schedule (${auth.reason})`);
@@ -585,7 +601,8 @@ export async function deleteCronJob(
 
 /**
  * Pause all active jobs for an owner on a control chat. Caller must hold or
- * be about to take the chat_user_state write; we lock jobs first ORDER BY id.
+ * be about to take the chat_user_state write. Lock order: advisory barrier,
+ * then cron rows FOR UPDATE ORDER BY id (same order as resume/activate).
  */
 export async function pauseActiveJobsForOwnerChatDelete(
   db: Database,

@@ -12,8 +12,8 @@ import { Cron } from "croner";
  * traditional DOM/DOW OR semantics (Croner 10's successor to `domAndDow: false`).
  *
  * Nonexistent spring-forward wall times are skipped (not shifted): after Croner
- * proposes an instant we verify its local minute/hour match the expression, and
- * advance past gap artifacts.
+ * proposes an instant we verify only that the local minute/hour still match the
+ * expression's minute/hour fields. DOM/month/DOW semantics stay with Croner.
  */
 function buildCron(expression: string, timezone: string): Cron {
   return new Cron(normalizeCronExpression(expression), {
@@ -31,81 +31,31 @@ export class InvalidCronScheduleError extends Error {
   }
 }
 
-const MONTH_ALIASES: Record<string, number> = {
-  JAN: 1,
-  JANUARY: 1,
-  FEB: 2,
-  FEBRUARY: 2,
-  MAR: 3,
-  MARCH: 3,
-  APR: 4,
-  APRIL: 4,
-  MAY: 5,
-  JUN: 6,
-  JUNE: 6,
-  JUL: 7,
-  JULY: 7,
-  AUG: 8,
-  AUGUST: 8,
-  SEP: 9,
-  SEPTEMBER: 9,
-  OCT: 10,
-  OCTOBER: 10,
-  NOV: 11,
-  NOVEMBER: 11,
-  DEC: 12,
-  DECEMBER: 12,
-};
-
-const DOW_ALIASES: Record<string, number> = {
-  SUN: 0,
-  SUNDAY: 0,
-  MON: 1,
-  MONDAY: 1,
-  TUE: 2,
-  TUESDAY: 2,
-  WED: 3,
-  WEDNESDAY: 3,
-  THU: 4,
-  THURSDAY: 4,
-  FRI: 5,
-  FRIDAY: 5,
-  SAT: 6,
-  SATURDAY: 6,
-};
-
-type LocalParts = {
+type LocalHourMinute = {
   minute: number;
   hour: number;
-  day: number;
-  month: number;
-  /** 0=Sunday … 6=Saturday */
-  dow: number;
 };
 
-function localParts(at: Date, timezone: string): LocalParts {
+function localHourMinute(at: Date, timezone: string): LocalHourMinute {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
     hour: "numeric",
     minute: "numeric",
-    weekday: "short",
     hourCycle: "h23",
   }).formatToParts(at);
   const get = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? "";
-  const weekday = get("weekday").toUpperCase().slice(0, 3);
   return {
     minute: Number(get("minute")),
     hour: Number(get("hour")),
-    day: Number(get("day")),
-    month: Number(get("month")),
-    dow: DOW_ALIASES[weekday] ?? 0,
   };
 }
 
-function tokenMatches(token: string, value: number, aliases?: Record<string, number>): boolean {
+/**
+ * Match a single minute/hour cron token against a civil clock value.
+ * Used only to detect Croner spring-forward gap shifts — not as a second
+ * DOM/DOW/month interpreter.
+ */
+function clockTokenMatches(token: string, value: number): boolean {
   const raw = token.trim();
   if (!raw || raw === "*") return true;
 
@@ -120,8 +70,6 @@ function tokenMatches(token: string, value: number, aliases?: Record<string, num
 
   const resolve = (side: string): number | null => {
     if (side === "*") return null;
-    const upper = side.toUpperCase();
-    if (aliases && upper in aliases) return aliases[upper] ?? null;
     const n = Number(side);
     return Number.isInteger(n) ? n : null;
   };
@@ -145,33 +93,21 @@ function tokenMatches(token: string, value: number, aliases?: Record<string, num
   return step === 1 || value % step === 0;
 }
 
-function fieldMatches(field: string, value: number, aliases?: Record<string, number>): boolean {
-  return field.split(",").some((token) => tokenMatches(token, value, aliases));
+function clockFieldMatches(field: string, value: number): boolean {
+  return field.split(",").some((token) => clockTokenMatches(token, value));
 }
 
 /**
- * True when `at`'s civil wall time in `timezone` satisfies the five-field
- * expression (minute/hour/DOM/month/DOW with traditional OR for DOM/DOW).
+ * True when `at`'s civil minute/hour in `timezone` still satisfy the expression's
+ * minute and hour fields. Gap-shifted spring-forward instants fail this check.
+ * DOM/month/DOW are intentionally not re-checked — Croner owns those.
  */
 export function matchesScheduledWallTime(expression: string, timezone: string, at: Date): boolean {
   const fields = normalizeCronExpression(expression).split(" ");
   if (fields.length !== 5) return false;
-  const [minuteF, hourF, domF, monthF, dowF] = fields as [string, string, string, string, string];
-  const local = localParts(at, timezone);
-
-  if (!fieldMatches(minuteF, local.minute)) return false;
-  if (!fieldMatches(hourF, local.hour)) return false;
-  if (!fieldMatches(monthF, local.month, MONTH_ALIASES)) return false;
-
-  const domStar = domF === "*";
-  const dowStar = dowF === "*";
-  const domOk = fieldMatches(domF, local.day);
-  const dowOk = fieldMatches(dowF, local.dow, DOW_ALIASES);
-  // Traditional OR: when both DOM and DOW are restricted, either may match.
-  if (!domStar && !dowStar) return domOk || dowOk;
-  if (!domStar) return domOk;
-  if (!dowStar) return dowOk;
-  return true;
+  const [minuteF, hourF] = fields as [string, string, string, string, string];
+  const local = localHourMinute(at, timezone);
+  return clockFieldMatches(minuteF, local.minute) && clockFieldMatches(hourF, local.hour);
 }
 
 /**

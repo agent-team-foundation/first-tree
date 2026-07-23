@@ -10,7 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createChat } from "../services/chat.js";
-import { createCronJob } from "../services/cron-job.js";
+import { createCronJob, updateCronJob } from "../services/cron-job.js";
 import { createCronScheduler } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
@@ -433,5 +433,91 @@ describe("cron jobs integration", () => {
       .from(cronJobs)
       .where(and(eq(cronJobs.controlChatId, chatId), eq(cronJobs.name, body.name)));
     expect(rows).toHaveLength(1);
+  });
+
+  it("serializes concurrent resume against owner chat deletion without deadlock", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "resume-vs-delete",
+      schedule: "0 7 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    expect(createRes.statusCode).toBe(201);
+    const job = createRes.json() as { id: string; revision: number };
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+
+    // Active job + concurrent activate (advisory+row) vs owner delete (advisory+row).
+    const raced = Promise.allSettled([
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { state: "active" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+      }),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("resume-vs-delete deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(2);
+    expect(outcome[1]?.status).toBe("fulfilled");
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.state).toBe("paused");
+    expect(row?.stateReason).toBe("owner_chat_deleted");
+  });
+
+  it("returns CRON_JOB_INVALID_REQUEST for malformed If-Match and empty PATCH", async () => {
+    const { runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "codes",
+      schedule: "0 8 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+
+    const badMatch = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { prompt: "x" },
+      { "if-match": "not-a-revision" },
+    );
+    expect(badMatch.statusCode).toBe(400);
+    expect(badMatch.json()).toMatchObject({ code: "CRON_JOB_INVALID_REQUEST" });
+
+    const emptyPatch = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      {},
+      { "if-match": String(job.revision) },
+    );
+    expect(emptyPatch.statusCode).toBe(400);
+    expect(emptyPatch.json()).toMatchObject({ code: "CRON_JOB_INVALID_REQUEST" });
+
+    const badName = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { name: "" },
+      { "if-match": String(job.revision) },
+    );
+    expect(badName.statusCode).toBe(400);
+    expect(badName.json()).toMatchObject({ code: "CRON_JOB_INVALID_REQUEST" });
+  });
+
+  it("returns CRON_JOB_FORBIDDEN when a non-participant agent hits Class D cron routes", async () => {
+    const { app, chatId } = await setupChatWithAgent();
+    const outsider = await createTestAgent(app, { name: `cron-out-${crypto.randomUUID().slice(0, 6)}` });
+    const denied = await outsider.request("GET", `/api/v1/agent/chats/${chatId}/cron-jobs`);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ code: "CRON_JOB_FORBIDDEN" });
   });
 });

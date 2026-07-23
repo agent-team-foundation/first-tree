@@ -84,6 +84,8 @@ export const CRON_JOB_ERROR_CODES = [
   "CRON_JOB_INVALID_SCHEDULE",
   "CRON_JOB_INVALID_TIMEZONE",
   "CRON_JOB_INVALID_STATE",
+  /** Request/header/body shape errors that are not schedule/timezone/state. */
+  "CRON_JOB_INVALID_REQUEST",
   "CRON_JOB_CHAT_REQUIRED",
   "CRON_TRIGGER_METADATA_RESERVED",
 ] as const;
@@ -174,7 +176,8 @@ function fieldHasJenkinsHashAtom(field: string): boolean {
   const n = field.length;
   let i = 0;
   while (i < n) {
-    const atAtomStart = i === 0 || field.charAt(i - 1) === "," || field.charAt(i - 1) === "/" || field.charAt(i - 1) === "-";
+    const atAtomStart =
+      i === 0 || field.charAt(i - 1) === "," || field.charAt(i - 1) === "/" || field.charAt(i - 1) === "-";
     const ch = field.charAt(i);
     if (atAtomStart && (ch === "H" || ch === "h")) {
       if (i + 1 >= n) return true;

@@ -28,6 +28,26 @@ describe("cron-schedule", () => {
     expect(next?.toISOString()).toBe("2026-03-01T09:00:00.000Z");
   });
 
+  it("treats DOW 7 as Sunday via Croner (not a second parser)", () => {
+    // 2026-07-26 is Sunday. Croner accepts both 0 and 7 for Sunday.
+    const after = new Date("2026-07-25T00:00:00.000Z");
+    const withSeven = firstOccurrenceStrictlyAfter("0 9 * * 7", "UTC", after);
+    const withZero = firstOccurrenceStrictlyAfter("0 9 * * 0", "UTC", after);
+    expect(withSeven?.toISOString()).toBe("2026-07-26T09:00:00.000Z");
+    expect(withZero?.toISOString()).toBe("2026-07-26T09:00:00.000Z");
+  });
+
+  it("follows Croner DOM step origins for */2 (days 1,3,5,...)", () => {
+    // Croner expands */2 from array index 0 → DOM 1,3,5,... (not day%2===0).
+    const next = firstOccurrenceStrictlyAfter("0 0 */2 * *", "UTC", new Date("2026-07-01T12:00:00.000Z"));
+    expect(next?.toISOString()).toBe("2026-07-03T00:00:00.000Z");
+  });
+
+  it("follows Croner month step origins for */2", () => {
+    const next = firstOccurrenceStrictlyAfter("0 0 1 */2 *", "UTC", new Date("2026-01-15T00:00:00.000Z"));
+    expect(next?.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+  });
+
   it("skips the nonexistent America/New_York spring-forward wall time", () => {
     // 2026-03-08 local 02:00 does not exist. Must NOT shift to 03:00 EDT.
     const next = firstOccurrenceStrictlyAfter("0 2 8 3 *", "America/New_York", new Date("2026-03-07T00:00:00.000Z"));

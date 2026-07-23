@@ -19,9 +19,12 @@ export function sendCronError(reply: { status: (code: number) => { send: (body: 
   if (err instanceof CronJobAppError) {
     return reply.status(err.statusCode).send({ error: err.message, code: err.code });
   }
+  if (err instanceof ForbiddenError) {
+    return reply.status(403).send({ error: err.message, code: "CRON_JOB_FORBIDDEN" as CronJobErrorCode });
+  }
   if (err instanceof ZodError) {
     const paths = err.issues.flatMap((issue) => issue.path.map(String));
-    let code: CronJobErrorCode = "CRON_JOB_INVALID_SCHEDULE";
+    let code: CronJobErrorCode = "CRON_JOB_INVALID_REQUEST";
     if (paths.includes("timezone")) code = "CRON_JOB_INVALID_TIMEZONE";
     else if (paths.includes("state")) code = "CRON_JOB_INVALID_STATE";
     else if (paths.includes("schedule")) code = "CRON_JOB_INVALID_SCHEDULE";
@@ -37,7 +40,14 @@ export async function requireCronAgentCaller(
   chatId: string,
 ): Promise<{ agentId: string; memberId: string; humanAgentId: string }> {
   const identity = requireAgent(request);
-  await chatService.assertParticipant(app.db, chatId, identity.uuid);
+  try {
+    await chatService.assertParticipant(app.db, chatId, identity.uuid);
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", err.message);
+    }
+    throw err;
+  }
 
   const user = request.user;
   if (!user) throw new ForbiddenError("User authentication required");
