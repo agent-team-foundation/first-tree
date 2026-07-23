@@ -5,10 +5,13 @@ import { act } from "react";
 import { MemoryRouter, Route, Routes, useNavigationType } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
-import { MobileChatPage } from "../chat.js";
+import { MobileWorkPage } from "../work.js";
 
 const authMock = vi.hoisted(() => ({ value: { agentId: "human-agent-self" } }));
-const meChatMocks = vi.hoisted(() => ({ listMeChats: vi.fn() }));
+const meChatMocks = vi.hoisted(() => ({
+  listMeChats: vi.fn(),
+  listMeChatSourceCounts: vi.fn(),
+}));
 
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
@@ -27,7 +30,7 @@ function NavProbe() {
   return null;
 }
 
-describe("MobileChatPage back navigation", () => {
+describe("MobileWorkPage back navigation", () => {
   let harness: DomHarness;
 
   beforeEach(() => {
@@ -38,6 +41,7 @@ describe("MobileChatPage back navigation", () => {
       rows: [],
       nextCursor: null,
     });
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
     lastNavType = "";
   });
 
@@ -45,11 +49,11 @@ describe("MobileChatPage back navigation", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     // Start on the chat detail (c=chat-1) with the list already behind it.
     harness.render(
-      <MemoryRouter initialEntries={["/m/chat", "/m/chat?c=chat-1"]}>
+      <MemoryRouter initialEntries={["/m/work", "/m/work?c=chat-1"]}>
         <QueryClientProvider client={queryClient}>
           <NavProbe />
           <Routes>
-            <Route path="/m/chat" element={<MobileChatPage />} />
+            <Route path="/m/work" element={<MobileWorkPage />} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -63,7 +67,7 @@ describe("MobileChatPage back navigation", () => {
       back?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
     await harness.flush();
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("No chats"));
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("No active work"));
 
     // clearChat must REPLACE the detail with the list (not PUSH), so the
     // browser Back button / swipe cannot reopen the chat detail just exited.

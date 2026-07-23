@@ -5,6 +5,7 @@ import {
   countUnreadRows,
   formatMobileAge,
   isNowFeedRow,
+  mobileCardContent,
   mobileChatListSignal,
   mobileChatPreview,
   mobileChatSignal,
@@ -139,6 +140,62 @@ describe("mobile chat projection", () => {
     expect(countUnreadRows(rows)).toBe(1);
     expect(mobileChatSignal(explicitMention).label).toBe("Unread");
     expect(mobileChatSignal(explicitMention).attention).toBe(false);
+  });
+
+  it("allocates the fixed two-line Work content budget by state", () => {
+    const summary = "**Current:** staging is green";
+    expect(
+      mobileCardContent(
+        chatRow({
+          description: summary,
+          lastMessagePreview: "Latest message",
+        }),
+      ),
+    ).toEqual({ kind: "summary", primary: "Current: staging is green", secondary: null });
+
+    expect(
+      mobileCardContent(
+        chatRow({
+          description: summary,
+          lastMessagePreview: "Please approve the rollout",
+          openRequestCount: 1,
+        }),
+      ),
+    ).toEqual({ kind: "action", primary: "Please approve the rollout", secondary: null });
+
+    expect(
+      mobileCardContent(
+        chatRow({
+          description: summary,
+          lastMessagePreview: "A new review arrived",
+          unreadMentionCount: 1,
+        }),
+      ),
+    ).toEqual({
+      kind: "dynamic",
+      primary: "Current: staging is green",
+      secondary: "New · A new review arrived",
+    });
+
+    expect(
+      mobileCardContent(
+        chatRow({
+          description: summary,
+          busyAgentIds: ["agent-1"],
+          liveActivity: {
+            agentId: "agent-1",
+            kind: "tool_call",
+            label: "Running tests",
+            detail: "Web smoke suite",
+            startedAt: NOW,
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "dynamic",
+      primary: "Current: staging is green",
+      secondary: "Working · Web smoke suite",
+    });
   });
 });
 

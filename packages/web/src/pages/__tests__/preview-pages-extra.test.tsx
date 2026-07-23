@@ -340,25 +340,25 @@ describe("extra preview pages", () => {
   it("renders the mobile mock preview and opens a chat detail without auth", async () => {
     const rendered = await renderPreview(<MobilePreviewPage />, "/preview/mobile");
 
-    expect(text(rendered.container)).toContain("Now");
-    expect(rendered.container.querySelector("h1")?.textContent).toBe("Now");
-    expect(text(rendered.container)).not.toContain("2 need attention");
+    expect(text(rendered.container)).toContain("Work");
+    expect(rendered.container.querySelector("h1")?.textContent).toBe("Work");
     expect(text(rendered.container)).toContain("Release readiness");
     expect(text(rendered.container)).toContain("Needs your answer");
-    expect(text(rendered.container)).not.toContain("Needs attention");
-    expect(text(rendered.container)).not.toContain("In progress");
-    expect(rendered.container.querySelector("[data-mobile-feed]")).not.toBeNull();
-    expect(rendered.container.querySelector('[data-mobile-card="feed"]')).not.toBeNull();
+    expect(text(rendered.container)).toContain("Pinned");
+    expect(text(rendered.container)).toContain("Recent");
+    expect(rendered.container.querySelector("[data-mobile-work-list]")).not.toBeNull();
+    expect(rendered.container.querySelector('[data-mobile-card="action"]')).not.toBeNull();
+    expect(rendered.container.querySelector('[data-mobile-card="work"]')).not.toBeNull();
     expect(rendered.container.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
 
-    await click(buttonByText(rendered.container, "Chat"));
-    expect(text(rendered.container)).toContain("Chat");
-    expect(text(rendered.container)).toContain("Visual QA");
-    expect(rendered.container.querySelector('[data-mobile-card="list"]')).not.toBeNull();
+    expect(
+      [...rendered.container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Chat"),
+    ).toBe(false);
+    expect(buttonByText(rendered.container, "Team")).not.toBeNull();
 
     await click(buttonByLabel(rendered.container, /^Open Release readiness$/));
-    expect(text(rendered.container)).toContain("Summary");
-    expect(text(rendered.container)).toContain("The mobile shell is ready for review");
+    expect(text(rendered.container)).toContain("Current state");
+    expect(text(rendered.container)).toContain("Staging is green");
 
     await cleanupRendered(rendered);
   });

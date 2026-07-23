@@ -46,6 +46,7 @@ const authMock = vi.hoisted(() => {
 
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
+  listMeChatSourceCounts: vi.fn(),
 }));
 
 vi.mock("../../../auth/auth-context.js", () => ({
@@ -73,8 +74,7 @@ function renderShell(harness: DomHarness, path: string) {
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route element={<MobileShell />}>
-            <Route path="/m/now" element={<div>now content</div>} />
-            <Route path="/m/chat" element={<div>chat content</div>} />
+            <Route path="/m/work" element={<div>work content</div>} />
           </Route>
         </Routes>
       </QueryClientProvider>
@@ -89,34 +89,37 @@ describe("MobileShell", () => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
     meChatMocks.listMeChats.mockReturnValue(new Promise(() => undefined));
+    meChatMocks.listMeChatSourceCounts.mockReset();
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
   });
 
   it("keeps bottom tabs on primary tabs and hides them for chat detail", async () => {
-    renderShell(harness, "/m/now");
+    renderShell(harness, "/m/work");
     await harness.flush();
     expect(harness.container.querySelector('nav[aria-label="Mobile"]')).not.toBeNull();
 
     harness.cleanup();
     harness = createDomHarness();
 
-    renderShell(harness, "/m/chat?c=chat-1");
+    renderShell(harness, "/m/work?c=chat-1");
     await harness.flush();
-    expect(harness.container.textContent).toContain("chat content");
+    expect(harness.container.textContent).toContain("work content");
     expect(harness.container.querySelector('nav[aria-label="Mobile"]')).toBeNull();
     expect(harness.container.textContent).not.toContain("Current team");
   });
 
   it("omits duplicate root-tab top titles and keeps team switching out of mobile chrome", async () => {
-    renderShell(harness, "/m/now");
+    renderShell(harness, "/m/work");
     await harness.flush();
 
     expect(harness.container.querySelector("header")).toBeNull();
-    expect(harness.container.textContent).toContain("Now");
+    expect(harness.container.textContent).toContain("Work");
+    expect(harness.container.textContent).not.toContain("Chat");
     expect(harness.container.textContent).not.toContain("Current team");
   });
 
   it("uses the mobile viewport utility and reserves the top safe area", async () => {
-    renderShell(harness, "/m/now");
+    renderShell(harness, "/m/work");
     await harness.flush();
 
     // Viewport height comes from the .h-dvh-screen utility: dynamic viewport

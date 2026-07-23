@@ -4,10 +4,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
-import { MobileChatPage } from "../chat.js";
+import { MobileWorkPage } from "../work.js";
 
 const authMock = vi.hoisted(() => ({ value: { agentId: "human-agent-self" } }));
-const meChatMocks = vi.hoisted(() => ({ listMeChats: vi.fn() }));
+const meChatMocks = vi.hoisted(() => ({
+  listMeChats: vi.fn(),
+  listMeChatSourceCounts: vi.fn(),
+}));
 
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
@@ -19,7 +22,7 @@ vi.mock("../../../components/doc-preview-drawer.js", () => ({
   DocPreviewDrawer: () => <div data-testid="mobile-doc-drawer" />,
 }));
 
-describe("MobileChatPage document-evidence surface", () => {
+describe("MobileWorkPage document-evidence surface", () => {
   let harness: DomHarness;
 
   beforeEach(() => {
@@ -30,15 +33,16 @@ describe("MobileChatPage document-evidence surface", () => {
       rows: [],
       nextCursor: null,
     });
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
   });
 
   it("mounts the document preview drawer so captured doc links are not a no-op", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     harness.render(
-      <MemoryRouter initialEntries={["/m/chat"]}>
+      <MemoryRouter initialEntries={["/m/work"]}>
         <QueryClientProvider client={queryClient}>
           <Routes>
-            <Route path="/m/chat" element={<MobileChatPage />} />
+            <Route path="/m/work" element={<MobileWorkPage />} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -47,6 +51,6 @@ describe("MobileChatPage document-evidence surface", () => {
     await harness.waitFor(() =>
       expect(harness.container.querySelector('[data-testid="mobile-doc-drawer"]')).not.toBeNull(),
     );
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("No chats"));
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("No active work"));
   });
 });
