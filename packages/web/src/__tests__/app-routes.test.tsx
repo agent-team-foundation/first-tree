@@ -112,11 +112,11 @@ vi.mock("../pages/settings/integrations.js", async () => {
     ),
   };
 });
-vi.mock("../pages/settings/onboarding.js", () => ({ SettingsOnboardingPage: () => <div>settings onboarding</div> }));
 vi.mock("../pages/settings/repositories.js", () => ({
   SettingsRepositoriesPage: () => <div>settings repositories</div>,
 }));
 vi.mock("../pages/settings/resources.js", () => ({ SettingsResourcesPage: () => <div>settings resources</div> }));
+vi.mock("../pages/settings/setup.js", () => ({ SettingsSetupPage: () => <div>settings setup</div> }));
 vi.mock("../pages/agent-detail.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -162,6 +162,7 @@ vi.mock("../pages/team-switcher-preview.js", () => ({
 vi.mock("../pages/settings-github-preview.js", () => ({
   SettingsGithubPreviewPage: () => <div>settings github preview</div>,
 }));
+vi.mock("../pages/setup-preview.js", () => ({ SetupPreviewPage: () => <div>setup preview</div> }));
 vi.mock("../pages/onboarding-preview.js", () => ({ OnboardingPreviewPage: () => <div>onboarding preview</div> }));
 vi.mock("../pages/context-tree-setup-preview.js", () => ({
   ContextTreeSetupPreviewPage: () => (
@@ -284,7 +285,11 @@ describe("App routes", () => {
     expect(await renderAppAt("/integrations")).toContain("settings github");
     await resetRenderedApp();
 
-    expect(await renderAppAt("/settings/setup")).toContain("settings onboarding");
+    expect(await renderAppAt("/settings/setup")).toContain("settings setup");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/onboarding")).toContain("settings setup");
+    expect(window.location.pathname).toBe("/settings/setup");
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/repositories")).toContain("settings repositories");
@@ -470,6 +475,9 @@ describe("App routes", () => {
     await resetRenderedApp();
 
     expect(await renderAppAt("/preview/settings-github")).toContain("settings github preview");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/preview/setup")).toContain("setup preview");
     await resetRenderedApp();
 
     expect(await renderAppAt("/preview/onboarding")).toContain("onboarding preview");

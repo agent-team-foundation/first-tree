@@ -1461,62 +1461,6 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(plain.root);
   });
 
-  it("renders SettingsOnboardingPage resume, hide, disabled, and completed states", async () => {
-    const { SettingsOnboardingPage } = await import("../settings/onboarding.js");
-
-    authMock.value = {
-      ...authMock.value,
-      onboardingStep: "create_agent",
-      onboardingDismissedAt: null,
-      onboardingCompletedAt: null,
-      dismissOnboarding: vi.fn(async () => undefined),
-    };
-    const disabled = await renderDom(<SettingsOnboardingPage />);
-    const hideDisabled = [...disabled.container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Hide setup guide"),
-    );
-    expect(hideDisabled).toBeTruthy();
-    expect(hideDisabled?.hasAttribute("disabled")).toBe(true);
-    await unmountRoot(disabled.root);
-
-    authMock.value = {
-      ...authMock.value,
-      onboardingStep: "completed",
-      onboardingDismissedAt: null,
-      onboardingCompletedAt: null,
-      dismissOnboarding: vi.fn(async () => undefined),
-    };
-    const active = await renderDom(<SettingsOnboardingPage />);
-    await click(
-      [...active.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Hide setup guide"),
-      ) ?? null,
-    );
-    expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
-    await unmountRoot(active.root);
-
-    authMock.value = {
-      ...authMock.value,
-      onboardingDismissedAt: "2026-05-01T00:00:00.000Z",
-      onboardingCompletedAt: null,
-      restoreOnboarding: vi.fn(async () => undefined),
-    };
-    const dismissed = await renderDom(<SettingsOnboardingPage />);
-    await waitForText("Setup is hidden", dismissed.container);
-    await click(
-      [...dismissed.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Resume setup"),
-      ) ?? null,
-    );
-    expect(authMock.value.restoreOnboarding).toHaveBeenCalled();
-    expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith("resumed", { source: "settings" });
-    await unmountRoot(dismissed.root);
-
-    authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
-    const completed = await renderDom(<SettingsOnboardingPage />);
-    expect(completed.container.textContent).toBe("");
-  });
-
   it("switches orgs and opens setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {
     clientApiMocks.post.mockResolvedValue({});
     const { TeamSwitcher } = await import("../../components/team-switcher.js");
