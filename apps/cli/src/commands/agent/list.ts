@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { cliFetch } from "../../core/cli-fetch.js";
-import { print } from "../../core/output.js";
+import { isJsonMode, print } from "../../core/output.js";
 
 export function registerAgentListCommand(agent: Command): void {
   agent
@@ -23,6 +23,15 @@ export function registerAgentListCommand(agent: Command): void {
         const agentsDir = join(defaultConfigDir(), "agents");
         try {
           const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
+          const rows = [...agents].map(([name, config]) => ({
+            name,
+            runtime: config.runtime,
+            uuid: config.agentId,
+          }));
+          if (isJsonMode()) {
+            print.result(rows);
+            return;
+          }
           if (agents.size === 0) {
             print.line("  No agents configured.\n");
             return;
@@ -35,6 +44,10 @@ export function registerAgentListCommand(agent: Command): void {
             print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} uuid: ${config.agentId}\n`);
           }
         } catch {
+          if (isJsonMode()) {
+            print.result([]);
+            return;
+          }
           print.line("  No agents configured.\n");
         }
         return;
@@ -60,6 +73,10 @@ export function registerAgentListCommand(agent: Command): void {
           clientId: string | null;
         }>;
         const filtered = options.org ? agents.filter((a) => a.organizationId === options.org) : agents;
+        if (isJsonMode()) {
+          print.result(filtered);
+          return;
+        }
         if (filtered.length === 0) {
           print.line("  No agents found.\n");
           return;

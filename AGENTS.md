@@ -47,6 +47,7 @@ Full CLI commands and env vars live in [docs/cli-reference.md](docs/cli-referenc
 - `skills/first-tree-read/SKILL.md` — task-scoped Context Tree reading
 - `skills/first-tree-seed/SKILL.md` — one-time bootstrap for an empty tree
 - `skills/first-tree-qa/SKILL.md` — complete-harness-first professional QA workflow
+- `skills/audit-context-tree-value/SKILL.md` — manual, read-only historical Context Tree value audit
 
 Operator-only flows such as `login`, `daemon install`, and `agent create` belong in [docs/cli-reference.md](docs/cli-reference.md) and [docs/onboarding-guide.md](docs/onboarding-guide.md), not in skills.
 

@@ -57,6 +57,7 @@ const SHIPPED_SKILLS = [
   "first-tree-file-bug",
   "context-tree-review",
   "context-tree-audit",
+  "audit-context-tree-value",
   "first-tree-qa",
 ];
 

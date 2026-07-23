@@ -224,7 +224,13 @@ first-tree agent
 first-tree agent list                    # locally-configured agents on this client
 first-tree agent list --remote           # every agent the signed-in user manages on the server
 first-tree agent list --remote --org <id>  # cross-org view (multi-org operators)
+first-tree --json agent list             # local aliases, runtime providers, and exact UUIDs
+first-tree --json agent list --remote    # managed-agent records with exact UUIDs
 ```
+
+The global `--json` flag returns machine-readable rows. Local rows contain
+`name`, `runtime`, and `uuid`; remote rows preserve the managed-agent API
+fields, including `uuid` and `runtimeProvider`.
 
 ### agent create
 

@@ -1,4 +1,5 @@
 import type { SkillEvalSuiteDefinition } from "../core/coverage.js";
+import { AUDIT_CONTEXT_TREE_VALUE_SUITE } from "./audit-context-tree-value/cases.js";
 import { CONTEXT_TREE_AUDIT_SUITE } from "./context-tree-audit/cases.js";
 import { CONTEXT_TREE_REVIEW_SUITE } from "./context-tree-review/cases.js";
 import { FIRST_TREE_QA_SUITE } from "./first-tree-qa/cases.js";
@@ -8,6 +9,7 @@ import { FIRST_TREE_WELCOME_SUITE } from "./first-tree-welcome/cases.js";
 import { FIRST_TREE_WRITE_SUITE } from "./first-tree-write/cases.js";
 
 export const SKILL_EVAL_SUITES: readonly SkillEvalSuiteDefinition[] = [
+  AUDIT_CONTEXT_TREE_VALUE_SUITE,
   CONTEXT_TREE_AUDIT_SUITE,
   CONTEXT_TREE_REVIEW_SUITE,
   FIRST_TREE_READ_SUITE,

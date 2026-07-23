@@ -21,6 +21,7 @@ const originalPlatform = process.platform;
 const CORE_SKILLS = [
   "context-tree-review",
   "context-tree-audit",
+  "audit-context-tree-value",
   "first-tree-welcome",
   "first-tree-seed",
   "first-tree-file-bug",

@@ -363,6 +363,9 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(familyMap).toMatch(/\|\s*`context-tree-review`\s*\| a trusted GitHub App Context Review run/);
     expect(familyMap).toMatch(/\|\s*`context-tree-audit`\s*\| a human explicitly asks to audit/);
+    expect(familyMap).toMatch(
+      /\|\s*`audit-context-tree-value`\s*\| a human explicitly asks for a manual historical audit/,
+    );
 
     const treelessFamily = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: null })),
@@ -377,6 +380,10 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a trusted GitHub App Context Review run/);
     expect(treelessFamily).toMatch(/\|\s*`context-tree-audit`\s*\| a human explicitly asks to audit/);
+    expect(treelessFamily).toMatch(
+      /\|\s*`audit-context-tree-value`\s*\| a human explicitly asks for a manual historical audit/,
+    );
+    expect(treelessFamily).toContain("local Codex traces only");
     expect(treelessFamily).toMatch(/without a binding, the audit fails closed/);
     expect(treelessFamily).toContain("These skills install in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
@@ -753,8 +760,10 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
-    expect(tree).toContain("Load `context-tree-review` only for GitHub PRs");
-    expect(tree).toContain("Load\n`context-tree-audit` exclusively for audits");
+    expect(tree).toContain("`context-tree-review`\nowns GitHub PRs");
+    expect(tree).toContain("Load `context-tree-audit` exclusively for stored-tree audits");
+    expect(tree).toContain("`audit-context-tree-value` has exclusive precedence");
+    expect(tree).toContain("historical-value audits");
     expect(tree).toContain("**Normal content**");
     expect(tree).toContain("**Archive/supporting content**");
     expect(tree).toContain("**Member content**");
@@ -762,8 +771,8 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
-    expect(tree).toContain("GitLab MRs use ordinary GitLab review on a stable head");
-    expect(tree).toContain("never enter the GitHub-only Context Reviewer state machine");
+    expect(tree).toContain("GitLab MRs use ordinary GitLab review\non a stable head");
+    expect(tree).toContain("never enter the GitHub-only Context Reviewer state\nmachine");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");

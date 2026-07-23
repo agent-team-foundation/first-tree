@@ -948,9 +948,13 @@ async function runGate(options: CliOptions): Promise<void> {
     return;
   }
 
-  throw new Error(
-    "eval:gate currently requires --suite context-tree-audit, --suite context-tree-review, --suite first-tree-qa, --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
-  );
+  if (options.suite === "audit-context-tree-value") {
+    throw new Error(
+      "The audit-context-tree-value live gate is planned but not implemented. Run its deterministic floor and unit tests; do not run a model-backed eval without a later explicit contract.",
+    );
+  }
+
+  throw new Error("eval:gate currently requires an implemented live gate suite.");
 }
 
 async function runQuality(options: CliOptions): Promise<void> {

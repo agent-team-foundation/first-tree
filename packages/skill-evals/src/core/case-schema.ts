@@ -5,6 +5,7 @@ export const SHIPPED_SKILLS = [
   "first-tree-welcome",
   "context-tree-review",
   "context-tree-audit",
+  "audit-context-tree-value",
   "first-tree-qa",
 ] as const;
 

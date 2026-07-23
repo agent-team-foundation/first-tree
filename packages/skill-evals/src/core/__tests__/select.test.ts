@@ -23,6 +23,7 @@ describe("skill eval selection", () => {
     ["skills/first-tree-read/SKILL.md", "first-tree-read"],
     ["skills/first-tree-seed/SKILL.md", "first-tree-seed"],
     ["skills/first-tree-qa/SKILL.md", "first-tree-qa"],
+    ["skills/audit-context-tree-value/SKILL.md", "audit-context-tree-value"],
   ])("selects only the no-model floor for %s", (path, skill) => {
     const summary = selectSkillEvalRecommendations([path], "main");
 

@@ -1,7 +1,7 @@
 ---
 name: first-tree-read
-version: 0.2.0
-description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports GitHub and GitLab explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content; `context-tree-review` owns trusted provider-scoped review snapshots and `context-tree-audit` owns audit snapshots.
+version: 0.2.1
+description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports GitHub and GitLab explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review, an explicit broad audit of stored tree content, or a manual historical audit of how Tree passages influenced Agent choices; those workflows are owned by `context-tree-review`, `context-tree-audit`, and `audit-context-tree-value`.
 ---
 
 # First Tree Read
@@ -18,6 +18,11 @@ file reads for that task stay inside it.
 Use `first-tree-write` for tree writes from a source artifact. An explicit
 request to audit stored normal content on the default branch belongs to
 `context-tree-audit`; do not start this task-scoped read workflow first.
+
+An explicit request to reconstruct how Context Tree passages influenced past
+Agent choices in owned or authorized Chat history belongs to
+`audit-context-tree-value`; it has exclusive precedence and this task-scoped
+read workflow must not run first.
 
 Do not use this skill for a Cloud Context Reviewer wake-up or an explicit
 request to review a Context Tree PR/MR. `context-tree-review` has exclusive

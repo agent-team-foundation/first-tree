@@ -71,6 +71,7 @@ const outputMocks = vi.hoisted(() => ({
 }));
 
 const printLineMock = vi.hoisted(() => vi.fn());
+const isJsonModeMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("@inquirer/prompts", () => promptMocks);
 vi.mock("@first-tree/client", () => clientSdkMocks);
@@ -80,6 +81,7 @@ vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../core/index.js", () => coreMocks);
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
+  isJsonMode: isJsonModeMock,
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
 }));
 
@@ -119,6 +121,7 @@ async function runTopLevel(register: (program: Command) => void, args: string[])
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-agent-commands-"));
   vi.clearAllMocks();
+  isJsonModeMock.mockReturnValue(false);
   configMocks.defaultHome.mockReturnValue(tempDir);
   configMocks.defaultConfigDir.mockReturnValue(tempDir);
   configMocks.defaultDataDir.mockReturnValue(join(tempDir, "data"));
@@ -327,6 +330,31 @@ describe("agent lifecycle CLI commands", () => {
     cliFetchMock.mockResolvedValueOnce(jsonResponse([]));
     await runAgent(["list", "--remote"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No agents found");
+  });
+
+  it("returns exact local and remotely managed Agent UUIDs in JSON mode", async () => {
+    isJsonModeMock.mockReturnValue(true);
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["codex", { runtime: "codex", agentId: "agent-local" }]]));
+    await runAgent(["list"]);
+    expect(outputMocks.success).toHaveBeenLastCalledWith([{ name: "codex", runtime: "codex", uuid: "agent-local" }]);
+
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          uuid: "agent-remote",
+          name: "codex",
+          displayName: "Codex",
+          type: "agent",
+          organizationId: "org-1",
+          runtimeProvider: "codex",
+          clientId: "client-1",
+        },
+      ]),
+    );
+    await runAgent(["list", "--remote"]);
+    expect(outputMocks.success).toHaveBeenLastCalledWith([
+      expect.objectContaining({ name: "codex", runtimeProvider: "codex", uuid: "agent-remote" }),
+    ]);
   });
 
   it("stringifies non-Error failures across agent command catch paths", async () => {

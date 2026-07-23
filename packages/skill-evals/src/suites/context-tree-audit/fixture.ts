@@ -97,6 +97,7 @@ const DEFAULT_SKILL_NAMES = [
   "first-tree-write",
   "context-tree-review",
   "context-tree-audit",
+  "audit-context-tree-value",
   "first-tree-qa",
 ] as const;
 
@@ -114,7 +115,7 @@ function workspaceAgents(skills: readonly { description: string; name: string }[
 |---|---|
 ${rows}
 
-An explicit broad audit of stored normal content loads \`context-tree-audit\` exclusively. Do not run \`first-tree-read\` first. Every evidence-backed tree edit is handed to \`first-tree-write\`; resulting pull requests are reviewed by \`context-tree-review\` and are never self-approved or merged by Audit.
+An explicit broad audit of stored normal content loads \`context-tree-audit\` exclusively. A manual historical audit of passage influence in authorized Chats loads \`audit-context-tree-value\` exclusively. Do not run \`first-tree-read\` first for either workflow. Every evidence-backed tree edit is handed to \`first-tree-write\`; resulting pull requests are reviewed by \`context-tree-review\` and are never self-approved or merged by Audit.
 
 ## Context Tree Policy
 

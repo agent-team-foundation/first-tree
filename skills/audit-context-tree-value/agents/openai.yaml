@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Context Tree Value"
+  short_description: "Audit how Context Tree influenced past decisions"
+  default_prompt: "Use $audit-context-tree-value to audit how my agents used Context Tree over the past seven days."

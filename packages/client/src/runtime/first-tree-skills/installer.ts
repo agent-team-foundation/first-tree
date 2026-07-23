@@ -60,6 +60,7 @@ export const CORE_SKILL_NAMES = [
   "first-tree-write",
   "context-tree-review",
   "context-tree-audit",
+  "audit-context-tree-value",
 ] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff", "first-tree-gitlab"] as const;

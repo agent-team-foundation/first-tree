@@ -23,6 +23,10 @@ const SKILL_BY_PATH: readonly {
   paths: readonly string[];
 }[] = [
   {
+    paths: ["skills/audit-context-tree-value/", "packages/skill-evals/src/suites/audit-context-tree-value/"],
+    skill: "audit-context-tree-value",
+  },
+  {
     paths: ["skills/context-tree-audit/", "packages/skill-evals/src/suites/context-tree-audit/"],
     skill: "context-tree-audit",
   },

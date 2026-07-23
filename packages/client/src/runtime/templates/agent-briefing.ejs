@@ -435,12 +435,13 @@ When a task has a repo/path/feature/domain/owner/source signal, load
 you to inspect `<%- contextTree.hierarchyHelpCommand %>` inside the tree repo,
 then use `tree tree` selectors to find focused files before reading their
 Markdown content with normal file reads. Treat code, CLI, review, repo,
-path, bug, and error tasks as tree-read signals, except Context Tree reviews
-and explicit broad audits. Load `context-tree-review` only for GitHub PRs;
-GitLab MRs use ordinary GitLab review on a stable head under this policy and
-never enter the GitHub-only Context Reviewer state machine. Load
-`context-tree-audit` exclusively for audits. Do not run `first-tree-read` first
-for these workflows; each owns its snapshot without refreshing mutable main.
+path, bug, and error tasks as tree-read signals, except Context Tree reviews, broad stored-content audits, or historical-value audits. `context-tree-review`
+owns GitHub PRs; GitLab MRs use ordinary GitLab review
+on a stable head and never enter the GitHub-only Context Reviewer state
+machine. Load `context-tree-audit` exclusively for stored-tree audits. When a
+human asks how Tree passages influenced past Agent choices in authorized
+Chats, `audit-context-tree-value` has exclusive precedence. Do not run
+`first-tree-read` first for these workflows; each owns its evidence boundary.
 
 At minimum start with the root `NODE.md`; **If the root also contains an `AGENTS.md`, read it too**
 because it carries org-level rules. Follow
@@ -551,7 +552,8 @@ harness skills (`tdoc`, `review`, `simplify`, `update-config`, …).
 | `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub or GitLab integration, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
 | `context-tree-review` | a trusted GitHub App Context Review run or an explicit request to review a GitHub Context Tree pull request; GitLab MRs use ordinary GitLab review |
-| `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems |<% } else { %>
+| `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems |
+| `audit-context-tree-value` | a human explicitly asks for a manual historical audit of how Context Tree passages influenced decisions in owned or authorized Chats; not for ordinary task reads or stored-tree health |<% } else { %>
 
 ## First Tree Family
 
@@ -568,4 +570,5 @@ binding, follow the Tree Location guidance before proceeding.
 | `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub or GitLab integration, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
 | `context-tree-review` | a trusted GitHub App Context Review run or an explicit request to review a GitHub Context Tree pull request; GitLab MRs use ordinary GitLab review |
-| `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems; without a binding, the audit fails closed |<% } %>
+| `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems; without a binding, the audit fails closed |
+| `audit-context-tree-value` | a human explicitly asks for a manual historical audit of how Context Tree passages influenced decisions in owned or authorized Chats; local Codex traces only |<% } %>
