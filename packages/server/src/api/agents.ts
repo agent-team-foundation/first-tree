@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import {
+  ATTACHMENT_ERROR_CODES,
   agentPinnedMessageSchema,
   switchAgentRuntimeSchema,
   updateAgentSchema,
@@ -315,7 +316,9 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const rawLength = request.headers["content-length"];
     const contentLength = typeof rawLength === "string" ? Number.parseInt(rawLength, 10) : Number.NaN;
     if (!Number.isFinite(contentLength) || contentLength < 0) {
-      throw new LengthRequiredError("Avatar uploads must declare Content-Length");
+      throw new LengthRequiredError("Avatar uploads must declare Content-Length", {
+        code: ATTACHMENT_ERROR_CODES.lengthRequired,
+      });
     }
     const body = request.body;
     if (!(body instanceof Readable)) {

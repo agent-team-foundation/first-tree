@@ -14,6 +14,17 @@ const MESSAGE_PAGE = 500;
 const BLOB_BATCH = 8;
 const BLOB_PARALLEL = 4;
 
+/**
+ * Test-only injection points (same pattern as the cron scheduler's
+ * `afterClaimForTest`): run between the object PUT and the row UPDATE so
+ * suites can deterministically exercise the mid-flight races the 0-row
+ * adjudication below exists for. Production callers pass nothing.
+ */
+export type AttachmentMigrationHooks = {
+  beforeAttachmentUpdate?: (attachmentId: string) => Promise<void>;
+  beforeAvatarUpdate?: (agentUuid: string) => Promise<void>;
+};
+
 export type AttachmentMigrationStats = {
   organizationsBackfilled: number;
   organizationlessRemaining: number;
@@ -61,6 +72,7 @@ function affectedCount(result: unknown): number {
 export async function migrateAttachmentsToObjectStorage(
   db: Database,
   storage: ObjectStorage,
+  hooks: AttachmentMigrationHooks = {},
 ): Promise<AttachmentMigrationStats> {
   // ── Phase A: organization backfill ─────────────────────────────────
   const orgBackfill = await db.execute(sql`
@@ -103,15 +115,23 @@ export async function migrateAttachmentsToObjectStorage(
       }
     }
     if (pairs.length === 0) continue;
-    const inserted = await db.execute(sql`
-      INSERT INTO attachment_references (attachment_id, message_id)
-      SELECT p.attachment_id, p.message_id
-      FROM jsonb_to_recordset(${JSON.stringify(pairs)}::jsonb)
-        AS p(attachment_id text, message_id text)
-      JOIN attachments a ON a.id = p.attachment_id AND a.state != 'deleting'
-      ON CONFLICT DO NOTHING
-    `);
-    edgesInserted += affectedCount(inserted);
+    try {
+      const inserted = await db.execute(sql`
+        INSERT INTO attachment_references (attachment_id, message_id)
+        SELECT p.attachment_id, p.message_id
+        FROM jsonb_to_recordset(${JSON.stringify(pairs)}::jsonb)
+          AS p(attachment_id text, message_id text)
+        JOIN attachments a ON a.id = p.attachment_id AND a.state != 'deleting'
+        ON CONFLICT DO NOTHING
+      `);
+      edgesInserted += affectedCount(inserted);
+    } catch (error) {
+      // Narrow FK race: an attachment can be destroyed between this
+      // statement's snapshot and its constraint checks. Skip the page and
+      // keep going — a rerun converges (the dangling target is gone by
+      // then, so its pair simply filters out).
+      log.warn({ err: error, page: cursor }, "phase B page failed; continuing (rerun converges)");
+    }
   }
   log.info({ messagesScanned, edgesInserted }, "phase B: reference-ledger backfill");
 
@@ -138,6 +158,19 @@ export async function migrateAttachmentsToObjectStorage(
           const data = row.data;
           if (!data) return;
           const key = attachmentObjectKey(row.id);
+          // Recheck right before the PUT: the batch read may be stale (a
+          // rival run migrated the row, or the sweep claimed it). Skipping
+          // here narrows the window in which we would overwrite the live
+          // object with these (identical-source) bytes for nothing.
+          const [fresh] = await db
+            .select({ state: attachments.state, hasData: isNotNull(attachments.data) })
+            .from(attachments)
+            .where(eq(attachments.id, row.id))
+            .limit(1);
+          if (!fresh || fresh.state !== "stored" || !fresh.hasData) {
+            attachmentsSkipped += 1;
+            return;
+          }
           if (row.sizeBytes !== data.byteLength) {
             log.warn(
               { attachmentId: row.id, sizeBytes: row.sizeBytes, payloadBytes: data.byteLength },
@@ -148,15 +181,28 @@ export async function migrateAttachmentsToObjectStorage(
             contentLength: data.byteLength,
             contentType: row.mimeType,
           });
+          await hooks.beforeAttachmentUpdate?.(row.id);
           const updated = await db
             .update(attachments)
             .set({ objectKey: key, data: null, sizeBytes: data.byteLength })
             .where(and(eq(attachments.id, row.id), eq(attachments.state, "stored"), isNotNull(attachments.data)))
             .returning({ id: attachments.id });
           if (updated.length === 0) {
-            // Tombstoned (or already migrated by a parallel run) mid-flight —
-            // remove the object we just wrote so nothing leaks unreferenced.
-            await storage.deleteObject(key);
+            // 0 rows has two very different causes — adjudicate by
+            // re-reading the row instead of deleting blindly:
+            // - row gone or tombstoned → the object is ownerless; delete it
+            //   (otherwise it would leak forever — no row, so no sweep).
+            // - row alive with object_key set (a rival run won the swap) →
+            //   the row OWNS this key; same key + same source bytes, so
+            //   deleting here would destroy a live payload. Leave it.
+            const [current] = await db
+              .select({ state: attachments.state, objectKey: attachments.objectKey })
+              .from(attachments)
+              .where(eq(attachments.id, row.id))
+              .limit(1);
+            if (!current || current.state === "deleting" || !current.objectKey) {
+              await storage.deleteObject(key);
+            }
             attachmentsSkipped += 1;
             return;
           }
@@ -194,17 +240,43 @@ export async function migrateAttachmentsToObjectStorage(
         continue;
       }
       const key = avatarObjectKey(row.uuid);
+      // Recheck right before the PUT: an online avatar upload may have
+      // landed since the batch read (new payload already at this key, row
+      // bytea cleared). Skipping avoids overwriting the fresh upload with
+      // these older bytes — the fixed per-agent key is last-writer-wins,
+      // so this recheck is what keeps the race window negligible.
+      const [freshAgent] = await db
+        .select({ hasData: isNotNull(agents.avatarImageData) })
+        .from(agents)
+        .where(eq(agents.uuid, row.uuid))
+        .limit(1);
+      if (!freshAgent || !freshAgent.hasData) {
+        avatarsSkipped += 1;
+        continue;
+      }
       await storage.putObjectStream(key, Readable.from([data]), {
         contentLength: data.byteLength,
         contentType: row.mime,
       });
+      await hooks.beforeAvatarUpdate?.(row.uuid);
       const updated = await db
         .update(agents)
         .set({ avatarObjectKey: key, avatarImageData: null })
         .where(and(eq(agents.uuid, row.uuid), isNotNull(agents.avatarImageData)))
         .returning({ uuid: agents.uuid });
       if (updated.length === 0) {
-        await storage.deleteObject(key);
+        // Adjudicate like phase C: only delete the object when no live row
+        // claims the key. An online upload that raced us has already set
+        // avatar_object_key — deleting here would 404 the avatar the user
+        // just uploaded.
+        const [current] = await db
+          .select({ objectKey: agents.avatarObjectKey })
+          .from(agents)
+          .where(eq(agents.uuid, row.uuid))
+          .limit(1);
+        if (!current || !current.objectKey) {
+          await storage.deleteObject(key);
+        }
         avatarsSkipped += 1;
       } else {
         avatarsMoved += 1;

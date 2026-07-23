@@ -34,6 +34,8 @@ export const ATTACHMENT_ERROR_CODES = {
   quotaExceeded: "ATTACHMENT_QUOTA_EXCEEDED",
   /** Uploader holds too many parallel upload streams (HTTP 429). */
   concurrencyExceeded: "ATTACHMENT_CONCURRENCY_EXCEEDED",
+  /** Upload did not declare Content-Length (HTTP 411). */
+  lengthRequired: "ATTACHMENT_LENGTH_REQUIRED",
 } as const;
 
 /**

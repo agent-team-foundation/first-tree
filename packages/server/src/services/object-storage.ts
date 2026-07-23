@@ -201,6 +201,6 @@ export function createObjectStorage(config: ObjectStorageConfig): ObjectStorage 
  * headers.
  */
 export function contentDisposition(filename: string, disposition: "inline" | "attachment"): string {
-  const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replaceAll('"', "'");
+  const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "'");
   return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }

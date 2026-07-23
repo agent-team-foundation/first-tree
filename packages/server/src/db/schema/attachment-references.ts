@@ -16,13 +16,14 @@ import { messages } from "./messages.js";
  * (with a full-scan verify veto as the safety net for rows uploaded before
  * the backfill ran — see services/attachment-sweep.ts).
  *
- * FK discipline: `attachment_id` deliberately has NO cascade. Every
- * legitimate row-delete path proves the edge count is zero before deleting
- * the attachment, so a cascade could only ever fire on a logic bug deleting
- * a still-referenced attachment — and would then silently destroy the
- * evidence. RESTRICT turns that bug into a loud constraint violation.
- * `message_id` has no cascade either: messages are immutable and never
- * row-deleted (enforced today by inbound RESTRICT FKs).
+ * FK discipline: `attachment_id` deliberately has NO cascade (default
+ * NO ACTION — functionally restrictive). Every legitimate row-delete path
+ * proves the edge count is zero before deleting the attachment, so a
+ * cascade could only ever fire on a logic bug deleting a still-referenced
+ * attachment — and would then silently destroy the evidence. NO ACTION
+ * turns that bug into a loud constraint violation. `message_id` has no
+ * cascade either: messages are immutable and never row-deleted (enforced
+ * today by inbound restrictive FKs).
  */
 export const attachmentReferences = pgTable(
   "attachment_references",

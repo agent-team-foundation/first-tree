@@ -96,7 +96,9 @@ export async function orgAttachmentRoutes(app: FastifyInstance): Promise<void> {
       if (!Number.isFinite(contentLength) || contentLength < 0) {
         // Quota is reserved from the declared size, so chunked transfer
         // encoding cannot be admitted.
-        throw new LengthRequiredError("Attachment uploads must declare Content-Length");
+        throw new LengthRequiredError("Attachment uploads must declare Content-Length", {
+          code: ATTACHMENT_ERROR_CODES.lengthRequired,
+        });
       }
       if (contentLength === 0) {
         throw new BadRequestError("Attachment is empty");

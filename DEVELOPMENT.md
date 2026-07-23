@@ -35,8 +35,11 @@ its package script.
 `http://localhost:9001`). The `.env.example` values point the server at the
 compose MinIO out of the box, and the server creates its bucket on boot.
 Without the `FIRST_TREE_S3_*` group the server still runs, but attachment
-uploads answer 503 until storage is configured. Server tests need neither
-service pre-started — vitest provisions its own containers (or uses the
+uploads answer 503 until storage is configured. Deployments upgrading from
+a pre-object-storage version move existing payloads out of PostgreSQL with
+`pnpm --filter @first-tree/server migrate:attachments` (idempotent,
+live-safe; see `.env.example`). Server tests need neither service
+pre-started — vitest provisions its own containers (or uses the
 `CI_DATABASE_URL` / `CI_S3_ENDPOINT` escape hatches).
 
 ## Local URLs
