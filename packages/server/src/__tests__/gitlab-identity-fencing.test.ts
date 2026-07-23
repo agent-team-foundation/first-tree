@@ -89,7 +89,7 @@ async function postMr(app: App, bearer: string, reviewers: { username: string }[
   return app.inject({
     method: "POST",
     url: `/api/v1/webhooks/gitlab/${bearer}`,
-    headers: { "content-type": "application/json", "x-gitlab-event": "Merge Request Hook" },
+    headers: { "content-type": "application/json", "x-gitlab-event": "System Hook" },
     payload: JSON.stringify(mrPayload(reviewers)),
   });
 }
@@ -108,7 +108,7 @@ async function holdIngressAfterDurableCard(
     connectionId: fixture.connection.connectionId,
     instanceOrigin: "https://gitlab.internal",
     stableDeliveryId: null,
-    eventHeader: "Merge Request Hook",
+    eventHeader: "System Hook",
     body: mrPayload(reviewers),
   });
   const applied = applyGitlabPersonnelEvidence(normalized, "reviewers");
@@ -172,7 +172,7 @@ describe("GitLab identity authority fencing", () => {
       connectionId: fixture.connection.connectionId,
       instanceOrigin: "https://gitlab.internal",
       stableDeliveryId: null,
-      eventHeader: "Merge Request Hook",
+      eventHeader: "System Hook",
       body: mrPayload([], "Reviewer.One", iid),
     });
     const applied = applyGitlabPersonnelEvidence(normalized, "reviewers");
@@ -235,7 +235,7 @@ describe("GitLab identity authority fencing", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${fixture.connection.bearer}`,
-      headers: { "content-type": "application/json", "x-gitlab-event": "Merge Request Hook" },
+      headers: { "content-type": "application/json", "x-gitlab-event": "System Hook" },
       payload: JSON.stringify(mrPayload([], "Reviewer.One", iid)),
     });
     expect(response.statusCode).toBe(200);

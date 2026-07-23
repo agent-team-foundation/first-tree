@@ -39,6 +39,7 @@ function issuePayload(iid = 42, input: { projectId?: number; projectPath?: strin
   const projectId = input.projectId ?? 501;
   const projectPath = input.projectPath ?? "Acme/API";
   return {
+    event_name: "issue",
     object_kind: "issue",
     project: {
       id: projectId,
@@ -74,7 +75,7 @@ async function postWebhook(
     url: `/api/v1/webhooks/gitlab/${bearer}`,
     headers: {
       "content-type": "application/json",
-      "x-gitlab-event": options.event ?? "Issue Hook",
+      "x-gitlab-event": options.event ?? "System Hook",
       ...(options.stableId ? { "idempotency-key": options.stableId } : {}),
       ...(options.webhookId ? { "webhook-id": options.webhookId } : {}),
       ...(options.webhookUuid ? { "x-gitlab-webhook-uuid": options.webhookUuid } : {}),
@@ -123,7 +124,7 @@ describe("GitLab Stage 2A backend", () => {
     expect(await findActiveGitlabEndpoint(app.db, first.bearer)).toBeNull();
     expect(await findActiveGitlabEndpoint(app.db, regenerated.bearer)).not.toBeNull();
     expect((await getGitlabConnectionSummary(app.db, first.connectionId)).endpointSeen).toBe(false);
-    const test = await postWebhook(app, regenerated.bearer, { object_kind: "test" }, { event: "Test Hook" });
+    const test = await postWebhook(app, regenerated.bearer, { event_name: "test" });
     expect(test.statusCode).toBe(200);
     expect((await getGitlabConnectionSummary(app.db, first.connectionId)).endpointSeen).toBe(true);
 
@@ -402,12 +403,12 @@ describe("GitLab Stage 2A backend", () => {
         state,
       },
     });
-    expect(
-      (await postWebhook(app, first.bearer, mrPayload("open", "opened"), { event: "Merge Request Hook" })).json(),
-    ).toMatchObject({ outcome: "delivered" });
-    expect(
-      (await postWebhook(app, first.bearer, mrPayload("merge", "merged"), { event: "Merge Request Hook" })).json(),
-    ).toMatchObject({ outcome: "provider_only" });
+    expect((await postWebhook(app, first.bearer, mrPayload("open", "opened"))).json()).toMatchObject({
+      outcome: "delivered",
+    });
+    expect((await postWebhook(app, first.bearer, mrPayload("merge", "merged"))).json()).toMatchObject({
+      outcome: "provider_only",
+    });
     expect(
       await app.db
         .select()
@@ -433,7 +434,7 @@ describe("GitLab Stage 2A backend", () => {
         url: "https://gitlab.internal/Acme/API/-/merge_requests/52",
       },
     };
-    expect((await postWebhook(app, first.bearer, note, { event: "Note Hook" })).statusCode).toBe(200);
+    expect((await postWebhook(app, first.bearer, note, { event: "Note Hook" })).statusCode).toBe(400);
     const [mapping] = await app.db
       .select()
       .from(gitlabEntityChatMappings)
@@ -455,14 +456,43 @@ describe("GitLab Stage 2A backend", () => {
   it("applies content/body guards while accepting valid unsupported events as no-ops", async () => {
     const app = getApp();
     const first = await connection(app);
-    const unsupported = await postWebhook(app, first.bearer, { object_kind: "push" }, { event: "Push Hook" });
+    const repositoryUpdate = await postWebhook(app, first.bearer, {
+      event_name: "repository_update",
+      project_id: 5,
+      project: {
+        id: 5,
+        path_with_namespace: "Acme/Context",
+        web_url: "https://gitlab.internal/Acme/Context",
+      },
+      changes: [
+        {
+          before: "0".repeat(40),
+          after: "1".repeat(40),
+          ref: "refs/heads/main",
+        },
+      ],
+    });
+    expect(repositoryUpdate.statusCode).toBe(200);
+    expect(repositoryUpdate.json()).toMatchObject({ outcome: "provider_only" });
+    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).endpointSeen).toBe(true);
+
+    const unsupported = await postWebhook(app, first.bearer, { event_name: "push" });
     expect(unsupported.statusCode).toBe(200);
     expect(unsupported.json()).toMatchObject({ outcome: "provider_only" });
+
+    const projectHook = await postWebhook(
+      app,
+      first.bearer,
+      { object_kind: "merge_request" },
+      { event: "Merge Request Hook" },
+    );
+    expect(projectHook.statusCode).toBe(400);
+    expect(projectHook.json()).toMatchObject({ error: expect.stringContaining("/admin/hooks") });
 
     const wrongType = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${first.bearer}`,
-      headers: { "content-type": "text/plain", "x-gitlab-event": "Issue Hook" },
+      headers: { "content-type": "text/plain", "x-gitlab-event": "System Hook" },
       payload: JSON.stringify(issuePayload()),
     });
     expect(wrongType.statusCode).toBeGreaterThanOrEqual(400);
@@ -958,39 +988,35 @@ describe("GitLab Stage 2A backend", () => {
     const malformed = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${malformedConnection.bearer}`,
-      headers: { "content-type": "application/json", "x-gitlab-event": "Issue Hook" },
+      headers: { "content-type": "application/json", "x-gitlab-event": "System Hook" },
       payload: '{"object_kind":',
     });
     expect(malformed.statusCode).toBe(400);
 
     const limited = await connection(app, { isolatedOrg: true });
     for (let index = 0; index < 119; index += 1) {
-      const response = await postWebhook(app, limited.bearer, { object_kind: "test" }, { event: "Test Hook" });
+      const response = await postWebhook(app, limited.bearer, { event_name: "test" });
       expect(response.statusCode).toBe(200);
     }
     const missingEventHeader = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${limited.bearer}`,
       headers: { "content-type": "application/json" },
-      payload: JSON.stringify({ object_kind: "test" }),
+      payload: JSON.stringify({ event_name: "test" }),
     });
     expect(missingEventHeader.statusCode).toBe(400);
-    expect((await postWebhook(app, limited.bearer, { object_kind: "test" }, { event: "Test Hook" })).statusCode).toBe(
-      429,
-    );
+    expect((await postWebhook(app, limited.bearer, { event_name: "test" })).statusCode).toBe(429);
     const rateLimitedBeforeJsonParsing = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${limited.bearer}`,
-      headers: { "content-type": "application/json", "x-gitlab-event": "Issue Hook" },
+      headers: { "content-type": "application/json", "x-gitlab-event": "System Hook" },
       payload: '{"object_kind":',
     });
     expect(rateLimitedBeforeJsonParsing.statusCode).toBe(429);
     expect((await getGitlabConnectionSummary(app.db, limited.connectionId)).health.lastProcessingFailureCode).toBe(
       "missing_or_invalid_event_header",
     );
-    expect(
-      (await postWebhook(app, malformedConnection.bearer, { object_kind: "test" }, { event: "Test Hook" })).statusCode,
-    ).toBe(200);
+    expect((await postWebhook(app, malformedConnection.bearer, { event_name: "test" })).statusCode).toBe(200);
 
     const unknownSourceIp = "203.0.113.77";
     for (let index = 0; index < 119; index += 1) {
@@ -1021,9 +1047,8 @@ describe("GitLab Stage 2A backend", () => {
         await postWebhook(
           app,
           malformedConnection.bearer,
-          { object_kind: "test" },
+          { event_name: "test" },
           {
-            event: "Test Hook",
             remoteAddress: unknownSourceIp,
           },
         )
