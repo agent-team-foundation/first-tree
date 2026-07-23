@@ -17,7 +17,7 @@ import {
 } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { deletePendingReservation, finalizeAttachment, reserveAttachment } from "../../services/attachment.js";
-import { createByteLimitStream } from "../../services/stream-limit.js";
+import { createByteLimitStream, settleStreamingUpload } from "../../services/stream-limit.js";
 import { createUploadGate } from "../../services/upload-gate.js";
 
 /**
@@ -147,16 +147,20 @@ export async function orgAttachmentRoutes(app: FastifyInstance): Promise<void> {
                 `Request body does not match Content-Length (declared ${contentLength}, saw ${seenBytes}${seenBytes > contentLength ? "+" : ""} bytes)`,
               ),
           });
-          // pipeline() propagates failures both ways (client abort → PUT
-          // rejects; storage failure → request stream destroyed) while the
-          // SDK concurrently consumes the limiter as the PUT body.
-          await Promise.all([
-            objectStorage.putObjectStream(objectKey, limiter, {
-              contentLength,
-              contentType: mimeType,
-            }),
-            pipeline(body, limiter),
-          ]);
+          // The SDK consumes the limiter as the PUT body while pipeline()
+          // pumps the request stream through it; settleStreamingUpload
+          // cross-cancels the halves on failure and never orphans either
+          // rejection.
+          await settleStreamingUpload({
+            limiter,
+            producer: pipeline(body, limiter),
+            startConsumer: (abortSignal) =>
+              objectStorage.putObjectStream(objectKey, limiter, {
+                contentLength,
+                contentType: mimeType,
+                abortSignal,
+              }),
+          });
         } catch (error) {
           // Best-effort rollback; a crash instead leaves the pending row to
           // the TTL sweep, which deletes object + row idempotently.

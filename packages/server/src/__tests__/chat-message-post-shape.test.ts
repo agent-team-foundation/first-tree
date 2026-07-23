@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp, workerObjectStorage } from "./helpers.js";
 
 /**
  * Wire-level shape of `POST /api/v1/chats/:chatId/messages` (the web
@@ -18,7 +18,7 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
  * request flips back to open and a threaded reply unthreads (PR 981 review).
  */
 describe("POST /chats/:chatId/messages — response carries metadata + inReplyTo", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ objectStorage: workerObjectStorage() });
 
   async function uploadAttachment(
     app: FastifyInstance,

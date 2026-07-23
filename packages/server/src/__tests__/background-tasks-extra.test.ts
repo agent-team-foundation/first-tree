@@ -55,6 +55,13 @@ function makeApp(archiveSweepIntervalSeconds = 30): FastifyInstance {
       cronJobs: {
         enabled: false,
       },
+      attachments: {
+        // Disabled: these unit tests pin the pre-existing timers; the
+        // attachment sweep has its own integration suite.
+        sweepIntervalSeconds: 0,
+        orphanGraceSeconds: 86_400,
+        pendingTtlSeconds: 3_600,
+      },
       runtime: {
         archiveMappedIdleSeconds: 3_600,
         archiveSweepIntervalSeconds,
@@ -63,6 +70,7 @@ function makeApp(archiveSweepIntervalSeconds = 30): FastifyInstance {
       },
     },
     db: { name: "db" },
+    objectStorage: null,
   } as unknown as FastifyInstance;
 }
 

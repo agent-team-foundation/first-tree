@@ -49,7 +49,7 @@ import {
 } from "./access-control.js";
 import { avatarObjectKey, type ObjectStorage } from "./object-storage.js";
 import { resolveDefaultOrgId } from "./organization.js";
-import { createByteLimitStream } from "./stream-limit.js";
+import { createByteLimitStream, settleStreamingUpload } from "./stream-limit.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
 /**
@@ -1402,10 +1402,16 @@ export async function setAgentAvatarImage(
         `Avatar upload body does not match Content-Length (declared ${opts.contentLength}, saw ${seenBytes}${seenBytes > opts.contentLength ? "+" : ""} bytes)`,
       ),
   });
-  await Promise.all([
-    objectStorage.putObjectStream(key, limiter, { contentLength: opts.contentLength, contentType: opts.mime }),
-    pipeline(body, limiter),
-  ]);
+  await settleStreamingUpload({
+    limiter,
+    producer: pipeline(body, limiter),
+    startConsumer: (abortSignal) =>
+      objectStorage.putObjectStream(key, limiter, {
+        contentLength: opts.contentLength,
+        contentType: opts.mime,
+        abortSignal,
+      }),
+  });
 
   const now = new Date();
   const result = await db

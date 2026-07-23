@@ -7,10 +7,10 @@ import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgent, unbindAgent } from "../services/presence.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAdmin, useTestApp, workerObjectStorage } from "./helpers.js";
 
 describe("Admin Agents API", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ objectStorage: workerObjectStorage() });
 
   async function authedRequest(app: FastifyInstance) {
     const ctx = await createAdminContext(app);
@@ -437,6 +437,19 @@ describe("Admin Agents API", () => {
     expect(badUpload.statusCode).toBe(400);
     expect(badUpload.json<{ error: string }>().error).toContain("image/* Content-Type");
 
+    // No body at all → no Content-Length → 411 (declared size is required
+    // since the payload streams to object storage).
+    const noLengthUpload = await app.inject({
+      method: "PUT",
+      url: `/api/v1/agents/${agent.uuid}/avatar`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "content-type": "image/png",
+      },
+    });
+    expect(noLengthUpload.statusCode).toBe(411);
+    expect(noLengthUpload.json<{ error: string }>().error).toContain("Content-Length");
+
     const emptyImageUpload = await app.inject({
       method: "PUT",
       url: `/api/v1/agents/${agent.uuid}/avatar`,
@@ -444,6 +457,7 @@ describe("Admin Agents API", () => {
         authorization: `Bearer ${ctx.accessToken}`,
         "content-type": "image/png",
       },
+      payload: Buffer.alloc(0),
     });
     expect(emptyImageUpload.statusCode).toBe(400);
     expect(emptyImageUpload.json<{ error: string }>().error).toContain("Avatar image payload is empty");

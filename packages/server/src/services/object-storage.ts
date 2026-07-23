@@ -30,6 +30,8 @@ export type PutObjectStreamOptions = {
   /** Exact payload length. Required — uploads reserve quota from the declared size. */
   contentLength: number;
   contentType: string;
+  /** Aborts the in-flight PUT promptly (e.g. when the body stream failed). */
+  abortSignal?: AbortSignal;
 };
 
 export type GetObjectStreamResult = {
@@ -95,6 +97,13 @@ function buildClient(config: ObjectStorageConfig, endpoint: string | undefined):
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
+    // Skip the SDK's default CRC32 wrapping of every PutObject body: none of
+    // our calls require checksums, the extra internal body pipe leaks an
+    // unhandled rejection when an aborted streaming upload destroys the
+    // source mid-flight, and some S3-compatible backends reject the
+    // checksum trailers anyway.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 
@@ -126,6 +135,7 @@ export function createObjectStorage(config: ObjectStorageConfig): ObjectStorage 
           ContentLength: opts.contentLength,
           ContentType: opts.contentType,
         }),
+        { abortSignal: opts.abortSignal },
       );
     },
 
