@@ -2393,10 +2393,6 @@ export class SessionManager {
     // Clear per-session runtime state on suspend
     this.sessionRuntimeStates.delete(entry.chatId);
     this.recomputeRuntimeState();
-    if (canceledUnestablishedStart && this.sessions.get(entry.chatId) === entry) {
-      this.sessions.delete(entry.chatId);
-      this.currentTrigger.delete(entry.chatId);
-    }
     entry.suspending = prepare
       .then(() => {
         if (canceledTransition || this.retiredHandlers.has(entry.handler)) {
@@ -2414,6 +2410,13 @@ export class SessionManager {
       })
       .finally(() => {
         entry.suspending = null;
+        // Keep the unestablished entry addressable until preparation settles:
+        // dispatch() uses its suspending promise as the same-chat admission
+        // fence while operator ACK/recovery decisions are still in flight.
+        if (canceledUnestablishedStart && this.sessions.get(entry.chatId) === entry) {
+          this.sessions.delete(entry.chatId);
+          this.currentTrigger.delete(entry.chatId);
+        }
       });
     this.persistRegistry();
     this.notifySessionState(entry.chatId, "suspended");

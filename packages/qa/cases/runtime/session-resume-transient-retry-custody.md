@@ -67,6 +67,13 @@ the head through `start()`, never `resume()`, then accept the tail in order;
 the canceled start must not leave an empty resume mapping or settle either
 delivery.
 
+Before releasing that unresolved start, have it report
+`processingStarted`, then issue operator suspend and hold its terminal-prefix
+ACK open. Deliver a same-chat tail while that ACK is pending. The
+unestablished SessionEntry must remain as an admission fence until suspend
+preparation settles: no replacement start, resume, or inject may enter the
+provider during the ACK window.
+
 Evict the same unestablished chat while it is in a non-active fresh-start
 retry/terminal window, and separately restart the SessionManager while its
 first start is unresolved. Neither LRU state nor the persisted registry may

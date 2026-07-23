@@ -1406,6 +1406,9 @@ describe("SessionManager edge coverage", () => {
 
     await sm.handleCommand(chatId, "session:suspend");
     await vi.waitFor(() => expect(i.inboxDelivery.hasRecoveryDebt(chatId)).toBe(true));
+    const suspension = i.sessions.get(chatId)?.suspending;
+    expect(suspension).not.toBeNull();
+    await suspension;
 
     expect(i.sessions.has(chatId)).toBe(false);
     expect(sm.activeCount).toBe(1);
@@ -1436,6 +1439,87 @@ describe("SessionManager edge coverage", () => {
     await freshCtx.finishTurn(messageFromEntry(tailEntry), { status: "success", terminal: true });
     expect(ackEntry).toHaveBeenNthCalledWith(1, headEntry.id);
     expect(ackEntry).toHaveBeenNthCalledWith(2, tailEntry.id);
+
+    await sm.shutdown();
+  });
+
+  it("keeps canceled fresh-start admission fenced while operator suspend ACK is pending", async () => {
+    let signalStartStarted: (() => void) | undefined;
+    let resolveStart: (() => void) | undefined;
+    const startStarted = new Promise<void>((resolve) => {
+      signalStartStarted = resolve;
+    });
+    const startGate = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    let signalAckStarted: (() => void) | undefined;
+    let resolveAck: (() => void) | undefined;
+    const ackStarted = new Promise<void>((resolve) => {
+      signalAckStarted = resolve;
+    });
+    const ackGate = new Promise<void>((resolve) => {
+      resolveAck = resolve;
+    });
+    const oldHandler = handler({
+      start: vi.fn().mockImplementation(async (message, _ctx, token) => {
+        token.processingStarted(message);
+        signalStartStarted?.();
+        await startGate;
+        return "stale-start-session";
+      }),
+    });
+    const replacement = handler({ start: vi.fn().mockResolvedValue("replacement-tail-session") });
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockImplementation(async () => {
+      signalAckStarted?.();
+      await ackGate;
+    });
+    const sm = makeManager({
+      handlers: [oldHandler, replacement],
+      ackEntry,
+    });
+    const i = internals(sm);
+    const chatId = "chat-canceled-start-pending-operator-ack";
+    const headEntry = mockEntry({ id: 85, chatId, messageId: "msg-canceled-start-processing-head" });
+    const tailEntry = mockEntry({ id: 86, chatId, messageId: "msg-canceled-start-during-ack" });
+    const blocker = makeSessionRecord("chat-canceled-start-ack-blocker", { status: "active" });
+    i.sessions.set(blocker.chatId, blocker);
+    i._activeCount = 1;
+
+    const headDispatch = sm.dispatch(headEntry);
+    await startStarted;
+    expect(sm.activeCount).toBe(2);
+
+    await sm.handleCommand(chatId, "session:suspend");
+    await ackStarted;
+    expect(i.sessions.get(chatId)?.suspending).not.toBeNull();
+    expect(sm.activeCount).toBe(1);
+
+    const tailDispatch = sm.dispatch(tailEntry);
+    await Promise.resolve();
+
+    expect(replacement.start).not.toHaveBeenCalled();
+    expect(replacement.resume).not.toHaveBeenCalled();
+    expect(oldHandler.inject).not.toHaveBeenCalled();
+    expect(i.sessions.has(chatId)).toBe(true);
+    expect(sm.activeCount).toBe(1);
+
+    resolveAck?.();
+    await tailDispatch;
+
+    expect(i.sessions.get(chatId)?.claudeSessionId).toBe("replacement-tail-session");
+    expect(replacement.start).toHaveBeenCalledTimes(1);
+    expect(replacement.start).toHaveBeenCalledWith(
+      expect.objectContaining({ id: tailEntry.message.id }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(replacement.resume).not.toHaveBeenCalled();
+    expect(sm.activeCount).toBe(2);
+
+    resolveStart?.();
+    await headDispatch;
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(headEntry.id);
 
     await sm.shutdown();
   });
