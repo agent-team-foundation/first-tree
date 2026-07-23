@@ -104,6 +104,31 @@ export type CreateTestAppOptions = {
   githubAppPrivateKeyPem?: string;
 };
 
+/**
+ * Object-storage config pointing at this worker's MinIO bucket (provisioned
+ * by global-setup, one bucket per pool slot — the S3 analogue of the
+ * per-worker database). Suites that exercise the attachment S3 surface pass
+ * the result as `createTestApp({ objectStorage: workerObjectStorage() })`.
+ */
+export function workerObjectStorage(): NonNullable<Config["objectStorage"]> {
+  const endpoint = process.env.VITEST_S3_ENDPOINT;
+  if (!endpoint) {
+    throw new Error("VITEST_S3_ENDPOINT not set — vitest global setup did not provision object storage");
+  }
+  const maxWorkers = Number.parseInt(process.env.VITEST_PG_MAX_WORKERS ?? "1", 10);
+  const rawId = Number.parseInt(process.env.VITEST_POOL_ID ?? "1", 10);
+  const slot = ((rawId - 1) % Math.max(1, maxWorkers)) + 1;
+  return {
+    bucket: `vitest-w${slot}`,
+    accessKeyId: process.env.VITEST_S3_ACCESS_KEY_ID ?? "",
+    secretAccessKey: process.env.VITEST_S3_SECRET_ACCESS_KEY ?? "",
+    endpoint,
+    region: "us-east-1",
+    forcePathStyle: true,
+    publicEndpoint: undefined,
+  };
+}
+
 export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
   const baseRateLimit = {
     max: 10000,
