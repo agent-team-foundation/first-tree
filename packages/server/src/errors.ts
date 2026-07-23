@@ -80,6 +80,42 @@ export class UnprocessableError extends AppError {
 }
 
 /**
+ * 413 — a single request body exceeds a server-enforced byte cap. Pass a
+ * stable `code` via attrs when the caller needs machine-readable identity
+ * (the central error handler serializes `attrs.code` into the body).
+ */
+export class PayloadTooLargeError extends AppError {
+  constructor(message = "Payload too large", attrs?: AppErrorAttrs) {
+    super(413, message, attrs);
+    this.name = "PayloadTooLargeError";
+  }
+}
+
+/**
+ * 411 — the request must declare `Content-Length` up front (streaming
+ * uploads reserve quota from the declared size before consuming the body,
+ * so chunked transfer encoding cannot be admitted).
+ */
+export class LengthRequiredError extends AppError {
+  constructor(message = "Content-Length required", attrs?: AppErrorAttrs) {
+    super(411, message, attrs);
+    this.name = "LengthRequiredError";
+  }
+}
+
+/**
+ * 429 — the caller holds too many concurrent in-flight operations. Distinct
+ * from @fastify/rate-limit's request-frequency 429: this guards sustained
+ * parallel streams, not request count per window.
+ */
+export class TooManyRequestsError extends AppError {
+  constructor(message = "Too many concurrent requests", attrs?: AppErrorAttrs) {
+    super(429, message, attrs);
+    this.name = "TooManyRequestsError";
+  }
+}
+
+/**
  * 503 — an upstream dependency (GitHub API) is temporarily unreachable.
  * The operation was NOT performed; the caller may safely retry later.
  */

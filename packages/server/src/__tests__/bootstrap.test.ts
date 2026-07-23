@@ -41,6 +41,15 @@ const baseServerConfig: ServerConfig = {
   docs: { enabled: false },
   cronJobs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
+  attachments: {
+    downloadMode: "proxy",
+    orgQuotaBytes: 2 * 1024 * 1024 * 1024,
+    orgQuotaCount: 1000,
+    sweepIntervalSeconds: 0,
+    orphanGraceSeconds: 86_400,
+    pendingTtlSeconds: 3600,
+    maxConcurrentUploadsPerUploader: 4,
+  },
   server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {

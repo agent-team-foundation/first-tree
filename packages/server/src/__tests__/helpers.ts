@@ -76,6 +76,12 @@ export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
   inbox?: Partial<NonNullable<Config["inbox"]>>;
+  /**
+   * Object storage config. Absent by default — suites that exercise the S3
+   * surface pass the per-worker MinIO target provisioned by global setup.
+   */
+  objectStorage?: Config["objectStorage"];
+  attachments?: Partial<Config["attachments"]>;
   runtimeHttpTokenEnforcement?: boolean;
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
@@ -135,6 +141,19 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     database: {
       url: process.env.DATABASE_URL ?? "",
       provider: "external",
+    },
+    ...(opts.objectStorage !== undefined ? { objectStorage: opts.objectStorage } : {}),
+    attachments: {
+      downloadMode: "proxy",
+      orgQuotaBytes: 2 * 1024 * 1024 * 1024,
+      orgQuotaCount: 1000,
+      // Disabled by default in tests — sweep suites drive passes explicitly,
+      // mirroring archiveSweepIntervalSeconds below.
+      sweepIntervalSeconds: 0,
+      orphanGraceSeconds: 86_400,
+      pendingTtlSeconds: 3600,
+      maxConcurrentUploadsPerUploader: 4,
+      ...opts.attachments,
     },
     server: {
       port: 0,
