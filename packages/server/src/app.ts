@@ -92,6 +92,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { registerSecurityHeaders } from "./security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -395,6 +396,11 @@ export async function buildApp(config: Config) {
   // and only fires on `statusCode >= 400`. Registered globally so any route
   // that flips the flag participates without extra wiring.
   app.addHook("onSend", bodyCaptureOnSendHook);
+
+  // App-wide browser security headers (CSP, HSTS, frame denial, …) on every
+  // response — SPA shell, static assets, API, 404s, and error bodies alike.
+  // See security-headers.ts for the policy rationale (issue #1541).
+  registerSecurityHeaders(app, config);
 
   // Auth hooks
   const userAuth = userAuthHook(db, config.secrets.jwtSecret);

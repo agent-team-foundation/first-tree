@@ -1,7 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerConfig } from "@first-tree/shared/config";
+import {
+  DEFAULT_CSP_CONNECT_ORIGINS,
+  DEFAULT_CSP_IMG_ORIGINS,
+  DEFAULT_CSP_SCRIPT_ORIGINS,
+  type ServerConfig,
+} from "@first-tree/shared/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertBootConfigValid } from "../boot-guards.js";
 import { shouldAutoGenerateServerSecrets, startServer } from "../bootstrap-server.js";
@@ -48,6 +53,12 @@ const baseServerConfig: ServerConfig = {
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
+  security: {
+    headersEnabled: true,
+    cspScriptOrigins: [...DEFAULT_CSP_SCRIPT_ORIGINS],
+    cspConnectOrigins: [...DEFAULT_CSP_CONNECT_ORIGINS],
+    cspImgOrigins: [...DEFAULT_CSP_IMG_ORIGINS],
+  },
   trustProxy: false,
   connectBootstrap: {
     portableDownloadBaseUrl: "https://download.first-tree.ai/releases",

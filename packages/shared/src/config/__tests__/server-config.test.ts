@@ -133,6 +133,63 @@ describe("server config", () => {
     ).rejects.toThrow(/gitlab|array/iu);
   });
 
+  it("defaults browser security headers to enabled with the production CSP origin lists", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+    const { DEFAULT_CSP_CONNECT_ORIGINS, DEFAULT_CSP_IMG_ORIGINS, DEFAULT_CSP_SCRIPT_ORIGINS } = await import(
+      "../server-config.js"
+    );
+    expect(config.security.headersEnabled).toBe(true);
+    expect(config.security.cspScriptOrigins).toEqual([...DEFAULT_CSP_SCRIPT_ORIGINS]);
+    expect(config.security.cspConnectOrigins).toEqual([...DEFAULT_CSP_CONNECT_ORIGINS]);
+    expect(config.security.cspImgOrigins).toEqual([...DEFAULT_CSP_IMG_ORIGINS]);
+  });
+
+  it("parses CSP origin list env vars as comma/whitespace-separated origins that replace the defaults", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_SECURITY_HEADERS_ENABLED", "false");
+    vi.stubEnv(
+      "FIRST_TREE_CSP_SCRIPT_ORIGINS",
+      "https://CDN.Example.com, https://*.metrics.example\n https://a.example:8443",
+    );
+    vi.stubEnv("FIRST_TREE_CSP_CONNECT_ORIGINS", "wss://relay.example");
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+    expect(config.security.headersEnabled).toBe(false);
+    // Replaces (not appends to) the default list, lowercased and trimmed.
+    expect(config.security.cspScriptOrigins).toEqual([
+      "https://cdn.example.com",
+      "https://*.metrics.example",
+      "https://a.example:8443",
+    ]);
+    expect(config.security.cspConnectOrigins).toEqual(["wss://relay.example"]);
+  });
+
+  it("rejects CSP keyword sources and non-origin entries in origin list env vars", async () => {
+    stubRequiredProductionConfig();
+    for (const invalid of ["'unsafe-inline'", "data:", "*", "javascript:alert(1)", "example.com"]) {
+      resetConfig();
+      const configDir = makeTempConfigDir();
+      vi.stubEnv("FIRST_TREE_CSP_SCRIPT_ORIGINS", invalid);
+      await expect(
+        initConfig({
+          schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+          role: "server",
+          configDir,
+        }),
+      ).rejects.toThrow(/CSP origin/u);
+    }
+  });
+
   it("rejects partial Google OAuth configuration", async () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();

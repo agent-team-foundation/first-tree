@@ -1,6 +1,11 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  DEFAULT_CSP_CONNECT_ORIGINS,
+  DEFAULT_CSP_IMG_ORIGINS,
+  DEFAULT_CSP_SCRIPT_ORIGINS,
+} from "@first-tree/shared/config";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
@@ -33,6 +38,12 @@ const baseConfig: Config = {
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
+  security: {
+    headersEnabled: true,
+    cspScriptOrigins: [...DEFAULT_CSP_SCRIPT_ORIGINS],
+    cspConnectOrigins: [...DEFAULT_CSP_CONNECT_ORIGINS],
+    cspImgOrigins: [...DEFAULT_CSP_IMG_ORIGINS],
+  },
   trustProxy: false,
   connectBootstrap: {
     portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
