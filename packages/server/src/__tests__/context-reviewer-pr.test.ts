@@ -503,6 +503,7 @@ describe("handleContextReviewerPrEvent", () => {
     if (!result.handled) throw new Error("expected handled result");
 
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, result.chatId)).limit(1);
+    expect(chat?.topic).toBe("Context Review · context-tree#123");
     expect(chat?.metadata).toMatchObject({
       source: "github",
       entityType: "pull_request",
@@ -603,6 +604,35 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).not.toContain("gh pr review");
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(1);
+  });
+
+  it("does not rename a reused reviewer chat with a legacy topic", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const first = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload(),
+      organizationId: admin.organizationId,
+    });
+    if (!first.handled) throw new Error("expected handled result");
+
+    const legacyTopic = "Context Review PR #123: Clarify agent routing context";
+    await app.db.update(chats).set({ topic: legacyTopic }).where(eq(chats.id, first.chatId));
+
+    const second = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        pull_request: { ...pullRequestPayload().pull_request, title: "Renamed upstream title" },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(second).toMatchObject({ handled: true, chatId: first.chatId, reused: true });
+    const [chat] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, first.chatId)).limit(1);
+    expect(chat?.topic).toBe(legacyTopic);
   });
 
   it("does not reuse caller-spoofable reviewer chat metadata", async () => {

@@ -20,6 +20,7 @@ import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
+import { formatContextReviewTopic } from "./scm-entity-chat-topic.js";
 
 const log = createLogger("ContextReviewerPr");
 const require = createRequire(import.meta.url);
@@ -340,7 +341,11 @@ async function handleContextReviewerPrEventWithInfo(
     organizationId: input.organizationId,
     initialRecipientAgentIds: [reviewer.uuid],
     contextParticipantAgentIds: [],
-    topic: `Context Review PR #${info.prNumber}: ${info.title}`,
+    topic: formatContextReviewTopic({
+      provider: "github",
+      repositoryPath: info.repoFullName,
+      changeNumber: info.prNumber,
+    }),
     onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
     initialMessage: {
       source: "github",
