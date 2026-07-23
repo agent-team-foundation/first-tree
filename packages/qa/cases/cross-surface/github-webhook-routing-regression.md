@@ -29,8 +29,12 @@ together without a GitHub-specific post-delivery branch.
   card in the followed chat and, for an explicit target, the expected delegate inbox/session wake. Inspect the delegate's
   assembled turn input and confirm both a current webhook card and a card carried as preceding silent context use
   `[From: GitHub · type=system ...]`, never the representative human carrier.
-- Redeliver the same signed body with the same stable delivery id. Observe a successful deduplicated response and no
-  second card or wake.
+- Redeliver the same signed body with the same stable delivery id. Observe a successful deduplicated response reporting
+  `claimState: "done"` and no second card or wake.
+- Induce one processing failure after the claim (for example, temporarily break audience resolution downstream) and
+  observe the 500 response. Redeliver the same signed body: within the claim TTL a still-held claim answers deduplicated
+  with `claimState: "pending"`; once the claim is released or its TTL (default 300s) has passed, the redelivery must be
+  fully reprocessed — the card lands and the claim finishes `done` — instead of staying deduplicated forever.
 - Deliver an equivalent supported event without `X-GitHub-Delivery`. Confirm it is accepted without creating a
   `processed_events` claim. If the event is repeated, treat repeated side effects as the documented weak-reliability
   baseline rather than an exactly-once promise.
@@ -41,8 +45,9 @@ together without a GitHub-specific post-delivery branch.
 ## Expected Result
 
 `PASS`: signed events resolve through the bound installation, reach the expected chat and wake path, stable delivery ids
-deduplicate the whole request, missing delivery ids do not claim, invalid signatures have no side effects, and optional
-Context Reviewer behavior remains dedicated and claim-covered. Agent-visible webhook attribution is GitHub/system while
+deduplicate the whole request, a failed attempt recovers — redelivering after the claim is released or expired
+reprocesses the event instead of deduplicating it forever — missing delivery ids do not claim, invalid signatures have
+no side effects, and optional Context Reviewer behavior remains dedicated and claim-covered. Agent-visible webhook attribution is GitHub/system while
 the existing participant sender, routing, and wake behavior remains unchanged.
 
 `FAIL`: a reproducible regression in authentication, tenant resolution, followed-chat/card delivery, wake routing,

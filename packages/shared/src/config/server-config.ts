@@ -489,6 +489,30 @@ export const serverConfigSchema = defineConfig({
       },
     ),
     /**
+     * Webhook claim lease TTL. An inbound SCM delivery is claimed `pending`
+     * for this long before processing; within the TTL a redelivery of the
+     * same id is deduped (shields live handlers and replica races), after it
+     * a redelivery takes the claim over and reprocesses (recovers deliveries
+     * whose attempt crashed between claim and completion). Deliberately
+     * positive-only: with no TTL the claim degrades back to an at-most-once
+     * marker and a crash mid-processing silently loses the event. Default
+     * 300s is orders of magnitude above real handler time (DB-bound,
+     * seconds) while keeping operator redelivery recovery within minutes.
+     */
+    webhookClaimTtlSeconds: field(z.coerce.number().int().positive().default(300), {
+      env: "FIRST_TREE_WEBHOOK_CLAIM_TTL_SECONDS",
+    }),
+    /**
+     * Webhook claim hygiene-sweep cadence. Set to 0 to disable the sweeper
+     * (useful in tests). Recovery never depends on the sweep — expired
+     * pending claims are taken over inline by the next redelivery — it only
+     * deletes long-expired pending rows nobody redelivered, so the default
+     * hourly tick is plenty.
+     */
+    webhookClaimSweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(3600), {
+      env: "FIRST_TREE_WEBHOOK_CLAIM_SWEEP_INTERVAL_SECONDS",
+    }),
+    /**
      * Optional outbound webhook URL — if set, every notification is
      * fire-and-forget POSTed here in JSON. Replaces the prior DB-backed
      * `notification_webhook_url` config row.

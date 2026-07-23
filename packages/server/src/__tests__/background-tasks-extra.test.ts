@@ -15,12 +15,14 @@ const serviceMocks = {
   notifyAgentEvent: vi.fn(),
   pruneStaleSilentEntries: vi.fn(),
   sweepChatArchive: vi.fn(),
+  sweepExpiredWebhookClaims: vi.fn(),
 };
 
 const mockedModules = [
   "../observability/index.js",
   "../services/chat-archive.js",
   "../services/client.js",
+  "../services/event-dedup.js",
   "../services/inbox.js",
   "../services/notification.js",
   "../services/presence.js",
@@ -36,6 +38,9 @@ function mockBackgroundTaskDependencies(): void {
   vi.doMock("../services/client.js", () => ({
     cleanupStaleClients: serviceMocks.cleanupStaleClients,
   }));
+  vi.doMock("../services/event-dedup.js", () => ({
+    sweepExpiredWebhookClaims: serviceMocks.sweepExpiredWebhookClaims,
+  }));
   vi.doMock("../services/inbox.js", () => ({
     pruneStaleSilentEntries: serviceMocks.pruneStaleSilentEntries,
   }));
@@ -49,13 +54,17 @@ function mockBackgroundTaskDependencies(): void {
   }));
 }
 
-function makeApp(archiveSweepIntervalSeconds = 30): FastifyInstance {
+function makeApp(
+  archiveSweepIntervalSeconds = 30,
+  webhookClaimSweepIntervalSeconds = archiveSweepIntervalSeconds,
+): FastifyInstance {
   return {
     config: {
       runtime: {
         archiveMappedIdleSeconds: 3_600,
         archiveSweepIntervalSeconds,
         presenceCleanupSeconds: 60,
+        webhookClaimSweepIntervalSeconds,
       },
     },
     db: { name: "db" },
@@ -74,6 +83,7 @@ beforeEach(() => {
   serviceMocks.notifyAgentEvent.mockResolvedValue(undefined);
   serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 0, stalePendingDeleted: 0 });
   serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 0, unmappedRowsArchived: 0 });
+  serviceMocks.sweepExpiredWebhookClaims.mockResolvedValue(0);
 });
 
 afterEach(() => {
@@ -90,6 +100,7 @@ describe("createBackgroundTasks", () => {
     serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 2, stalePendingDeleted: 1 });
     serviceMocks.markStaleAgents.mockResolvedValue(["agent_1", "agent_2"]);
     serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 1, unmappedRowsArchived: 1 });
+    serviceMocks.sweepExpiredWebhookClaims.mockResolvedValue(2);
     const app = makeApp(30);
     const tasks = createBackgroundTasks(app, "srv_1");
 
@@ -116,6 +127,8 @@ describe("createBackgroundTasks", () => {
       { mappedRowsArchived: 1, unmappedRowsArchived: 1 },
       "chat auto-archive sweep flipped rows to archived",
     );
+    expect(serviceMocks.sweepExpiredWebhookClaims).toHaveBeenCalledWith(app.db);
+    expect(loggerMocks.info).toHaveBeenCalledWith({ swept: 2 }, "webhook claim sweep deleted stale pending claims");
 
     tasks.stop();
     expect(vi.getTimerCount()).toBe(0);
@@ -136,6 +149,7 @@ describe("createBackgroundTasks", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(serviceMocks.sweepChatArchive).not.toHaveBeenCalled();
+    expect(serviceMocks.sweepExpiredWebhookClaims).not.toHaveBeenCalled();
     expect(loggerMocks.error).toHaveBeenCalledWith({ err: expect.any(Error) }, "failed initial heartbeat");
     expect(loggerMocks.error).toHaveBeenCalledWith({ err: expect.any(Error) }, "failed to prune silent inbox rows");
     expect(loggerMocks.error).toHaveBeenCalledWith(

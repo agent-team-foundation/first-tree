@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
+import * as eventDedupService from "./event-dedup.js";
 import * as inboxService from "./inbox.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
@@ -17,6 +18,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let webhookClaimSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -83,6 +85,27 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
+      // Webhook claim hygiene sweep — cadence comes from runtime config so
+      // ops (and tests) can tune or zero-disable it. Recovery of crashed
+      // webhook attempts never depends on this sweep — expired pending
+      // claims are taken over inline by the next redelivery — it only
+      // deletes long-expired pending rows nobody redelivered. See
+      // services/event-dedup.ts for the claim state machine and the
+      // deletion grace period.
+      const webhookClaimSweepSeconds = app.config.runtime.webhookClaimSweepIntervalSeconds;
+      if (webhookClaimSweepSeconds > 0) {
+        webhookClaimSweepTimer = setInterval(async () => {
+          try {
+            const swept = await eventDedupService.sweepExpiredWebhookClaims(app.db);
+            if (swept > 0) {
+              log.info({ swept }, "webhook claim sweep deleted stale pending claims");
+            }
+          } catch (err) {
+            log.error({ err }, "webhook claim sweep failed");
+          }
+        }, webhookClaimSweepSeconds * 1000);
+      }
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -101,6 +124,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (webhookClaimSweepTimer) {
+        clearInterval(webhookClaimSweepTimer);
+        webhookClaimSweepTimer = null;
       }
     },
   };

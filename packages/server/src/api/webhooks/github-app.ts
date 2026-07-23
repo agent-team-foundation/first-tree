@@ -157,8 +157,10 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
  *      the normalize pipeline (these events shouldn't fan out as cards)
  *   4. other events → installation.id → hub_organization_id reverse-lookup,
  *      then GitHub normalize → provider-neutral SCM processing seam →
- *      GitHub audience/delivery adapters. The seam best-effort unclaims on
- *      uncaught handler failure so GitHub's retry has a chance to clear.
+ *      GitHub audience/delivery adapters. The seam claims each delivery as a
+ *      pending lease and marks it done on success; on failure (including a
+ *      crash mid-processing) the claim expires, so redelivering the same id
+ *      after the TTL reprocesses the event instead of being deduped.
  *
  * Routes return 200 for "ignored" cases (no installation context, not
  * bound, suspended, duplicate delivery) so GitHub doesn't accumulate
@@ -256,6 +258,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     const result = await processScmWebhookDelivery({
       db: app.db,
       ingress,
+      claimTtlSeconds: app.config.runtime.webhookClaimTtlSeconds,
       observation: normalized.observation,
       event: normalized.event,
       applyObservation: async (current) => {
@@ -294,7 +297,16 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
     switch (result.outcome) {
       case "duplicate":
-        return reply.status(200).send({ ok: true, event: eventType, deduped: true });
+        // claimState tells a redelivering operator whether to retry again:
+        // `pending` = an attempt owns the claim until its TTL expires
+        // (redeliver after that), `done` = processed for good. Additive so
+        // existing consumers of the response shape are unaffected.
+        return reply.status(200).send({
+          ok: true,
+          event: eventType,
+          deduped: true,
+          ...(result.claimState ? { claimState: result.claimState } : {}),
+        });
       case "provider_only":
         log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
         return reply

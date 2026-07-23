@@ -59,6 +59,8 @@ const baseServerConfig: ServerConfig = {
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,
     archiveMappedIdleSeconds: 60 * 60,
+    webhookClaimTtlSeconds: 300,
+    webhookClaimSweepIntervalSeconds: 0,
     notificationWebhookUrl: undefined,
   },
   update: {
