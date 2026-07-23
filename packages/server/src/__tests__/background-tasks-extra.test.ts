@@ -121,7 +121,7 @@ describe("createBackgroundTasks", () => {
       "chat auto-archive sweep flipped rows to archived",
     );
 
-    tasks.stop();
+    await tasks.stop();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -147,6 +147,6 @@ describe("createBackgroundTasks", () => {
       "failed to heartbeat / cleanup presence",
     );
 
-    tasks.stop();
+    await tasks.stop();
   });
 });

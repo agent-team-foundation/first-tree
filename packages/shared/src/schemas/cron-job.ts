@@ -132,14 +132,16 @@ const FIVE_FIELD_CRON_RE = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/;
  * Reject non-portable / non-OR extensions without matching day/month aliases.
  *
  * Field semantics (Croner 10):
- * - DOM: any `L`/`W` is a calendar modifier (`1L`, `L`, `15W`, `LW`) — reject
- * - DOW/month: English aliases stay valid; reject `L`/`W`/`#`/`?`/`+`/`H`/`@`
- *   modifier tokens without treating `JUL`/`WED` as modifiers
+ * - Minute/hour/DOM: any `L`/`W` is a Quartz/calendar modifier — reject
+ * - Month/DOW: only Croner's three-letter aliases (JAN…SAT) are valid; full
+ *   names like MARCH/WEDNESDAY are rejected because Croner's substring
+ *   replace leaves illegal residue
+ * - Also reject `#`/`?`/`+`/`H`/`@` modifier tokens
  */
 export function hasNonPortableCronExtension(expression: string): boolean {
   const fields = normalizeCronExpression(expression).split(" ");
   if (fields.length !== 5) return true;
-  const [, , dom, month, dow] = fields as [string, string, string, string, string];
+  const [minute, hour, dom, month, dow] = fields as [string, string, string, string, string];
 
   for (const field of fields) {
     if (field.startsWith("+")) return true;
@@ -148,24 +150,26 @@ export function hasNonPortableCronExtension(expression: string): boolean {
     if (fieldHasJenkinsHashAtom(field)) return true;
   }
 
-  // Day-of-month never has letter aliases; any L/W is a Croner/Quartz modifier.
-  if (/[LlWw]/.test(dom)) return true;
+  // Minute/hour/DOM never have letter aliases; any L/W is a modifier.
+  if (/[LlWw]/.test(minute) || /[LlWw]/.test(hour) || /[LlWw]/.test(dom)) return true;
 
-  // Month/DOW: inspect atoms so JUL/WED survive while 5L / W / LW do not.
+  // Month/DOW: inspect atoms so JUL/WED survive while 5L / W / LW / MARCH do not.
   for (const field of [month, dow]) {
     for (const atom of field.split(/[,/-]/)) {
       if (!atom || atom === "*") continue;
       if (/^\d+$/.test(atom)) continue;
       if (isCronMonthOrDowAlias(atom)) continue;
       if (/[LlWw]/i.test(atom)) return true;
+      // Unknown letter token (including full aliases Croner rejects).
+      if (/[A-Za-z]/.test(atom)) return true;
     }
   }
 
   return false;
 }
 
-const CRON_MONTH_OR_DOW_ALIAS_RE =
-  /^(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?|SUN(?:DAY)?|MON(?:DAY)?|TUE(?:SDAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|FRI(?:DAY)?|SAT(?:URDAY)?)$/i;
+/** Croner 10 three-letter aliases only (substring replace breaks full names). */
+const CRON_MONTH_OR_DOW_ALIAS_RE = /^(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|SUN|MON|TUE|WED|THU|FRI|SAT)$/i;
 
 function isCronMonthOrDowAlias(atom: string): boolean {
   return CRON_MONTH_OR_DOW_ALIAS_RE.test(atom);

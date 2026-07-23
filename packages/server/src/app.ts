@@ -717,7 +717,7 @@ export async function buildApp(config: Config) {
   app.addHook("onClose", async () => {
     commandVersionPoller.stop();
     pulseAggregator.stop();
-    backgroundTasks.stop();
+    await backgroundTasks.stop();
     await notifier.stop();
     await listenClient.end();
     await db.end();

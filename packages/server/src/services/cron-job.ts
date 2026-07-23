@@ -309,6 +309,9 @@ export async function createCronJob(
     agentId: string;
     body: CreateCronJobRequest;
     config: CronJobsRuntimeConfig;
+    /** Class D: authenticated managing member; revalidated inside the txn. */
+    callerMemberId?: string;
+    callerHumanAgentId?: string;
   },
 ): Promise<CronJob> {
   assertMutationsAvailable(input.config);
@@ -331,10 +334,24 @@ export async function createCronJob(
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
     }
 
-    await lockOwnerChatCronBarrier(txDb, input.controlChatId, agent.managerId);
+    // Prefer the authenticated caller as owner. Re-check manager/speaker/
+    // engagement inside this txn so a mid-flight reassignment cannot mint a
+    // schedule owned by the new manager on the old caller's authorization.
+    let ownerMemberId = agent.managerId;
+    if (input.callerMemberId && input.callerHumanAgentId) {
+      await assertCronAgentRouteAccess(txDb, {
+        chatId: input.controlChatId,
+        agentId: input.agentId,
+        callerMemberId: input.callerMemberId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
+      ownerMemberId = input.callerMemberId;
+    }
+
+    await lockOwnerChatCronBarrier(txDb, input.controlChatId, ownerMemberId);
 
     const validated = await revalidateOwnerChatAgent(txDb, {
-      ownerMemberId: agent.managerId,
+      ownerMemberId,
       controlChatId: input.controlChatId,
       agentId: input.agentId,
       chatMode: "reuse_control_chat",
@@ -369,53 +386,55 @@ export async function createCronJob(
     }
 
     const id = uuidv7();
-    try {
-      const [inserted] = await tx
-        .insert(cronJobs)
-        .values({
-          id,
-          ownerMemberId: validated.ownerMemberId,
-          controlChatId: input.controlChatId,
-          agentId: input.agentId,
-          name: input.body.name,
-          chatMode: "reuse_control_chat",
-          cronExpression: scheduled.schedule,
-          timezone: scheduled.timezone,
-          prompt: input.body.prompt,
-          state: "active",
-          stateReason: null,
-          revision: 1,
-          nextRunAt: scheduled.nextRunAt,
-          lastTriggerMessageId: null,
-        })
-        .returning();
+    // ON CONFLICT DO NOTHING avoids aborting the txn on a racing rename
+    // (catching 23505 then querying would raise 25P02).
+    const inserted = await tx
+      .insert(cronJobs)
+      .values({
+        id,
+        ownerMemberId: validated.ownerMemberId,
+        controlChatId: input.controlChatId,
+        agentId: input.agentId,
+        name: input.body.name,
+        chatMode: "reuse_control_chat",
+        cronExpression: scheduled.schedule,
+        timezone: scheduled.timezone,
+        prompt: input.body.prompt,
+        state: "active",
+        stateReason: null,
+        revision: 1,
+        nextRunAt: scheduled.nextRunAt,
+        lastTriggerMessageId: null,
+      })
+      .onConflictDoNothing({
+        target: [cronJobs.controlChatId, cronJobs.agentId, cronJobs.name],
+      })
+      .returning();
 
-      if (!inserted) throw new Error("failed to insert cron job");
-      log.info(
-        {
-          jobId: inserted.id,
-          organizationId: validated.organizationId,
-          controlChatId: inserted.controlChatId,
-          agentId: inserted.agentId,
-        },
-        "cron.job.created",
-      );
-      return projectCronJob(txDb, inserted);
-    } catch (err) {
-      if (isUniqueViolation(err)) {
-        const identical = await resolveIdenticalCreateConflict(txDb, {
-          controlChatId: input.controlChatId,
-          agentId: input.agentId,
-          name: input.body.name,
-          schedule: scheduled.schedule,
-          timezone: scheduled.timezone,
-          prompt: input.body.prompt,
-        });
-        if (identical) return identical;
-        throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
-      }
-      throw err;
+    if (!inserted[0]) {
+      const identical = await resolveIdenticalCreateConflict(txDb, {
+        controlChatId: input.controlChatId,
+        agentId: input.agentId,
+        name: input.body.name,
+        schedule: scheduled.schedule,
+        timezone: scheduled.timezone,
+        prompt: input.body.prompt,
+      });
+      if (identical) return identical;
+      throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
     }
+
+    log.info(
+      {
+        jobId: inserted[0].id,
+        organizationId: validated.organizationId,
+        controlChatId: inserted[0].controlChatId,
+        agentId: inserted[0].agentId,
+        metric: "cron_job_created_total",
+      },
+      "cron.job.created",
+    );
+    return projectCronJob(txDb, inserted[0]);
   });
 }
 
@@ -442,6 +461,9 @@ export async function updateCronJob(
     agentScope?: { agentId: string; controlChatId: string };
     /** When set, require job.ownerMemberId === memberId for mutations. */
     ownerMemberId?: string;
+    /** Class D: authenticated managing member; revalidated inside the txn. */
+    callerMemberId?: string;
+    callerHumanAgentId?: string;
   },
 ): Promise<CronJob> {
   return db.transaction(async (tx) => {
@@ -474,13 +496,20 @@ export async function updateCronJob(
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
     }
+    if (input.callerMemberId && input.callerHumanAgentId) {
+      await assertCronAgentRouteAccess(txDb, {
+        chatId: job.controlChatId,
+        agentId: job.agentId,
+        callerMemberId: input.callerMemberId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
+    }
     assertRevision(job, input.expectedRevision);
 
     const name = body.name ?? job.name;
     const prompt = body.prompt ?? job.prompt;
-    let schedule = body.schedule ?? job.cronExpression;
-    let timezone = body.timezone ?? job.timezone;
-    const scheduleTouched = body.schedule !== undefined || body.timezone !== undefined;
+    let schedule = job.cronExpression;
+    let timezone = job.timezone;
 
     let nextState: "active" | "paused" = job.state as "active" | "paused";
     let nextReason: string | null = job.stateReason;
@@ -500,15 +529,20 @@ export async function updateCronJob(
     }
 
     const resuming = body.state === "active" && job.state !== "active";
-    // Recompute nextRunAt only when schedule/timezone change or a real resume
-    // requires a fresh future fire. Already-active + state:active is a no-op
-    // for nextRunAt. Every schedule/timezone write still goes through Croner.
-    if (scheduleTouched || resuming) {
+    const scheduleFieldsPresent = body.schedule !== undefined || body.timezone !== undefined;
+    // Normalize/validate when schedule/timezone are supplied or a real resume
+    // needs a fresh fire. Recompute nextRunAt only for an effective schedule
+    // change or real resume — identical schedule/timezone must not discard a
+    // due occurrence or bump revision alone.
+    if (scheduleFieldsPresent || resuming) {
       try {
-        const normalized = assertSchedulable(schedule, timezone, await databaseNow(txDb));
+        const candidateSchedule = body.schedule ?? job.cronExpression;
+        const candidateTimezone = body.timezone ?? job.timezone;
+        const normalized = assertSchedulable(candidateSchedule, candidateTimezone, await databaseNow(txDb));
+        const scheduleChanged = normalized.schedule !== job.cronExpression || normalized.timezone !== job.timezone;
         schedule = normalized.schedule;
         timezone = normalized.timezone;
-        if (nextState === "active") {
+        if (nextState === "active" && (resuming || scheduleChanged)) {
           nextRunAt = normalized.nextRunAt;
         }
       } catch (err) {
@@ -575,10 +609,13 @@ export async function deleteCronJob(
     expectedRevision: number;
     agentScope?: { agentId: string; controlChatId: string };
     ownerMemberId?: string;
+    callerMemberId?: string;
+    callerHumanAgentId?: string;
   },
 ): Promise<DeleteCronJobResponse> {
   return db.transaction(async (tx) => {
-    const job = await lockJob(tx as unknown as Database, input.jobId);
+    const txDb = tx as unknown as Database;
+    const job = await lockJob(txDb, input.jobId);
     if (input.agentScope) {
       if (job.agentId !== input.agentScope.agentId || job.controlChatId !== input.agentScope.controlChatId) {
         throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
@@ -586,6 +623,14 @@ export async function deleteCronJob(
     }
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
+    }
+    if (input.callerMemberId && input.callerHumanAgentId) {
+      await assertCronAgentRouteAccess(txDb, {
+        chatId: job.controlChatId,
+        agentId: job.agentId,
+        callerMemberId: input.callerMemberId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
     }
     assertRevision(job, input.expectedRevision);
     await tx.delete(cronJobs).where(eq(cronJobs.id, job.id));

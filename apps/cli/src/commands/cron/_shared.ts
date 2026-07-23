@@ -5,7 +5,11 @@ import { handleSdkError } from "../_shared/local-agent.js";
 export function requireCronChatId(): string {
   const chatId = process.env.FIRST_TREE_CHAT_ID?.trim();
   if (!chatId) {
-    fail("NO_CHAT_CONTEXT", "Scheduled job commands require FIRST_TREE_CHAT_ID from the active agent session.", 2);
+    fail(
+      "CRON_JOB_CHAT_REQUIRED",
+      "Scheduled job commands require FIRST_TREE_CHAT_ID from the active agent session.",
+      2,
+    );
   }
   return chatId;
 }

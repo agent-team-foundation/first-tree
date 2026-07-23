@@ -10,7 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createChat } from "../services/chat.js";
-import { createCronJob, updateCronJob } from "../services/cron-job.js";
+import { createCronJob, deleteCronJob, updateCronJob } from "../services/cron-job.js";
 import { createCronScheduler } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
@@ -519,5 +519,198 @@ describe("cron jobs integration", () => {
     const denied = await outsider.request("GET", `/api/v1/agent/chats/${chatId}/cron-jobs`);
     expect(denied.statusCode).toBe(403);
     expect(denied.json()).toMatchObject({ code: "CRON_JOB_FORBIDDEN" });
+  });
+
+  it("rejects Class D create/PATCH/DELETE when the caller is no longer the manager", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "pre-reassign",
+      schedule: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    expect(createRes.statusCode).toBe(201);
+    const job = createRes.json() as { id: string; revision: number };
+
+    const other = await createTestAgent(app, { name: `cron-mgr-${crypto.randomUUID().slice(0, 6)}` });
+    // Keep agent in original chat as speaker; only flip manager.
+    await app.db.update(agents).set({ managerId: other.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
+
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+    await expect(
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body: { name: "after-reassign", schedule: "0 10 * * *", timezone: "UTC", prompt: "no" },
+        config,
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+
+    await expect(
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { prompt: "stolen" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+
+    await expect(
+      deleteCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+  });
+
+  it("maps create racing a name-only rename to CRON_JOB_NAME_CONFLICT without 25P02", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+    const existing = await createCronJob(app.db, {
+      controlChatId: chatId,
+      agentId: runtime.agent.uuid,
+      body: { name: "before-rename", schedule: "0 11 * * *", timezone: "UTC", prompt: "a" },
+      config,
+      callerMemberId: runtime.memberId,
+      callerHumanAgentId: runtime.humanAgentUuid,
+    });
+
+    const outcomes = await Promise.allSettled([
+      updateCronJob(app.db, {
+        jobId: existing.id,
+        expectedRevision: existing.revision,
+        body: { name: "raced-name" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body: { name: "raced-name", schedule: "0 12 * * *", timezone: "UTC", prompt: "b" },
+        config,
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+    ]);
+
+    const rejected = outcomes.filter((item) => item.status === "rejected");
+    for (const item of rejected) {
+      expect(item.status).toBe("rejected");
+      if (item.status === "rejected") {
+        expect(item.reason).toMatchObject({ code: "CRON_JOB_NAME_CONFLICT", statusCode: 409 });
+        expect(String(item.reason?.cause?.code ?? "")).not.toBe("25P02");
+        expect(String(item.reason?.message ?? "")).not.toMatch(/current transaction is aborted/i);
+      }
+    }
+    const rows = await app.db
+      .select()
+      .from(cronJobs)
+      .where(and(eq(cronJobs.controlChatId, chatId), eq(cronJobs.name, "raced-name")));
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not advance nextRunAt or revision for an identical schedule/timezone PATCH", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "due-preserve",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string; revision: number; schedule: string; timezone: string };
+    const dueAt = new Date(Date.now() - 5_000);
+    await app.db.update(cronJobs).set({ nextRunAt: dueAt }).where(eq(cronJobs.id, job.id));
+
+    const patched = await updateCronJob(app.db, {
+      jobId: job.id,
+      expectedRevision: job.revision,
+      body: { schedule: job.schedule, timezone: job.timezone },
+      config: {
+        enabled: true,
+        pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+      },
+      agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+      callerMemberId: runtime.memberId,
+      callerHumanAgentId: runtime.humanAgentUuid,
+    });
+
+    expect(patched.revision).toBe(job.revision);
+    expect(patched.nextRunAt).toBe(dueAt.toISOString());
+  });
+
+  it("rejects create when kill switch is off but still allows pause", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const enabledConfig = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+    const job = await createCronJob(app.db, {
+      controlChatId: chatId,
+      agentId: runtime.agent.uuid,
+      body: { name: "kill-switch", schedule: "0 13 * * *", timezone: "UTC", prompt: "x" },
+      config: enabledConfig,
+      callerMemberId: runtime.memberId,
+      callerHumanAgentId: runtime.humanAgentUuid,
+    });
+
+    await expect(
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body: { name: "disabled-create", schedule: "0 14 * * *", timezone: "UTC", prompt: "x" },
+        config: { enabled: false, pollingIntervalSeconds: 5 },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOBS_DISABLED" });
+
+    const paused = await updateCronJob(app.db, {
+      jobId: job.id,
+      expectedRevision: job.revision,
+      body: { state: "paused" },
+      config: { enabled: false, pollingIntervalSeconds: 5 },
+      agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+      callerMemberId: runtime.memberId,
+      callerHumanAgentId: runtime.humanAgentUuid,
+    });
+    expect(paused.state).toBe("paused");
+  });
+
+  it("awaits an in-flight sweep before scheduler stop resolves", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "shutdown-drain",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string };
+    await app.db
+      .update(cronJobs)
+      .set({ nextRunAt: new Date(Date.now() - 1_000) })
+      .where(eq(cronJobs.id, job.id));
+
+    const scheduler = createCronScheduler(app);
+    const sweep = scheduler.sweepOnce();
+    await scheduler.stop();
+    await expect(sweep).resolves.toBeUndefined();
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.nextRunAt?.getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 });

@@ -35,7 +35,7 @@ const MAX_JOBS_PER_SWEEP = 100;
 
 export type CronScheduler = {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   /** Test/ops hook: run one sweep immediately. */
   sweepOnce(): Promise<void>;
 };
@@ -129,11 +129,81 @@ type SweepDecision =
       controlChatId: string;
       agentId: string;
       scheduledFor: Date;
+      latenessMs: number;
       messageId: string;
       recipients: string[];
       deferred: DeferredSendMessagePostCommitEffects;
     }
-  | { kind: "skipped" | "auto_paused"; jobId: string; reason: string };
+  | {
+      kind: "skipped";
+      jobId: string;
+      reason: string;
+      organizationId: string;
+      controlChatId: string;
+      agentId: string;
+      scheduledFor: Date;
+      latenessMs: number;
+    }
+  | {
+      kind: "auto_paused";
+      jobId: string;
+      reason: string;
+      controlChatId: string;
+      agentId: string;
+      scheduledFor: Date;
+    };
+
+function emitSweepDecisionTelemetry(decision: Exclude<SweepDecision, { kind: "none" }>, sweepStartedAt: number): void {
+  const dueToCommitMs = Date.now() - sweepStartedAt;
+  if (decision.kind === "accepted") {
+    log.info(
+      {
+        jobId: decision.jobId,
+        organizationId: decision.organizationId,
+        controlChatId: decision.controlChatId,
+        deliveryChatId: decision.controlChatId,
+        agentId: decision.agentId,
+        scheduledFor: decision.scheduledFor.toISOString(),
+        latenessMs: decision.latenessMs,
+        dueToCommitMs,
+        decisionReason: "accepted",
+        metric: "cron_occurrence_accepted_total",
+      },
+      "cron.occurrence.accepted",
+    );
+    return;
+  }
+  if (decision.kind === "skipped") {
+    log.info(
+      {
+        jobId: decision.jobId,
+        organizationId: decision.organizationId,
+        controlChatId: decision.controlChatId,
+        deliveryChatId: decision.controlChatId,
+        agentId: decision.agentId,
+        scheduledFor: decision.scheduledFor.toISOString(),
+        latenessMs: decision.latenessMs,
+        dueToCommitMs,
+        decisionReason: decision.reason,
+        metric: "cron_occurrence_skipped_total",
+      },
+      "cron.occurrence.skipped",
+    );
+    return;
+  }
+  log.info(
+    {
+      jobId: decision.jobId,
+      controlChatId: decision.controlChatId,
+      agentId: decision.agentId,
+      scheduledFor: decision.scheduledFor.toISOString(),
+      dueToCommitMs,
+      decisionReason: decision.reason,
+      metric: "cron_job_auto_paused_total",
+    },
+    "cron.job.auto_paused",
+  );
+}
 
 async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<SweepDecision> {
   return db.transaction(async (tx) => {
@@ -151,6 +221,7 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
 
     const now = await databaseNow(txDb);
     const scheduledFor = job.nextRunAt;
+    const latenessMs = now.getTime() - scheduledFor.getTime();
 
     const pause = async (reason: CronJobPauseReason): Promise<SweepDecision> => {
       await tx
@@ -162,17 +233,14 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
           revision: sql`${cronJobs.revision} + 1`,
         })
         .where(eq(cronJobs.id, job.id));
-      log.info(
-        {
-          jobId: job.id,
-          controlChatId: job.controlChatId,
-          agentId: job.agentId,
-          scheduledFor: scheduledFor.toISOString(),
-          decisionReason: reason,
-        },
-        "cron.job.auto_paused",
-      );
-      return { kind: "auto_paused", jobId: job.id, reason };
+      return {
+        kind: "auto_paused",
+        jobId: job.id,
+        reason,
+        controlChatId: job.controlChatId,
+        agentId: job.agentId,
+        scheduledFor,
+      };
     };
 
     // Parser failures must pause inside the claim transaction. Throwing here
@@ -197,20 +265,16 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
 
     const skip = async (reason: CronOccurrenceSkipReason): Promise<SweepDecision> => {
       await tx.update(cronJobs).set({ nextRunAt }).where(eq(cronJobs.id, job.id));
-      log.info(
-        {
-          jobId: job.id,
-          organizationId: permanent.organizationId,
-          controlChatId: job.controlChatId,
-          deliveryChatId: job.controlChatId,
-          agentId: job.agentId,
-          scheduledFor: scheduledFor.toISOString(),
-          latenessMs: now.getTime() - scheduledFor.getTime(),
-          decisionReason: reason,
-        },
-        "cron.occurrence.skipped",
-      );
-      return { kind: "skipped", jobId: job.id, reason };
+      return {
+        kind: "skipped",
+        jobId: job.id,
+        reason,
+        organizationId: permanent.organizationId,
+        controlChatId: job.controlChatId,
+        agentId: job.agentId,
+        scheduledFor,
+        latenessMs,
+      };
     };
 
     if (now.getTime() > scheduledFor.getTime() + CRON_DISPATCH_GRACE_MS) {
@@ -274,20 +338,6 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
       })
       .where(eq(cronJobs.id, job.id));
 
-    log.info(
-      {
-        jobId: job.id,
-        organizationId: permanent.organizationId,
-        controlChatId: job.controlChatId,
-        deliveryChatId: job.controlChatId,
-        agentId: job.agentId,
-        scheduledFor: scheduledFor.toISOString(),
-        latenessMs: now.getTime() - scheduledFor.getTime(),
-        decisionReason: "accepted",
-      },
-      "cron.occurrence.accepted",
-    );
-
     return {
       kind: "accepted" as const,
       jobId: job.id,
@@ -295,6 +345,7 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
       controlChatId: job.controlChatId,
       agentId: job.agentId,
       scheduledFor,
+      latenessMs,
       messageId: sent.message.id,
       recipients: sent.recipients,
       deferred: sent.deferredPostCommitEffects,
@@ -303,30 +354,51 @@ async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<S
 }
 
 export async function sweepCronJobs(db: Database, notifier: Notifier, opts: { staleSeconds: number }): Promise<void> {
-  for (let i = 0; i < MAX_JOBS_PER_SWEEP; i++) {
-    let decision: SweepDecision;
-    try {
-      decision = await claimAndProcessOne(db, opts.staleSeconds);
-    } catch (err) {
-      log.error({ err }, "cron.sweep.failed");
-      break;
-    }
-    if (decision.kind === "none") break;
-    if (decision.kind === "accepted") {
+  const sweepStartedAt = Date.now();
+  let processed = 0;
+  try {
+    for (let i = 0; i < MAX_JOBS_PER_SWEEP; i++) {
+      let decision: SweepDecision;
       try {
-        await runDeferredSendMessagePostCommitEffects(db, decision.deferred);
-        notifyRecipients(notifier, decision.recipients, decision.messageId);
-        await notifier.notifyChatUpdated(decision.controlChatId);
+        decision = await claimAndProcessOne(db, opts.staleSeconds);
       } catch (err) {
-        log.error({ err, jobId: decision.jobId, messageId: decision.messageId }, "cron post-commit effects failed");
+        log.error({ err, metric: "cron_sweep_failures_total" }, "cron.sweep.failed");
+        break;
+      }
+      if (decision.kind === "none") break;
+      processed += 1;
+      // Decision telemetry only after the claim txn committed successfully.
+      emitSweepDecisionTelemetry(decision, sweepStartedAt);
+      if (decision.kind === "accepted") {
+        try {
+          await runDeferredSendMessagePostCommitEffects(db, decision.deferred);
+          notifyRecipients(notifier, decision.recipients, decision.messageId);
+          await notifier.notifyChatUpdated(decision.controlChatId);
+        } catch (err) {
+          log.error(
+            { err, jobId: decision.jobId, messageId: decision.messageId, metric: "cron_post_commit_failures_total" },
+            "cron post-commit effects failed",
+          );
+        }
       }
     }
+  } finally {
+    log.info(
+      {
+        processed,
+        durationMs: Date.now() - sweepStartedAt,
+        saturated: processed >= MAX_JOBS_PER_SWEEP,
+        metric: "cron_sweep_duration_ms",
+      },
+      "cron.sweep.finished",
+    );
   }
 }
 
 export function createCronScheduler(app: FastifyInstance): CronScheduler {
   let timer: ReturnType<typeof setInterval> | null = null;
-  let sweepInFlight = false;
+  let inFlight: Promise<void> | null = null;
+  let stopping = false;
 
   const config = (): CronJobsRuntimeConfig => ({
     enabled: app.config.cronJobs.enabled,
@@ -334,23 +406,29 @@ export function createCronScheduler(app: FastifyInstance): CronScheduler {
   });
 
   const run = async () => {
-    if (sweepInFlight) return;
+    if (stopping) return;
+    if (inFlight) return;
     if (!isCronWorkerRunnable(config())) return;
-    sweepInFlight = true;
+    const work = (async () => {
+      try {
+        await sweepCronJobs(app.db, app.notifier, {
+          staleSeconds: app.config.runtime.presenceCleanupSeconds,
+        });
+      } catch (err) {
+        log.error({ err, metric: "cron_sweep_failures_total" }, "cron.sweep.failed");
+      }
+    })();
+    inFlight = work;
     try {
-      await sweepCronJobs(app.db, app.notifier, {
-        staleSeconds: app.config.runtime.presenceCleanupSeconds,
-      });
-    } catch (err) {
-      log.error({ err }, "cron.sweep.failed");
+      await work;
     } finally {
-      sweepInFlight = false;
+      if (inFlight === work) inFlight = null;
     }
   };
 
   return {
     start() {
-      if (timer) return;
+      if (timer || stopping) return;
       if (!isCronWorkerRunnable(config())) {
         log.info({ enabled: app.config.cronJobs.enabled }, "cron worker not started");
         return;
@@ -361,10 +439,14 @@ export function createCronScheduler(app: FastifyInstance): CronScheduler {
       }, ms);
       void run();
     },
-    stop() {
+    async stop() {
+      stopping = true;
       if (timer) {
         clearInterval(timer);
         timer = null;
+      }
+      if (inFlight) {
+        await inFlight;
       }
     },
     sweepOnce: run,

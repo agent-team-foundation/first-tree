@@ -36,8 +36,15 @@ describe("cron expression schema", () => {
   it("accepts day and month aliases that Croner supports", () => {
     expect(cronExpressionSchema.parse("0 9 * * THU")).toBe("0 9 * * THU");
     expect(cronExpressionSchema.parse("0 9 * JUL *")).toBe("0 9 * JUL *");
-    expect(cronExpressionSchema.parse("0 9 * MARCH *")).toBe("0 9 * MARCH *");
+    expect(cronExpressionSchema.parse("0 9 * MAR *")).toBe("0 9 * MAR *");
     expect(cronExpressionSchema.parse("0 9 * * WED")).toBe("0 9 * * WED");
+  });
+
+  it("rejects full aliases and L/W in minute/hour that Croner 10 cannot parse", () => {
+    expect(cronExpressionSchema.safeParse("0 9 * MARCH *").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0 9 * * WEDNESDAY").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0L 9 * * *").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0 9W * * *").success).toBe(false);
   });
 });
 

@@ -567,6 +567,9 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(briefing).toContain("try the host `gh` CLI first");
     expect(briefing).toContain("cron preview");
+    expect(briefing).toContain("cron list");
+    expect(briefing).toContain("acceptedWorkPreserved");
+    expect(briefing).toContain("applied/not-applied");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
     expect(briefing).not.toContain("final provider `PATH`");
     expect(briefing).toContain("gh auth status");

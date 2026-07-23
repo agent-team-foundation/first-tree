@@ -11,7 +11,7 @@ const log = createLogger("BackgroundTasks");
 
 export type BackgroundTasks = {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
 };
 
 export function createBackgroundTasks(app: FastifyInstance, instanceId: string): BackgroundTasks {
@@ -77,8 +77,8 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       });
     },
 
-    stop() {
-      cronScheduler.stop();
+    async stop() {
+      await cronScheduler.stop();
       if (inboxTimer) {
         clearInterval(inboxTimer);
         inboxTimer = null;

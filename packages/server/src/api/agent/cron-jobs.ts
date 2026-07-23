@@ -42,13 +42,15 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { chatId: string } }>("/:chatId/cron-jobs", async (request, reply) => {
     try {
-      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
+      const { agentId, memberId, humanAgentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const body = createCronJobRequestSchema.parse(request.body);
       const job = await createCronJob(app.db, {
         controlChatId: request.params.chatId,
         agentId,
         body,
         config: cronConfig(app),
+        callerMemberId: memberId,
+        callerHumanAgentId: humanAgentId,
       });
       notifyCronChatUpdated(app, request.params.chatId);
       return reply.code(201).send(job);
@@ -68,7 +70,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
-      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
+      const { agentId, memberId, humanAgentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const body = updateCronJobRequestSchema.parse(request.body);
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
@@ -80,6 +82,8 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
         body,
         config: cronConfig(app),
         agentScope: { agentId, controlChatId: request.params.chatId },
+        callerMemberId: memberId,
+        callerHumanAgentId: humanAgentId,
       });
       notifyCronChatUpdated(app, request.params.chatId);
       return job;
@@ -90,7 +94,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
-      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
+      const { agentId, memberId, humanAgentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
         Array.isArray(revisionHeader) ? revisionHeader[0] : revisionHeader,
@@ -99,6 +103,8 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
         jobId: request.params.id,
         expectedRevision,
         agentScope: { agentId, controlChatId: request.params.chatId },
+        callerMemberId: memberId,
+        callerHumanAgentId: humanAgentId,
       });
       notifyCronChatUpdated(app, request.params.chatId);
       return result;
