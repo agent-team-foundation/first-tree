@@ -10,12 +10,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installFirstTreeSkills,
   installOneSkill,
   resolveBundledSkillsRoot,
+  resolveWithinSkillsRoot,
   TREE_SKILL_NAMES,
 } from "../runtime/first-tree-skills/installer.js";
 import { writeManagedState } from "../runtime/managed-state.js";
@@ -204,5 +205,23 @@ describe("first-tree skill installer edge coverage", () => {
     expect(mod.installOneSkill(workspace, skillLayout(bundledRoot))).toBe("installed");
 
     expect(existsSync(join(workspace, ".claude", "skills", "first-tree-write", ".sentinel"))).toBe(true);
+  });
+});
+
+describe("resolveWithinSkillsRoot", () => {
+  it("returns the resolved target for a name inside the root", () => {
+    expect(resolveWithinSkillsRoot(join("tmp", "skills-root"), "first-tree-write")).toBe(
+      resolve("tmp", "skills-root", "first-tree-write"),
+    );
+  });
+
+  it("refuses targets equal to the root or escaping it (#1610)", () => {
+    const root = join("tmp", "skills-root");
+    expect(resolveWithinSkillsRoot(root, ".")).toBeNull();
+    expect(resolveWithinSkillsRoot(root, "")).toBeNull();
+    expect(resolveWithinSkillsRoot(root, "..")).toBeNull();
+    expect(resolveWithinSkillsRoot(root, "../sibling")).toBeNull();
+    expect(resolveWithinSkillsRoot(root, "../../outside")).toBeNull();
+    expect(resolveWithinSkillsRoot(root, "/abs/path")).toBeNull();
   });
 });

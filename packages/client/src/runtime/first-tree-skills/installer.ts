@@ -36,10 +36,10 @@ import {
   symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledCliVersion } from "../bootstrap.js";
-import { readManagedState, updateManagedState } from "../managed-state.js";
+import { isManagedSkillName, readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
@@ -456,15 +456,24 @@ function reconcileTreeSkillState(workspacePath: string): void {
  * actually exist; anything the user added later (a custom skill payload
  * under `.agents/skills/<user-skill>/`) is never touched because we look
  * up by NAME, not by listing the directory.
+ *
+ * The name comes from the agent-writable managed-state file, i.e. untrusted
+ * input (#1610): anything that is not a strict skill slug is skipped, and
+ * each delete target must resolve strictly inside its skills root before a
+ * recursive remove runs.
  */
 function removeManagedSkill(workspacePath: string, name: string): void {
-  const agentsFull = join(workspacePath, ".agents", "skills", name);
-  const claudeFull = join(workspacePath, ".claude", "skills", name);
-  try {
-    rmSync(agentsFull, { recursive: true, force: true });
-  } catch {
-    // Best-effort — the Claude companion cleanup below still runs.
+  if (!isManagedSkillName(name)) return;
+  const agentsFull = resolveWithinSkillsRoot(join(workspacePath, ".agents", "skills"), name);
+  if (agentsFull !== null) {
+    try {
+      rmSync(agentsFull, { recursive: true, force: true });
+    } catch {
+      // Best-effort — the Claude companion cleanup below still runs.
+    }
   }
+  const claudeFull = resolveWithinSkillsRoot(join(workspacePath, ".claude", "skills"), name);
+  if (claudeFull === null) return;
   try {
     const claudeState = inspectPath(claudeFull);
     if (claudeState.kind === "missing") return;
@@ -476,4 +485,24 @@ function removeManagedSkill(workspacePath: string, name: string): void {
   } catch {
     // Either missing or remove failed — both acceptable here.
   }
+}
+
+/**
+ * Resolve `name` inside a skills root (`<workspace>/.agents/skills` or
+ * `<workspace>/.claude/skills`) and verify the result stays strictly inside
+ * that root; returns `null` when it does not. Defense in depth behind
+ * `isManagedSkillName`: even if the slug schema were ever loosened, a
+ * resolved path equal to the root or escaping it is refused instead of
+ * reaching a recursive delete. Mirrors the containment idiom in
+ * `runtime/git-local-path.ts`.
+ *
+ * @internal Exported for unit tests.
+ */
+export function resolveWithinSkillsRoot(skillsRoot: string, name: string): string | null {
+  const root = resolve(skillsRoot);
+  const target = resolve(root, name);
+  const relativeTarget = relative(root, target);
+  const escapesRoot = relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`);
+  if (!relativeTarget || escapesRoot || isAbsolute(relativeTarget)) return null;
+  return target;
 }
