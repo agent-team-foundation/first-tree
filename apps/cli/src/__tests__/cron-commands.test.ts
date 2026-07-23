@@ -1,4 +1,3 @@
-import { SdkError } from "@first-tree/client";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

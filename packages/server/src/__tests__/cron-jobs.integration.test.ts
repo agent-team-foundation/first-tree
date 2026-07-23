@@ -458,7 +458,7 @@ describe("cron jobs integration", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("serializes concurrent resume against owner chat deletion without deadlock", async () => {
+  it("serializes concurrent Class D resume against owner chat deletion without deadlock", async () => {
     const { app, runtime, chatId } = await setupChatWithAgent();
     const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
       name: "resume-vs-delete",
@@ -473,7 +473,8 @@ describe("cron jobs integration", () => {
       pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
     };
 
-    // Active job + concurrent activate (advisory+row) vs owner delete (advisory+row).
+    // Class D caller fields exercise member→agent→speakers→advisory→engagement
+    // recheck (not the legacy internal path that skipped auth locks).
     const raced = Promise.allSettled([
       updateCronJob(app.db, {
         jobId: job.id,
@@ -481,6 +482,8 @@ describe("cron jobs integration", () => {
         body: { state: "active" },
         config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
       }),
       setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
     ]);
@@ -492,10 +495,207 @@ describe("cron jobs integration", () => {
     ]);
     expect(outcome).toHaveLength(2);
     expect(outcome[1]?.status).toBe("fulfilled");
+    const resumeResult = outcome[0];
+    if (resumeResult?.status === "rejected") {
+      expect(resumeResult.reason).toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+    }
 
     const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
     expect(row?.state).toBe("paused");
     expect(row?.stateReason).toBe("owner_chat_deleted");
+  });
+
+  it("serializes Class D create against chat deletion when engagement row is missing", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    // createChat does not seed chat_user_state — missing-row case for Class D.
+    const existing = await app.db
+      .select()
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, runtime.humanAgentUuid)));
+    expect(existing).toHaveLength(0);
+
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+    const raced = Promise.allSettled([
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body: {
+          name: "create-vs-delete-missing-engagement",
+          schedule: "0 9 * * *",
+          timezone: "UTC",
+          prompt: "must not land after chat delete",
+        },
+        config,
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("create-vs-delete missing-engagement deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(2);
+    expect(outcome[1]?.status).toBe("fulfilled");
+
+    const createResult = outcome[0];
+    const rows = await app.db
+      .select()
+      .from(cronJobs)
+      .where(and(eq(cronJobs.controlChatId, chatId), eq(cronJobs.name, "create-vs-delete-missing-engagement")));
+    if (createResult?.status === "fulfilled") {
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.state).toBe("paused");
+      expect(rows[0]?.stateReason).toBe("owner_chat_deleted");
+    } else {
+      expect(createResult?.reason).toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+      expect(rows).toHaveLength(0);
+    }
+    const [engagement] = await app.db
+      .select()
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, runtime.humanAgentUuid)))
+      .limit(1);
+    expect(engagement?.engagementStatus).toBe("deleted");
+  });
+
+  it("serializes Class D pause against owner chat deletion without deadlock", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    await setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "active");
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "pause-vs-delete",
+      schedule: "0 10 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+
+    const raced = Promise.allSettled([
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { state: "paused" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("pause-vs-delete deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(2);
+    expect(outcome[1]?.status).toBe("fulfilled");
+    const mutate = outcome[0];
+    if (mutate?.status === "rejected") {
+      expect(["CRON_JOB_FORBIDDEN", "CRON_JOB_REVISION_MISMATCH"]).toContain((mutate.reason as { code?: string }).code);
+    }
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.state).toBe("paused");
+    expect(["owner_chat_deleted", "user_paused"]).toContain(row?.stateReason);
+  });
+
+  it("serializes Class D config update against owner chat deletion without deadlock", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    await setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "active");
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "config-vs-delete",
+      schedule: "0 11 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+
+    const raced = Promise.allSettled([
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { prompt: "rewritten" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("config-vs-delete deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(2);
+    expect(outcome[1]?.status).toBe("fulfilled");
+    const mutate = outcome[0];
+    if (mutate?.status === "rejected") {
+      expect(["CRON_JOB_FORBIDDEN", "CRON_JOB_REVISION_MISMATCH"]).toContain((mutate.reason as { code?: string }).code);
+    }
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row).toBeTruthy();
+    expect(row?.state).toBe("paused");
+    expect(row?.stateReason).toBe("owner_chat_deleted");
+  });
+
+  it("serializes Class D job delete against owner chat deletion without deadlock", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    await setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "active");
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "job-delete-vs-chat-delete",
+      schedule: "0 12 * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+
+    const raced = Promise.allSettled([
+      deleteCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: runtime.memberId,
+        callerHumanAgentId: runtime.humanAgentUuid,
+      }),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("job-delete-vs-chat-delete deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(2);
+    expect(outcome[1]?.status).toBe("fulfilled");
+    const mutate = outcome[0];
+    if (mutate?.status === "rejected") {
+      expect(["CRON_JOB_FORBIDDEN", "CRON_JOB_REVISION_MISMATCH"]).toContain((mutate.reason as { code?: string }).code);
+    }
+
+    const rows = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id));
+    if (rows.length === 1) {
+      expect(rows[0]?.state).toBe("paused");
+      expect(rows[0]?.stateReason).toBe("owner_chat_deleted");
+    } else {
+      expect(rows).toHaveLength(0);
+    }
   });
 
   it("returns CRON_JOB_INVALID_REQUEST for malformed If-Match and empty PATCH", async () => {

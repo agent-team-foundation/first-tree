@@ -330,9 +330,8 @@ export async function createCronJob(
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
 
-    // Class D: lock auth rows (member→agent→speakers→engagement) before the
-    // owner-chat advisory barrier so manager reassignment serializes on the
-    // agent row until this transaction commits.
+    // Class D global order: member→agent→speakers → advisory → engagement
+    // recheck → cron/insert. Advisory serializes with setChatEngagement(deleted).
     let ownerMemberId: string;
     if (input.callerMemberId && input.callerHumanAgentId) {
       await assertCronAgentRouteAccess(txDb, {
@@ -342,15 +341,19 @@ export async function createCronJob(
         callerHumanAgentId: input.callerHumanAgentId,
       });
       ownerMemberId = input.callerMemberId;
+      await lockOwnerChatCronBarrier(txDb, input.controlChatId, ownerMemberId);
+      await assertCronOwnerEngagementAllowed(txDb, {
+        controlChatId: input.controlChatId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
     } else {
       const [agent] = await txDb.select().from(agents).where(eq(agents.uuid, input.agentId)).for("update").limit(1);
       if (!agent || agent.status !== "active") {
         throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
       }
       ownerMemberId = agent.managerId;
+      await lockOwnerChatCronBarrier(txDb, input.controlChatId, ownerMemberId);
     }
-
-    await lockOwnerChatCronBarrier(txDb, input.controlChatId, ownerMemberId);
 
     const validated = await revalidateOwnerChatAgent(txDb, {
       ownerMemberId,
@@ -501,11 +504,20 @@ export async function updateCronJob(
         callerMemberId: input.callerMemberId,
         callerHumanAgentId: input.callerHumanAgentId,
       });
+      // Always take the owner-chat barrier for Class D so pause/config/delete
+      // serialize with setChatEngagement(deleted) even when not resuming.
+      await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
+      await assertCronOwnerEngagementAllowed(txDb, {
+        controlChatId: peek.controlChatId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
+    } else if (body.state === "active") {
+      assertMutationsAvailable(input.config);
+      await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
     }
 
     if (body.state === "active") {
       assertMutationsAvailable(input.config);
-      await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
     }
 
     const job = await lockJob(txDb, input.jobId);
@@ -654,6 +666,11 @@ export async function deleteCronJob(
         callerMemberId: input.callerMemberId,
         callerHumanAgentId: input.callerHumanAgentId,
       });
+      await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
+      await assertCronOwnerEngagementAllowed(txDb, {
+        controlChatId: peek.controlChatId,
+        callerHumanAgentId: input.callerHumanAgentId,
+      });
     }
 
     const job = await lockJob(txDb, input.jobId);
@@ -679,8 +696,10 @@ export async function deleteCronJob(
 
 /**
  * Pause all active jobs for an owner on a control chat. Caller must hold or
- * be about to take the chat_user_state write. Lock order: advisory barrier,
- * then cron rows FOR UPDATE ORDER BY id (same order as resume/activate).
+ * be about to take the chat_user_state write. Lock order: owner-chat advisory
+ * barrier, then cron rows FOR UPDATE ORDER BY id, then engagement UPSERT in
+ * `setChatEngagement`. Class D mutations use member→agent→speakers→advisory→
+ * engagement recheck→cron so both paths share advisory-before-engagement.
  */
 export async function pauseActiveJobsForOwnerChatDelete(
   db: Database,
@@ -726,18 +745,18 @@ export async function pauseActiveJobsForOwnerChatDelete(
 }
 
 /**
- * Class D authorization check held until commit.
+ * Class D manager/speaker authorization held until commit.
  *
- * Lock order (must stay ahead of owner-chat advisory + cron row locks):
+ * Lock order (must stay ahead of owner-chat advisory + engagement recheck + cron):
  *   1. caller member row
  *   2. agent row
  *   3. chat_membership speaker rows (`agent_id` ASC)
- *   4. chat_user_state engagement row (when present)
  *
- * Matches `updateAgent` / `deactivateMembership` member→agent ordering so a
- * concurrent manager reassignment's `UPDATE agents` blocks on the agent
- * row lock until this transaction commits — closing the READ COMMITTED
- * TOCTOU between ordinary SELECTs and the cron mutation.
+ * Engagement is intentionally *not* locked here — `setChatEngagement(deleted)`
+ * takes the owner-chat advisory before upserting `chat_user_state`, so Class D
+ * must take that advisory next and only then re-read engagement (see
+ * `assertCronOwnerEngagementAllowed`). Locking engagement before advisory
+ * deadlocks against chat deletion.
  */
 export async function assertCronAgentRouteAccess(
   db: Database,
@@ -795,12 +814,24 @@ export async function assertCronAgentRouteAccess(
       );
     }
   }
+}
 
+/**
+ * Engagement gate for Class D mutations. Call only *after* holding
+ * `lockOwnerChatCronBarrier` for `(controlChatId, ownerMemberId)`.
+ *
+ * Chat deletion takes that same advisory before upserting `deleted`, so a
+ * missing `chat_user_state` row is still serialized: the delete path cannot
+ * insert `deleted` while we hold the barrier.
+ */
+export async function assertCronOwnerEngagementAllowed(
+  db: Database,
+  input: { controlChatId: string; callerHumanAgentId: string },
+): Promise<void> {
   const [engagement] = await db
     .select({ status: chatUserState.engagementStatus })
     .from(chatUserState)
-    .where(and(eq(chatUserState.chatId, input.chatId), eq(chatUserState.agentId, input.callerHumanAgentId)))
-    .for("update")
+    .where(and(eq(chatUserState.chatId, input.controlChatId), eq(chatUserState.agentId, input.callerHumanAgentId)))
     .limit(1);
   if (engagement?.status === "deleted") {
     throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Control chat is deleted for the schedule owner");
