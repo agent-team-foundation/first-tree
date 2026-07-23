@@ -25,7 +25,8 @@ import {
   ShieldCheck,
   Webhook,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
 import { getContextTreeSnapshot } from "../../api/context-tree.js";
 import { reportOnboardingEvent } from "../../api/onboarding-events.js";
@@ -35,6 +36,8 @@ import { useAuth } from "../../auth/auth-context.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { cn } from "../../lib/utils.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
+import { SetupContextTreeControls } from "./setup-context-tree-controls.js";
+import { SetupReviewerControls } from "./setup-reviewer-controls.js";
 
 type Fact<T> =
   | { state: "loading" }
@@ -94,7 +97,7 @@ export type SetupRowModel = {
   action?: {
     label: string;
     to: string;
-    intent?: "resume-onboarding";
+    intent?: "resume-onboarding" | "open-context-tree-controls" | "open-reviewer-controls";
   };
 };
 
@@ -185,12 +188,12 @@ const ACTION_DESTINATIONS = {
   manage_github_installation: "/settings/integrations/github",
   connect_gitlab: "/settings/integrations/gitlab",
   configure_gitlab_webhook: "/settings/integrations/gitlab",
-  repair_tree_binding: "/settings/repositories#context-tree",
+  repair_tree_binding: "/settings/setup#context-tree",
   open_tree_setup_chat: "/context",
-  select_review_agent: "/settings/repositories#context-tree",
-  replace_review_agent: "/settings/repositories#context-tree",
+  select_review_agent: "/settings/setup#automatic-review",
+  replace_review_agent: "/settings/setup#automatic-review",
   open_agent_owner_flow: "/team",
-  manage_review_agent: "/settings/repositories#context-tree",
+  manage_review_agent: "/settings/setup#automatic-review",
 } satisfies Record<SetupActionKind, string>;
 
 const ACTION_LABELS = {
@@ -263,12 +266,9 @@ function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin
   const blockers = configured.flatMap((provider) => provider.blockers);
   const issues = blockerDetail(blockers, isAdmin);
   const detail = [providerDetail, issues].filter((item): item is string => Boolean(item)).join(" · ");
-  const kind: SetupStatusKind =
-    isAdmin && hasAdminBlocker(blockers)
-      ? "attention"
-      : configured.some((provider) => provider.health === "degraded" || provider.health === "unavailable")
-        ? "neutral"
-        : "pending";
+  const hasAdminOwnedBlocker = hasAdminBlocker(blockers);
+  const adminAttention = isAdmin && hasAdminOwnedBlocker;
+  const inactiveKind: SetupStatusKind = adminAttention ? "attention" : hasAdminOwnedBlocker ? "blocked" : "neutral";
 
   if (ready.length === configured.length) {
     return {
@@ -277,17 +277,17 @@ function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin
       kind: "ready",
     };
   }
-  if (ready.length > 0) return { label: "Partial coverage", detail, kind };
+  if (ready.length > 0) return { label: "Partial coverage", detail, kind: adminAttention ? "attention" : "pending" };
   if (configured.some((provider) => provider.health === "pending_verification")) {
-    return { label: "Verification pending", detail, kind };
+    return { label: "Verification pending", detail, kind: adminAttention ? "attention" : "pending" };
   }
   if (configured.some((provider) => provider.health === "degraded")) {
-    return { label: "Degraded", detail, kind };
+    return { label: "Degraded", detail, kind: inactiveKind };
   }
   return {
     label: hasAdminBlocker(blockers) && isAdmin ? "Needs attention" : "Service unavailable",
     detail,
-    kind,
+    kind: inactiveKind,
   };
 }
 
@@ -338,7 +338,7 @@ function contextTreeStatus(
       detail:
         blockerDetail(blockers, isAdmin) ??
         (isAdmin ? "The Context Tree binding is invalid." : "Ask an admin to repair the Context Tree binding."),
-      kind: isAdmin ? "attention" : "neutral",
+      kind: isAdmin ? "attention" : "blocked",
     };
   }
 
@@ -350,39 +350,41 @@ function contextTreeStatus(
   const issueDetail = blockerDetail(blockers, isAdmin);
   const detail = [bindingDetail, issueDetail].filter((item): item is string => Boolean(item)).join(" · ");
   if (availability === "active") return { label: "Available", detail, kind: "ready" };
-  if (availability === "stale") return { label: "Available · update delayed", detail, kind: "neutral" };
+  if (availability === "stale") return { label: "Available · update delayed", detail, kind: "pending" };
   if (availability === "unavailable") {
     return isAdmin
       ? { label: "Needs recovery", detail, kind: "attention" }
       : {
           label: "Unavailable",
           detail: issueDetail ? detail : `${bindingDetail} · Ask an admin to recover Context Tree access.`,
-          kind: "neutral",
+          kind: "blocked",
         };
   }
   if (availability === "checking") return { label: "Checking availability", detail, kind: "loading" };
   return { label: "Status unknown", detail, kind: "unknown" };
 }
 
-function contextTreeAction(
-  contextTree: Fact<ContextTreeFact>,
-  blockers: SetupBlocker[],
-  isAdmin: boolean,
-): SetupRowModel["action"] | undefined {
+function contextTreeAction(contextTree: Fact<ContextTreeFact>, isAdmin: boolean): SetupRowModel["action"] | undefined {
   if (contextTree.state !== "ready") return undefined;
   const { binding, availability } = contextTree.value;
   if (binding.state === "unbound") {
-    return isAdmin ? { label: "Set up", to: "/context" } : undefined;
+    return isAdmin
+      ? { label: "Set up", to: "/settings/setup#context-tree", intent: "open-context-tree-controls" }
+      : undefined;
   }
   if (binding.state === "invalid") {
     return isAdmin
-      ? (actionFromBlockers(blockers, true) ?? { label: "Repair", to: "/settings/repositories#context-tree" })
+      ? { label: "Repair", to: "/settings/setup#context-tree", intent: "open-context-tree-controls" }
       : { label: "View", to: "/context" };
   }
   if (availability === "unavailable") {
-    return isAdmin ? { label: "Recover", to: "/context" } : { label: "View", to: "/context" };
+    return isAdmin
+      ? { label: "Recover", to: "/settings/setup#context-tree", intent: "open-context-tree-controls" }
+      : { label: "View", to: "/context" };
   }
-  return isAdmin ? { label: "Manage", to: "/settings/repositories#context-tree" } : { label: "View", to: "/context" };
+  return isAdmin
+    ? { label: "Manage", to: "/settings/setup#context-tree", intent: "open-context-tree-controls" }
+    : { label: "View", to: "/context" };
 }
 
 function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["status"] {
@@ -390,26 +392,40 @@ function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowM
     return { label: "Available after Context Tree", kind: "optional" };
   }
   if (review.adoption === "disabled") {
-    return { label: "Off", detail: "Optional", kind: "optional" };
+    const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
+    const healthDetail =
+      review.health === "pending_verification"
+        ? "Reviewer verification pending"
+        : review.health === "degraded"
+          ? "Reviewer degraded"
+          : review.health === "unavailable"
+            ? "Reviewer unavailable"
+            : null;
+    const issues = blockerDetail(review.blockers, isAdmin);
+    const detail = [reviewer, healthDetail, issues, "Optional"]
+      .filter((item): item is string => Boolean(item))
+      .join(" · ");
+    return { label: "Off", detail, kind: "optional" };
   }
 
   const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
   const issues = blockerDetail(review.blockers, isAdmin);
   const detail = [reviewer, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
   if (review.health === "ready") return { label: "On", detail, kind: "ready" };
-  const kind: SetupStatusKind =
-    isAdmin && hasAdminBlocker(review.blockers)
-      ? "attention"
-      : review.health === "pending_verification"
-        ? "pending"
-        : "neutral";
-  if (review.health === "pending_verification") return { label: "Verification pending", detail, kind };
-  if (review.health === "degraded") return { label: "Degraded", detail, kind };
+  const hasAdminOwnedBlocker = hasAdminBlocker(review.blockers);
+  const adminAttention = isAdmin && hasAdminOwnedBlocker;
+  const inactiveKind: SetupStatusKind = adminAttention ? "attention" : hasAdminOwnedBlocker ? "blocked" : "neutral";
+  if (review.health === "pending_verification") {
+    return { label: "Verification pending", detail, kind: adminAttention ? "attention" : "pending" };
+  }
+  if (review.health === "degraded") {
+    return { label: "Degraded", detail, kind: inactiveKind };
+  }
   if (review.health === "unavailable") {
     return {
       label: hasAdminBlocker(review.blockers) && isAdmin ? "Needs attention" : "Service unavailable",
       detail,
-      kind,
+      kind: inactiveKind,
     };
   }
   return { label: "Status unknown", detail, kind: "unknown" };
@@ -417,16 +433,13 @@ function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowM
 
 function reviewAction(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["action"] | undefined {
   if (review.adoption === "unavailable") return undefined;
-  if (!isAdmin) {
-    return review.adoption === "enabled" ? { label: "View", to: "/settings/repositories#context-tree" } : undefined;
-  }
-  if (review.adoption === "disabled") {
-    return { label: "Set up", to: "/settings/repositories#context-tree" };
-  }
-  const blockerAction = actionFromBlockers(review.blockers, true);
-  if (blockerAction) return blockerAction;
-  if (review.blockers.length > 0) return undefined;
-  return { label: "Manage", to: "/settings/repositories#context-tree" };
+  if (!isAdmin) return undefined;
+
+  return {
+    label: review.adoption === "disabled" && !review.reviewerAgent ? "Set up" : "Manage",
+    to: "/settings/setup#automatic-review",
+    intent: "open-reviewer-controls",
+  };
 }
 
 /**
@@ -574,7 +587,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       description: "Shared decisions and constraints available to agents.",
       icon: GitFork,
       status: contextTreeStatus(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
-      action: contextTreeAction(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
+      action: contextTreeAction(contextTree, isAdmin),
     },
     {
       key: "automatic-review",
@@ -590,6 +603,13 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
 
 export function SettingsSetupPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [expandedOwnerControl, setExpandedOwnerControl] = useState<{
+    organizationId: string | null;
+    key: SetupRowModel["key"];
+  } | null>(null);
+  const previousOrganizationId = useRef<string | null>(null);
+  const handledOwnerHash = useRef<string | null>(null);
   const {
     role,
     organizationId,
@@ -681,16 +701,101 @@ export function SettingsSetupPage() {
     navigate("/onboarding");
   };
 
-  return <SetupOverview facts={facts} rows={buildSetupRows(facts)} onResumeOnboarding={resumeOnboarding} />;
+  const contextTree = contextTreeFact(capabilities, contextTreeSnapshot);
+  const expandedOwnerControlKey =
+    expandedOwnerControl?.organizationId === organizationId ? expandedOwnerControl.key : null;
+
+  useEffect(() => {
+    if (previousOrganizationId.current !== null && previousOrganizationId.current !== organizationId) {
+      setExpandedOwnerControl(null);
+      handledOwnerHash.current = null;
+    }
+    previousOrganizationId.current = organizationId;
+  }, [organizationId]);
+
+  useEffect(() => {
+    const key =
+      location.hash === "#context-tree"
+        ? "context-tree"
+        : location.hash === "#automatic-review"
+          ? "automatic-review"
+          : null;
+    if (!key || !organizationId || facts.capabilities.state !== "ready") return;
+
+    const hashKey = `${organizationId}:${location.hash}`;
+    if (handledOwnerHash.current === hashKey) return;
+    handledOwnerHash.current = hashKey;
+    if (role === "admin") setExpandedOwnerControl({ organizationId, key });
+  }, [facts.capabilities.state, location.hash, organizationId, role]);
+
+  useEffect(() => {
+    const key =
+      location.hash === "#context-tree"
+        ? "context-tree"
+        : location.hash === "#automatic-review"
+          ? "automatic-review"
+          : null;
+    if (!key || facts.capabilities.state !== "ready") return;
+    if (role === "admin" && expandedOwnerControlKey !== key) return;
+
+    const row = document.getElementById(key);
+    row?.scrollIntoView?.({ block: "start" });
+    row?.focus();
+  }, [expandedOwnerControlKey, facts.capabilities.state, location.hash, role]);
+
+  const ownerControls: Partial<Record<SetupRowModel["key"], ReactNode>> =
+    role !== "admin" || facts.capabilities.state !== "ready"
+      ? {}
+      : {
+          ...(expandedOwnerControlKey === "context-tree" && contextTree.state === "ready"
+            ? {
+                "context-tree": (
+                  <SetupContextTreeControls
+                    key={`context-tree-${organizationId}`}
+                    binding={contextTree.value.binding}
+                    availability={contextTree.value.availability}
+                  />
+                ),
+              }
+            : {}),
+          ...(expandedOwnerControlKey === "automatic-review"
+            ? {
+                "automatic-review": (
+                  <SetupReviewerControls
+                    key={`automatic-review-${organizationId}`}
+                    review={facts.capabilities.value.contextTree.automaticReview}
+                  />
+                ),
+              }
+            : {}),
+        };
+
+  return (
+    <SetupOverview
+      facts={facts}
+      rows={buildSetupRows(facts)}
+      ownerControls={ownerControls}
+      onToggleOwnerControl={(key) => {
+        setExpandedOwnerControl((current) =>
+          current?.organizationId === organizationId && current.key === key ? null : { organizationId, key },
+        );
+      }}
+      onResumeOnboarding={resumeOnboarding}
+    />
+  );
 }
 
 export function SetupOverview({
   facts,
   rows,
+  ownerControls = {},
+  onToggleOwnerControl,
   onResumeOnboarding,
 }: {
   facts: Pick<SetupFacts, "role" | "teamName">;
   rows: SetupRowModel[];
+  ownerControls?: Partial<Record<SetupRowModel["key"], ReactNode>>;
+  onToggleOwnerControl?: (key: SetupRowModel["key"]) => void;
   onResumeOnboarding?: () => Promise<void>;
 }) {
   const viewport = useWorkspaceViewport();
@@ -710,7 +815,14 @@ export function SetupOverview({
 
       <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>
         {rows.map((row) => (
-          <SetupRow key={row.key} row={row} narrow={narrow} onResumeOnboarding={onResumeOnboarding} />
+          <SetupRow
+            key={row.key}
+            row={row}
+            narrow={narrow}
+            ownerControl={ownerControls[row.key]}
+            onToggleOwnerControl={onToggleOwnerControl}
+            onResumeOnboarding={onResumeOnboarding}
+          />
         ))}
       </div>
     </div>
@@ -743,15 +855,21 @@ function SetupStatusMark({ kind }: { kind: SetupStatusKind }) {
 function SetupRow({
   row,
   narrow,
+  ownerControl,
+  onToggleOwnerControl,
   onResumeOnboarding,
 }: {
   row: SetupRowModel;
   narrow: boolean;
+  ownerControl?: ReactNode;
+  onToggleOwnerControl?: (key: SetupRowModel["key"]) => void;
   onResumeOnboarding?: () => Promise<void>;
 }) {
   const Icon = row.icon;
   return (
     <section
+      id={row.key}
+      tabIndex={-1}
       aria-labelledby={`setup-${row.key}`}
       data-setup-row={row.key}
       data-setup-parent={row.parentKey}
@@ -814,7 +932,23 @@ function SetupRow({
         className={cn("flex", !narrow && "justify-end")}
         style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}
       >
-        {row.action ? (
+        {(row.action?.intent === "open-context-tree-controls" || row.action?.intent === "open-reviewer-controls") &&
+        onToggleOwnerControl ? (
+          <button
+            type="button"
+            aria-expanded={Boolean(ownerControl)}
+            aria-controls={`setup-${row.key}-owner-controls`}
+            onClick={() => onToggleOwnerControl(row.key)}
+            className={cn(
+              "text-label inline-flex items-center font-medium text-fg-2 transition-colors",
+              "rounded-[var(--radius-input)] hover:bg-bg-hover hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
+            )}
+            style={{ minHeight: "var(--sp-8)", padding: "0 var(--sp-2)" }}
+          >
+            {row.action.label}
+          </button>
+        ) : row.action ? (
           <Link
             to={row.action.to}
             onClick={
@@ -840,6 +974,17 @@ function SetupRow({
           </Link>
         ) : null}
       </div>
+      {ownerControl ? (
+        <div
+          id={`setup-${row.key}-owner-controls`}
+          style={{
+            gridColumn: "1 / -1",
+            paddingLeft: narrow || row.parentKey ? "var(--sp-4)" : "var(--sp-11)",
+          }}
+        >
+          {ownerControl}
+        </div>
+      ) : null}
     </section>
   );
 }

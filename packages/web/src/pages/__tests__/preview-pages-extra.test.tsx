@@ -235,6 +235,22 @@ describe("extra preview pages", () => {
 
     expect(rendered.container.querySelector('[data-setup-preview="admin-ready"]')).not.toBeNull();
     expect(text(rendered.container)).toContain("Context Tree");
+    const treeRow = rendered.container.querySelector<HTMLElement>('[data-setup-row="context-tree"]');
+    if (!treeRow) throw new Error("Missing Context Tree row");
+    await click(buttonByText(treeRow, "Manage"));
+    expect(treeRow.querySelector('[data-setup-owner-controls="context-tree"]')).not.toBeNull();
+
+    const reviewRow = rendered.container.querySelector<HTMLElement>('[data-setup-row="automatic-review"]');
+    if (!reviewRow) throw new Error("Missing Automatic Review row");
+    await click(buttonByText(reviewRow, "Manage"));
+    expect(reviewRow.querySelector('[data-setup-owner-controls="automatic-review"]')).not.toBeNull();
+    expect(rendered.container.querySelector('[data-setup-owner-controls="context-tree"]')).toBeNull();
+    expect(text(reviewRow)).toContain("Context Reviewer");
+    const enablement = reviewRow.querySelector<HTMLButtonElement>('[role="switch"]');
+    expect(enablement?.getAttribute("aria-checked")).toBe("true");
+    if (!enablement) throw new Error("Missing preview Reviewer enablement switch");
+    await click(enablement);
+    expect(enablement.getAttribute("aria-checked")).toBe("false");
     expect(globalThis.fetch).not.toHaveBeenCalled();
 
     await cleanupRendered(rendered);
