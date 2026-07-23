@@ -62,6 +62,8 @@ export type CreateTestAppOptions = {
   githubOAuth?: boolean;
   /** Document review (docloop) routes. Defaults to enabled in tests. */
   docsEnabled?: boolean;
+  /** Cron jobs feature kill switch. Defaults to disabled in tests. */
+  cronJobsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
   landingCampaignServiceUserId?: string;
   landingCampaignServiceOrgId?: string;
@@ -124,6 +126,10 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // Docloop is off by default in production config but on in tests so
       // the document routes are exercised without per-test wiring.
       enabled: opts.docsEnabled ?? true,
+    },
+    cronJobs: {
+      // Cron jobs default off in production; tests opt in explicitly.
+      enabled: opts.cronJobsEnabled ?? false,
     },
     database: {
       url: process.env.DATABASE_URL ?? "",
