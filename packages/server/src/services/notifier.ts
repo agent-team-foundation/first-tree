@@ -151,6 +151,12 @@ export type Notifier = {
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
   notify(inboxId: string, messageId: string): Promise<void>;
+  /**
+   * Same NOTIFY as `notify`, but rejects when the underlying `pg_notify` fails.
+   * Ordinary callers keep using fire-and-forget `notify`; cron post-commit
+   * observability uses this so delivery-hint failures are countable.
+   */
+  notifyStrict(inboxId: string, messageId: string): Promise<void>;
   /** Notify that a config has changed */
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
@@ -294,6 +300,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
           subscriptions.delete(inboxId);
         }
       }
+    },
+
+    async notifyStrict(inboxId: string, messageId: string) {
+      await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
     },
 
     async notify(inboxId: string, messageId: string) {
@@ -784,16 +794,17 @@ export function notifyRecipients(notifier: Notifier, recipients: string[], messa
 }
 
 /**
- * Await every recipient notify and report failures. Callers that need
- * post-commit observability (e.g. cron sweeper) should use this instead of
- * `notifyRecipients`, which swallows rejections.
+ * Await every recipient notify via `notifyStrict` and report failures.
+ * Ordinary callers keep using fire-and-forget `notifyRecipients`, which goes
+ * through swallowing `notify()`. Cron sweeps use this so production
+ * `pg_notify` failures increment post-commit failure telemetry.
  */
 export async function notifyRecipientsSettled(
   notifier: Notifier,
   recipients: string[],
   messageId: string,
 ): Promise<{ failed: number; errors: unknown[] }> {
-  const results = await Promise.allSettled(recipients.map((inboxId) => notifier.notify(inboxId, messageId)));
+  const results = await Promise.allSettled(recipients.map((inboxId) => notifier.notifyStrict(inboxId, messageId)));
   const errors = results
     .filter((result): result is PromiseRejectedResult => result.status === "rejected")
     .map((result) => result.reason);

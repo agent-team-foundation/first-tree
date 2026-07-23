@@ -1,7 +1,7 @@
 import { CRON_TRIGGER_METADATA_KEY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
@@ -16,6 +16,7 @@ import { createCronJob, deleteCronJob, updateCronJob } from "../services/cron-jo
 import { computeDueToCommitMs, createCronScheduler, sweepCronJobs } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
+import { createNotifier } from "../services/notifier.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 function databaseUrlWithApplicationName(url: string, applicationName: string): string {
@@ -1249,7 +1250,8 @@ describe("cron jobs integration", () => {
       .where(eq(cronJobs.id, job.id));
 
     const failingNotifier = {
-      notify: async () => {
+      notify: async () => undefined,
+      notifyStrict: async () => {
         throw new Error("injected inbox notify failure");
       },
       notifyChatUpdated: async () => undefined,
@@ -1279,5 +1281,44 @@ describe("cron jobs integration", () => {
       return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
     });
     expect(cronAgain).toHaveLength(1);
+  });
+
+  it("records production createNotifier pg_notify failures on the cron settled path", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "postcommit-pg-notify-fault",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "tick",
+    });
+    const job = createRes.json() as { id: string };
+    await app.db
+      .update(cronJobs)
+      .set({ nextRunAt: new Date(Date.now() - 5_000) })
+      .where(eq(cronJobs.id, job.id));
+
+    const rejectingClient = Object.assign(
+      vi.fn(async () => {
+        throw new Error("pg_notify failed");
+      }),
+      {
+        listen: vi.fn(async () => ({ unlisten: vi.fn(async () => undefined) })),
+      },
+    );
+    const productionNotifier = createNotifier(rejectingClient as never);
+    // Keep chat-updated soft so only inbox NOTIFY fails through notifyStrict.
+    productionNotifier.notifyChatUpdated = async () => undefined;
+
+    const accepted = await sweepCronJobs(app.db, productionNotifier, {
+      staleSeconds: app.config.runtime.presenceCleanupSeconds,
+    });
+    expect(accepted.processed).toBe(1);
+    expect(accepted.postCommitFailures).toBe(1);
+
+    const cronMessages = (await app.db.select().from(messages).where(eq(messages.chatId, chatId))).filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronMessages).toHaveLength(1);
   });
 });
