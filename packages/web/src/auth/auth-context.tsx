@@ -11,6 +11,7 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
+import { purgeLocalUserData } from "../lib/purge-local-data.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -256,6 +257,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
     // identity.
     clearOnboardingSessionFlags();
+    // Purge locally persisted user content — cached messages + read state
+    // (IndexedDB `first-tree-chat-cache`), image bytes (`first-tree-images`),
+    // and composer drafts (localStorage). Without this, a later account on
+    // the same browser profile could recover the previous user's plaintext
+    // conversations (SEC-042). Fire-and-forget: the purge is best-effort and
+    // never throws, and logout must stay synchronous for the UI.
+    void purgeLocalUserData();
     setIsAuthenticated(false);
     setUser(null);
     setMemberships([]);

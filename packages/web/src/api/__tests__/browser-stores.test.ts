@@ -123,15 +123,28 @@ describe("image-store", () => {
     await expect(getImage("missing")).resolves.toBeNull();
   });
 
+  it("clears every cached image on clearAllImages (logout purge, SEC-042)", async () => {
+    const { clearAllImages, getImage, putImage } = await loadImageStore();
+
+    await putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" });
+    await putImage({ imageId: "img-2", base64: "def456", mimeType: "image/jpeg" });
+    await clearAllImages();
+
+    await expect(getImage("img-1")).resolves.toBeNull();
+    await expect(getImage("img-2")).resolves.toBeNull();
+  });
+
   it("rejects writes and returns null when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
-    const { getImage, putImage } = await import("../image-store.js");
+    const { clearAllImages, getImage, putImage } = await import("../image-store.js");
 
     await expect(putImage({ imageId: "img-1", base64: "abc123", mimeType: "image/png" })).rejects.toThrow(
       "Image storage unavailable",
     );
     await expect(getImage("img-1")).resolves.toBeNull();
+    // The purge path must stay silent — logout runs it unconditionally.
+    await expect(clearAllImages()).resolves.toBeUndefined();
   });
 
   it("rejects writes when the database open is blocked", async () => {
@@ -209,13 +222,25 @@ describe("read-state-store", () => {
     await expect(getReadState("chat-1")).resolves.toBeNull();
   });
 
+  it("clears every chat's read state on clearAllReadStates (logout purge, SEC-042)", async () => {
+    const { clearAllReadStates, getReadState, setReadState } = await loadReadStateStore();
+
+    await setReadState("chat-1", "msg-1", "msg-2");
+    await setReadState("chat-2", "msg-3", "msg-4");
+    await clearAllReadStates();
+
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+    await expect(getReadState("chat-2")).resolves.toBeNull();
+  });
+
   it("silently no-ops when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
-    const { clearReadState, getReadState, setReadState } = await import("../read-state-store.js");
+    const { clearAllReadStates, clearReadState, getReadState, setReadState } = await import("../read-state-store.js");
 
     await expect(setReadState("chat-1", "msg-1", "msg-2")).resolves.toBeUndefined();
     await expect(clearReadState("chat-1")).resolves.toBeUndefined();
+    await expect(clearAllReadStates()).resolves.toBeUndefined();
     await expect(getReadState("chat-1")).resolves.toBeNull();
   });
 

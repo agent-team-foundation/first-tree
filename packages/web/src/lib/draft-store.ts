@@ -136,6 +136,24 @@ export function saveDraft(
   writeMap(prune(map));
 }
 
+/**
+ * Remove every stored draft for every user and scope. Called on logout:
+ * drafts are plaintext user content, and logout is the "I'm done on this
+ * browser" signal, so no unsent text may survive it on a shared profile
+ * (SEC-042). All-user removal is intentional — the per-user scope prefix
+ * only prevents cross-account *restore*, not devtools inspection of the
+ * raw `localStorage` value.
+ */
+export function clearAllDrafts(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // localStorage may be unavailable (private mode); nothing was persisted
+    // there in that case, so there is nothing to purge.
+  }
+}
+
 /** Remove any stored draft for `scope` (used on successful send). */
 export function clearDraft(scope: string): void {
   const map = readMap();

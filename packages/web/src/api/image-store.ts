@@ -69,6 +69,26 @@ export async function putImage(params: { imageId: string; base64: string; mimeTy
   });
 }
 
+/**
+ * Remove every cached image. Called on logout so image bytes from the
+ * previous account cannot be recovered from IndexedDB on a shared browser
+ * profile (SEC-042). The authoritative bytes live in the server attachment
+ * store, so the next login re-fetches on demand. Unlike `putImage`, this
+ * resolves silently on unavailability or failure — logout must never be
+ * blocked by best-effort local cleanup.
+ */
+export async function clearAllImages(): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
 export async function getImage(imageId: string): Promise<{ base64: string; mimeType: string } | null> {
   const db = await openDb();
   if (!db) return null;
