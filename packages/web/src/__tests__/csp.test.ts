@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { DEFAULT_CSP_SCRIPT_ORIGINS } from "@first-tree/shared/config";
+import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -15,14 +16,22 @@ import { describe, expect, it } from "vitest";
 
 const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 
-/** Opening tags of every <script> element in index.html, with body text. */
-function scriptTags(html: string): Array<{ attrs: string; body: string }> {
-  const tags: Array<{ attrs: string; body: string }> = [];
-  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-  for (let match = re.exec(html); match !== null; match = re.exec(html)) {
-    tags.push({ attrs: match[1] ?? "", body: match[2] ?? "" });
+/**
+ * Every <script> element in index.html, extracted with a real HTML parser
+ * (happy-dom's DOMParser) rather than a regex, so end-tag variants such as
+ * `</script >` cannot slip past the scan (CodeQL js/bad-tag-filter).
+ */
+function scriptTags(html: string): Array<{ src: string | null; body: string }> {
+  const window = new Window();
+  try {
+    const doc = new window.DOMParser().parseFromString(html, "text/html");
+    return Array.from(doc.querySelectorAll("script"), (tag) => ({
+      src: tag.getAttribute("src"),
+      body: tag.textContent ?? "",
+    }));
+  } finally {
+    window.close();
   }
-  return tags;
 }
 
 describe("index.html under enforced CSP (script-src 'self', no unsafe-inline)", () => {
@@ -30,14 +39,14 @@ describe("index.html under enforced CSP (script-src 'self', no unsafe-inline)", 
     const tags = scriptTags(indexHtml);
     expect(tags.length).toBeGreaterThan(0);
     for (const tag of tags) {
-      expect(tag.attrs).toMatch(/\bsrc\s*=/);
+      expect(tag.src).toBeTruthy();
       expect(tag.body.trim()).toBe("");
     }
   });
 
   it("references bootstrap scripts that exist in public/ (copied to dist root by Vite)", () => {
     const srcs = scriptTags(indexHtml)
-      .map((tag) => /\bsrc\s*=\s*"([^"]+)"/.exec(tag.attrs)?.[1])
+      .map((tag) => tag.src)
       .filter((src): src is string => Boolean(src))
       // `/src/main.tsx` is the Vite module entry — rewritten at build time.
       .filter((src) => src.startsWith("/") && !src.startsWith("/src/"));
