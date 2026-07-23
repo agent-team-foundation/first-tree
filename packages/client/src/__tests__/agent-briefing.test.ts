@@ -557,16 +557,18 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(scheduled).toContain("cron` only");
     expect(scheduled).toContain("never provider-native schedulers");
-    expect(scheduled).toContain("Current-Chat human instruction already authorizes");
+    expect(scheduled).toContain("Managing human's explicit instruction for that create/update/pause/resume/delete");
     expect(scheduled).toContain("no re-`chat ask`");
+    expect(scheduled).toContain("fail closed");
     expect(scheduled).toContain("cron preview");
-    expect(scheduled).toContain("chat ask");
+    expect(scheduled).toContain("chat ask` managing human");
     expect(scheduled).toContain("applied/not-applied");
     expect(scheduled).toContain("cron list");
     expect(scheduled).toContain("Pause blocks future accepts only");
     expect(scheduled).toContain("accepted/delivered/running continue");
     expect(scheduled).toContain("acceptedWorkPreserved");
     expect(scheduled).toContain("FIRST_TREE_CHAT_ID");
+    expect(scheduled).not.toContain("Current-Chat human instruction");
     expect(scheduled).not.toContain("CronCreate");
   });
 
