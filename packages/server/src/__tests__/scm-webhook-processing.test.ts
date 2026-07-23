@@ -1,5 +1,7 @@
 import type { NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
+import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import { claimEvent } from "../services/event-dedup.js";
 import { processScmWebhookDelivery } from "../services/scm-webhook-processing.js";
 import { useTestApp } from "./helpers.js";
 
@@ -213,6 +215,104 @@ describe("processScmWebhookDelivery", () => {
 
     expect(first).toMatchObject({ outcome: "delivered", deliveryStats: { delivered: 1, failed: 1 } });
     expect(duplicate).toEqual({ outcome: "duplicate" });
+  });
+
+  it("marks a successful stable delivery done so it dedupes permanently", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-done");
+    const event = makeEvent(ingress);
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver: async () => ({ delivered: 1, failed: 0 }),
+    };
+
+    expect((await processScmWebhookDelivery(input)).outcome).toBe("delivered");
+
+    const rows = await app.db.execute<{ status: string; expires_at: string | Date | null }>(
+      sql`SELECT status, expires_at FROM processed_events WHERE event_id = ${"delivery-done"} AND platform = ${"github"}`,
+    );
+    expect(rows[0]?.status).toBe("done");
+    expect(rows[0]?.expires_at).toBeNull();
+    expect((await processScmWebhookDelivery(input)).outcome).toBe("duplicate");
+  });
+
+  it("reprocesses a delivery whose previous pending claim expired (crash injection)", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-crashed");
+    const event = makeEvent(ingress);
+    // Simulate a processor that claimed the delivery and then died before
+    // completing or unclaiming: the pending claim is committed and, by the
+    // time the provider redelivers, past its TTL (TTL 0 here).
+    expect(await claimEvent(app.db, "delivery-crashed", "github", 0)).toBe(true);
+
+    const deliver = vi.fn(async () => ({ delivered: 1, failed: 0 }));
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    };
+
+    const redelivered = await processScmWebhookDelivery(input);
+    expect(redelivered.outcome).toBe("delivered");
+    expect(deliver).toHaveBeenCalledOnce();
+    // The redelivery completed, so the event now dedupes permanently.
+    expect((await processScmWebhookDelivery(input)).outcome).toBe("duplicate");
+  });
+
+  it("dedupes against an unexpired in-flight pending claim", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-inflight");
+    const event = makeEvent(ingress);
+    // Another processor holds a live pending claim right now.
+    expect(await claimEvent(app.db, "delivery-inflight", "github")).toBe(true);
+
+    const deliver = vi.fn(async () => ({ delivered: 1, failed: 0 }));
+    const result = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    });
+    expect(result).toEqual({ outcome: "duplicate" });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("processes concurrent deliveries of the same stable id exactly once", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-race");
+    const event = makeEvent(ingress);
+    const deliver = vi.fn(async () => ({ delivered: 1, failed: 0 }));
+    const makeInput = () => ({
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver,
+    });
+
+    const results = await Promise.all(Array.from({ length: 4 }, () => processScmWebhookDelivery(makeInput())));
+
+    expect(results.filter((r) => r.outcome === "delivered")).toHaveLength(1);
+    expect(results.filter((r) => r.outcome === "duplicate")).toHaveLength(3);
+    expect(deliver).toHaveBeenCalledOnce();
   });
 
   it("rejects a normalized event whose provider-neutral ingress facts drift", async () => {

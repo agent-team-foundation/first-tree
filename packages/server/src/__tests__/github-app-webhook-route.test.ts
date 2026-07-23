@@ -1882,6 +1882,40 @@ describe("POST /webhooks/github-app", () => {
     expect(second.json().deduped).toBe(true);
   });
 
+  it("redelivery after a crashed processor's claim expires is processed, not deduped", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100024;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const deliveryId = randomUUID();
+    // Simulate the issue #317 scenario: a previous processor claimed this
+    // delivery and crashed before finishing (no done mark, no unclaim). The
+    // pending claim is committed and past its TTL when GitHub redelivers.
+    expect(await eventDedupService.claimEvent(app.db, deliveryId, "github", 0)).toBe(true);
+
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 6,
+        title: "redelivered",
+        html_url: "https://github.com/owner/repo/issues/6",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    };
+
+    const redelivered = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(redelivered.statusCode).toBe(200);
+    expect(redelivered.json().deduped).toBeUndefined();
+    // The redelivery completed, so a further duplicate is deduped for good.
+    const third = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(third.statusCode).toBe(200);
+    expect(third.json().deduped).toBe(true);
+  });
+
   it("duplicate context reviewer delivery is deduped and does not send another task", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

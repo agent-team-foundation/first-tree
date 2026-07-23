@@ -15,12 +15,14 @@ const serviceMocks = {
   notifyAgentEvent: vi.fn(),
   pruneStaleSilentEntries: vi.fn(),
   sweepChatArchive: vi.fn(),
+  sweepExpiredEventClaims: vi.fn(),
 };
 
 const mockedModules = [
   "../observability/index.js",
   "../services/chat-archive.js",
   "../services/client.js",
+  "../services/event-dedup.js",
   "../services/inbox.js",
   "../services/notification.js",
   "../services/presence.js",
@@ -35,6 +37,9 @@ function mockBackgroundTaskDependencies(): void {
   }));
   vi.doMock("../services/client.js", () => ({
     cleanupStaleClients: serviceMocks.cleanupStaleClients,
+  }));
+  vi.doMock("../services/event-dedup.js", () => ({
+    sweepExpiredEventClaims: serviceMocks.sweepExpiredEventClaims,
   }));
   vi.doMock("../services/inbox.js", () => ({
     pruneStaleSilentEntries: serviceMocks.pruneStaleSilentEntries,
@@ -78,6 +83,7 @@ beforeEach(() => {
   serviceMocks.notifyAgentEvent.mockResolvedValue(undefined);
   serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 0, stalePendingDeleted: 0 });
   serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 0, unmappedRowsArchived: 0 });
+  serviceMocks.sweepExpiredEventClaims.mockResolvedValue(0);
 });
 
 afterEach(() => {
@@ -94,6 +100,7 @@ describe("createBackgroundTasks", () => {
     serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 2, stalePendingDeleted: 1 });
     serviceMocks.markStaleAgents.mockResolvedValue(["agent_1", "agent_2"]);
     serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 1, unmappedRowsArchived: 1 });
+    serviceMocks.sweepExpiredEventClaims.mockResolvedValue(3);
     const app = makeApp(30);
     const tasks = createBackgroundTasks(app, "srv_1");
 
@@ -120,6 +127,8 @@ describe("createBackgroundTasks", () => {
       { mappedRowsArchived: 1, unmappedRowsArchived: 1 },
       "chat auto-archive sweep flipped rows to archived",
     );
+    expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledWith(app.db);
+    expect(loggerMocks.info).toHaveBeenCalledWith({ swept: 3 }, "swept expired pending webhook event claims");
 
     await tasks.stop();
     expect(vi.getTimerCount()).toBe(0);
@@ -133,6 +142,7 @@ describe("createBackgroundTasks", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("heartbeat failed"));
     serviceMocks.notifyAgentEvent.mockRejectedValueOnce(new Error("notify failed"));
+    serviceMocks.sweepExpiredEventClaims.mockRejectedValueOnce(new Error("claim sweep failed"));
     const app = makeApp(0);
     const tasks = createBackgroundTasks(app, "srv_2");
 
@@ -145,6 +155,10 @@ describe("createBackgroundTasks", () => {
     expect(loggerMocks.error).toHaveBeenCalledWith(
       { err: expect.any(Error) },
       "failed to heartbeat / cleanup presence",
+    );
+    expect(loggerMocks.error).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      "failed to sweep expired webhook event claims",
     );
 
     await tasks.stop();
