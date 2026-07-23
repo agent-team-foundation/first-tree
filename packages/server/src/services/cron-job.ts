@@ -496,6 +496,12 @@ export async function updateCronJob(
     if (input.ownerMemberId && peek.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
     }
+    // Class D: owner is immutable. Current manager alone is not enough —
+    // otherwise a reassignment lets B mutate A's job while locking A's
+    // advisory and checking B's engagement.
+    if (input.callerMemberId && peek.ownerMemberId !== input.callerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
+    }
 
     if (input.callerMemberId && input.callerHumanAgentId) {
       await assertCronAgentRouteAccess(txDb, {
@@ -506,6 +512,7 @@ export async function updateCronJob(
       });
       // Always take the owner-chat barrier for Class D so pause/config/delete
       // serialize with setChatEngagement(deleted) even when not resuming.
+      // Advisory key matches job.ownerMemberId (same as caller after the check).
       await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
       await assertCronOwnerEngagementAllowed(txDb, {
         controlChatId: peek.controlChatId,
@@ -527,6 +534,9 @@ export async function updateCronJob(
       }
     }
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
+    }
+    if (input.callerMemberId && job.ownerMemberId !== input.callerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may modify this job");
     }
     assertRevision(job, input.expectedRevision);
@@ -659,6 +669,9 @@ export async function deleteCronJob(
     if (input.ownerMemberId && peek.ownerMemberId !== input.ownerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
     }
+    if (input.callerMemberId && peek.ownerMemberId !== input.callerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
+    }
     if (input.callerMemberId && input.callerHumanAgentId) {
       await assertCronAgentRouteAccess(txDb, {
         chatId: peek.controlChatId,
@@ -680,6 +693,9 @@ export async function deleteCronJob(
       }
     }
     if (input.ownerMemberId && job.ownerMemberId !== input.ownerMemberId) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
+    }
+    if (input.callerMemberId && job.ownerMemberId !== input.callerMemberId) {
       throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Only the schedule owner may delete this job");
     }
     assertRevision(job, input.expectedRevision);

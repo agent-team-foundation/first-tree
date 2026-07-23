@@ -11,7 +11,7 @@ import { cronJobs } from "../db/schema/cron-jobs.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { serverInstances } from "../db/schema/server-instances.js";
-import { createChat } from "../services/chat.js";
+import { createChat, ensureParticipant } from "../services/chat.js";
 import { createCronJob, deleteCronJob, updateCronJob } from "../services/cron-job.js";
 import { createCronScheduler } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
@@ -795,6 +795,113 @@ describe("cron jobs integration", () => {
         callerHumanAgentId: runtime.humanAgentUuid,
       }),
     ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+  });
+
+  it("rejects Class D PATCH/DELETE from a new manager who is also a chat speaker", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "owned-by-a",
+      schedule: "0 13 * * *",
+      timezone: "UTC",
+      prompt: "owner A schedule",
+    });
+    expect(createRes.statusCode).toBe(201);
+    const job = createRes.json() as { id: string; revision: number; prompt: string };
+    expect(job.prompt).toBe("owner A schedule");
+
+    const newMgr = await createTestAgent(app, { name: `cron-newmgr-${crypto.randomUUID().slice(0, 6)}` });
+    await ensureParticipant(app.db, chatId, newMgr.humanAgentUuid);
+    await app.db.update(agents).set({ managerId: newMgr.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
+
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+
+    // New manager passes current-manager+speaker auth but is not the schedule owner.
+    await expect(
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { prompt: "stolen by B" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: newMgr.memberId,
+        callerHumanAgentId: newMgr.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+
+    await expect(
+      deleteCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: newMgr.memberId,
+        callerHumanAgentId: newMgr.humanAgentUuid,
+      }),
+    ).rejects.toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.ownerMemberId).toBe(runtime.memberId);
+    expect(row?.prompt).toBe("owner A schedule");
+    expect(row?.state).toBe("active");
+  });
+
+  it("keeps reassigned owner-scoped job intact when new manager races chat deletion", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    await setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "active");
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "reassign-vs-delete",
+      schedule: "0 14 * * *",
+      timezone: "UTC",
+      prompt: "must stay owner-scoped",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+
+    const newMgr = await createTestAgent(app, { name: `cron-race-b-${crypto.randomUUID().slice(0, 6)}` });
+    await ensureParticipant(app.db, chatId, newMgr.humanAgentUuid);
+    await app.db.update(agents).set({ managerId: newMgr.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
+
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+
+    // B's mutate must fail on owner identity before taking (chat, A) advisory;
+    // B's engagement delete uses (chat, B) and must not pause A's jobs.
+    // Owner A's chat delete pauses the job under the correct advisory key.
+    const raced = Promise.allSettled([
+      updateCronJob(app.db, {
+        jobId: job.id,
+        expectedRevision: job.revision,
+        body: { prompt: "B must not win" },
+        config,
+        agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
+        callerMemberId: newMgr.memberId,
+        callerHumanAgentId: newMgr.humanAgentUuid,
+      }),
+      setChatEngagement(app.db, chatId, newMgr.humanAgentUuid, "deleted"),
+      setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted"),
+    ]);
+    const outcome = await Promise.race([
+      raced,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("reassign-vs-delete deadlock timeout")), 15_000);
+      }),
+    ]);
+    expect(outcome).toHaveLength(3);
+    expect(outcome[0]?.status).toBe("rejected");
+    if (outcome[0]?.status === "rejected") {
+      expect(outcome[0].reason).toMatchObject({ code: "CRON_JOB_FORBIDDEN", statusCode: 403 });
+    }
+    expect(outcome[1]?.status).toBe("fulfilled");
+    expect(outcome[2]?.status).toBe("fulfilled");
+
+    const [row] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, job.id)).limit(1);
+    expect(row?.ownerMemberId).toBe(runtime.memberId);
+    expect(row?.prompt).toBe("must stay owner-scoped");
+    expect(row?.state).toBe("paused");
+    expect(row?.stateReason).toBe("owner_chat_deleted");
   });
 
   it("maps create racing a name-only rename to CRON_JOB_NAME_CONFLICT without 25P02", async () => {
