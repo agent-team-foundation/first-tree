@@ -410,6 +410,80 @@ describe("Settings Setup overview", () => {
     expect(row.status.kind).toBe(kind);
   });
 
+  it("explains GitLab merge-request routing verification from the canonical Team projection", () => {
+    const capabilities = capabilityFixture({
+      github: { adoption: "available", health: "not_observed" },
+      gitlab: {
+        adoption: "configuring",
+        health: "pending_verification",
+        blockers: [
+          {
+            code: "gitlab_merge_request_event_not_seen",
+            resolutionOwner: "admin",
+            actionKind: "configure_gitlab_webhook",
+          },
+        ],
+      },
+    });
+    const admin = rowFor(
+      "repository-automation",
+      facts({ role: "admin", capabilities: { state: "ready", value: capabilities } }),
+    );
+    const member = rowFor(
+      "repository-automation",
+      facts({ role: "member", capabilities: { state: "ready", value: capabilities } }),
+    );
+
+    expect(admin.status).toMatchObject({ label: "Verification pending", kind: "attention" });
+    expect(admin.status.detail).toContain("Waiting for the first valid GitLab merge request event.");
+    expect(admin.action).toEqual({ label: "Set up GitLab", to: "/settings/integrations/gitlab" });
+    expect(member.status).toMatchObject({ label: "Verification pending", kind: "pending" });
+    expect(member.status.detail).toContain("Ask an admin");
+    expect(member.action).toBeUndefined();
+  });
+
+  it("routes GitLab processing recovery for both adopted capabilities to the owner surface", () => {
+    const capabilities = capabilityFixture({
+      github: { adoption: "available", health: "not_observed" },
+      gitlab: {
+        adoption: "enabled",
+        health: "degraded",
+        blockers: [
+          {
+            code: "gitlab_processing_failed",
+            resolutionOwner: "admin",
+            actionKind: "configure_gitlab_webhook",
+          },
+        ],
+      },
+      review: {
+        adoption: "enabled",
+        health: "degraded",
+        blockers: [
+          {
+            code: "gitlab_processing_failed",
+            resolutionOwner: "admin",
+            actionKind: "configure_gitlab_webhook",
+          },
+        ],
+      },
+    });
+    const adminFacts = facts({ role: "admin", capabilities: { state: "ready", value: capabilities } });
+    const memberFacts = facts({ role: "member", capabilities: { state: "ready", value: capabilities } });
+
+    for (const key of ["repository-automation", "automatic-review"] as const) {
+      expect(rowFor(key, adminFacts).action).toEqual({
+        label: "Set up GitLab",
+        to: "/settings/integrations/gitlab",
+      });
+    }
+    expect(rowFor("repository-automation", memberFacts).action).toBeUndefined();
+    expect(rowFor("automatic-review", memberFacts).action).toEqual({
+      label: "View",
+      to: "/settings/repositories#context-tree",
+    });
+  });
+
   it("turns the same Team blocker into admin attention and member read-only explanation", () => {
     const shared = capabilityFixture({
       github: {
@@ -587,12 +661,18 @@ describe("Settings Setup overview", () => {
         review: {
           adoption: "enabled",
           health: "degraded",
-          blockers: [{ code: "gitlab_processing_failed", resolutionOwner: "admin", actionKind: null }],
+          blockers: [
+            {
+              code: "gitlab_processing_failed",
+              resolutionOwner: "admin",
+              actionKind: "configure_gitlab_webhook",
+            },
+          ],
         },
       }),
       "Degraded",
       "attention",
-      undefined,
+      "Set up GitLab",
     ],
   ] as const)("maps Automatic review %s without making it a Start Chat gate", (_name, capabilities, label, kind, action) => {
     const input = facts({ capabilities: { state: "ready", value: capabilities } });

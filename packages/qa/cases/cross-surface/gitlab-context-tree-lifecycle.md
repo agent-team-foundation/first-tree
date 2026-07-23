@@ -25,10 +25,13 @@ runtime, network, credential, and cross-surface behavior.
 - Use an isolated candidate First Tree deployment, disposable Team, disposable
   old-version Self-Managed GitLab project/group (including a nested namespace),
   and an eligible Work Agent plus independent Review Agent.
-- Configure one exact GitLab connection and project Webhook. The deployment
-  operator, not the Team admin, authorizes the exact HTTPS origin through the
-  GitLab egress allowlist. Retain evidence of policy shape but no bearer or
-  repository credential.
+- Configure one exact GitLab connection and an instance-wide System Hook from
+  the derived `/admin/hooks` page, with Push and Merge Request events enabled,
+  the default payload, and no custom template. First Tree must observe a
+  processable Merge Request event before routing or Context Review is treated
+  as ready. The deployment operator, not the Team admin, authorizes the exact
+  HTTPS origin through the GitLab egress allowlist. Retain evidence of policy
+  shape but no bearer or repository credential.
 - Authenticate `git`, `glab`, and the Review Agent's git identity only on the
   Agent hosts. Do not give First Tree Cloud a GitLab API/repository token.
 - Prepare public anonymous-readable and private repositories on the same

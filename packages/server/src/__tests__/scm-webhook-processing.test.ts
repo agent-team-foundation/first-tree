@@ -67,6 +67,7 @@ describe("processScmWebhookDelivery", () => {
     expect(first).toEqual({
       outcome: "delivered",
       deliveryStats: { delivered: 1, failed: 0 },
+      observationOutcome: "not_applicable",
       providerResult: "provider-result",
     });
     expect(duplicate).toEqual({ outcome: "duplicate" });
@@ -122,7 +123,11 @@ describe("processScmWebhookDelivery", () => {
       deliver,
     });
 
-    expect(result).toEqual({ outcome: "provider_only", providerResult: "provider-result" });
+    expect(result).toEqual({
+      outcome: "provider_only",
+      observationOutcome: "applied",
+      providerResult: "provider-result",
+    });
     expect(applyObservation).toHaveBeenCalledOnce();
     expect(resolveAudience).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
@@ -151,7 +156,7 @@ describe("processScmWebhookDelivery", () => {
         resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
         deliver,
       }),
-    ).resolves.toMatchObject({ outcome: "delivered" });
+    ).resolves.toMatchObject({ outcome: "delivered", observationOutcome: "failed" });
     expect(deliver).toHaveBeenCalledOnce();
   });
 

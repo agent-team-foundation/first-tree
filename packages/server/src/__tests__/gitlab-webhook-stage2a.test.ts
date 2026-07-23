@@ -24,14 +24,13 @@ import {
   withCurrentGitlabConnectionFence,
   withGitlabIngressFence,
 } from "../services/gitlab-connections.js";
-import {
-  declareGitlabEntityFollow,
-  observeGitlabEntityAndResolveFollowers,
-  removeGitlabEntityFollow,
-} from "../services/gitlab-entity-follow.js";
+import * as gitlabEntityFollowService from "../services/gitlab-entity-follow.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+
+const { declareGitlabEntityFollow, observeGitlabEntityAndResolveFollowers, removeGitlabEntityFollow } =
+  gitlabEntityFollowService;
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 
@@ -54,6 +53,60 @@ function issuePayload(iid = 42, input: { projectId?: number; projectPath?: strin
       description: "Please investigate",
       url: `https://gitlab.internal/${projectPath}/-/issues/${iid}`,
       state: "opened",
+    },
+  };
+}
+
+function mergeRequestPayload(
+  iid = 52,
+  input: {
+    action?: "open" | "merge";
+    state?: "opened" | "merged";
+    projectId?: number;
+    projectPath?: string;
+  } = {},
+) {
+  const projectId = input.projectId ?? 501;
+  const projectPath = input.projectPath ?? "Acme/API";
+  return {
+    object_kind: "merge_request",
+    project: {
+      id: projectId,
+      path_with_namespace: projectPath,
+      web_url: `https://gitlab.internal/${projectPath}`,
+    },
+    user: { username: "alice" },
+    reviewers: [],
+    object_attributes: {
+      iid,
+      action: input.action ?? "open",
+      title: "System Hook MR",
+      description: "",
+      url: `https://gitlab.internal/${projectPath}/-/merge_requests/${iid}`,
+      state: input.state ?? "opened",
+    },
+  };
+}
+
+function mergeRequestNotePayload(iid = 52) {
+  return {
+    event_name: "note",
+    object_kind: "note",
+    project: {
+      id: 501,
+      path_with_namespace: "Acme/API",
+      web_url: "https://gitlab.internal/Acme/API",
+    },
+    user: { username: "alice" },
+    object_attributes: {
+      noteable_type: "MergeRequest",
+      note: "System Hook note",
+      action: "create",
+    },
+    merge_request: {
+      iid,
+      title: "System Hook MR",
+      url: `https://gitlab.internal/Acme/API/-/merge_requests/${iid}`,
     },
   };
 }
@@ -120,13 +173,52 @@ describe("GitLab Stage 2A backend", () => {
     expect(JSON.stringify(persisted)).not.toContain(first.bearer);
     expect(JSON.stringify(await getGitlabConnectionSummary(app.db, first.connectionId))).not.toContain(first.bearer);
 
+    const observed = await postWebhook(app, first.bearer, mergeRequestPayload(), {
+      stableId: `before-regeneration-${randomUUID()}`,
+    });
+    expect(observed.statusCode).toBe(200);
+    const rejectedProjectHook = await postWebhook(
+      app,
+      first.bearer,
+      { object_kind: "merge_request" },
+      { event: "Merge Request Hook" },
+    );
+    expect(rejectedProjectHook.statusCode).toBe(400);
+    expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
+      endpointSeen: true,
+      stableDeliveryObserved: true,
+      health: {
+        lastValidInboundAt: expect.any(String),
+        lastSystemHookMergeRequestInboundAt: expect.any(String),
+        lastProcessingFailureAt: expect.any(String),
+        lastProcessingFailureCode: "unsupported_hook_type",
+      },
+    });
+
     const regenerated = await regenerateGitlabConnectionBearer(app.db, first.connectionId, first.admin.memberId);
     expect(await findActiveGitlabEndpoint(app.db, first.bearer)).toBeNull();
     expect(await findActiveGitlabEndpoint(app.db, regenerated.bearer)).not.toBeNull();
-    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).endpointSeen).toBe(false);
+    expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
+      endpointSeen: false,
+      stableDeliveryObserved: false,
+      health: {
+        lastValidInboundAt: null,
+        lastSystemHookMergeRequestInboundAt: null,
+        lastProcessingFailureAt: null,
+        lastProcessingFailureCode: null,
+      },
+    });
     const test = await postWebhook(app, regenerated.bearer, { event_name: "test" });
     expect(test.statusCode).toBe(200);
-    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).endpointSeen).toBe(true);
+    expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
+      endpointSeen: true,
+      stableDeliveryObserved: false,
+      health: {
+        lastValidInboundAt: expect.any(String),
+        lastSystemHookMergeRequestInboundAt: null,
+        lastProcessingFailureAt: null,
+      },
+    });
 
     const followedChatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({
@@ -148,7 +240,7 @@ describe("GitLab Stage 2A backend", () => {
       declaredByAgentId: first.admin.humanAgentUuid,
       humanAgentId: first.admin.humanAgentUuid,
       delegateAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     const replaced = await replaceGitlabConnection(app.db, {
       expectedConnectionId: first.connectionId,
@@ -265,8 +357,8 @@ describe("GitLab Stage 2A backend", () => {
     const first = await connection(app);
     const second = await connection(app, { isolatedOrg: true });
     const stableId = `shared-${randomUUID()}`;
-    expect((await postWebhook(app, first.bearer, issuePayload(), { stableId })).statusCode).toBe(200);
-    expect((await postWebhook(app, second.bearer, issuePayload(), { stableId })).statusCode).toBe(200);
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId })).statusCode).toBe(200);
+    expect((await postWebhook(app, second.bearer, mergeRequestPayload(), { stableId })).statusCode).toBe(200);
     const claimed = await app.db
       .select()
       .from(processedEvents)
@@ -277,7 +369,7 @@ describe("GitLab Stage 2A backend", () => {
     const before = claimed.length;
     expect(
       (
-        await postWebhook(app, first.bearer, issuePayload(43), {
+        await postWebhook(app, first.bearer, mergeRequestPayload(53), {
           webhookUuid: `request-${randomUUID()}`,
         })
       ).statusCode,
@@ -286,9 +378,9 @@ describe("GitLab Stage 2A backend", () => {
     expect(after).toHaveLength(before);
 
     const webhookStableId = `standard-${randomUUID()}`;
-    expect((await postWebhook(app, first.bearer, issuePayload(44), { webhookId: webhookStableId })).statusCode).toBe(
-      200,
-    );
+    expect(
+      (await postWebhook(app, first.bearer, mergeRequestPayload(54), { webhookId: webhookStableId })).statusCode,
+    ).toBe(200);
     const afterWebhookId = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
     expect(afterWebhookId).toHaveLength(before + 1);
   });
@@ -313,13 +405,13 @@ describe("GitLab Stage 2A backend", () => {
       declaredByAgentId: first.admin.humanAgentUuid,
       humanAgentId: first.admin.humanAgentUuid,
       delegateAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
-      expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(200);
-      expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(200);
+      expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(200);
+      expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(200);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -331,7 +423,7 @@ describe("GitLab Stage 2A backend", () => {
       declaredByAgentId: first.admin.humanAgentUuid,
       humanAgentId: first.admin.humanAgentUuid,
       delegateAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     expect(repeated?.projectId).toBe(501);
     const follows = await app.db
@@ -350,10 +442,10 @@ describe("GitLab Stage 2A backend", () => {
     expect(cards[0]?.metadata).toMatchObject({ mentions: [first.admin.humanAgentUuid] });
 
     const stableId = `dedup-${randomUUID()}`;
-    expect((await postWebhook(app, first.bearer, issuePayload(), { stableId })).json()).toMatchObject({
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId })).json()).toMatchObject({
       outcome: "delivered",
     });
-    expect((await postWebhook(app, first.bearer, issuePayload(), { stableId })).json()).toMatchObject({
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId })).json()).toMatchObject({
       outcome: "duplicate",
     });
     const after = await app.db
@@ -385,30 +477,12 @@ describe("GitLab Stage 2A backend", () => {
       delegateAgentId: first.admin.humanAgentUuid,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
-    const mrPayload = (action: "open" | "merge", state: "opened" | "merged") => ({
-      object_kind: "merge_request",
-      project: {
-        id: 501,
-        path_with_namespace: "Acme/API",
-        web_url: "https://gitlab.internal/Acme/API",
-      },
-      user: { username: "alice" },
-      reviewers: [],
-      object_attributes: {
-        iid: 52,
-        action,
-        title: "Lifecycle MR",
-        description: "",
-        url: "https://gitlab.internal/Acme/API/-/merge_requests/52",
-        state,
-      },
-    });
-    expect((await postWebhook(app, first.bearer, mrPayload("open", "opened"))).json()).toMatchObject({
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload())).json()).toMatchObject({
       outcome: "delivered",
     });
-    expect((await postWebhook(app, first.bearer, mrPayload("merge", "merged"))).json()).toMatchObject({
-      outcome: "provider_only",
-    });
+    expect(
+      (await postWebhook(app, first.bearer, mergeRequestPayload(52, { action: "merge", state: "merged" }))).json(),
+    ).toMatchObject({ outcome: "provider_only" });
     expect(
       await app.db
         .select()
@@ -504,6 +578,165 @@ describe("GitLab Stage 2A backend", () => {
     expect(oversized.statusCode).toBe(413);
   });
 
+  it("separates transport from System Hook MR processing and readiness evidence", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const rejectedProjectHook = await postWebhook(
+      app,
+      first.bearer,
+      { object_kind: "merge_request" },
+      { event: "Merge Request Hook" },
+    );
+    expect(rejectedProjectHook.statusCode).toBe(400);
+
+    for (const body of [
+      { event_name: "push" },
+      { event_name: "test" },
+      { event_name: "project_create" },
+      { object_kind: "gitlab_subscription_member_approval", action: "enqueue" },
+      issuePayload(),
+    ]) {
+      const response = await postWebhook(app, first.bearer, body);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ outcome: "provider_only" });
+    }
+    expect(
+      await app.db
+        .select()
+        .from(gitlabEntityChatMappings)
+        .where(eq(gitlabEntityChatMappings.connectionId, first.connectionId)),
+    ).toHaveLength(0);
+    expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
+      endpointSeen: true,
+      health: {
+        readiness: "needs_attention",
+        lastValidInboundAt: expect.any(String),
+        lastSystemHookMergeRequestInboundAt: null,
+        lastProcessingFailureAt: expect.any(String),
+        lastProcessingFailureCode: "unsupported_hook_type",
+      },
+    });
+
+    const noteOnMr = await postWebhook(app, first.bearer, mergeRequestNotePayload());
+    expect(noteOnMr.statusCode).toBe(200);
+    expect(await getGitlabConnectionSummary(app.db, first.connectionId)).toMatchObject({
+      health: {
+        lastSystemHookMergeRequestInboundAt: null,
+        lastProcessingFailureAt: expect.any(String),
+        lastProcessingFailureCode: "unsupported_hook_type",
+      },
+    });
+
+    const malformedMr = await postWebhook(app, first.bearer, { object_kind: "merge_request" });
+    expect(malformedMr.statusCode).toBe(400);
+    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).health).toMatchObject({
+      lastSystemHookMergeRequestInboundAt: null,
+      lastProcessingFailureAt: expect.any(String),
+      lastProcessingFailureCode: "malformed_payload",
+    });
+
+    const contradictoryEventType = await postWebhook(app, first.bearer, {
+      ...mergeRequestPayload(64),
+      event_type: "push",
+    });
+    expect(contradictoryEventType.statusCode).toBe(400);
+    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).health).toMatchObject({
+      lastSystemHookMergeRequestInboundAt: null,
+      lastProcessingFailureAt: expect.any(String),
+      lastProcessingFailureCode: "malformed_payload",
+    });
+
+    const terminalMr = await postWebhook(
+      app,
+      first.bearer,
+      mergeRequestPayload(63, { action: "merge", state: "merged" }),
+    );
+    expect(terminalMr.statusCode).toBe(200);
+    expect(terminalMr.json()).toMatchObject({ outcome: "provider_only" });
+    expect((await getGitlabConnectionSummary(app.db, first.connectionId)).health).toMatchObject({
+      readiness: "routing_verified",
+      lastSystemHookMergeRequestInboundAt: expect.any(String),
+      lastProcessingFailureAt: null,
+      lastProcessingFailureCode: null,
+    });
+  });
+
+  it("records observation failure against stale or missing MR evidence and recovers on a later MR", async () => {
+    const app = getApp();
+    const readyConnection = await connection(app);
+    const firstReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(71), {
+      stableId: `ready-before-observation-failure-${randomUUID()}`,
+    });
+    expect(firstReady.statusCode).toBe(200);
+    const readyBeforeFailure = await getGitlabConnectionSummary(app.db, readyConnection.connectionId);
+    expect(readyBeforeFailure.health).toMatchObject({
+      readiness: "routing_verified",
+      lastSystemHookMergeRequestInboundAt: expect.any(String),
+      lastProcessingFailureAt: null,
+    });
+
+    const observationSpy = vi.spyOn(gitlabEntityFollowService, "observeGitlabEntityAndResolveFollowers");
+    try {
+      observationSpy.mockRejectedValueOnce(new Error("entity observation unavailable"));
+      const failedDeliveryId = `ready-observation-failure-${randomUUID()}`;
+      const failedAfterReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(72), {
+        stableId: failedDeliveryId,
+      });
+      expect(failedAfterReady.statusCode).toBe(200);
+      expect(failedAfterReady.json()).toMatchObject({ outcome: "audience_empty" });
+      expect(await getGitlabConnectionSummary(app.db, readyConnection.connectionId)).toMatchObject({
+        health: {
+          readiness: "needs_attention",
+          lastSystemHookMergeRequestInboundAt: readyBeforeFailure.health.lastSystemHookMergeRequestInboundAt,
+          lastProcessingFailureAt: expect.any(String),
+          lastProcessingFailureCode: "processing_failed",
+        },
+      });
+
+      const duplicate = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(72), {
+        stableId: failedDeliveryId,
+      });
+      expect(duplicate.statusCode).toBe(200);
+      expect(duplicate.json()).toMatchObject({ outcome: "duplicate" });
+
+      const freshConnection = await connection(app, { isolatedOrg: true });
+      observationSpy.mockRejectedValueOnce(new Error("first entity observation unavailable"));
+      const failedFirstMr = await postWebhook(app, freshConnection.bearer, mergeRequestPayload(73), {
+        stableId: `fresh-observation-failure-${randomUUID()}`,
+      });
+      expect(failedFirstMr.statusCode).toBe(200);
+      expect(await getGitlabConnectionSummary(app.db, freshConnection.connectionId)).toMatchObject({
+        health: {
+          readiness: "needs_attention",
+          lastSystemHookMergeRequestInboundAt: null,
+          lastProcessingFailureAt: expect.any(String),
+          lastProcessingFailureCode: "processing_failed",
+        },
+      });
+
+      const recoveredReady = await postWebhook(app, readyConnection.bearer, mergeRequestPayload(74), {
+        stableId: `ready-recovery-${randomUUID()}`,
+      });
+      const recoveredFresh = await postWebhook(app, freshConnection.bearer, mergeRequestPayload(75), {
+        stableId: `fresh-recovery-${randomUUID()}`,
+      });
+      expect(recoveredReady.statusCode).toBe(200);
+      expect(recoveredFresh.statusCode).toBe(200);
+      expect((await getGitlabConnectionSummary(app.db, readyConnection.connectionId)).health).toMatchObject({
+        readiness: "routing_verified",
+        lastProcessingFailureAt: null,
+        lastProcessingFailureCode: null,
+      });
+      expect((await getGitlabConnectionSummary(app.db, freshConnection.connectionId)).health).toMatchObject({
+        readiness: "routing_verified",
+        lastProcessingFailureAt: null,
+        lastProcessingFailureCode: null,
+      });
+    } finally {
+      observationSpy.mockRestore();
+    }
+  });
+
   it("allows one chat to follow the same type and IID in two numeric projects", async () => {
     const app = getApp();
     const first = await connection(app);
@@ -519,16 +752,16 @@ describe("GitLab Stage 2A backend", () => {
         declaredByAgentId: first.admin.humanAgentUuid,
         humanAgentId: first.admin.humanAgentUuid,
         delegateAgentId: first.admin.humanAgentUuid,
-        entityUrl: `https://gitlab.internal/${projectPath}/-/issues/42`,
+        entityUrl: `https://gitlab.internal/${projectPath}/-/merge_requests/42`,
       });
     }
     const identity = (projectId: number, projectPath: string) => ({
-      entityType: "issue" as const,
+      entityType: "pull_request" as const,
       entityIid: 42,
       projectId,
       projectPath,
-      entityUrl: `https://gitlab.internal/${projectPath}/-/issues/42`,
-      title: "Webhook issue",
+      entityUrl: `https://gitlab.internal/${projectPath}/-/merge_requests/42`,
+      title: "Webhook merge request",
       entityState: "open" as const,
     });
     expect(
@@ -546,7 +779,7 @@ describe("GitLab Stage 2A backend", () => {
     expect(secondProjectRepeat[0]).toMatchObject({
       chatId,
       projectId: 502,
-      entityType: "issue",
+      entityType: "pull_request",
       entityIid: 42,
     });
     const stored = await app.db
@@ -556,7 +789,7 @@ describe("GitLab Stage 2A backend", () => {
         and(
           eq(gitlabEntityChatMappings.connectionId, first.connectionId),
           eq(gitlabEntityChatMappings.chatId, chatId),
-          eq(gitlabEntityChatMappings.entityType, "issue"),
+          eq(gitlabEntityChatMappings.entityType, "pull_request"),
           eq(gitlabEntityChatMappings.entityIid, 42),
         ),
       );
@@ -716,13 +949,13 @@ describe("GitLab Stage 2A backend", () => {
       declaredByAgentId: first.admin.humanAgentUuid,
       humanAgentId: first.admin.humanAgentUuid,
       delegateAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     releaseFence();
     await inFlight;
     await replacing;
     await expect(declaring).rejects.toThrow("not found");
-    expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(404);
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(404);
   });
 
   it("serializes replacement behind the organization-first fence used by follow declarations", async () => {
@@ -769,7 +1002,7 @@ describe("GitLab Stage 2A backend", () => {
   it("does not persist an unfollowed webhook and resolves later pending follows on the next event", async () => {
     const app = getApp();
     const first = await connection(app);
-    expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(200);
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(200);
     const unseen = await app.db
       .select()
       .from(gitlabEntityChatMappings)
@@ -798,11 +1031,11 @@ describe("GitLab Stage 2A backend", () => {
         declaredByAgentId: first.admin.humanAgentUuid,
         humanAgentId: first.admin.humanAgentUuid,
         delegateAgentId: routeAgent.agent.uuid,
-        entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+        entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
       });
       expect(follow).toMatchObject({ projectId: null });
     }
-    expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(200);
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(200);
     const observed = await app.db
       .select()
       .from(gitlabEntityChatMappings)
@@ -836,11 +1069,11 @@ describe("GitLab Stage 2A backend", () => {
           declaredByAgentId: first.admin.humanAgentUuid,
           humanAgentId: first.admin.humanAgentUuid,
           delegateAgentId: first.admin.humanAgentUuid,
-          entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+          entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
         })
       )?.projectId,
     ).toBeNull();
-    expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(200);
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload())).statusCode).toBe(200);
     expect(
       (
         await declareGitlabEntityFollow(app.db, {
@@ -850,13 +1083,13 @@ describe("GitLab Stage 2A backend", () => {
           declaredByAgentId: first.admin.humanAgentUuid,
           humanAgentId: first.admin.humanAgentUuid,
           delegateAgentId: first.admin.humanAgentUuid,
-          entityUrl: "https://gitlab.internal/Acme/Renamed/-/issues/42",
+          entityUrl: "https://gitlab.internal/Acme/Renamed/-/merge_requests/52",
         })
       )?.projectId,
     ).toBeNull();
-    expect((await postWebhook(app, first.bearer, issuePayload(42, { projectPath: "Acme/Renamed" }))).statusCode).toBe(
-      200,
-    );
+    expect(
+      (await postWebhook(app, first.bearer, mergeRequestPayload(52, { projectPath: "Acme/Renamed" }))).statusCode,
+    ).toBe(200);
     const mappings = await app.db
       .select()
       .from(gitlabEntityChatMappings)
@@ -890,19 +1123,19 @@ describe("GitLab Stage 2A backend", () => {
         declaredByAgentId: first.admin.humanAgentUuid,
         humanAgentId: first.admin.humanAgentUuid,
         delegateAgentId: routeAgent.agent.uuid,
-        entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+        entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
       });
     }
     const before = await app.db.select().from(messages).where(eq(messages.source, "gitlab"));
     const sendSpy = vi.spyOn(scmCardDelivery, "sendScmSystemCard").mockRejectedValueOnce(new Error("chat down"));
     const stableId = `partial-${randomUUID()}`;
-    const firstDelivery = await postWebhook(app, first.bearer, issuePayload(), { stableId });
+    const firstDelivery = await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId });
     sendSpy.mockRestore();
     expect(firstDelivery.statusCode).toBe(200);
     expect(firstDelivery.json()).toMatchObject({ outcome: "delivered" });
     const after = await app.db.select().from(messages).where(eq(messages.source, "gitlab"));
     expect(after).toHaveLength(before.length + 1);
-    expect((await postWebhook(app, first.bearer, issuePayload(), { stableId })).json()).toMatchObject({
+    expect((await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId })).json()).toMatchObject({
       outcome: "duplicate",
     });
   });
@@ -1092,7 +1325,7 @@ describe("GitLab Stage 2A backend", () => {
         headers: { authorization: `Bearer ${manager.accessToken}` },
         payload: {
           connectionId: created.connectionId,
-          entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
+          entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/42",
         },
       });
     expect((await follow()).statusCode).toBe(404);
@@ -1114,7 +1347,7 @@ describe("GitLab Stage 2A backend", () => {
       headers: { authorization: `Bearer ${manager.accessToken}` },
       payload: {
         connectionId: created.connectionId,
-        entityUrl: "https://gitlab.internal/Acme/%E0%A4/-/issues/43",
+        entityUrl: "https://gitlab.internal/Acme/%E0%A4/-/merge_requests/43",
       },
     });
     expect(malformedEncoding.statusCode).toBe(400);
@@ -1136,7 +1369,7 @@ describe("GitLab Stage 2A backend", () => {
           entityIid: 42,
         },
       ],
-      items: [{ entityIid: 42, entityUrl: "https://gitlab.internal/Acme/API/-/issues/42" }],
+      items: [{ entityIid: 42, entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/42" }],
     });
     expect(JSON.stringify(compatibleList.json().items)).not.toMatch(
       /connectionId|organizationId|declaredByAgentId|humanAgentId|delegateAgentId|identityLinkId|mappingId/,
@@ -1144,7 +1377,7 @@ describe("GitLab Stage 2A backend", () => {
     const canonicalDelete = await app.inject({
       method: "DELETE",
       url: `/api/v1/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(
-        "https://gitlab.internal/Acme/API/-/issues/42",
+        "https://gitlab.internal/Acme/API/-/merge_requests/42",
       )}`,
       headers: { authorization: `Bearer ${manager.accessToken}` },
     });
@@ -1158,7 +1391,7 @@ describe("GitLab Stage 2A backend", () => {
         headers: { authorization: `Bearer ${manager.accessToken}` },
         payload: {
           connectionId: created.connectionId,
-          entityUrl: `https://gitlab.internal/Acme/API/-/issues/${iid}`,
+          entityUrl: `https://gitlab.internal/Acme/API/-/merge_requests/${iid}`,
         },
       });
     expect((await followLegacyAlias(44)).statusCode).toBe(201);
@@ -1209,7 +1442,7 @@ describe("GitLab Stage 2A backend", () => {
       declaredByAgentId: first.admin.humanAgentUuid,
       humanAgentId: first.admin.humanAgentUuid,
       delegateAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/47",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/47",
     });
     if (!pending) throw new Error("pending GitLab mapping missing");
     const identityLinkId = `identity-${randomUUID()}`;
@@ -1235,12 +1468,12 @@ describe("GitLab Stage 2A backend", () => {
       attentionMode: "paired",
       attentionBackfillVersion: 1,
       active: true,
-      entityType: "issue",
+      entityType: "pull_request",
       entityIid: 47,
       projectId: 501,
       projectPath: "Acme/API",
       projectPathNormalized: "acme/api",
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/47",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/47",
       title: "Personnel route",
       entityState: "open",
     });
@@ -1261,11 +1494,11 @@ describe("GitLab Stage 2A backend", () => {
         ingressLocked();
         await ingressRelease;
         return observeGitlabEntityAndResolveFollowers(tx, first.connectionId, {
-          entityType: "issue",
+          entityType: "pull_request",
           entityIid: 47,
           projectId: 501,
           projectPath: "Acme/API",
-          entityUrl: "https://gitlab.internal/Acme/API/-/issues/47",
+          entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/47",
           title: "Activated while unfollowing",
           entityState: "open",
         });

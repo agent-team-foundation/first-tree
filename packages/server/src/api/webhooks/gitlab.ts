@@ -7,6 +7,7 @@ import {
   markGitlabProcessingFailure,
   markGitlabReviewerSchemaAnomaly,
   markGitlabStableDeliveryObserved,
+  markGitlabSystemHookMergeRequestProcessed,
   observeGitlabCompatibility,
   parseDeclaredGitlabVersion,
   resolveGitlabReviewerMode,
@@ -114,6 +115,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           body: request.body,
         });
         const declaredVersion = parseDeclaredGitlabVersion(request.headers["user-agent"]);
+        const isSystemHookMergeRequest = eventHeader === "System Hook" && normalized.hookEventKind === "merge_request";
         const result = await withGitlabIngressFence(
           app.db,
           endpoint.connection.id,
@@ -184,7 +186,30 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                 });
               },
             });
-            if (processed.outcome === "delivered" && processed.deliveryStats.failed > 0) {
+            const partialCardDeliveryFailed = processed.outcome === "delivered" && processed.deliveryStats.failed > 0;
+            if (isSystemHookMergeRequest && processed.outcome !== "duplicate") {
+              if (processed.observationOutcome !== "applied") {
+                await markGitlabProcessingFailure(
+                  tx,
+                  endpoint.connection.id,
+                  endpoint.connection.tokenHash,
+                  "processing_failed",
+                );
+              } else if (partialCardDeliveryFailed) {
+                await markGitlabProcessingFailure(
+                  tx,
+                  endpoint.connection.id,
+                  endpoint.connection.tokenHash,
+                  "partial_card_delivery_failure",
+                );
+              } else {
+                await markGitlabSystemHookMergeRequestProcessed(
+                  tx,
+                  endpoint.connection.id,
+                  endpoint.connection.tokenHash,
+                );
+              }
+            } else if (partialCardDeliveryFailed) {
               await markGitlabProcessingFailure(
                 tx,
                 endpoint.connection.id,

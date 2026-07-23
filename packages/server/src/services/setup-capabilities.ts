@@ -1,5 +1,6 @@
 import {
   canonicalGitRepoIdentity,
+  GITLAB_CONNECTION_READINESS,
   resolveContextTreeProvider,
   type SetupAutomaticReview,
   type SetupBlocker,
@@ -20,6 +21,7 @@ import {
   mintInstallationToken,
 } from "./github-app.js";
 import { findInstallationByOrg, type InstallationRow } from "./github-app-installations.js";
+import { projectGitlabConnectionReadiness } from "./gitlab-connections.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 
 type GithubReviewProbeResult = "ready" | "permission_required" | "repo_not_covered" | "failed";
@@ -50,14 +52,6 @@ function blocker(
   actionKind: SetupBlocker["actionKind"],
 ): SetupBlocker {
   return { code, resolutionOwner, actionKind };
-}
-
-function gitlabProcessingIsDegraded(connection: typeof gitlabConnections.$inferSelect): boolean {
-  if (!connection.lastProcessingFailureAt) return false;
-  return (
-    !connection.lastValidInboundAt ||
-    connection.lastProcessingFailureAt.getTime() > connection.lastValidInboundAt.getTime()
-  );
 }
 
 function githubRepositoryAutomationEventsReady(events: string[]): boolean {
@@ -174,6 +168,7 @@ function projectRepositoryAutomation(
             };
 
   let gitlab: SetupRepositoryAutomationProvider;
+  const gitlabReadiness = gitlabConnection ? projectGitlabConnectionReadiness(gitlabConnection) : null;
   if (!gitlabConnection) {
     gitlab = {
       provider: "gitlab",
@@ -182,7 +177,15 @@ function projectRepositoryAutomation(
       blockers: [],
       observedAt,
     };
-  } else if (!gitlabConnection.endpointFirstSeenAt) {
+  } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.needsAttention) {
+    gitlab = {
+      provider: "gitlab",
+      adoption: "enabled",
+      health: "degraded",
+      blockers: [blocker("gitlab_processing_failed", "admin", "configure_gitlab_webhook")],
+      observedAt,
+    };
+  } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.waiting) {
     gitlab = {
       provider: "gitlab",
       adoption: "configuring",
@@ -190,12 +193,12 @@ function projectRepositoryAutomation(
       blockers: [blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook")],
       observedAt,
     };
-  } else if (gitlabProcessingIsDegraded(gitlabConnection)) {
+  } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.transportReceived) {
     gitlab = {
       provider: "gitlab",
-      adoption: "enabled",
-      health: "degraded",
-      blockers: [blocker("gitlab_processing_failed", "admin", null)],
+      adoption: "configuring",
+      health: "pending_verification",
+      blockers: [blocker("gitlab_merge_request_event_not_seen", "admin", "configure_gitlab_webhook")],
       observedAt,
     };
   } else {
@@ -231,6 +234,7 @@ export async function getTeamSetupCapabilities(
     db.select().from(gitlabConnections).where(eq(gitlabConnections.organizationId, organizationId)).limit(1),
   ]);
   const gitlabConnection = gitlabRows[0] ?? null;
+  const gitlabReadiness = gitlabConnection ? projectGitlabConnectionReadiness(gitlabConnection) : null;
 
   const contextTreeBlockers: SetupBlocker[] = [];
   let binding: SetupContextTreeBinding;
@@ -350,12 +354,15 @@ export async function getTeamSetupCapabilities(
         ),
       );
       reviewHealth = "unavailable";
-    } else if (!gitlabConnection.endpointFirstSeenAt) {
+    } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.needsAttention) {
+      reviewBlockers.push(blocker("gitlab_processing_failed", "admin", "configure_gitlab_webhook"));
+      if (reviewHealth === "ready") reviewHealth = "degraded";
+    } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.waiting) {
       reviewBlockers.push(blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook"));
       if (reviewHealth === "ready") reviewHealth = "pending_verification";
-    } else if (gitlabProcessingIsDegraded(gitlabConnection)) {
-      reviewBlockers.push(blocker("gitlab_processing_failed", "admin", null));
-      if (reviewHealth === "ready") reviewHealth = "degraded";
+    } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.transportReceived) {
+      reviewBlockers.push(blocker("gitlab_merge_request_event_not_seen", "admin", "configure_gitlab_webhook"));
+      if (reviewHealth === "ready") reviewHealth = "pending_verification";
     }
   }
 

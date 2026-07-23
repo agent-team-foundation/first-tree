@@ -163,6 +163,7 @@ const BLOCKER_COPY = {
   github_pull_requests_permission_required: "GitHub pull-request write access is required.",
   github_tree_repo_not_covered: "The GitHub App cannot access this Context Tree repository.",
   gitlab_webhook_not_seen: "Waiting for the first valid GitLab webhook.",
+  gitlab_merge_request_event_not_seen: "Waiting for the first valid GitLab merge request event.",
   gitlab_processing_failed: "Recent GitLab webhook processing failed.",
   context_tree_binding_invalid: "The Context Tree binding is invalid.",
   context_tree_provider_unresolved: "The Context Tree provider could not be resolved.",
