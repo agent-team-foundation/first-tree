@@ -35,7 +35,7 @@ function sendCronError(reply: { status: (code: number) => { send: (body: unknown
  * Class D — agent self surface for scheduled jobs under the current chat.
  */
 export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { chatId: string } }>("/chats/:chatId/cron-jobs/preview", async (request, reply) => {
+  app.post<{ Params: { chatId: string } }>("/:chatId/cron-jobs/preview", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
@@ -46,7 +46,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get<{ Params: { chatId: string } }>("/chats/:chatId/cron-jobs", async (request, reply) => {
+  app.get<{ Params: { chatId: string } }>("/:chatId/cron-jobs", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
@@ -57,7 +57,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Params: { chatId: string } }>("/chats/:chatId/cron-jobs", async (request, reply) => {
+  app.post<{ Params: { chatId: string } }>("/:chatId/cron-jobs", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
@@ -74,7 +74,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get<{ Params: { chatId: string; id: string } }>("/chats/:chatId/cron-jobs/:id", async (request, reply) => {
+  app.get<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
@@ -84,7 +84,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.patch<{ Params: { chatId: string; id: string } }>("/chats/:chatId/cron-jobs/:id", async (request, reply) => {
+  app.patch<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
@@ -105,7 +105,7 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { chatId: string; id: string } }>("/chats/:chatId/cron-jobs/:id", async (request, reply) => {
+  app.delete<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);

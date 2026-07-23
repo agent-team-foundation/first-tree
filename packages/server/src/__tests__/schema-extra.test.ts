@@ -63,7 +63,7 @@ describe("database schema exports", () => {
     expect(buildExtraConfig(agentResourceBindings)).toHaveLength(3);
     expect(buildExtraConfig(agents)).toHaveLength(5);
     expect(buildExtraConfig(authIdentities)).toHaveLength(4);
-    expect(buildExtraConfig(clients)).toHaveLength(2);
+    expect(buildExtraConfig(clients)).toHaveLength(3);
     expect(buildExtraConfig(connectCodes)).toHaveLength(2);
     expect(buildExtraConfig(githubAppInstallations)).toHaveLength(6);
     expect(buildExtraConfig(githubEntityChatMappings)).toHaveLength(3);
