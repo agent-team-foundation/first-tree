@@ -40,8 +40,63 @@ describe("first-tree-read floor contract", () => {
     expect(skill).toContain("PR/MR or issue titles");
   });
 
+  it("records only material decision influence on the same final message", () => {
+    expect(skill).toContain("Attach a small `contextDecision` receipt only when all of these conditions hold");
+    expect(skill).toMatch(/Opening a file is not\s+enough/);
+    expect(skill).toContain("The read happened before the choice was made or executed");
+    expect(skill).toContain("Do not emit `effect: none`");
+    expect(skill).toContain("top-level `contextDecision` metadata");
+    expect(skill).toContain("task correctly ends with a blocking `chat ask`");
+    expect(skill).toContain("supply only the new\n`contextDecision` key");
+    expect(skill).toContain("Choose the first matching category in this precedence\norder");
+    expect(skill).toMatch(/`conflicted`[\s\S]+`redirected`[\s\S]+`constrained`[\s\S]+`confirmed`/);
+    expect(skill).toContain("Cite at most three Tree-root-relative\nnormal node paths");
+    expect(skill).toContain("read the binding repository and binding branch declared by the workspace\n   briefing");
+    expect(skill).toContain("never infer the binding branch from the checkout's current branch\n   or its upstream");
+    expect(skill).not.toContain("resolve the current branch's upstream remote-tracking ref");
+    expect(skill).toContain(
+      "latest successful hierarchy refresh to have refreshed the\n   remote-tracking ref for that exact binding branch",
+    );
+    expect(skill).toContain("fetch remote's URL to be canonically equal to the binding\n   repository");
+    expect(skill).toContain("require HEAD to remain unchanged");
+    expect(skill).toContain("reachable from that exact binding-branch\n   remote-tracking ref");
+    expect(skill).toContain("briefing has no unambiguous\nbinding branch");
+    expect(skill).toContain(
+      "exact binding-branch remote-tracking ref, that ref or its owning fetch remote\nis missing or ambiguous",
+    );
+    expect(skill).toMatch(/current branch or\s+upstream is never a fallback authority/);
+    expect(skill).toMatch(/canonical repository identities do not\s+match/);
+    expect(skill).toContain("omit the evidence\nrow and do not attach the receipt when no valid evidence remains");
+    expect(skill).toContain("canonical repository identity rather than raw string\nequality");
+    expect(skill).toContain("Never persist a credential-bearing remote URL");
+    expect(skill).toMatch(/It is not\s+server-verified proof of causality/);
+
+    const receiptBlock = /```json\n([\s\S]*?)\n```/.exec(skill);
+    expect(receiptBlock).not.toBeNull();
+    const parsed = JSON.parse(receiptBlock?.[1] ?? "{}") as {
+      contextDecision?: {
+        version?: number;
+        effect?: string;
+        summary?: string;
+        evidence?: Array<{ repoUrl?: string; commit?: string; nodePath?: string; heading?: string }>;
+      };
+    };
+    expect(parsed.contextDecision).toMatchObject({
+      version: 1,
+      effect: "constrained",
+      summary: expect.any(String),
+    });
+    expect(parsed.contextDecision?.evidence).toHaveLength(1);
+    expect(parsed.contextDecision?.evidence?.[0]).toMatchObject({
+      repoUrl: "https://github.com/example/context-tree",
+      nodePath: "system/cloud/team/tenancy-and-identity.md",
+      heading: "Organization isolation",
+    });
+    expect(parsed.contextDecision?.evidence?.[0]?.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it("keeps version metadata aligned", () => {
-    expect(skillVersion).toBe("0.2.0");
+    expect(skillVersion).toBe("0.3.0");
     expect(skill).toContain(`version: ${skillVersion}`);
   });
 });

@@ -167,6 +167,35 @@ Each state also ships a **soft** companion fill — `--state-working-soft` …
 state-tinted surfaces (chips, wells, `.context-change-breakdown`) instead of
 hand-rolling `color-mix(... var(--state-*) ..., transparent)` at the call site.
 
+### Capability readiness (Setup)
+
+Capability readiness is not agent presence. Setup rows keep the capability
+icon neutral and render a separate Lucide status glyph, so state remains clear
+without relying on color:
+
+| Meaning | Glyph | Token |
+|---------|-------|-------|
+| ready / verified | static `CircleCheck` | `--success` |
+| optional / not configured / off | `CircleMinus` | `--fg-4` |
+| verification pending | static `Clock3` | `--state-idle` |
+| current viewer can resolve it | `CircleAlert` | `--state-needs-you` |
+| degraded / blocked elsewhere | `CircleAlert` | `--state-blocked` |
+| status could not be checked | `CircleHelp` | `--fg-3` |
+
+A transient request may use `LoaderCircle` with a reduced-motion-safe spin;
+long-lived verification never spins. Use amber only when explicit ownership
+or personal scope establishes that the current viewer can resolve the issue;
+role or a generic Manage link alone is not enough. Red is reserved for a
+confirmed failed operation or system error, normally in an inline callout; a
+failed status query is neutral unknown, never evidence that the capability
+itself is unavailable.
+
+The visible label and detail are the semantic source; readiness glyphs are
+decorative (`aria-hidden`). Static row readouts do not each get an `aria-live`
+region. Do not reuse agent-centric `StateDot` / `StatusGlyph` for this
+vocabulary, and do not mechanically map backend health enums to color without
+considering adoption, blockers, resolution owner, role, and user impact.
+
 ### Feedback / severity
 A named set, aliased to shared base hues (one value per color):
 `--success` (green, = brand hue) · `--warning` (orange, = `--state-blocked`; the caution/blocked hue) · `--danger` (red).

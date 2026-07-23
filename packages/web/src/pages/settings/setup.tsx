@@ -9,7 +9,22 @@ import type {
   TeamSetupCapabilities,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, CircleCheck, FolderGit2, GitFork, Laptop, type LucideIcon, ShieldCheck, Webhook } from "lucide-react";
+import {
+  Bot,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  CircleMinus,
+  Clock3,
+  FolderGit2,
+  GitFork,
+  Laptop,
+  LoaderCircle,
+  type LucideIcon,
+  MessageCircle,
+  ShieldCheck,
+  Webhook,
+} from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
 import { getContextTreeSnapshot } from "../../api/context-tree.js";
@@ -33,6 +48,16 @@ type ContextTreeFact = {
   binding: SetupContextTreeBinding;
   availability: "active" | "stale" | "unavailable" | "checking" | "unknown" | null;
 };
+
+export type SetupStatusKind =
+  | "ready"
+  | "optional"
+  | "loading"
+  | "pending"
+  | "attention"
+  | "neutral"
+  | "blocked"
+  | "unknown";
 
 export type SetupFacts = {
   role: string | null;
@@ -64,7 +89,7 @@ export type SetupRowModel = {
   status: {
     label: string;
     detail?: string;
-    tone?: "positive" | "neutral" | "attention";
+    kind: SetupStatusKind;
   };
   action?: {
     label: string;
@@ -102,12 +127,12 @@ function contextTreeFact(
   };
 }
 
-function pendingStatus(): SetupRowModel["status"] {
-  return { label: "Checking…", tone: "neutral" };
+function loadingStatus(): SetupRowModel["status"] {
+  return { label: "Checking…", kind: "loading" };
 }
 
 function unknownStatus(): SetupRowModel["status"] {
-  return { label: "Status unknown", detail: "This status could not be loaded.", tone: "neutral" };
+  return { label: "Status unavailable", detail: "We couldn't check this right now.", kind: "unknown" };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -216,7 +241,7 @@ function providerHealthLabel(provider: SetupRepositoryAutomationProvider): strin
 function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin: boolean): SetupRowModel["status"] {
   const configured = providers.filter((provider) => provider.adoption !== "available");
   if (configured.length === 0) {
-    return { label: "Not configured", detail: "Optional", tone: "neutral" };
+    return { label: "Not configured", detail: "Optional", kind: "optional" };
   }
 
   const ready = configured.filter((provider) => provider.health === "ready");
@@ -226,26 +251,31 @@ function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin
   const blockers = configured.flatMap((provider) => provider.blockers);
   const issues = blockerDetail(blockers, isAdmin);
   const detail = [providerDetail, issues].filter((item): item is string => Boolean(item)).join(" · ");
-  const tone = isAdmin && hasAdminBlocker(blockers) ? "attention" : "neutral";
+  const kind: SetupStatusKind =
+    isAdmin && hasAdminBlocker(blockers)
+      ? "attention"
+      : configured.some((provider) => provider.health === "degraded" || provider.health === "unavailable")
+        ? "neutral"
+        : "pending";
 
   if (ready.length === configured.length) {
     return {
       label: ready.length === 2 ? "GitHub + GitLab ready" : `${PROVIDER_LABELS[ready[0]?.provider ?? "github"]} ready`,
       detail,
-      tone: "positive",
+      kind: "ready",
     };
   }
-  if (ready.length > 0) return { label: "Partial coverage", detail, tone };
+  if (ready.length > 0) return { label: "Partial coverage", detail, kind };
   if (configured.some((provider) => provider.health === "pending_verification")) {
-    return { label: "Verification pending", detail, tone };
+    return { label: "Verification pending", detail, kind };
   }
   if (configured.some((provider) => provider.health === "degraded")) {
-    return { label: "Degraded", detail, tone };
+    return { label: "Degraded", detail, kind };
   }
   return {
     label: hasAdminBlocker(blockers) && isAdmin ? "Needs attention" : "Service unavailable",
     detail,
-    tone,
+    kind,
   };
 }
 
@@ -279,7 +309,7 @@ function contextTreeStatus(
   blockers: SetupBlocker[],
   isAdmin: boolean,
 ): SetupRowModel["status"] {
-  if (contextTree.state === "loading") return pendingStatus();
+  if (contextTree.state === "loading") return loadingStatus();
   if (contextTree.state === "error") return unknownStatus();
 
   const { binding, availability } = contextTree.value;
@@ -287,7 +317,7 @@ function contextTreeStatus(
     return {
       label: "Not set up",
       detail: isAdmin ? "Optional" : "Optional · Ask an admin to set this up if your team needs it.",
-      tone: "neutral",
+      kind: "optional",
     };
   }
   if (binding.state === "invalid") {
@@ -296,7 +326,7 @@ function contextTreeStatus(
       detail:
         blockerDetail(blockers, isAdmin) ??
         (isAdmin ? "The Context Tree binding is invalid." : "Ask an admin to repair the Context Tree binding."),
-      tone: isAdmin ? "attention" : "neutral",
+      kind: isAdmin ? "attention" : "neutral",
     };
   }
 
@@ -307,19 +337,19 @@ function contextTreeStatus(
   ].join(" · ");
   const issueDetail = blockerDetail(blockers, isAdmin);
   const detail = [bindingDetail, issueDetail].filter((item): item is string => Boolean(item)).join(" · ");
-  if (availability === "active") return { label: "Available", detail, tone: "positive" };
-  if (availability === "stale") return { label: "Available · update delayed", detail, tone: "neutral" };
+  if (availability === "active") return { label: "Available", detail, kind: "ready" };
+  if (availability === "stale") return { label: "Available · update delayed", detail, kind: "neutral" };
   if (availability === "unavailable") {
     return isAdmin
-      ? { label: "Needs recovery", detail, tone: "attention" }
+      ? { label: "Needs recovery", detail, kind: "attention" }
       : {
           label: "Unavailable",
           detail: issueDetail ? detail : `${bindingDetail} · Ask an admin to recover Context Tree access.`,
-          tone: "neutral",
+          kind: "neutral",
         };
   }
-  if (availability === "checking") return { label: "Checking availability", detail, tone: "neutral" };
-  return { label: "Status unknown", detail, tone: "neutral" };
+  if (availability === "checking") return { label: "Checking availability", detail, kind: "loading" };
+  return { label: "Status unknown", detail, kind: "unknown" };
 }
 
 function contextTreeAction(
@@ -345,27 +375,32 @@ function contextTreeAction(
 
 function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["status"] {
   if (review.adoption === "unavailable") {
-    return { label: "Available after Context Tree", tone: "neutral" };
+    return { label: "Available after Context Tree", kind: "optional" };
   }
   if (review.adoption === "disabled") {
-    return { label: "Off", detail: "Optional", tone: "neutral" };
+    return { label: "Off", detail: "Optional", kind: "optional" };
   }
 
   const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
   const issues = blockerDetail(review.blockers, isAdmin);
   const detail = [reviewer, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
-  if (review.health === "ready") return { label: "On", detail, tone: "positive" };
-  const tone = isAdmin && hasAdminBlocker(review.blockers) ? "attention" : "neutral";
-  if (review.health === "pending_verification") return { label: "Verification pending", detail, tone };
-  if (review.health === "degraded") return { label: "Degraded", detail, tone };
+  if (review.health === "ready") return { label: "On", detail, kind: "ready" };
+  const kind: SetupStatusKind =
+    isAdmin && hasAdminBlocker(review.blockers)
+      ? "attention"
+      : review.health === "pending_verification"
+        ? "pending"
+        : "neutral";
+  if (review.health === "pending_verification") return { label: "Verification pending", detail, kind };
+  if (review.health === "degraded") return { label: "Degraded", detail, kind };
   if (review.health === "unavailable") {
     return {
       label: hasAdminBlocker(review.blockers) && isAdmin ? "Needs attention" : "Service unavailable",
       detail,
-      tone,
+      kind,
     };
   }
-  return { label: "Status unknown", detail, tone: "neutral" };
+  return { label: "Status unknown", detail, kind: "unknown" };
 }
 
 function reviewAction(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["action"] | undefined {
@@ -393,7 +428,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
 
   const computerStatus =
     facts.computers.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.computers.state === "error"
         ? unknownStatus()
         : facts.computers.value.connected > 0
@@ -403,7 +438,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
                 facts.computers.value.connected === 1 && facts.computers.value.connectedHostname
                   ? facts.computers.value.connectedHostname
                   : countLabel(facts.computers.value.connected, "computer"),
-              tone: "positive" as const,
+              kind: "ready" as const,
             }
           : {
               label: "Not connected",
@@ -415,33 +450,33 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
                   : reliesOnTeamAgent
                     ? "Optional while a team agent is available"
                     : "No computer connected",
-              tone: reliesOnTeamAgent ? ("neutral" as const) : ("attention" as const),
+              kind: reliesOnTeamAgent ? ("optional" as const) : ("attention" as const),
             };
 
   const repositoryStatus =
     facts.repositories.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.repositories.state === "error"
         ? unknownStatus()
         : facts.repositories.value > 0
           ? {
               label: `${facts.repositories.value} connected`,
               detail: countLabel(facts.repositories.value, "active repository", "active repositories"),
-              tone: "positive" as const,
+              kind: "ready" as const,
             }
-          : { label: "None connected", detail: "Optional", tone: "neutral" as const };
+          : { label: "None connected", detail: "Optional", kind: "optional" as const };
 
   const capabilities = facts.capabilities.state === "ready" ? facts.capabilities.value : null;
   const contextTree = contextTreeFact(facts.capabilities, facts.contextTreeSnapshot);
   const repositoryAutomationStatus =
     facts.capabilities.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.capabilities.state === "error"
         ? unknownStatus()
         : providerSummary(facts.capabilities.value.repositoryAutomation.providers, isAdmin);
   const automaticReviewStatus =
     facts.capabilities.state === "loading"
-      ? pendingStatus()
+      ? loadingStatus()
       : facts.capabilities.state === "error"
         ? unknownStatus()
         : reviewStatus(facts.capabilities.value.contextTree.automaticReview, isAdmin);
@@ -451,17 +486,17 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       key: "work-access",
       title: "Work access",
       description: "Whether this team has an agent you can use.",
-      icon: CircleCheck,
+      icon: MessageCircle,
       status: facts.hasUsableAgent
         ? {
             label: "Can work now",
             detail: facts.hasPersonalAgent ? "Your agent is available" : "A team agent is available",
-            tone: "positive",
+            kind: "ready",
           }
         : {
             label: "Agent needed",
             detail: "Set up an agent before starting work",
-            tone: "attention",
+            kind: "attention",
           },
       action: facts.hasUsableAgent
         ? { label: "Start a chat", to: facts.workspaceWillEnterOnboarding ? "/onboarding" : "/" }
@@ -484,12 +519,14 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       description: "An agent managed by you for personal workflows.",
       icon: Bot,
       status: facts.hasPersonalAgent
-        ? { label: "Available", detail: "Managed by you", tone: "positive" }
-        : {
-            label: "Not set up",
-            detail: facts.hasUsableAgent ? "Optional while a team agent is available" : "No agent managed by you",
-            tone: facts.hasUsableAgent ? "neutral" : "attention",
-          },
+        ? { label: "Available", detail: "Managed by you", kind: "ready" }
+        : resumeSetup
+          ? { label: "Setup paused", detail: "Resume to create your agent", kind: "attention" }
+          : {
+              label: "Not set up",
+              detail: facts.hasUsableAgent ? "Optional while a team agent is available" : "No agent managed by you",
+              kind: facts.hasUsableAgent ? "optional" : "attention",
+            },
       action: resumeSetup
         ? { label: "Resume setup", to: "/onboarding", intent: "resume-onboarding" }
         : facts.hasPersonalAgent
@@ -668,6 +705,29 @@ export function SetupOverview({
   );
 }
 
+const SETUP_STATUS_PRESENTATION: Record<SetupStatusKind, { icon: LucideIcon; color: string; animate?: boolean }> = {
+  ready: { icon: CircleCheck, color: "var(--success)" },
+  optional: { icon: CircleMinus, color: "var(--fg-4)" },
+  loading: { icon: LoaderCircle, color: "var(--state-idle)", animate: true },
+  pending: { icon: Clock3, color: "var(--state-idle)" },
+  attention: { icon: CircleAlert, color: "var(--state-needs-you)" },
+  neutral: { icon: CircleAlert, color: "var(--fg-3)" },
+  blocked: { icon: CircleAlert, color: "var(--state-blocked)" },
+  unknown: { icon: CircleHelp, color: "var(--fg-3)" },
+};
+
+function SetupStatusMark({ kind }: { kind: SetupStatusKind }) {
+  const presentation = SETUP_STATUS_PRESENTATION[kind];
+  const StatusIcon = presentation.icon;
+  return (
+    <StatusIcon
+      aria-hidden
+      className={cn("h-4 w-4 shrink-0", presentation.animate && "motion-safe:animate-spin")}
+      style={{ color: presentation.color }}
+    />
+  );
+}
+
 function SetupRow({
   row,
   narrow,
@@ -720,28 +780,9 @@ function SetupRow({
         </span>
       </div>
 
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}
-      >
+      <div data-setup-status-kind={row.status.kind} style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}>
         <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-          <span
-            aria-hidden
-            style={{
-              width: "var(--sp-2)",
-              height: "var(--sp-2)",
-              flexShrink: 0,
-              borderRadius: "var(--radius-full)",
-              background:
-                row.status.tone === "positive"
-                  ? "var(--color-success)"
-                  : row.status.tone === "attention"
-                    ? "var(--state-needs-you)"
-                    : "var(--border-strong)",
-            }}
-          />
+          <SetupStatusMark kind={row.status.kind} />
           <span className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
             {row.status.label}
           </span>
@@ -750,7 +791,7 @@ function SetupRow({
           <p
             className="text-caption truncate"
             title={row.status.detail}
-            style={{ margin: "var(--sp-0_5) 0 0 var(--sp-4)", color: "var(--fg-4)" }}
+            style={{ margin: "var(--sp-0_5) 0 0 var(--sp-6)", color: "var(--fg-4)" }}
           >
             {row.status.detail}
           </p>

@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-version: 0.2.0
+version: 0.3.0
 description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports GitHub and GitLab explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content; `context-tree-review` owns trusted provider-scoped review snapshots and `context-tree-audit` owns audit snapshots.
 ---
 
@@ -203,6 +203,110 @@ If tree content conflicts with the user's instruction, follow the tree
 constraint and surface the conflict. If the tree says nothing relevant, say so
 briefly and proceed from repo evidence.
 
+### 7. Record material decision influence
+
+Attach a small `contextDecision` receipt only when all of these conditions hold:
+
+1. The agent read a normal-content passage containing a current decision,
+   constraint, rationale, or cross-domain relationship. Opening a file is not
+   enough.
+2. The passage was relevant to a concrete design, implementation, review, or
+   debugging choice in the current task.
+3. The read happened before the choice was made or executed.
+4. The final visible message shows how the passage confirmed, constrained,
+   redirected, or conflicted with that choice.
+
+Do not attach a receipt for root or domain files used only as navigation,
+`AGENTS.md`, skill or workflow instructions, pure ownership routing,
+archive/proposal/supporting material alone, a Tree mention without decision
+influence, or a task for which the Tree had no relevant decision-bearing
+content. Do not emit `effect: none`.
+
+When the task ends with a visible First Tree `chat send` that contains the
+affected choice, add one receipt under the top-level `contextDecision` metadata
+key on that same command. If Tree context exposes an unresolved conflict and
+the task correctly ends with a blocking `chat ask`, attach the receipt to that
+same ask instead. `chat send` and `chat ask` merge recipient mentions,
+attachments, and body-origin metadata; supply only the new
+`contextDecision` key. For example, pass the JSON below through
+`--metadata '<json>'` on the same command that sends the final body. Do not send
+a separate receipt message, put the receipt only in prose, or reconstruct other
+metadata:
+
+```json
+{
+  "contextDecision": {
+    "version": 1,
+    "effect": "constrained",
+    "summary": "The existing organization-isolation constraint ruled out a global shared index.",
+    "evidence": [
+      {
+        "repoUrl": "https://github.com/example/context-tree",
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "nodePath": "system/cloud/team/tenancy-and-identity.md",
+        "heading": "Organization isolation"
+      }
+    ]
+  }
+}
+```
+
+Use exactly one effect. Choose the first matching category in this precedence
+order so periodic reports remain comparable:
+
+1. `conflicted` — exposed a conflict that still requires resolution or
+   escalation;
+2. `redirected` — changed the intended approach;
+3. `constrained` — ruled out an option or narrowed the acceptable solution or
+   implementation boundary;
+4. `confirmed` — removed material uncertainty and justified keeping the choice
+   without changing its boundary.
+
+Keep `summary` to one concrete sentence. Cite at most three Tree-root-relative
+normal node paths that jointly influenced the same choice. `heading` is
+optional; omit it when the relevant heading cannot be named reliably.
+
+Every evidence row must identify the repository and exact commit that supplied
+the passage. Store `repoUrl` as the credential-free binding repository exactly
+as the Server activation receipt or managed workspace briefing declares it;
+never substitute a local transport URL. Report consumers must compare this
+field through First Tree's canonical repository identity rather than raw string
+equality. Never persist a credential-bearing remote URL.
+
+For a BYO task, use the activation receipt's binding repository and commit. Its
+detached snapshot is already exact and remote-backed. For a managed workspace,
+after the last hierarchy selector and before reading a candidate passage:
+
+1. read the binding repository and binding branch declared by the workspace
+   briefing; never infer the binding branch from the checkout's current branch
+   or its upstream;
+2. require the latest successful hierarchy refresh to have refreshed the
+   remote-tracking ref for that exact binding branch, then resolve the fetch
+   remote that owns the ref;
+3. require that fetch remote's URL to be canonically equal to the binding
+   repository declared by the workspace briefing;
+4. record `git rev-parse HEAD`;
+5. read the candidate normal-content files;
+6. require HEAD to remain unchanged;
+7. require every cited path to exist in that commit and have no staged or
+   unstaged difference; and
+8. require the commit to be reachable from that exact binding-branch
+   remote-tracking ref.
+
+If another pull or process moves HEAD during those steps, re-read from a new
+stable commit before attributing influence. If the briefing has no unambiguous
+binding branch, the latest hierarchy refresh cannot be shown to have refreshed
+the exact binding-branch remote-tracking ref, that ref or its owning fetch remote
+is missing or ambiguous, or the canonical repository identities do not match,
+do not attribute the briefing's `repoUrl`. The checkout's current branch or
+upstream is never a fallback authority. If repository, branch, commit, remote
+reachability, or path identity cannot be established safely, omit the evidence
+row and do not attach the receipt when no valid evidence remains.
+
+The receipt is the agent's durable, reviewable attribution. It is not
+server-verified proof of causality, and the final prose must not claim that it
+is.
+
 ## Output Expectations
 
 Keep the user-facing result concise:
@@ -212,6 +316,9 @@ Keep the user-facing result concise:
   relationships that affect the task
 - for BYO Read, report the selected Team, binding, and exact commit when it
   helps the user verify which task snapshot governed the answer
+- when the strict decision-influence test passes, attach the receipt to the
+  same final First Tree `chat send`, or to the same blocking `chat ask` for an
+  unresolved conflict, instead of adding receipt prose or another message
 - avoid restating every node; carry forward only what changes how you act
 
 Never modify tree files with this skill.
