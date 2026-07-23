@@ -618,6 +618,10 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
     expect(briefing).toContain("first-tree github follow --help");
     expect(briefing).not.toContain("`first-tree-github` skill");
+    expect(briefing).toContain("enables **Settings → Setup**");
+    expect(briefing).toContain("missing,\n  suspended, or does not cover the repo");
+    expect(briefing).toContain("Give this handoff once");
+    expect(briefing).not.toContain("enables **Settings → GitHub**");
   });
 
   it("keeps compact GitLab posture inline and routes detailed operations on demand", () => {
