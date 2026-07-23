@@ -134,6 +134,13 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       host: "127.0.0.1",
       publicUrl: undefined,
     },
+    security: {
+      csp: {
+        scriptOrigins: [],
+        connectOrigins: [],
+        imageOrigins: [],
+      },
+    },
     workspace: {
       root: "/tmp/first-tree-test-workspaces",
     },

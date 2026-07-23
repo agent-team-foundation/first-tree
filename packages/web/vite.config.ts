@@ -1,13 +1,24 @@
 import { execSync } from "node:child_process";
-import { readdir, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  BROWSER_SECURITY_MANIFEST_FILENAME,
+  type BrowserSecurityManifest,
+  browserSecurityManifestSchema,
+  WEB_VERSION_MANIFEST_FILENAME,
+} from "@first-tree/shared";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { assertBuildHtmlSecurity } from "./build-html-security.js";
+import { buildBrowserSecurityManifest } from "./src/browser-resource-policy.js";
+import { loadViteBrowserEnvironment } from "./vite-environment.js";
 
-const HUB_TARGET = process.env.VITE_PROXY_TARGET ?? "http://localhost:8000";
 const SENTRY_WEB_PROJECT = "first-tree-web";
+const WEB_ROOT = fileURLToPath(new URL(".", import.meta.url));
+const DIST_ROOT = join(WEB_ROOT, "dist");
 
 /**
  * A unique id for this web build. Resolution order:
@@ -36,13 +47,13 @@ function resolveBuildId(): string {
   }
 }
 
-function deleteSourceMapsPlugin(): Plugin {
+function deleteSourceMapsPlugin(distRoot: string): Plugin {
   return {
     name: "first-tree:delete-source-maps",
     apply: "build",
     enforce: "post",
     async closeBundle() {
-      await deleteSourceMaps("dist/assets").catch((error: unknown) => {
+      await deleteSourceMaps(join(distRoot, "assets")).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`Sentry source map cleanup skipped: ${message}`);
       });
@@ -82,9 +93,71 @@ function versionManifestPlugin(buildId: string): Plugin {
     generateBundle() {
       this.emitFile({
         type: "asset",
-        fileName: "version.json",
+        fileName: WEB_VERSION_MANIFEST_FILENAME,
         source: JSON.stringify({ buildId }),
       });
+    },
+  };
+}
+
+function browserSecurityManifestPlugin(manifest: BrowserSecurityManifest): Plugin {
+  return {
+    name: "first-tree:browser-security-manifest",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: BROWSER_SECURITY_MANIFEST_FILENAME,
+        source: JSON.stringify(manifest),
+      });
+    },
+  };
+}
+
+async function readableBuildFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await readableBuildFiles(path)));
+    } else if (entry.isFile() && /\.(?:css|html|js)$/u.test(entry.name)) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
+function browserSecurityBuildVerifierPlugin(distRoot: string, expectedBuildId: string): Plugin {
+  return {
+    name: "first-tree:verify-browser-security-build",
+    apply: "build",
+    enforce: "post",
+    async closeBundle() {
+      const indexPath = join(distRoot, "index.html");
+      const indexHtml = await readFile(indexPath, "utf8");
+      assertBuildHtmlSecurity(indexHtml);
+      await readFile(join(distRoot, "theme-init.js"), "utf8");
+
+      const manifestText = await readFile(join(distRoot, BROWSER_SECURITY_MANIFEST_FILENAME), "utf8");
+      const manifest = browserSecurityManifestSchema.parse(JSON.parse(manifestText));
+      const versionText = await readFile(join(distRoot, WEB_VERSION_MANIFEST_FILENAME), "utf8");
+      const version: unknown = JSON.parse(versionText);
+      const versionBuildId =
+        typeof version === "object" && version !== null && "buildId" in version
+          ? Reflect.get(version, "buildId")
+          : undefined;
+      if (manifest.buildId !== expectedBuildId || versionBuildId !== expectedBuildId) {
+        throw new Error("Browser security build verification failed: emitted build IDs do not match");
+      }
+
+      const files = await readableBuildFiles(distRoot);
+      for (const file of files) {
+        const contents = await readFile(file, "utf8");
+        if (contents.includes("chat-row-avatar-preview--freeze")) {
+          throw new Error("Browser security build verification failed: dev-only avatar preview style was emitted");
+        }
+      }
     },
   };
 }
@@ -100,40 +173,52 @@ if (!sentryPluginEnabled && process.env.CI) {
   console.warn("Sentry source map upload skipped: SENTRY_AUTH_TOKEN or SENTRY_ORG is not configured.");
 }
 
-export default defineConfig({
-  build: {
-    sourcemap: "hidden",
-  },
-  plugins: [
-    react(),
-    tailwindcss(),
-    versionManifestPlugin(buildId),
-    sentryVitePlugin({
-      org: sentryOrg,
-      project: sentryProject,
-      authToken: sentryAuthToken,
-      disable: !sentryPluginEnabled,
-      telemetry: false,
-      release: {
-        name: sentryRelease,
-        inject: false,
-        setCommits: false,
-      },
-      sourcemaps: {
-        filesToDeleteAfterUpload: "dist/assets/**/*.map",
-      },
-      errorHandler(error) {
-        console.warn(`Sentry source map upload failed: ${error.message}`);
-      },
-    }),
-    deleteSourceMapsPlugin(),
-  ],
-  define: {
-    __WEB_BUILD_ID__: JSON.stringify(buildId),
-  },
-  server: {
-    proxy: {
-      "/api/v1": { target: HUB_TARGET, changeOrigin: true, ws: true },
+export default defineConfig(({ mode }) => {
+  const browserEnvironment = loadViteBrowserEnvironment(mode, WEB_ROOT, process.env);
+  const browserSecurityManifest = browserSecurityManifestSchema.parse(
+    buildBrowserSecurityManifest(buildId, browserEnvironment),
+  );
+  const hubTarget = browserEnvironment.VITE_PROXY_TARGET ?? "http://localhost:8000";
+
+  return {
+    root: WEB_ROOT,
+    envDir: WEB_ROOT,
+    build: {
+      sourcemap: "hidden",
     },
-  },
+    plugins: [
+      react(),
+      tailwindcss(),
+      versionManifestPlugin(buildId),
+      browserSecurityManifestPlugin(browserSecurityManifest),
+      sentryVitePlugin({
+        org: sentryOrg,
+        project: sentryProject,
+        authToken: sentryAuthToken,
+        disable: !sentryPluginEnabled,
+        telemetry: false,
+        release: {
+          name: sentryRelease,
+          inject: false,
+          setCommits: false,
+        },
+        sourcemaps: {
+          filesToDeleteAfterUpload: "dist/assets/**/*.map",
+        },
+        errorHandler(error) {
+          console.warn(`Sentry source map upload failed: ${error.message}`);
+        },
+      }),
+      browserSecurityBuildVerifierPlugin(DIST_ROOT, buildId),
+      deleteSourceMapsPlugin(DIST_ROOT),
+    ],
+    define: {
+      __WEB_BUILD_ID__: JSON.stringify(buildId),
+    },
+    server: {
+      proxy: {
+        "/api/v1": { target: hubTarget, changeOrigin: true, ws: true },
+      },
+    },
+  };
 });

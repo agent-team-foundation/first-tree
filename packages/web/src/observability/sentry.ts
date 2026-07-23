@@ -1,9 +1,9 @@
 import * as Sentry from "@sentry/react";
 import type { ErrorInfo } from "react";
-import { PROD_HOST, sanitizePath } from "../analytics.js";
+import { sanitizePath } from "../analytics.js";
+import { PRODUCTION_WEB_HOST, resolveEffectiveSentryIntegration } from "../browser-resource-policy.js";
 
 const DEFAULT_SAMPLE_RATE = 0.1;
-const FALSE_VALUES = new Set(["0", "false", "off", "no"]);
 const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_RE =
   /token|secret|password|credential|authorization|cookie|jwt|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?code/i;
@@ -20,11 +20,10 @@ type WebSentryConfig = {
 };
 
 export function resolveWebSentryConfig(env: ImportMetaEnv = import.meta.env): WebSentryConfig {
-  const rawDsn = env.VITE_SENTRY_DSN?.trim();
-  const rawEnabled = env.VITE_SENTRY_ENABLED?.trim().toLowerCase();
+  const effectiveIntegration = resolveEffectiveSentryIntegration(env);
   return {
-    enabled: rawEnabled ? !FALSE_VALUES.has(rawEnabled) : Boolean(rawDsn),
-    dsn: rawDsn || undefined,
+    enabled: effectiveIntegration.active,
+    dsn: effectiveIntegration.active ? effectiveIntegration.dsn : undefined,
     environment: env.VITE_SENTRY_ENVIRONMENT?.trim() || defaultEnvironment(),
     release: env.VITE_SENTRY_RELEASE?.trim() || `first-tree-web@${__WEB_BUILD_ID__}`,
     buildId: __WEB_BUILD_ID__,
@@ -162,7 +161,7 @@ function stripUrlSuffix(url: string): string {
 
 function defaultEnvironment(): string {
   if (typeof window === "undefined") return import.meta.env.MODE || "development";
-  return window.location.hostname === PROD_HOST ? "production" : import.meta.env.MODE || "development";
+  return window.location.hostname === PRODUCTION_WEB_HOST ? "production" : import.meta.env.MODE || "development";
 }
 
 function parseSampleRate(raw: string | undefined, fallback: number): number {

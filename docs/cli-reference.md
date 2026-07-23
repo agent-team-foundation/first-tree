@@ -1462,11 +1462,39 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server origin. Used to stamp the issuer on short connect codes and to build invite-link URLs plus Google and GitHub OAuth callbacks. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Exact public-facing HTTP(S) server origin. Used for the embedded SPA's WS(S)/CSP source, short-connect-code issuer, invite links, and Google/GitHub OAuth callbacks. **Required in production and whenever the server embeds a Web dist; HTTPS is required in production.** | — |
 | `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
+
+**Browser security policy:**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_CSP_SCRIPT_ORIGINS` | Comma-separated exact origins allowed to supply scripts to the embedded Web SPA. Production accepts HTTPS only. | empty |
+| `FIRST_TREE_CSP_CONNECT_ORIGINS` | Comma-separated exact origins allowed for browser fetch, beacon, and WebSocket connections. Production accepts HTTPS/WSS only. | empty |
+| `FIRST_TREE_CSP_IMAGE_ORIGINS` | Comma-separated exact origins allowed to supply browser images. Production accepts HTTPS only. | empty |
+
+Each value is an origin only: scheme, host, and optional port. Wildcards,
+credentials, paths, queries, fragments, protocol-relative values, CSP keywords,
+and raw directive fragments are rejected. Script and image lists accept only
+HTTP(S); connect additionally accepts WS(S). Production narrows these schemes
+to HTTPS for script/image and HTTPS/WSS for connect. The embedded SPA's same-origin
+WS(S) source is derived from the validated `FIRST_TREE_PUBLIC_URL`, so it does
+not need to be duplicated in the connect list. Never put a Sentry DSN,
+presigned object URL, token, or other credential-bearing URL in these lists—
+derive and configure only its sanitized origin.
+
+The lists are capability-specific and are unrelated to the inbound
+`FIRST_TREE_CORS_ORIGIN` policy. Empty lists are valid only when the candidate
+Web build and environment have no matching external dependency. When the
+server embeds a Web dist, it loads that build's generated, origin-only browser
+security manifest and checks every active requirement against the corresponding
+runtime list before starting. A missing or mismatched required origin fails
+closed. Populate and verify the lists for each production environment before
+promoting its image; use the source registry and generated candidate manifest
+as authority instead of copying an origin catalog into deployment docs.
 
 **Command update advertisement:**
 
@@ -1566,7 +1594,7 @@ threshold.
 | `FIRST_TREE_OTEL_ENVIRONMENT` | Deployment label emitted as `deployment.environment.name`. | `development` |
 | `FIRST_TREE_OTEL_CAPTURE_CLIENT_IP` | Capture client IP attribute on traces. | `false` |
 | `VITE_SENTRY_DSN` | Public browser DSN for Web Console errors in the `first-tree-web` Sentry project. | unset |
-| `VITE_SENTRY_ENABLED` | Explicit Web Sentry switch; `false` / `0` / `off` disables even when a DSN is present. | enabled when DSN exists |
+| `VITE_SENTRY_ENABLED` | Build-time Web Sentry switch; `false` / `0` / `off` disables both browser initialization and its generated security-manifest requirement even when a DSN is present. | enabled when DSN exists |
 | `VITE_SENTRY_ENVIRONMENT` | Web Sentry environment label. | host/mode-derived |
 | `VITE_SENTRY_TRACES_SAMPLE_RATE` | Web Sentry trace sample rate (`0.0–1.0`). | `0.1` |
 | `FIRST_TREE_CLIENT_SENTRY_DSN` | Client daemon/runtime DSN for the `first-tree-client` Sentry project. | unset |

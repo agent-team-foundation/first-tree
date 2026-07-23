@@ -33,7 +33,13 @@ export {
 export { defineConfig, field, optional } from "./schema.js";
 export type { ServerConfig } from "./server-config.js";
 // Typed config schemas and accessors
-export { createServerConfigSchema, getServerConfig, serverConfigSchema } from "./server-config.js";
+export {
+  browserSecurityConnectOriginListConfigSchema,
+  browserSecurityOriginListConfigSchema,
+  createServerConfigSchema,
+  getServerConfig,
+  serverConfigSchema,
+} from "./server-config.js";
 // `setConfig` is intended for test scaffolding only — production code goes
 // through `initConfig`, which sets the singleton internally. Exposed at the
 // barrel so server test helpers can pin a config before constructing the

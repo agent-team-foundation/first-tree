@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import {
+  BROWSER_SECURITY_MAX_ORIGIN_LENGTH,
+  BROWSER_SECURITY_MAX_ORIGINS_PER_CAPABILITY,
+  browserSecurityConnectOriginSchema,
+  browserSecurityOriginSchema,
+  parseBrowserSecurityAuthority,
+} from "../schemas/browser-security-manifest.js";
 import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
@@ -12,6 +19,87 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
+
+const RAW_BROWSER_ORIGIN_PATTERN = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\\\s]+)\/?$/iu;
+
+function authorityMatchesParsedOrigin(
+  authority: ReturnType<typeof parseBrowserSecurityAuthority>,
+  parsed: URL,
+): boolean {
+  if (!authority || authority.hostname !== parsed.hostname) return false;
+  if (authority.port === parsed.port) return true;
+
+  const defaultPort = parsed.protocol === "http:" || parsed.protocol === "ws:" ? "80" : "443";
+  return parsed.port === "" && authority.port === defaultPort;
+}
+
+function canonicalConfigOriginSchema(
+  protocols: ReadonlySet<string>,
+  outputSchema: typeof browserSecurityOriginSchema | typeof browserSecurityConnectOriginSchema,
+) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(BROWSER_SECURITY_MAX_ORIGIN_LENGTH)
+    .transform((value, context) => {
+      try {
+        // Check the operator's raw value before WHATWG normalization. URL
+        // parsing intentionally collapses dot segments and drops empty query
+        // or fragment markers, which would otherwise turn non-origin inputs
+        // such as `/private/..`, `?`, or `#` into an apparently exact origin.
+        const rawOrigin = RAW_BROWSER_ORIGIN_PATTERN.exec(value);
+        if (!rawOrigin) {
+          context.addIssue({ code: "custom", message: "must be an exact browser origin" });
+          return z.NEVER;
+        }
+        const authority = parseBrowserSecurityAuthority(rawOrigin[2] ?? "");
+        const parsed = new URL(value);
+        if (
+          value.includes("*") ||
+          !authorityMatchesParsedOrigin(authority, parsed) ||
+          !protocols.has(parsed.protocol) ||
+          parsed.username.length > 0 ||
+          parsed.password.length > 0 ||
+          parsed.pathname !== "/" ||
+          parsed.search.length > 0 ||
+          parsed.hash.length > 0
+        ) {
+          context.addIssue({ code: "custom", message: "must be an exact browser origin" });
+          return z.NEVER;
+        }
+        return parsed.origin;
+      } catch {
+        context.addIssue({ code: "custom", message: "must be an exact browser origin" });
+        return z.NEVER;
+      }
+    })
+    .pipe(outputSchema);
+}
+
+function browserSecurityOriginListConfigSchemaFor(originSchema: z.ZodType<string>) {
+  return z
+    .preprocess((value) => {
+      if (typeof value !== "string") return value;
+      if (value.trim().length === 0) return [];
+      return value.split(",").map((origin) => origin.trim());
+    }, z.array(originSchema).max(BROWSER_SECURITY_MAX_ORIGINS_PER_CAPABILITY))
+    .transform((origins) => [...new Set(origins)].sort());
+}
+
+const canonicalHttpOriginSchema = canonicalConfigOriginSchema(
+  new Set(["http:", "https:"]),
+  browserSecurityOriginSchema,
+);
+const canonicalConnectOriginSchema = canonicalConfigOriginSchema(
+  new Set(["http:", "https:", "ws:", "wss:"]),
+  browserSecurityConnectOriginSchema,
+);
+
+export const browserSecurityOriginListConfigSchema =
+  browserSecurityOriginListConfigSchemaFor(canonicalHttpOriginSchema);
+export const browserSecurityConnectOriginListConfigSchema =
+  browserSecurityOriginListConfigSchemaFor(canonicalConnectOriginSchema);
 
 const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
   .refine((provider) => provider === "codex" || provider === "claude-code", {
@@ -171,6 +259,19 @@ export const serverConfigSchema = defineConfig({
      * `NODE_ENV === 'production'`.
      */
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
+  },
+  security: {
+    csp: {
+      scriptOrigins: field(browserSecurityOriginListConfigSchema.default([]), {
+        env: "FIRST_TREE_CSP_SCRIPT_ORIGINS",
+      }),
+      connectOrigins: field(browserSecurityConnectOriginListConfigSchema.default([]), {
+        env: "FIRST_TREE_CSP_CONNECT_ORIGINS",
+      }),
+      imageOrigins: field(browserSecurityOriginListConfigSchema.default([]), {
+        env: "FIRST_TREE_CSP_IMAGE_ORIGINS",
+      }),
+    },
   },
   workspace: {
     // Lazy default (function form): zod's `.default(value)` evaluates

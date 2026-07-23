@@ -77,7 +77,7 @@ export function Layout() {
   // On `narrow` the theme toggle and full status chips drop too: four full tabs
   // plus text chips + theme + avatar overflow a phone-width row and would clip
   // the avatar off the right edge. Phones fall back to the OS
-  // `prefers-color-scheme` (honoured at boot in index.html); the toggle returns
+  // `prefers-color-scheme` (honoured by the blocking theme bootstrap); the toggle returns
   // at `md`. The avatar is the one control that never drops.
   const viewport = useWorkspaceViewport();
   // Lifted out of NewVersionChip so the `/version.json` poll runs at EVERY
