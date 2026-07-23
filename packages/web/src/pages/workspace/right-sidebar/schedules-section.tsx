@@ -302,6 +302,9 @@ function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob
   const preview = useQuery({
     queryKey: cronPreviewQueryKey(chatId, job.schedule, job.timezone),
     queryFn: () => previewChatCronJobs(chatId, { schedule: job.schedule, timezone: job.timezone }),
+    // A paused job has no upcoming runs (UpcomingRuns returns null); the
+    // resume dialog fetches its own preview when actually opened.
+    enabled: job.state === "active",
     staleTime: 30_000,
   });
 
