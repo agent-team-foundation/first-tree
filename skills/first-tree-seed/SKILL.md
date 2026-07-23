@@ -335,14 +335,19 @@ coverage handoff, read the selected Team:
 first-tree org context-tree review-config --as-member --org "<team-id>" --json
 ```
 
-- Use this read only to distinguish configured from off. It is not a health or
-  readiness check. When configured, do not infer Reviewer health from this
-  command. When off, include Review Agent selection through **Settings →
-  Setup** in the setup handoff.
+- Use only the JSON `enabled` and `agentUuid` fields to distinguish three
+  durable configuration states. This is not a health or readiness check:
+  - `agentUuid` is null: include selecting an eligible managed Review Agent and
+    enabling Automatic Review through **Settings → Setup**.
+  - `agentUuid` is present and `enabled` is false: the selection is retained;
+    include only enabling Automatic Review through **Settings → Setup**.
+  - `agentUuid` is present and `enabled` is true: add no Review setup handoff
+    and infer no Reviewer health from this command.
+  Any other or ambiguous result creates no inferred debt.
 - Send one milestone response: combine any GitHub App recovery or repository
-  coverage action with Review Agent selection. If only one is missing, mention
-  only that action. If neither is missing, add no setup guidance. Setup owns
-  provider prerequisites and the Team mutation.
+  coverage action with the applicable Review setup action above. If only one is
+  missing, mention only that action. If neither is missing, add no setup
+  guidance. Setup owns provider prerequisites and the Team mutation.
 - A failed or ambiguous read creates no inferred debt and does not block Seed.
   Context Review remains optional for Team, Chat, basic Tree use and Seed
   completion. For a newly created GitHub tree, mention baseline approval rules
@@ -354,12 +359,15 @@ Use this response matrix after the milestone:
 
 | Tree provider / coverage | Review config read | User-facing setup action |
 | --- | --- | --- |
-| GitHub coverage missing | Off | One combined handoff: authoritative coverage recovery plus Review Agent in Settings → Setup |
-| GitHub coverage missing | Configured or read failed/ambiguous | Coverage recovery only; infer no Review debt |
-| GitHub covered | Off | Review Agent in Settings → Setup only |
-| GitHub covered | Configured or read failed/ambiguous | No setup handoff |
-| GitLab | Off | Review Agent in Settings → Setup only; no GitHub App guidance |
-| GitLab | Configured or read failed/ambiguous | No setup handoff |
+| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Setup |
+| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Setup |
+| GitHub coverage missing | Enabled or read failed/ambiguous | Coverage recovery only; infer no Review debt |
+| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Setup only |
+| GitHub covered | Selected but off | Enable Automatic Review in Settings → Setup only |
+| GitHub covered | Enabled or read failed/ambiguous | No setup handoff |
+| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Setup only; no GitHub App guidance |
+| GitLab | Selected but off | Enable Automatic Review in Settings → Setup only; no GitHub App guidance |
+| GitLab | Enabled or read failed/ambiguous | No setup handoff |
 
 **B — Bound but unseeded.** The tree is bound and holds at most non-normal
 supporting/member structure under the generated policy's content classes,

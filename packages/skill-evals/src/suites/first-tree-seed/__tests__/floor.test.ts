@@ -136,13 +136,15 @@ describe("first-tree-seed floor invariants", () => {
   it("hands off Review Agent configuration to Setup without blocking Seed", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open, check Review Agent configuration once");
     expect(skillMarkdown).toContain('first-tree org context-tree review-config --as-member --org "<team-id>" --json');
-    expect(skillMarkdown).toMatch(/Review Agent selection through \*\*Settings →\s+Setup\*\*/u);
+    expect(skillMarkdown).toContain("Use only the JSON `enabled` and `agentUuid` fields");
+    expect(skillMarkdown).toMatch(/selecting an eligible managed Review Agent and\s+enabling Automatic Review/u);
+    expect(skillMarkdown).toContain("the selection is retained");
     expect(skillMarkdown).toMatch(/Setup owns\s+provider prerequisites and the Team mutation/u);
-    expect(skillMarkdown).toContain("It is not a health or\n  readiness check");
+    expect(skillMarkdown).toContain("This is not a health or readiness check");
     expect(skillMarkdown).toContain("first perform the Review Agent read");
     expect(skillMarkdown).toContain("send at most one combined setup handoff");
     expect(skillMarkdown).toMatch(/supersedes\s+the generated briefing's generic GitHub-follow setup prompt/u);
-    expect(skillMarkdown).toContain("If only one is missing, mention\n  only that action");
+    expect(skillMarkdown).toMatch(/If only one is\s+missing, mention only that action/u);
     expect(skillMarkdown).toContain("creates no inferred debt and does not block Seed");
     expect(skillMarkdown).toContain("optional for Team, Chat, basic Tree use and Seed\n  completion");
     expect(skillMarkdown).toContain("only when this run verified that ruleset setup succeeded");
@@ -150,12 +152,15 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("Do not repeat the Review Agent\nhandoff from Phase 1");
 
     const handoffRows = [
-      "| GitHub coverage missing | Off | One combined handoff: authoritative coverage recovery plus Review Agent in Settings → Setup |",
-      "| GitHub coverage missing | Configured or read failed/ambiguous | Coverage recovery only; infer no Review debt |",
-      "| GitHub covered | Off | Review Agent in Settings → Setup only |",
-      "| GitHub covered | Configured or read failed/ambiguous | No setup handoff |",
-      "| GitLab | Off | Review Agent in Settings → Setup only; no GitHub App guidance |",
-      "| GitLab | Configured or read failed/ambiguous | No setup handoff |",
+      "| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Setup |",
+      "| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Setup |",
+      "| GitHub coverage missing | Enabled or read failed/ambiguous | Coverage recovery only; infer no Review debt |",
+      "| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Setup only |",
+      "| GitHub covered | Selected but off | Enable Automatic Review in Settings → Setup only |",
+      "| GitHub covered | Enabled or read failed/ambiguous | No setup handoff |",
+      "| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
+      "| GitLab | Selected but off | Enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
+      "| GitLab | Enabled or read failed/ambiguous | No setup handoff |",
     ];
     for (const row of handoffRows) {
       expect(skillMarkdown).toContain(row);

@@ -471,12 +471,14 @@ run. The dedicated tree task owns its own post-PR/MR handoff through
 - For a confirmed **admin**, read the current managed Agent's Team with
   `first-tree org context-tree review-config --json`. Do not switch to
   `--as-member`: its default Team can differ from this Agent/chat's Team.
-  If Review is off, say once that **Settings → Setup** can select a Review Agent
-  for automatic Tree PR/MR review.
-- Use this read only to distinguish configured from off. It is not a health or
-  readiness check. Do not prompt a member, repeat a configured setup, or infer
-  debt when the read fails or is ambiguous. None of these states blocks
-  onboarding.
+  Read only the JSON `enabled` and `agentUuid` fields. If `agentUuid` is null,
+  say once that **Settings → Setup** can select an eligible managed Review Agent
+  and enable Automatic Review. If `agentUuid` is present while `enabled` is
+  false, say only that Setup can enable Automatic Review; the Agent is already
+  selected. If both are present/enabled, add no Review setup handoff.
+- This is not a health or readiness check. Do not prompt a member, infer
+  Reviewer health, or infer debt when the read is invalid, fails, or is
+  ambiguous. None of these states blocks onboarding.
 - Setup owns provider prerequisites, Reviewer selection and health; this
   launcher performs no Team mutation.
 
@@ -485,8 +487,9 @@ The ownership matrix is intentionally small:
 | Observed milestone | State | This launcher's action |
 | --- | --- | --- |
 | GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |
-| Pre-existing populated tree after value | Confirmed admin; Review off | Read config, then hand off once to Settings → Setup |
-| Pre-existing populated tree after value | Review configured, read failed/ambiguous, member, or unclear role | No Review setup handoff |
+| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |
+| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |
+| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |
 | Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |
 
 ## Doing the Work & Talking to the User
@@ -626,8 +629,10 @@ admin-only surface; involve the responsible admin.
   either later.
 - After value against a pre-existing populated tree, check Context Review
   configuration and give a confirmed admin at most one **Settings → Setup**
-  handoff when no Reviewer is configured. A dedicated tree task owns this
-  handoff for its own PR/MR; never repeat it in the launcher. Never make it an
+  handoff when no eligible Reviewer is selected or the retained selection is
+  disabled. Distinguish those states: do not tell an admin to select another
+  Agent when one is already retained. A dedicated tree task owns this handoff
+  for its own PR/MR; never repeat it in the launcher. Never make it an
   onboarding gate, treat configuration as a health check, infer debt from an
   ambiguous state, prompt a member to configure it, or perform the Team mutation
   from this launcher.
