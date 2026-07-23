@@ -502,7 +502,9 @@ describe("SchedulesSection chat switching", () => {
 
 describe("SchedulesSection time freshness", () => {
   // Fake-timer-aware render/click/flush: the shared helpers wait on a real
-  // setTimeout(0), which never fires once timers are faked.
+  // setTimeout(0), which never fires once timers are faked. The client
+  // mirrors production (app.tsx): window-focus refetch is globally OFF, so
+  // only the section's own clock/interval/visibility policy can refresh.
   async function flushFake(ms: number): Promise<void> {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ms);
@@ -515,7 +517,9 @@ describe("SchedulesSection time freshness", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
+    });
     await act(async () => {
       root?.render(
         <QueryClientProvider client={queryClient}>
@@ -532,6 +536,35 @@ describe("SchedulesSection time freshness", () => {
       el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
     await flushFake(1);
+  }
+
+  function everyMinuteJob(): CronJob {
+    return makeJob({
+      schedule: "* * * * *",
+      timezone: "UTC",
+      nextRunAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+  }
+
+  /** Server-truth preview: five occurrences, one per minute, all after NOW. */
+  function everyMinutePreview(): CronPreviewResponse {
+    const first = Date.now() + 60_000;
+    return {
+      schedule: "* * * * *",
+      timezone: "UTC",
+      occurrences: [0, 1, 2, 3, 4].map((i) => {
+        const at = new Date(first + i * 60_000).toISOString();
+        return { at, local: at, timezone: "UTC" };
+      }),
+    };
+  }
+
+  function renderedOccurrenceInstants(): number[] {
+    return [...document.querySelectorAll("#schedule-detail-job-1 ol li span")].map((span) => {
+      const raw = span.textContent ?? "";
+      const iso = raw.startsWith("(") && raw.endsWith(")") ? raw.slice(1, -1) : raw;
+      return new Date(iso).getTime();
+    });
   }
 
   it("relative next-run label keeps advancing while a row stays mounted", async () => {
@@ -553,24 +586,79 @@ describe("SchedulesSection time freshness", () => {
     }
   });
 
-  it("expanded preview refetches on the interval so occurrences stay future", async () => {
+  it("expanded preview refetches: label advances, old first occurrence gone, five stay future", async () => {
     vi.useFakeTimers();
     try {
-      cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2030-01-05T14:00:00.000Z"));
-      await renderFake([makeJob()]);
+      cronApiMocks.previewChatCronJobs.mockImplementation(async () => everyMinutePreview());
+      await renderFake([everyMinuteJob()]);
       await clickFake(document.querySelector("button[aria-expanded]"));
 
       expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(1);
-      expect(document.body.textContent).toContain("2030-01-05T14:00:00.000Z");
+      expect(document.body.textContent).toContain("in 1 minute");
+      const firstRun = renderedOccurrenceInstants();
+      expect(firstRun).toHaveLength(5);
+      const oldFirst = firstRun[0]!;
+      expect(oldFirst).toBeGreaterThan(Date.now());
 
-      cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2030-02-11T14:00:00.000Z"));
-      await flushFake(60_000);
+      // Cross the first occurrence without collapsing/reopening the row.
+      await flushFake(61_000);
 
       expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
-      expect(document.body.textContent).toContain("2030-02-11T14:00:00.000Z");
-      // The row never collapsed/reopened to get there.
+      expect(document.body.textContent).toContain("due now");
       expect(document.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe("true");
+      const now = Date.now();
+      const after = renderedOccurrenceInstants();
+      expect(after).toHaveLength(5);
+      expect(after).not.toContain(oldFirst);
+      for (const instant of after) {
+        expect(instant).toBeGreaterThan(now);
+      }
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("catches up immediately on visible after a hidden gap, and stops all clocks on collapse/unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      cronApiMocks.previewChatCronJobs.mockImplementation(async () => everyMinutePreview());
+      await renderFake([everyMinuteJob()]);
+      await clickFake(document.querySelector("button[aria-expanded]"));
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(1);
+
+      // Hidden transition must not catch up.
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushFake(1);
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(1);
+
+      // Time passes in the background; interval refetches stay paused.
+      await flushFake(120_000);
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(1);
+
+      // Becoming visible triggers the local catch-up immediately — far from
+      // any 60s interval boundary.
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushFake(1);
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
+      const visibleFirst = renderedOccurrenceInstants()[0]!;
+      expect(visibleFirst).toBeGreaterThan(Date.now());
+
+      // Collapsing the row removes the preview observer: no more refetches.
+      await clickFake(document.querySelector("button[aria-expanded]"));
+      await flushFake(120_000);
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
+
+      // Unmount stops every interval (clock, list poll, preview poll).
+      const listCallsBeforeUnmount = cronApiMocks.listChatCronJobs.mock.calls.length;
+      await act(async () => root?.unmount());
+      root = null;
+      await flushFake(120_000);
+      expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
+      expect(cronApiMocks.listChatCronJobs.mock.calls.length).toBe(listCallsBeforeUnmount);
+    } finally {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
       vi.useRealTimers();
     }
   });
