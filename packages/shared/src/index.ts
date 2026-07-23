@@ -1184,6 +1184,9 @@ export {
 } from "./schemas/workspace-manifest.js";
 // -- WebSocket handshake frames --
 export type {
+  AdminWsAuthFrame,
+  AdminWsAuthOkFrame,
+  AdminWsServerHelloFrame,
   AuthControlFrame,
   AuthExpiredFrame,
   AuthRejectedCode,
@@ -1195,8 +1198,13 @@ export type {
   WsAuthFrame,
 } from "./schemas/ws-auth.js";
 export {
+  ADMIN_WS_PROTOCOL_VERSION,
   AUTH_REJECTED_CODES,
   AUTH_RETRYABLE_CODES,
+  adminWsAuthFrameSchema,
+  adminWsAuthOkFrameSchema,
+  adminWsChallengeNonceSchema,
+  adminWsServerHelloFrameSchema,
   authControlFrameSchema,
   authExpiredFrameSchema,
   authRejectedCodeSchema,

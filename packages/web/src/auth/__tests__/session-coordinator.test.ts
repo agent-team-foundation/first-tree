@@ -2000,6 +2000,134 @@ describe("AuthSessionCoordinator", () => {
     disposeRuntime();
   });
 
+  it("keeps the exact terminal 401 capability retryable after a coordinator open failure", async () => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous("baseline-terminal-active-me-401-open-retry");
+    const certificate = activation("terminal-active-me-401-open-retry", "generation-terminal-active-me-401-open-retry");
+    await activateAnonymous(factory, coordinator, certificate, "attempt-terminal-active-me-401-open-retry");
+    const replacement = await credential(certificate, 1, "terminal-active-me-401-open-retry-rotated");
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: "account-revision-terminal-active-me-401-open-retry",
+      ownerTabId: "owner-tab-terminal-active-me-401-open-retry",
+      documentId: "document-terminal-active-me-401-open-retry",
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+        .mockResolvedValueOnce(
+          jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+        )
+        .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 })),
+    );
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      "generation-terminal-active-me-401-open-retry-retiring",
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    const beforeFailure = await readCoordinatorSnapshot(factory);
+    vi.spyOn(factory, "open").mockImplementationOnce(() => {
+      throw new Error("transient coordinator open failure");
+    });
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).rejects.toMatchObject({
+      code: sessionErrorCodes.persistenceUnavailable,
+    });
+    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeFailure);
+
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe("retired");
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: {
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        generation: "generation-terminal-active-me-401-open-retry-retiring",
+      },
+      credentials: [],
+    });
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).rejects.toMatchObject({
+      code: sessionErrorCodes.staleOperation,
+    });
+    disposeRuntime();
+  });
+
+  it.each([
+    "pagehide",
+    "freeze",
+  ] as const)("lets terminal 401 retirement cross a latched coordinator open when %s invalidates local delivery", async (eventName) => {
+    const factory = new IDBFactory();
+    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
+    await coordinator.bootstrapAnonymous(`baseline-terminal-active-me-401-${eventName}-open`);
+    const certificate = activation(
+      `terminal-active-me-401-${eventName}-open`,
+      `generation-terminal-active-me-401-${eventName}-open`,
+    );
+    await activateAnonymous(factory, coordinator, certificate, `attempt-terminal-active-me-401-${eventName}-open`);
+    const replacement = await credential(certificate, 1, `terminal-active-me-401-${eventName}-open-rotated`);
+    const lease = createAccountLease({
+      activation: certificate,
+      accountRevision: `account-revision-terminal-active-me-401-${eventName}-open`,
+      ownerTabId: `owner-tab-terminal-active-me-401-${eventName}-open`,
+      documentId: `document-terminal-active-me-401-${eventName}-open`,
+      signal: new AbortController().signal,
+    });
+    const barrier = new ContentScopeBarrier({ coordinator, indexedDB: factory, locks: new ImmediateLocks() });
+    const disposeRuntime = installAccountStoreRuntime({ barrier, lease });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("expired access", { status: 401 }))
+        .mockResolvedValueOnce(
+          jsonResponse({ accessToken: replacement.accessToken, refreshToken: replacement.refreshToken }),
+        )
+        .mockResolvedValueOnce(new Response("still unauthorized", { status: 401 })),
+    );
+
+    const firstRejection = await sessionRejection(coordinator.requestActiveMe(lease));
+    await coordinator.refreshAccountCredentialAfterActiveMe401(
+      lease,
+      firstRejection,
+      `generation-terminal-active-me-401-${eventName}-open-retiring`,
+    );
+    const terminalRejection = await sessionRejection(coordinator.requestActiveMe(lease, firstRejection));
+    const windowTarget = new EventTarget();
+    const documentTarget = new EventTarget();
+    const detachLifecycle = installSessionLifecycleHooks({
+      registry: barrier.registry,
+      windowTarget,
+      documentTarget,
+    });
+    const open = deferNextOpen(factory);
+    const retirement = coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection);
+    await open.started;
+
+    (eventName === "pagehide" ? windowTarget : documentTarget).dispatchEvent(new Event(eventName));
+    open.release();
+
+    await expect(retirement).resolves.toBe("retired");
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: {
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        generation: `generation-terminal-active-me-401-${eventName}-open-retiring`,
+      },
+      credentials: [],
+    });
+    detachLifecycle();
+    disposeRuntime();
+  });
+
   it("preserves a newer credential that commits before a terminal active me 401 retirement", async () => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
@@ -2066,7 +2194,7 @@ describe("AuthSessionCoordinator", () => {
     "pagehide",
     "freeze",
     "request-sequence",
-  ] as const)("leaves authority unchanged when %s supersedes a terminal active me 401 claim", async (winner) => {
+  ] as const)("retires the exact refreshed credential after %s invalidates only local delivery", async (winner) => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
     await coordinator.bootstrapAnonymous(`baseline-terminal-active-me-401-${winner}-wins`);
@@ -2127,15 +2255,18 @@ describe("AuthSessionCoordinator", () => {
         code: sessionErrorCodes.admissionDenied,
       });
     }
-    const beforeRetirement = await readCoordinatorSnapshot(factory);
 
-    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe(
-      "superseded",
-    );
-    expect(await readCoordinatorSnapshot(factory)).toEqual(beforeRetirement);
-    expect(beforeRetirement).toMatchObject({
-      authority: { mode: "active", session: certificate },
-      credentials: [refreshed],
+    await expect(coordinator.retireAccountAfterTerminalActiveMe401(lease, terminalRejection)).resolves.toBe("retired");
+    expect(await readCoordinatorSnapshot(factory)).toMatchObject({
+      authority: {
+        mode: "retiring",
+        source: certificate,
+        cause: "owned_401",
+        phase: "revoked",
+        generation: `generation-terminal-active-me-401-${winner}-wins-retiring`,
+      },
+      credentials: [],
+      attempts: [],
     });
     detachLifecycle();
     disposeWinner();

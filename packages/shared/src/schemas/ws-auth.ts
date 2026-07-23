@@ -12,6 +12,45 @@ export const wsAuthFrameSchema = z.object({
 });
 export type WsAuthFrame = z.infer<typeof wsAuthFrameSchema>;
 
+/**
+ * Admin WebSocket challenge protocol. Unlike the agent-runtime socket, the
+ * browser admin socket first receives a server-authority challenge and must
+ * echo its connection-specific nonce. This binds `auth:ok` to the exact
+ * connection that supplied the token instead of accepting an unchallenged
+ * bearer frame.
+ */
+export const ADMIN_WS_PROTOCOL_VERSION = 1 as const;
+export const adminWsChallengeNonceSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
+
+export const adminWsServerHelloFrameSchema = z
+  .object({
+    type: z.literal("server:hello"),
+    protocolVersion: z.literal(ADMIN_WS_PROTOCOL_VERSION),
+    authority: z.string().min(1),
+    nonce: adminWsChallengeNonceSchema,
+  })
+  .strict();
+export type AdminWsServerHelloFrame = z.infer<typeof adminWsServerHelloFrameSchema>;
+
+export const adminWsAuthFrameSchema = z
+  .object({
+    type: z.literal("auth"),
+    protocolVersion: z.literal(ADMIN_WS_PROTOCOL_VERSION),
+    nonce: adminWsChallengeNonceSchema,
+    token: z.string().min(1),
+  })
+  .strict();
+export type AdminWsAuthFrame = z.infer<typeof adminWsAuthFrameSchema>;
+
+export const adminWsAuthOkFrameSchema = z
+  .object({
+    type: z.literal("auth:ok"),
+    protocolVersion: z.literal(ADMIN_WS_PROTOCOL_VERSION),
+    nonce: adminWsChallengeNonceSchema,
+  })
+  .strict();
+export type AdminWsAuthOkFrame = z.infer<typeof adminWsAuthOkFrameSchema>;
+
 /** How long the server waits for the first `auth` frame before closing the WS. */
 export const WS_AUTH_FRAME_TIMEOUT_MS = 5_000;
 

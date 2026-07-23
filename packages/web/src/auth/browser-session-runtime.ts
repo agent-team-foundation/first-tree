@@ -127,6 +127,11 @@ type RetirementCompletion =
   | Readonly<{ kind: "completed" }>
   | Readonly<{ kind: "superseded"; authority: AuthAuthority }>;
 
+type PendingResume = Readonly<{
+  cycle: number;
+  promise: Promise<BrowserSessionProjection>;
+}>;
+
 function captureNoticeTransport(value: CrossDocumentNoticeTransport): CrossDocumentNoticeTransport {
   const available = value.available;
   const publishSourceRetired = value.publishSourceRetired;
@@ -290,6 +295,8 @@ export class BrowserSessionRuntime {
   #pendingSourceNotices = new Set<string>();
   #pendingAuthorityNotice = false;
   #hardSuspendedActive: ActiveRuntime | null = null;
+  #resumeCycle = 0;
+  #pendingResume: PendingResume | null = null;
 
   public constructor(options: BrowserSessionRuntimeOptions = {}) {
     const indexedDBOption = options.indexedDB;
@@ -479,8 +486,27 @@ export class BrowserSessionRuntime {
     }
   }
 
-  public async resume(): Promise<BrowserSessionProjection> {
-    if (this.#documentTarget?.visibilityState === "hidden") return this.getProjection();
+  public resume(): Promise<BrowserSessionProjection> {
+    if (this.#documentTarget?.visibilityState === "hidden") return Promise.resolve(this.getProjection());
+    const cycle = this.#resumeCycle;
+    const pending = this.#pendingResume;
+    if (pending?.cycle === cycle) return pending.promise;
+
+    const start = (): Promise<BrowserSessionProjection> => {
+      if (this.#documentTarget?.visibilityState === "hidden") return Promise.resolve(this.getProjection());
+      return this.#resumeOnce();
+    };
+    const promise = pending ? pending.promise.then(start, start) : start();
+    const task = Object.freeze({ cycle, promise });
+    this.#pendingResume = task;
+    const clear = (): void => {
+      if (this.#pendingResume === task) this.#pendingResume = null;
+    };
+    void promise.then(clear, clear);
+    return promise;
+  }
+
+  async #resumeOnce(): Promise<BrowserSessionProjection> {
     const hardSuspendedActive = this.#hardSuspendedActive;
     this.#suspended = false;
     for (let attempts = 0; attempts < MAX_RECONCILIATION_ATTEMPTS; attempts += 1) {
@@ -783,6 +809,7 @@ export class BrowserSessionRuntime {
     this.#documentTarget?.addEventListener("freeze", onSuspend, { capture: true });
     const onVeil = (): void => {
       if (this.#disposed) return;
+      this.#resumeCycle += 1;
       this.#operationRevision += 1;
       this.#veil.begin("lifecycle_suspended");
     };

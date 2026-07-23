@@ -943,6 +943,81 @@ describe("BrowserSessionRuntime", () => {
     unsubscribe();
   });
 
+  it("single-flights pageshow, visibility, and direct resume across suspended head commit and delivery", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-concurrent-offline-resume");
+    const locks = new NavigationDeliveryGateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "concurrent-offline-resume");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-concurrent-offline-resume",
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    const beforeView = before.publication.viewLease;
+    if (!beforeView) throw new Error("Expected selected organization view");
+    fetch.mockClear();
+    harness.authority.reconcile.mockReset();
+    harness.authority.reconcile.mockResolvedValue({ kind: "unavailable", expected: SERVER_AUTHORITY });
+    locks.holdNavigationDelivery();
+
+    harness.windowTarget.dispatchEvent(new Event("pagehide"));
+    const delivered: BrowserSessionProjection[] = [];
+    const unsubscribe = harness.runtime.subscribe((projection) => delivered.push(projection));
+    delivered.length = 0;
+    const resume = vi.spyOn(harness.runtime, "resume");
+    harness.windowTarget.dispatchEvent(new Event("pageshow"));
+    await locks.navigationCommitted;
+
+    expect(harness.authority.reconcile).toHaveBeenCalledTimes(1);
+    expect(harness.runtime.getProjection()).toMatchObject({ kind: "veiled" });
+    harness.documentTarget.dispatchEvent(new Event("visibilitychange"));
+    expect(resume).toHaveBeenCalledTimes(2);
+    const pageShowResume = resume.mock.results[0]?.value;
+    const visibilityResume = resume.mock.results[1]?.value;
+    expect(visibilityResume).toBe(pageShowResume);
+    const directResume = harness.runtime.resume();
+    expect(directResume).toBe(pageShowResume);
+    expect(harness.authority.reconcile).toHaveBeenCalledTimes(1);
+
+    locks.releaseNavigationDelivery();
+    const after = activeProjection(await directResume);
+    const afterView = after.publication.viewLease;
+    if (!afterView) throw new Error("Expected rebound organization view");
+    expect(harness.authority.reconcile).toHaveBeenCalledTimes(2);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(delivered.some((projection) => projection.kind === "recovery")).toBe(false);
+    expect(after.accountLease.accountRevision).not.toBe(before.accountLease.accountRevision);
+    expect(after.publication.state).toMatchObject({ kind: "selected", organizationId: "org-a" });
+    expect(after.publication.state.orgRevision).not.toBe(before.publication.state.orgRevision);
+    expect(captureAccountStoreRuntime(before.accountLease)).toBeNull();
+    expect(captureContentStoreRuntime(beforeView)).toBeNull();
+    expect(captureAccountStoreRuntime(after.accountLease)).not.toBeNull();
+    expect(captureContentStoreRuntime(afterView)).not.toBeNull();
+    await expect(
+      new AccountStateStore().getAccountEntry(after.accountLease, {
+        kind: "selected-organization",
+        key: "current",
+        tabId: after.accountLease.ownerTabId,
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        state: "selected",
+        organizationId: "org-a",
+        orgRevision: after.publication.state.orgRevision,
+      },
+    });
+    unsubscribe();
+  });
+
   it.each([
     "retirement",
     "selected-head",

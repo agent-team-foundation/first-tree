@@ -173,7 +173,8 @@ type VerifiedActiveMeProofState = {
   state: "available" | "claimed" | "consumed";
 };
 
-type ActiveMe401BaseEvidence = Readonly<{
+type ActiveMe401RefreshEvidence = Readonly<{
+  purpose: "refresh";
   runtime: CapturedAccountRuntimeFence;
   signal: AbortSignal;
   capturedCredential: CredentialRecord;
@@ -183,14 +184,16 @@ type ActiveMe401BaseEvidence = Readonly<{
   requestSequence: number;
 }>;
 
-type ActiveMe401Evidence =
-  | (ActiveMe401BaseEvidence & Readonly<{ purpose: "refresh" }>)
-  | (ActiveMe401BaseEvidence &
-      Readonly<{
-        purpose: "retire";
-        authorityRevision: number;
-        retirementGeneration: string;
-      }>);
+type ActiveMe401RetirementEvidence = Readonly<{
+  purpose: "retire";
+  activation: ActivationCertificate;
+  capturedCredential: CredentialRecord;
+  expectedCredential: CredentialCursor;
+  authorityRevision: number;
+  retirementGeneration: string;
+}>;
+
+type ActiveMe401Evidence = ActiveMe401RefreshEvidence | ActiveMe401RetirementEvidence;
 
 type ActiveMe401State = {
   evidence: ActiveMe401Evidence;
@@ -626,6 +629,7 @@ function getIndexedDbFactory(explicitFactory?: IDBFactory): IDBFactory {
 function openCoordinatorDatabase(
   factory: IDBFactory,
   onBlocked?: (databaseName: string) => void,
+  enforceLifecycleFence = true,
 ): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const lifecycleGeneration = coordinatorLifecycleGeneration;
@@ -662,7 +666,7 @@ function openCoordinatorDatabase(
     };
     request.onsuccess = () => {
       const database = request.result;
-      if (lifecycleGeneration !== coordinatorLifecycleGeneration) {
+      if (enforceLifecycleFence && lifecycleGeneration !== coordinatorLifecycleGeneration) {
         database.close();
         reject(new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator open was cancelled by lifecycle"));
         return;
@@ -771,8 +775,9 @@ async function executeCoordinatorTransaction<T>(
     throw new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator transaction was cancelled");
   }
   const lifecycleGeneration = coordinatorLifecycleGeneration;
-  const database = await openCoordinatorDatabase(factory, onBlocked);
-  if (signal?.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+  const enforceLifecycleFence = resultFence === "document-lifecycle";
+  const database = await openCoordinatorDatabase(factory, onBlocked, enforceLifecycleFence);
+  if (signal?.aborted || (enforceLifecycleFence && lifecycleGeneration !== coordinatorLifecycleGeneration)) {
     closeCoordinatorDatabase(database);
     throw new SessionError(sessionErrorCodes.staleOperation, "Auth coordinator transaction crossed a lifecycle fence");
   }
@@ -1395,23 +1400,28 @@ export class AuthSessionCoordinator {
         Object.freeze({ kind: "active_me_http_status", status: response.status }),
       );
       if (response.status === 401) {
+        const evidence: ActiveMe401Evidence =
+          retryClaim === null
+            ? Object.freeze({
+                purpose: "refresh",
+                runtime,
+                signal,
+                capturedCredential: captured,
+                expectedCredential: credentialCursor(captured),
+                lifecycleGeneration,
+                requestKey,
+                requestSequence,
+              })
+            : Object.freeze({
+                purpose: "retire",
+                activation: lease.activation,
+                capturedCredential: captured,
+                expectedCredential: credentialCursor(captured),
+                authorityRevision: retryClaim.authorityRevision,
+                retirementGeneration: retryClaim.retirementGeneration,
+              });
         activeMe401Rejections.set(error, {
-          evidence: Object.freeze({
-            runtime,
-            signal,
-            capturedCredential: captured,
-            expectedCredential: credentialCursor(captured),
-            lifecycleGeneration,
-            requestKey,
-            requestSequence,
-            ...(retryClaim === null
-              ? { purpose: "refresh" as const }
-              : {
-                  purpose: "retire" as const,
-                  authorityRevision: retryClaim.authorityRevision,
-                  retirementGeneration: retryClaim.retirementGeneration,
-                }),
-          }),
+          evidence,
           state: "available",
         });
       }
@@ -1868,8 +1878,9 @@ export class AuthSessionCoordinator {
 
   /**
    * Consumes only the exact terminal `/me` 401 emitted by the refresh-bound
-   * retry. A stale runtime, credential, request sequence, or authority loses
-   * the retirement race without mutating the current session.
+   * retry. Runtime and request-sequence fences govern capability minting; once
+   * minted, only a newer durable session, authority revision, or exact
+   * credential wins the retirement race.
    */
   public async retireAccountAfterTerminalActiveMe401(
     leaseValue: unknown,
@@ -1886,48 +1897,31 @@ export class AuthSessionCoordinator {
       rejection.state !== "available" ||
       !evidence ||
       evidence.purpose !== "retire" ||
-      !sameAccountLease(evidence.runtime.sourceLease, sourceLease) ||
-      evidence.signal !== evidence.runtime.lease.signal
+      !sameActivation(evidence.activation, sourceLease.activation)
     ) {
       throw new SessionError(sessionErrorCodes.staleOperation, "Terminal account identity rejection is stale");
     }
     rejection.state = "claimed";
-    const evidenceCurrent = (): boolean => {
-      if (
-        evidence.signal.aborted ||
-        evidence.lifecycleGeneration !== coordinatorLifecycleGeneration ||
-        latestActiveMeRequests.get(evidence.requestKey) !== evidence.requestSequence
-      ) {
-        return false;
-      }
-      try {
-        evidence.runtime.assertCurrent();
-        return true;
-      } catch {
-        return false;
-      }
-    };
 
     try {
-      return await this.commit(
+      const result = await this.commit(
         (snapshot): CoordinatorDecision<RetirementResult> => {
-          if (!evidenceCurrent()) return keepCoordinatorSnapshot("superseded");
           const authority = snapshot.authority;
           if (
             authority.mode === "retiring" &&
             authority.cause === "owned_401" &&
-            sameActivation(authority.source, sourceLease.activation)
+            sameActivation(authority.source, evidence.activation)
           ) {
             return keepCoordinatorSnapshot("already_retiring");
           }
           if (
             authority.mode !== "active" ||
-            !sameActivation(authority.session, sourceLease.activation) ||
+            !sameActivation(authority.session, evidence.activation) ||
             authority.revision !== evidence.authorityRevision
           ) {
             return keepCoordinatorSnapshot("superseded");
           }
-          const current = matchingCredential(snapshot, sourceLease.activation);
+          const current = matchingCredential(snapshot, evidence.activation);
           if (
             !current ||
             !sameCredentialCursor(credentialCursor(current), evidence.expectedCredential) ||
@@ -1937,7 +1931,7 @@ export class AuthSessionCoordinator {
           }
           if (
             evidence.retirementGeneration === authority.generation ||
-            evidence.retirementGeneration === sourceLease.activation.authGeneration
+            evidence.retirementGeneration === evidence.activation.authGeneration
           ) {
             throw new SessionError(
               sessionErrorCodes.invalidState,
@@ -1949,7 +1943,7 @@ export class AuthSessionCoordinator {
             mode: "retiring",
             generation: evidence.retirementGeneration,
             revision: authority.revision + 1,
-            source: sourceLease.activation,
+            source: evidence.activation,
             cause: "owned_401",
             forbiddenGenerations: Object.freeze([]),
             phase: "revoked",
@@ -1963,8 +1957,15 @@ export class AuthSessionCoordinator {
         // cannot retroactively win over the durable auth mutation.
         "transaction",
       );
-    } finally {
       rejection.state = "consumed";
+      return result;
+    } catch (error) {
+      // `transaction` result fencing resolves only after `complete`, so a
+      // rejection means no retirement commit became durable. Preserve the
+      // exact WeakMap capability for a retry; a successful or superseded
+      // decision above consumes it and cannot be replayed.
+      if (rejection.state === "claimed") rejection.state = "available";
+      throw error;
     }
   }
 

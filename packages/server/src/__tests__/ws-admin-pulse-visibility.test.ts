@@ -62,9 +62,16 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
       ws.once("open", () => {
         const onMessage = (raw: WebSocket.RawData) => {
           try {
-            const msg = JSON.parse(raw.toString()) as { type?: string };
-            if (msg.type === "server:hello") {
-              ws.send(JSON.stringify({ type: "auth", token }));
+            const msg = JSON.parse(raw.toString()) as { type?: string; protocolVersion?: number; nonce?: string };
+            if (msg.type === "server:hello" && msg.protocolVersion === 1 && typeof msg.nonce === "string") {
+              ws.send(
+                JSON.stringify({
+                  type: "auth",
+                  protocolVersion: msg.protocolVersion,
+                  nonce: msg.nonce,
+                  token,
+                }),
+              );
               return;
             }
             if (msg.type === "auth:ok") {

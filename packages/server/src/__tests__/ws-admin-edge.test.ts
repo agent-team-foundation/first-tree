@@ -1,3 +1,4 @@
+import { ADMIN_WS_PROTOCOL_VERSION } from "@first-tree/shared";
 import { SignJWT } from "jose";
 import { describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
@@ -79,15 +80,17 @@ function makeSelectBuilder(rows: unknown[]) {
 }
 
 function makeDb(options: {
+  userRows?: unknown[];
   memberRows?: unknown[];
   visibleRows?: unknown[];
   humanRows?: unknown[];
   audienceRows?: unknown[][];
 }) {
+  const userRows = options.userRows ?? [{ id: "user-1", status: "active" }];
   const memberRows = options.memberRows ?? [{ id: "member-1", role: "admin", agentId: "human-1" }];
   const visibleRows = options.visibleRows ?? [{ id: "visible-agent" }];
   const humanRows = options.humanRows ?? [{ uuid: "human-1" }];
-  const selectRows = [memberRows, visibleRows, humanRows];
+  const selectRows = [userRows, memberRows, visibleRows, humanRows];
   let selectIndex = 0;
   const execute = vi.fn();
   for (const rows of options.audienceRows ?? []) execute.mockResolvedValueOnce(rows);
@@ -209,8 +212,19 @@ async function authenticate(
   orgId = "org-1",
 ) {
   await route(socket.socket, request(orgId));
-  expect(sentPayloads(socket.send)[0]).toEqual({ type: "server:hello", authority: SERVER_AUTHORITY });
-  socket.emitMessage({ type: "auth", token });
+  const hello = sentPayloads(socket.send)[0];
+  expect(hello).toMatchObject({
+    type: "server:hello",
+    protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+    authority: SERVER_AUTHORITY,
+    nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
+  });
+  socket.emitMessage({
+    type: "auth",
+    protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+    nonce: hello?.nonce,
+    token,
+  });
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const types = sentPayloads(socket.send).map((payload) => payload.type);
     if (
@@ -219,6 +233,14 @@ async function authenticate(
       types.includes("auth:expired") ||
       types.includes("auth:retryable")
     ) {
+      const authOk = sentPayloads(socket.send).find((payload) => payload.type === "auth:ok");
+      if (authOk) {
+        expect(authOk).toEqual({
+          type: "auth:ok",
+          protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+          nonce: hello?.nonce,
+        });
+      }
       return;
     }
     await waitForAsyncDispatch();
@@ -298,6 +320,61 @@ describe("Admin WS route edge paths", () => {
 
     expect(sentPayloads(expired.send).at(-1)).toEqual({ type: "auth:expired" });
     expect(expired.close).toHaveBeenCalledWith(4001, "Auth expired");
+  });
+
+  it("binds authentication to the exact challenge and rejects missing or suspended users", async () => {
+    const handlers: CapturedHandlers = {};
+    const token = await signToken({ sub: "user-1", type: "access" });
+
+    const challengedApp = makeApp(makeDb({}));
+    await orgWsRoutes(makeNotifier(handlers), JWT_SECRET)(challengedApp.app as never);
+    const wrongChallenge = makeSocket();
+    await challengedApp.getRoute()(wrongChallenge.socket, request());
+    const issuedNonce = sentPayloads(wrongChallenge.send)[0]?.nonce;
+    if (typeof issuedNonce !== "string") throw new Error("admin challenge nonce missing");
+    const wrongNonce = `${issuedNonce.startsWith("a") ? "b" : "a"}${issuedNonce.slice(1)}`;
+    wrongChallenge.emitMessage({
+      type: "auth",
+      protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+      nonce: wrongNonce,
+      token,
+    });
+    expect(sentPayloads(wrongChallenge.send).at(-1)).toMatchObject({
+      type: "auth:rejected",
+      code: "invalid_auth_frame",
+    });
+
+    const wrongProtocol = makeSocket();
+    await challengedApp.getRoute()(wrongProtocol.socket, request());
+    const wrongProtocolHello = sentPayloads(wrongProtocol.send)[0];
+    wrongProtocol.emitMessage({
+      type: "auth",
+      protocolVersion: ADMIN_WS_PROTOCOL_VERSION + 1,
+      nonce: wrongProtocolHello?.nonce,
+      token,
+    });
+    expect(sentPayloads(wrongProtocol.send).at(-1)).toMatchObject({
+      type: "auth:rejected",
+      code: "invalid_auth_frame",
+    });
+
+    const missingApp = makeApp(makeDb({ userRows: [] }));
+    await orgWsRoutes(makeNotifier({}), JWT_SECRET)(missingApp.app as never);
+    const missing = makeSocket();
+    await authenticate(missingApp.getRoute(), missing, token);
+    expect(sentPayloads(missing.send).at(-1)).toMatchObject({
+      type: "auth:rejected",
+      code: "user_not_found",
+    });
+
+    const suspendedApp = makeApp(makeDb({ userRows: [{ id: "user-1", status: "suspended" }] }));
+    await orgWsRoutes(makeNotifier({}), JWT_SECRET)(suspendedApp.app as never);
+    const suspended = makeSocket();
+    await authenticate(suspendedApp.getRoute(), suspended, token);
+    expect(sentPayloads(suspended.send).at(-1)).toMatchObject({
+      type: "auth:rejected",
+      code: "user_suspended",
+    });
   });
 
   it("emits auth:retryable for backend failures instead of rejecting the credential", async () => {
@@ -404,7 +481,14 @@ describe("Admin WS route edge paths", () => {
       await getRoute()(pending.socket, request());
 
       handlers.sessionState?.({ agentId: "agent-1", chatId: "chat-1", organizationId: "org-1" });
-      expect(sentPayloads(pending.send)).toEqual([{ type: "server:hello", authority: SERVER_AUTHORITY }]);
+      expect(sentPayloads(pending.send)).toEqual([
+        expect.objectContaining({
+          type: "server:hello",
+          protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+          authority: SERVER_AUTHORITY,
+          nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
+        }),
+      ]);
 
       await vi.advanceTimersByTimeAsync(5_000);
       expect(sentPayloads(pending.send).at(-1)).toMatchObject({

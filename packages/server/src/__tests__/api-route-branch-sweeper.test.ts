@@ -37,8 +37,13 @@ function createApp(overrides: Record<string, unknown> = {}): { app: Record<strin
   return { app, routes };
 }
 
-function replyDouble(): { status: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> } {
+function replyDouble(): {
+  header: ReturnType<typeof vi.fn>;
+  status: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+} {
   const reply = {
+    header: vi.fn(() => reply),
     status: vi.fn(() => reply),
     send: vi.fn((body: unknown) => body),
   };
@@ -153,6 +158,7 @@ describe("API route branch contracts", () => {
     await route.handler({ params: { token: "invite_token" } }, reply);
 
     expect(previewInvitation).toHaveBeenCalledWith(expect.anything(), "invite_token");
+    expect(reply.header).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(reply.send).toHaveBeenCalledWith(preview);
   });
 

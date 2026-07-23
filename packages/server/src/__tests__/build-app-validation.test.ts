@@ -190,8 +190,23 @@ describe("buildApp — stable server authority validation", () => {
     };
     const app = await buildApp(cfg);
     try {
-      const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/server-authority" });
-      expect(res.json()).toEqual({ v: 1, authority: "https://s2.example/api/v1" });
+      const absent = await app.inject({ method: "GET", url: "/api/v1/bootstrap/server-authority" });
+      expect(absent.json()).toEqual({ v: 1, authority: "https://s2.example/api/v1" });
+
+      const exact = await app.inject({
+        method: "GET",
+        url: "/api/v1/bootstrap/server-authority",
+        headers: { "x-first-tree-expected-authority": "https://s2.example/api/v1" },
+      });
+      expect(exact.json()).toEqual({ v: 1, authority: "https://s2.example/api/v1" });
+
+      const mismatch = await app.inject({
+        method: "GET",
+        url: "/api/v1/bootstrap/server-authority",
+        headers: { "x-first-tree-expected-authority": "https://s1.example/api/v1" },
+      });
+      expect(mismatch.statusCode).toBe(421);
+      expect(mismatch.json()).toEqual({ error: "Server authority mismatch" });
     } finally {
       await app.close();
     }

@@ -1,11 +1,59 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADMIN_WS_PROTOCOL_VERSION,
+  adminWsAuthFrameSchema,
+  adminWsAuthOkFrameSchema,
+  adminWsServerHelloFrameSchema,
   authControlFrameSchema,
   authExpiredFrameSchema,
   authRejectedFrameSchema,
   authRetryableFrameSchema,
   serverWelcomeFrameSchema,
 } from "../schemas/ws-auth.js";
+
+const ADMIN_NONCE = "abcdefghijklmnopqrstuv";
+
+describe("admin websocket challenge schemas", () => {
+  it("binds hello, auth, and auth:ok to one protocol version and nonce", () => {
+    expect(
+      adminWsServerHelloFrameSchema.safeParse({
+        type: "server:hello",
+        protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+        authority: "https://server.test/api/v1",
+        nonce: ADMIN_NONCE,
+      }).success,
+    ).toBe(true);
+    expect(
+      adminWsAuthFrameSchema.safeParse({
+        type: "auth",
+        protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+        nonce: ADMIN_NONCE,
+        token: "access-token",
+      }).success,
+    ).toBe(true);
+    expect(
+      adminWsAuthOkFrameSchema.safeParse({
+        type: "auth:ok",
+        protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+        nonce: ADMIN_NONCE,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    { type: "auth", protocolVersion: 2, nonce: ADMIN_NONCE, token: "access-token" },
+    { type: "auth", protocolVersion: ADMIN_WS_PROTOCOL_VERSION, nonce: "short", token: "access-token" },
+    {
+      type: "auth",
+      protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+      nonce: ADMIN_NONCE,
+      token: "access-token",
+      extra: true,
+    },
+  ])("rejects an invalid or ambiguous admin auth challenge echo", (frame) => {
+    expect(adminWsAuthFrameSchema.safeParse(frame).success).toBe(false);
+  });
+});
 
 describe("auth control frame schemas", () => {
   it("accepts auth:rejected with a finite rejection code", () => {

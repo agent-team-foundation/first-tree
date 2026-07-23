@@ -165,7 +165,24 @@ function addRoute(
 
 function makeApp(extra: Record<string, unknown> = {}): { app: unknown; routes: RegisteredRoute[] } {
   const routes: RegisteredRoute[] = [];
+  const suppliedConfig =
+    typeof extra.config === "object" && extra.config !== null ? (extra.config as Record<string, unknown>) : {};
+  const suppliedServer =
+    typeof suppliedConfig.server === "object" && suppliedConfig.server !== null
+      ? (suppliedConfig.server as Record<string, unknown>)
+      : {};
+  const { config: _suppliedConfig, ...appOverrides } = extra;
   const app = {
+    config: {
+      ...suppliedConfig,
+      server: {
+        authority: "https://first-tree.example/api/v1",
+        host: "127.0.0.1",
+        port: 3000,
+        publicUrl: "https://first-tree.example",
+        ...suppliedServer,
+      },
+    },
     db: { name: "db" },
     addContentTypeParser: vi.fn(),
     delete(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
@@ -183,7 +200,7 @@ function makeApp(extra: Record<string, unknown> = {}): { app: unknown; routes: R
     put(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
       addRoute(routes, "PUT", path, optionsOrHandler, maybeHandler);
     },
-    ...extra,
+    ...appOverrides,
   };
   return { app, routes };
 }
@@ -384,7 +401,7 @@ describe("small API route handlers", () => {
         auth: { connectTokenExpiry: "10m" },
         channel: "staging",
         connectBootstrap: { portableDownloadBaseUrl: "https://download.example/releases" },
-        server: { publicUrl: "https://first-tree.example/app/" },
+        server: { publicUrl: "https://first-tree.example" },
       },
     });
 
@@ -402,7 +419,7 @@ describe("small API route handlers", () => {
       { name: "db" },
       "user_1",
       { connectTokenExpiry: "10m" },
-      "https://first-tree.example/app",
+      "https://first-tree.example",
     );
   });
 

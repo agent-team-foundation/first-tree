@@ -1,4 +1,6 @@
+import { randomBytes } from "node:crypto";
 import {
+  ADMIN_WS_PROTOCOL_VERSION,
   AGENT_STATUSES,
   AGENT_VISIBILITY,
   type AgentChatStatus,
@@ -7,8 +9,8 @@ import {
   type AuthControlFrame,
   type AuthRejectedCode,
   type AuthRetryableCode,
+  adminWsAuthFrameSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
-  wsAuthFrameSchema,
 } from "@first-tree/shared";
 import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +19,7 @@ import type { RawData, WebSocket } from "ws";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
+import { users } from "../../db/schema/users.js";
 import {
   createLogger,
   endWsConnectionSpan,
@@ -36,7 +39,7 @@ const ADMIN_WS_AUTH_REJECTED_CLOSE_CODE = 4401;
 const ADMIN_WS_FORBIDDEN_CLOSE_CODE = 4403;
 const ADMIN_WS_RETRYABLE_CLOSE_CODE = 1013;
 
-function parseAdminAuthFrame(raw: RawData, isBinary: boolean): { token: string } | null {
+function parseAdminAuthFrame(raw: RawData, isBinary: boolean, expectedNonce: string): { token: string } | null {
   if (isBinary) return null;
   let bytes: Buffer;
   if (raw instanceof ArrayBuffer) {
@@ -53,8 +56,8 @@ function parseAdminAuthFrame(raw: RawData, isBinary: boolean): { token: string }
   } catch {
     return null;
   }
-  const parsed = wsAuthFrameSchema.safeParse(value);
-  return parsed.success ? { token: parsed.data.token } : null;
+  const parsed = adminWsAuthFrameSchema.safeParse(value);
+  return parsed.success && parsed.data.nonce === expectedNonce ? { token: parsed.data.token } : null;
 }
 
 /**
@@ -287,6 +290,7 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
       let authenticated = false;
       let handshakeSettled = false;
       let socketClosed = false;
+      const challengeNonce = randomBytes(16).toString("base64url");
       const clearAuthTimeout = (): void => {
         if (authTimeout !== null) {
           clearTimeout(authTimeout);
@@ -341,7 +345,7 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
       });
 
       socket.once("message", (raw: RawData, isBinary: boolean) => {
-        const frame = parseAdminAuthFrame(raw, isBinary);
+        const frame = parseAdminAuthFrame(raw, isBinary, challengeNonce);
         if (!frame) {
           rejectAuth("Invalid authentication frame", "Invalid auth frame", "invalid_auth_frame");
           return;
@@ -385,6 +389,21 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
           }
 
           const organizationId = orgIdFromPath;
+          const [userRow] = await app.db
+            .select({ id: users.id, status: users.status })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+          if (handshakeSettled) return;
+          if (!userRow) {
+            rejectAuth("User not found or suspended", "User not found", AUTH_REJECTED_CODES.USER_NOT_FOUND);
+            return;
+          }
+          if (userRow.status !== "active") {
+            rejectAuth("User not found or suspended", "User suspended", AUTH_REJECTED_CODES.USER_SUSPENDED);
+            return;
+          }
+
           const [memberRow] = await app.db
             .select({ id: members.id, role: members.role, agentId: members.agentId })
             .from(members)
@@ -421,7 +440,13 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
             expireAuth();
             return;
           }
-          socket.send(JSON.stringify({ type: "auth:ok" }));
+          socket.send(
+            JSON.stringify({
+              type: "auth:ok",
+              protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+              nonce: challengeNonce,
+            }),
+          );
           handshakeSettled = true;
           authenticated = true;
           clearAuthTimeout();
@@ -442,7 +467,14 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
         if (authenticated) return;
         retryAuth("Authentication timed out", "Auth timeout", AUTH_RETRYABLE_CODES.AUTH_TIMEOUT);
       }, WS_AUTH_FRAME_TIMEOUT_MS);
-      socket.send(JSON.stringify({ type: "server:hello", authority: serverAuthority }));
+      socket.send(
+        JSON.stringify({
+          type: "server:hello",
+          protocolVersion: ADMIN_WS_PROTOCOL_VERSION,
+          authority: serverAuthority,
+          nonce: challengeNonce,
+        }),
+      );
     });
   };
 }

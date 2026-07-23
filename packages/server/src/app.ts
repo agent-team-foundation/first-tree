@@ -77,6 +77,7 @@ import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
+import { installExpectedServerAuthorityGate } from "./middleware/expected-server-authority.js";
 import { userAuthHook } from "./middleware/user-auth.js";
 import {
   applyLoggerConfig,
@@ -103,6 +104,7 @@ import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
 import { createResourcesService } from "./services/resources.js";
 import { backfillResourcesPhase1 } from "./services/resources-migration.js";
+import { configuredServerAuthority } from "./utils/server-authority.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -286,6 +288,14 @@ export async function buildApp(config: Config) {
       return false;
     },
   });
+
+  // Web requests pin the exact server authority before carrying credentials
+  // or a body. This is the first security/application request hook: tracing
+  // opens its root span first, then a stale browser routed to another
+  // production instance is rejected before request-context enrichment, auth,
+  // content parsing, rate limiting, or route code can observe the request.
+  // Header absence stays valid for CLI and other non-Web API clients.
+  installExpectedServerAuthorityGate(app, configuredServerAuthority(config));
 
   // Request-scoped logger + x-trace-id + error correlation
   await app.register(observabilityPlugin);
