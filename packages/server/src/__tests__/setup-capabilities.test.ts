@@ -24,10 +24,12 @@ const githubAppCredentials = {
   appId: "12345",
   privateKeyPem: githubAppPrivateKey,
   slug: "first-tree-test",
+  webhookSecret: "setup-webhook-secret",
 };
 const githubAppCredentialsWithoutSlug = {
   appId: githubAppCredentials.appId,
   privateKeyPem: githubAppCredentials.privateKeyPem,
+  webhookSecret: githubAppCredentials.webhookSecret,
 };
 
 type Scenario = Awaited<ReturnType<typeof createScenario>>;
@@ -108,7 +110,12 @@ async function seedSetting(
 async function seedGithubInstallation(
   app: FastifyInstance,
   scenario: Scenario,
-  options: { accountLogin?: string; pullRequests?: "read" | "write"; suspended?: boolean } = {},
+  options: {
+    accountLogin?: string;
+    pullRequests?: "read" | "write";
+    suspended?: boolean;
+    events?: string[];
+  } = {},
 ): Promise<void> {
   const installationId = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
   await app.db.insert(githubAppInstallations).values({
@@ -124,7 +131,7 @@ async function seedGithubInstallation(
       metadata: "read",
       pull_requests: options.pullRequests ?? "write",
     },
-    events: ["pull_request"],
+    events: options.events ?? ["pull_request", "issue_comment", "pull_request_review_comment"],
     suspendedAt: options.suspended ? new Date("2026-07-22T08:00:00.000Z") : null,
   });
 }
@@ -190,6 +197,7 @@ async function seedGithubReview(
     accountLogin?: string;
     pullRequests?: "read" | "write";
     suspended?: boolean;
+    events?: string[];
   } = {},
 ): Promise<void> {
   await seedSetting(app, scenario, "context_tree", {
@@ -207,6 +215,7 @@ async function seedGithubReview(
     accountLogin: options.accountLogin,
     pullRequests: options.pullRequests,
     suspended: options.suspended,
+    events: options.events,
   });
 }
 
@@ -243,9 +252,14 @@ function project(
   scenario: Scenario,
   probeGithubReview?: () => Promise<never | "ready" | "permission_required" | "repo_not_covered" | "failed">,
   options: {
-    githubAppCredentials?: { appId: string; privateKeyPem: string; slug?: string };
+    githubAppCredentials?: {
+      appId: string;
+      privateKeyPem: string;
+      slug?: string;
+      webhookSecret?: string;
+    };
     githubFetch?: typeof fetch;
-  } = {},
+  } = { githubAppCredentials },
 ) {
   return getTeamSetupCapabilities(app.db, scenario.organizationId, {
     now: () => observedAt,
@@ -388,6 +402,41 @@ describe("Team setup capabilities", () => {
     });
     expect(suspendedProbe).not.toHaveBeenCalled();
 
+    const missingApp = await createScenario(app);
+    const missingAppReviewer = await createReviewer(app, missingApp);
+    await seedGithubReview(app, missingApp, { reviewer: missingAppReviewer });
+    const missingAppProbe = vi.fn(async () => "ready" as const);
+    const missingAppProjection = await project(app, missingApp, missingAppProbe, {
+      githubAppCredentials: undefined,
+    });
+    expect(missingAppProjection.repositoryAutomation.providers[0]).toMatchObject({
+      provider: "github",
+      adoption: "enabled",
+      health: "unavailable",
+      blockers: [
+        {
+          code: "github_app_not_configured",
+          resolutionOwner: "operator",
+          actionKind: null,
+        },
+      ],
+    });
+    expect(missingAppProjection).toMatchObject({
+      contextTree: {
+        automaticReview: {
+          health: "unavailable",
+          blockers: [
+            {
+              code: "github_app_not_configured",
+              resolutionOwner: "operator",
+              actionKind: null,
+            },
+          ],
+        },
+      },
+    });
+    expect(missingAppProbe).not.toHaveBeenCalled();
+
     const permission = await createScenario(app);
     const permissionReviewer = await createReviewer(app, permission);
     await seedGithubReview(app, permission, { reviewer: permissionReviewer, pullRequests: "read" });
@@ -401,6 +450,69 @@ describe("Team setup capabilities", () => {
       },
     });
     expect(permissionProbe).not.toHaveBeenCalled();
+
+    const missingEvents = await createScenario(app);
+    const missingEventsReviewer = await createReviewer(app, missingEvents);
+    await seedGithubReview(app, missingEvents, { reviewer: missingEventsReviewer, events: [] });
+    const missingEventsProbe = vi.fn(async () => "ready" as const);
+    const missingEventsProjection = await project(app, missingEvents, missingEventsProbe);
+    expect(missingEventsProjection.repositoryAutomation.providers[0]).toMatchObject({
+      provider: "github",
+      adoption: "enabled",
+      health: "unavailable",
+      blockers: [
+        {
+          code: "github_webhook_events_missing",
+          resolutionOwner: "operator",
+          actionKind: null,
+        },
+      ],
+    });
+    expect(missingEventsProjection).toMatchObject({
+      contextTree: {
+        automaticReview: {
+          health: "unavailable",
+          blockers: [
+            {
+              code: "github_webhook_events_missing",
+              resolutionOwner: "operator",
+              actionKind: null,
+            },
+          ],
+        },
+      },
+    });
+    expect(missingEventsProbe).not.toHaveBeenCalled();
+
+    const missingCommentEvents = await createScenario(app);
+    const missingCommentEventsReviewer = await createReviewer(app, missingCommentEvents);
+    await seedGithubReview(app, missingCommentEvents, {
+      reviewer: missingCommentEventsReviewer,
+      events: ["pull_request"],
+    });
+    const missingCommentEventsProbe = vi.fn(async () => "ready" as const);
+    const missingCommentEventsProjection = await project(app, missingCommentEvents, missingCommentEventsProbe);
+    expect(missingCommentEventsProjection.repositoryAutomation.providers[0]).toMatchObject({
+      provider: "github",
+      adoption: "enabled",
+      health: "ready",
+      blockers: [],
+    });
+    expect(missingCommentEventsProjection).toMatchObject({
+      contextTree: {
+        automaticReview: {
+          health: "unavailable",
+          blockers: [
+            {
+              code: "github_webhook_events_missing",
+              resolutionOwner: "operator",
+              actionKind: null,
+            },
+          ],
+        },
+      },
+    });
+    expect(missingCommentEventsProbe).not.toHaveBeenCalled();
 
     const uncovered = await createScenario(app);
     const uncoveredReviewer = await createReviewer(app, uncovered);

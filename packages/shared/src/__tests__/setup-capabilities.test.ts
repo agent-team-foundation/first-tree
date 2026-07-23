@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   setupActionKindSchema,
+  setupBlockerCodeSchema,
   setupBlockerSchema,
   setupContextTreeBindingSchema,
   setupRepositoryAutomationProviderSchema,
@@ -63,6 +64,8 @@ describe("TeamSetupCapabilities public contract", () => {
     );
     expect(setupContextTreeBindingSchema.parse(value.contextTree.binding)).toEqual(value.contextTree.binding);
     expect(setupActionKindSchema.parse("open_tree_setup_chat")).toBe("open_tree_setup_chat");
+    expect(setupBlockerCodeSchema.parse("github_app_not_configured")).toBe("github_app_not_configured");
+    expect(setupBlockerCodeSchema.parse("github_webhook_events_missing")).toBe("github_webhook_events_missing");
   });
 
   it("fails closed on unknown fields at every public object boundary", () => {

@@ -11,7 +11,9 @@ export const setupCapabilityHealthSchema = z.enum([
 
 export const setupBlockerCodeSchema = z.enum([
   "provider_probe_failed",
+  "github_app_not_configured",
   "github_app_suspended",
+  "github_webhook_events_missing",
   "github_pull_requests_permission_required",
   "github_tree_repo_not_covered",
   "gitlab_webhook_not_seen",

@@ -23,8 +23,19 @@ import { findInstallationByOrg, type InstallationRow } from "./github-app-instal
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 
 type GithubReviewProbeResult = "ready" | "permission_required" | "repo_not_covered" | "failed";
-type GithubReviewCredentials = GithubAppCredentials & { slug?: string };
+type GithubReviewCredentials = GithubAppCredentials & { slug?: string; webhookSecret?: string };
 const GITHUB_REVIEW_PROBE_TIMEOUT_MS = 5_000;
+const GITHUB_REPOSITORY_AUTOMATION_EVENTS: ReadonlySet<string> = new Set([
+  "commit_comment",
+  "discussion",
+  "discussion_comment",
+  "issue_comment",
+  "issues",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+]);
+const GITHUB_AUTOMATIC_REVIEW_EVENTS = ["pull_request", "issue_comment", "pull_request_review_comment"] as const;
 
 export type SetupCapabilitiesOptions = {
   now?: () => Date;
@@ -47,6 +58,14 @@ function gitlabProcessingIsDegraded(connection: typeof gitlabConnections.$inferS
     !connection.lastValidInboundAt ||
     connection.lastProcessingFailureAt.getTime() > connection.lastValidInboundAt.getTime()
   );
+}
+
+function githubRepositoryAutomationEventsReady(events: string[]): boolean {
+  return events.some((event) => GITHUB_REPOSITORY_AUTOMATION_EVENTS.has(event));
+}
+
+function githubAutomaticReviewEventsReady(events: string[]): boolean {
+  return GITHUB_AUTOMATIC_REVIEW_EVENTS.every((event) => events.includes(event));
 }
 
 async function defaultGithubReviewProbe(
@@ -111,6 +130,7 @@ async function defaultGithubReviewProbe(
 function projectRepositoryAutomation(
   installation: InstallationRow | null,
   gitlabConnection: typeof gitlabConnections.$inferSelect | null,
+  githubWebhookConfigured: boolean,
   observedAt: string,
 ): SetupRepositoryAutomationProvider[] {
   const github: SetupRepositoryAutomationProvider = !installation
@@ -121,21 +141,37 @@ function projectRepositoryAutomation(
         blockers: [],
         observedAt,
       }
-    : installation.suspendedAt
+    : !githubWebhookConfigured
       ? {
           provider: "github",
           adoption: "enabled",
           health: "unavailable",
-          blockers: [blocker("github_app_suspended", "admin", "manage_github_installation")],
+          blockers: [blocker("github_app_not_configured", "operator", null)],
           observedAt,
         }
-      : {
-          provider: "github",
-          adoption: "enabled",
-          health: "ready",
-          blockers: [],
-          observedAt,
-        };
+      : installation.suspendedAt
+        ? {
+            provider: "github",
+            adoption: "enabled",
+            health: "unavailable",
+            blockers: [blocker("github_app_suspended", "admin", "manage_github_installation")],
+            observedAt,
+          }
+        : !githubRepositoryAutomationEventsReady(installation.events)
+          ? {
+              provider: "github",
+              adoption: "enabled",
+              health: "unavailable",
+              blockers: [blocker("github_webhook_events_missing", "operator", null)],
+              observedAt,
+            }
+          : {
+              provider: "github",
+              adoption: "enabled",
+              health: "ready",
+              blockers: [],
+              observedAt,
+            };
 
   let gitlab: SetupRepositoryAutomationProvider;
   if (!gitlabConnection) {
@@ -265,11 +301,17 @@ export async function getTeamSetupCapabilities(
       if (!installation) {
         reviewBlockers.push(blocker("context_review_provider_prerequisite_missing", "admin", "connect_github"));
         reviewHealth = "unavailable";
+      } else if (!options.githubAppCredentials?.webhookSecret) {
+        reviewBlockers.push(blocker("github_app_not_configured", "operator", null));
+        reviewHealth = "unavailable";
       } else if (installation.suspendedAt) {
         reviewBlockers.push(blocker("github_app_suspended", "admin", "manage_github_installation"));
         reviewHealth = "unavailable";
       } else if (installation.permissions.pull_requests !== "write") {
         reviewBlockers.push(blocker("github_pull_requests_permission_required", "admin", "manage_github_installation"));
+        reviewHealth = "unavailable";
+      } else if (!githubAutomaticReviewEventsReady(installation.events)) {
+        reviewBlockers.push(blocker("github_webhook_events_missing", "operator", null));
         reviewHealth = "unavailable";
       } else if (reviewHealth === "ready") {
         const probe =
@@ -320,7 +362,12 @@ export async function getTeamSetupCapabilities(
   return teamSetupCapabilitiesSchema.parse({
     organizationId,
     repositoryAutomation: {
-      providers: projectRepositoryAutomation(installation, gitlabConnection, observedAt),
+      providers: projectRepositoryAutomation(
+        installation,
+        gitlabConnection,
+        Boolean(options.githubAppCredentials?.webhookSecret),
+        observedAt,
+      ),
     },
     contextTree: {
       binding,
