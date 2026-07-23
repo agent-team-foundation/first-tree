@@ -14,6 +14,10 @@ import { captureAccountStoreRuntime, installAccountStoreRuntime } from "./sessio
 import { ContentDatabaseRegistry, ContentScopeBarrier, type SessionLockManager } from "./session/content-barrier.js";
 import { captureContentStoreRuntime } from "./session/content-store-runtime.js";
 import {
+  type ActiveHttpMethod,
+  type ActiveHttpRequestBody,
+  type ActiveHttpResponse,
+  type ActiveHttpResponseType,
   type ActiveSessionProjection,
   AuthSessionCoordinator,
   type CoordinatorOptions,
@@ -36,7 +40,9 @@ import {
   type AccountLease,
   type ActivationCertificate,
   type AuthAuthority,
+  type CredentialCursor,
   createAccountLease,
+  type JsonValue,
   sameActivation,
   sameCredentialCursor,
 } from "./session/types.js";
@@ -93,6 +99,24 @@ export type BrowserSessionProjection =
 export type BrowserSessionSubscriber = (projection: BrowserSessionProjection) => void;
 export type BrowserSessionLogoutResult = "completed" | "superseded";
 
+export type BrowserSessionHttpTarget =
+  | Readonly<{ kind: "selected-organization"; path: string }>
+  | Readonly<{ kind: "selected-resource"; path: string }>;
+
+export type BrowserSessionHttpRequest = Readonly<{
+  target: BrowserSessionHttpTarget;
+  method?: ActiveHttpMethod;
+  headers?: Readonly<Record<string, string>>;
+  body?: ActiveHttpRequestBody;
+  responseType: ActiveHttpResponseType;
+  maxResponseBytes?: number;
+  signal?: AbortSignal;
+}>;
+
+export type BrowserSessionHttpFacade = Readonly<{
+  request(input: BrowserSessionHttpRequest): Promise<ActiveHttpResponse>;
+}>;
+
 type RuntimeOperation = Readonly<{
   revision: number;
   veil: SessionVeilToken;
@@ -138,6 +162,31 @@ type PendingTerminalActiveMe401 = Readonly<{
 }>;
 
 type PendingTerminalActiveMe401Result = Readonly<{
+  source: ActivationCertificate;
+  retirement: RetirementResult;
+}>;
+
+type ActiveHttpOwner = Readonly<{
+  active: ActiveRuntime;
+  accountLease: AccountLease;
+  publication: SelectedOrganizationPublication;
+  view: NonNullable<SelectedOrganizationPublication["viewLease"]>;
+  credential: CredentialCursor;
+}>;
+
+type PendingActiveHttpRefresh = Readonly<{
+  activation: ActivationCertificate;
+  credential: CredentialCursor;
+  promise: Promise<ActiveRuntime>;
+}>;
+
+type PendingTerminalActiveHttp401 = Readonly<{
+  source: ActivationCertificate;
+  response: ActiveHttpResponse;
+  generation: string;
+}>;
+
+type PendingTerminalActiveHttp401Result = Readonly<{
   source: ActivationCertificate;
   retirement: RetirementResult;
 }>;
@@ -263,6 +312,177 @@ function ownerTabId(storage: BrowserSessionStorage, createId: () => string): str
   return created;
 }
 
+type CapturedBrowserSessionHttpRequest = Readonly<{
+  target: BrowserSessionHttpTarget;
+  method: ActiveHttpMethod | undefined;
+  headers: Readonly<Record<string, string>> | undefined;
+  body: ActiveHttpRequestBody | undefined;
+  responseType: ActiveHttpResponseType;
+  maxResponseBytes: number | undefined;
+  signal: AbortSignal | undefined;
+}>;
+
+const MAX_BROWSER_HTTP_REQUEST_HEADERS = 64;
+const MAX_BROWSER_HTTP_HEADER_NAME_BYTES = 256;
+const MAX_BROWSER_HTTP_HEADER_VALUE_BYTES = 8 * 1024;
+const MAX_BROWSER_HTTP_HEADERS_BYTES = 64 * 1024;
+
+function browserHttpInvalid(message: string): SessionError {
+  return new SessionError(sessionErrorCodes.invalidState, message);
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Reflect.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function snapshotBrowserHttpHeaders(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) throw browserHttpInvalid("Authenticated browser headers are malformed");
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
+  let count = 0;
+  let encodedBytes = 0;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw browserHttpInvalid("Authenticated browser headers are malformed");
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string") {
+      throw browserHttpInvalid("Authenticated browser headers are accessor-backed");
+    }
+    count += 1;
+    const keyBytes = new TextEncoder().encode(key).byteLength;
+    const valueBytes = new TextEncoder().encode(descriptor.value).byteLength;
+    encodedBytes += keyBytes + valueBytes + 4;
+    if (
+      count > MAX_BROWSER_HTTP_REQUEST_HEADERS ||
+      keyBytes > MAX_BROWSER_HTTP_HEADER_NAME_BYTES ||
+      valueBytes > MAX_BROWSER_HTTP_HEADER_VALUE_BYTES ||
+      encodedBytes > MAX_BROWSER_HTTP_HEADERS_BYTES
+    ) {
+      throw browserHttpInvalid("Authenticated browser headers are oversized");
+    }
+    result[key] = descriptor.value;
+  }
+  return Object.freeze(result);
+}
+
+function snapshotBrowserHttpBody(value: unknown): ActiveHttpRequestBody | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) throw browserHttpInvalid("Authenticated browser request body is malformed");
+  const kind = value.kind;
+  const bodyValue = value.value;
+  if (kind === "json") {
+    let cloned: unknown;
+    try {
+      cloned = structuredClone(bodyValue);
+    } catch {
+      throw browserHttpInvalid("Authenticated browser JSON body cannot be cloned");
+    }
+    return Object.freeze({ kind, value: cloned as JsonValue });
+  }
+  const contentType = value.contentType;
+  if (typeof contentType !== "string") {
+    throw browserHttpInvalid("Authenticated browser request content type is malformed");
+  }
+  if (kind === "text") {
+    if (typeof bodyValue !== "string") {
+      throw browserHttpInvalid("Authenticated browser text body is malformed");
+    }
+    return Object.freeze({ kind, value: bodyValue, contentType });
+  }
+  if (kind === "bytes") {
+    let bytes: Uint8Array;
+    if (bodyValue instanceof ArrayBuffer) {
+      bytes = new Uint8Array(bodyValue).slice();
+    } else if (ArrayBuffer.isView(bodyValue)) {
+      bytes = new Uint8Array(bodyValue.buffer, bodyValue.byteOffset, bodyValue.byteLength).slice();
+    } else {
+      throw browserHttpInvalid("Authenticated browser byte body is malformed");
+    }
+    const buffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(buffer).set(bytes);
+    return Object.freeze({ kind, value: buffer, contentType });
+  }
+  if (kind === "blob") {
+    if (!(bodyValue instanceof Blob)) {
+      throw browserHttpInvalid("Authenticated browser blob body is malformed");
+    }
+    return Object.freeze({
+      kind,
+      value: bodyValue.slice(0, bodyValue.size, bodyValue.type),
+      contentType,
+    } as ActiveHttpRequestBody);
+  }
+  throw browserHttpInvalid("Authenticated browser request body kind is unsupported");
+}
+
+function snapshotBrowserSessionHttpRequest(value: unknown): CapturedBrowserSessionHttpRequest {
+  if (!isPlainRecord(value)) throw browserHttpInvalid("Authenticated browser request is malformed");
+  const targetValue = value.target;
+  const methodValue = value.method;
+  const headersValue = value.headers;
+  const bodyValue = value.body;
+  const responseTypeValue = value.responseType;
+  const maxResponseBytesValue = value.maxResponseBytes;
+  const signalValue = value.signal;
+  if (!isPlainRecord(targetValue)) throw browserHttpInvalid("Authenticated browser target is malformed");
+  const targetKind = targetValue.kind;
+  const targetPath = targetValue.path;
+  if (
+    (targetKind !== "selected-organization" && targetKind !== "selected-resource") ||
+    typeof targetPath !== "string"
+  ) {
+    throw browserHttpInvalid("Authenticated browser target is malformed");
+  }
+  if (
+    methodValue !== undefined &&
+    methodValue !== "GET" &&
+    methodValue !== "POST" &&
+    methodValue !== "PUT" &&
+    methodValue !== "PATCH" &&
+    methodValue !== "DELETE"
+  ) {
+    throw browserHttpInvalid("Authenticated browser method is unsupported");
+  }
+  if (responseTypeValue !== "json" && responseTypeValue !== "text" && responseTypeValue !== "bytes") {
+    throw browserHttpInvalid("Authenticated browser response type is unsupported");
+  }
+  if (
+    maxResponseBytesValue !== undefined &&
+    (typeof maxResponseBytesValue !== "number" || !Number.isSafeInteger(maxResponseBytesValue))
+  ) {
+    throw browserHttpInvalid("Authenticated browser response limit is malformed");
+  }
+  if (
+    signalValue !== undefined &&
+    (typeof signalValue !== "object" ||
+      typeof (signalValue as AbortSignal).aborted !== "boolean" ||
+      typeof (signalValue as AbortSignal).addEventListener !== "function" ||
+      typeof (signalValue as AbortSignal).removeEventListener !== "function")
+  ) {
+    throw browserHttpInvalid("Authenticated browser signal is malformed");
+  }
+  return Object.freeze({
+    target: Object.freeze({ kind: targetKind, path: targetPath }) as BrowserSessionHttpTarget,
+    method: methodValue as ActiveHttpMethod | undefined,
+    headers: snapshotBrowserHttpHeaders(headersValue),
+    body: snapshotBrowserHttpBody(bodyValue),
+    responseType: responseTypeValue,
+    maxResponseBytes: maxResponseBytesValue as number | undefined,
+    signal: signalValue as AbortSignal | undefined,
+  });
+}
+
+function selectedHttpPath(target: BrowserSessionHttpTarget, organizationId: string): string {
+  if (!target.path.startsWith("/") || target.path.startsWith("//")) {
+    throw browserHttpInvalid("Authenticated browser path is malformed");
+  }
+  if (target.kind === "selected-organization") {
+    return `/orgs/${encodeURIComponent(organizationId)}${target.path}`;
+  }
+  return target.path;
+}
+
 /**
  * Non-React owner for browser authentication, selected-organization state,
  * lifecycle fencing, and verified account purge. UI integrations subscribe to
@@ -315,6 +535,9 @@ export class BrowserSessionRuntime {
   #resumeCycle = 0;
   #pendingResume: PendingResume | null = null;
   #pendingTerminalActiveMe401: PendingTerminalActiveMe401 | null = null;
+  #pendingActiveHttpRefresh: PendingActiveHttpRefresh | null = null;
+  #pendingTerminalActiveHttp401: PendingTerminalActiveHttp401 | null = null;
+  #pendingTerminalActiveHttp401Task: Promise<PendingTerminalActiveHttp401Result> | null = null;
 
   public constructor(options: BrowserSessionRuntimeOptions = {}) {
     const indexedDBOption = options.indexedDB;
@@ -412,6 +635,25 @@ export class BrowserSessionRuntime {
       live = false;
       this.#subscribers.delete(subscriber);
     };
+  }
+
+  /**
+   * Captures an opaque HTTP facade for the exact selected account/org view.
+   * The closure intentionally exposes neither the view lease nor coordinator
+   * capabilities. It survives only routine credential rotation; navigation,
+   * account replacement, logout, or hard suspension permanently stales it.
+   */
+  public captureActiveHttp(): BrowserSessionHttpFacade {
+    const owner = this.#captureActiveHttpOwner();
+    return Object.freeze({
+      request: (inputValue: BrowserSessionHttpRequest): Promise<ActiveHttpResponse> => {
+        // An async callee would otherwise defer these reads until a later
+        // microtask. Snapshot all caller-controlled input in this synchronous
+        // closure before the first await or authority check.
+        const input = snapshotBrowserSessionHttpRequest(inputValue);
+        return this.#requestActiveHttpOwned(owner, input);
+      },
+    });
   }
 
   public async start(): Promise<BrowserSessionProjection> {
@@ -534,6 +776,11 @@ export class BrowserSessionRuntime {
       try {
         await this.#ensureBootLegacyScrub();
         this.#assertCurrent(operation);
+        const pendingHttpRetirement = await this.#retryPendingTerminalActiveHttp401();
+        if (pendingHttpRetirement) {
+          await this.#convergeActiveHttpRetirement(pendingHttpRetirement.source, pendingHttpRetirement.retirement);
+          return this.getProjection();
+        }
         const pendingRetirement = await this.#retryPendingTerminalActiveMe401();
         if (pendingRetirement) {
           if (pendingRetirement.retirement === "superseded") {
@@ -834,6 +1081,9 @@ export class BrowserSessionRuntime {
     this.#hardSuspendedActive = null;
     this.#suspendedRemount = null;
     this.#pendingTerminalActiveMe401 = null;
+    this.#pendingActiveHttpRefresh = null;
+    this.#pendingTerminalActiveHttp401 = null;
+    this.#pendingTerminalActiveHttp401Task = null;
     this.#subscribers.clear();
   }
 
@@ -1372,6 +1622,12 @@ export class BrowserSessionRuntime {
     operation: RuntimeOperation,
     rotateObservedRevision = false,
   ): Promise<ReconciledSelection> {
+    if (this.#pendingTerminalActiveHttp401) {
+      throw new SessionError(
+        sessionErrorCodes.recoveryRequired,
+        "Authenticated HTTP retirement must settle before account reconciliation",
+      );
+    }
     const pendingRetirement = await this.#retryPendingTerminalActiveMe401();
     if (pendingRetirement) throw this.#terminalActiveMe401Error(pendingRetirement.retirement);
     let currentReason = reason;
@@ -1619,6 +1875,397 @@ export class BrowserSessionRuntime {
   #retireAccountHandle(handle: AccountRuntimeHandle, reason: unknown): void {
     handle.sourceController.abort(reason);
     handle.disposeAccountRuntime();
+  }
+
+  #captureActiveHttpOwner(): ActiveHttpOwner {
+    const active = this.#requireActive();
+    const publication = active.projection.publication;
+    const view = publication.viewLease;
+    if (!view) {
+      throw new SessionError(
+        sessionErrorCodes.admissionDenied,
+        "Authenticated HTTP requires a selected organization view",
+      );
+    }
+    if (
+      !captureAccountStoreRuntime(active.accountLease) ||
+      !captureContentStoreRuntime(view) ||
+      active.accountLease.signal.aborted ||
+      view.signal.aborted
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP view is stale");
+    }
+    return Object.freeze({
+      active,
+      accountLease: active.accountLease,
+      publication,
+      view,
+      credential: active.projection.credential,
+    });
+  }
+
+  #readCurrentActiveHttpOwner(owner: ActiveHttpOwner): ActiveHttpOwner {
+    const active = this.#active;
+    if (
+      this.#disposed ||
+      !active ||
+      active.accountLease !== owner.accountLease ||
+      !sameActivation(active.activation, owner.active.activation) ||
+      active.projection.publication !== owner.publication ||
+      active.projection.publication.viewLease !== owner.view ||
+      active.accountLease.signal.aborted ||
+      owner.view.signal.aborted ||
+      !captureAccountStoreRuntime(owner.accountLease) ||
+      !captureContentStoreRuntime(owner.view)
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP facade is stale");
+    }
+    return Object.freeze({
+      active,
+      accountLease: owner.accountLease,
+      publication: owner.publication,
+      view: owner.view,
+      credential: active.projection.credential,
+    });
+  }
+
+  async #assertActiveHttpOwner(
+    owner: ActiveHttpOwner,
+    expectedCredential?: CredentialCursor,
+  ): Promise<ActiveHttpOwner> {
+    let current = this.#readCurrentActiveHttpOwner(owner);
+    if (expectedCredential && !sameCredentialCursor(current.credential, expectedCredential)) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP credential was replaced");
+    }
+    await this.#selectedOrganization.assertPublicationCurrent(owner.accountLease, owner.publication);
+    current = this.#readCurrentActiveHttpOwner(owner);
+    if (expectedCredential && !sameCredentialCursor(current.credential, expectedCredential)) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP credential was replaced");
+    }
+    return current;
+  }
+
+  #publishActiveHttpCredential(owner: ActiveHttpOwner, session: ActiveSessionProjection): ActiveRuntime {
+    const current = this.#active;
+    if (
+      this.#disposed ||
+      !current ||
+      current.accountLease !== owner.accountLease ||
+      !sameActivation(current.activation, owner.active.activation) ||
+      current.accountLease.signal.aborted ||
+      !captureAccountStoreRuntime(current.accountLease) ||
+      !sameActivation(session.authority.session, current.activation)
+    ) {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP refresh changed account");
+    }
+    const projection: BrowserSessionActiveProjection = Object.freeze({
+      ...current.projection,
+      credential: session.credential,
+    });
+    const replacement: ActiveRuntime = Object.freeze({
+      activation: current.activation,
+      accountLease: current.accountLease,
+      sourceController: current.sourceController,
+      disposeAccountRuntime: current.disposeAccountRuntime,
+      projection,
+    });
+    this.#active = replacement;
+    if (this.#state.kind === "active" && this.#state.accountLease === current.accountLease) {
+      this.#state = projection;
+    }
+    this.#emit();
+    return replacement;
+  }
+
+  async #reconcileActiveHttpTransport(owner: ActiveHttpOwner, status: 421 | 503): Promise<"match" | "unavailable"> {
+    const assertLocalSourceNotSuperseded = (): void => {
+      if (this.#pendingUiRetirementEpoch === owner.active.activation.sessionEpoch) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Authenticated transport evidence arrived after local retirement began",
+        );
+      }
+      if (this.#active !== null && !sameActivation(this.#active.activation, owner.active.activation)) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Authenticated transport evidence belongs to a superseded session",
+        );
+      }
+    };
+    const assertSourceStillActive = async (): Promise<void> => {
+      const authority = await this.#coordinator.readAuthority();
+      if (authority.mode !== "active" || !sameActivation(authority.session, owner.active.activation)) {
+        throw new SessionError(
+          sessionErrorCodes.staleOperation,
+          "Authenticated transport evidence belongs to a superseded session",
+        );
+      }
+      assertLocalSourceNotSuperseded();
+    };
+    // A coordinator-minted 421/503 is server-wide evidence for the exact
+    // activation, not for only the organization view that happened to issue
+    // the request. A same-session org replacement must not suppress it.
+    assertLocalSourceNotSuperseded();
+    let reconciliation: ServerAuthorityReconciliation;
+    try {
+      await assertSourceStillActive();
+      reconciliation = await this.#authority.reconcile(owner.active.activation.serverAuthority);
+      await assertSourceStillActive();
+    } catch (error) {
+      if (error instanceof SessionError && error.code === sessionErrorCodes.staleOperation) throw error;
+      // A stale response must never veil or retire a replacement session.
+      assertLocalSourceNotSuperseded();
+      const operation = this.#begin("authenticated_http_authority_recovery");
+      const active = this.#active;
+      if (active && sameActivation(active.activation, owner.active.activation)) {
+        this.#recoveryRemount = Object.freeze({
+          activation: active.activation,
+          expectedState: active.projection.publication.state,
+        });
+        this.#recoveryLogoutOwner = active.activation;
+        this.#retireLocalActive(active);
+        this.#registry.invalidateEpoch(active.activation.sessionEpoch);
+      }
+      this.#fail(operation, error);
+      throw error;
+    }
+
+    if (reconciliation.kind === "mismatch") {
+      const operation = this.#begin("authenticated_http_server_mismatch");
+      this.#recoveryLogoutOwner = owner.active.activation;
+      const active = this.#active;
+      if (active && sameActivation(active.activation, owner.active.activation)) this.#retireLocalActive(active);
+      try {
+        await this.#retireServerMismatch(owner.active.activation, operation, false);
+      } catch (error) {
+        this.#fail(operation, error);
+        throw error;
+      }
+      throw new SessionError(
+        sessionErrorCodes.admissionDenied,
+        "Authenticated request reached a different server authority",
+      );
+    }
+
+    if (status === 421) {
+      const error = new SessionError(
+        sessionErrorCodes.recoveryRequired,
+        "Authenticated request was rejected by the server authority boundary",
+      );
+      const operation = this.#begin("authenticated_http_authority_recovery");
+      const active = this.#active;
+      if (active && sameActivation(active.activation, owner.active.activation)) {
+        this.#recoveryRemount = Object.freeze({
+          activation: active.activation,
+          expectedState: active.projection.publication.state,
+        });
+        this.#recoveryLogoutOwner = active.activation;
+        this.#retireLocalActive(active);
+        this.#registry.invalidateEpoch(active.activation.sessionEpoch);
+      }
+      this.#fail(operation, error);
+      throw error;
+    }
+    return reconciliation.kind;
+  }
+
+  async #convergeActiveHttpRetirement(source: ActivationCertificate, retirement: RetirementResult): Promise<void> {
+    if (retirement === "retired" || retirement === "already_retiring") {
+      const active = this.#active;
+      if (active && sameActivation(active.activation, source)) this.#retireLocalActive(active);
+      this.#registry.invalidateEpoch(source.sessionEpoch);
+      await this.#convergeCommittedOwned401(source);
+      return;
+    }
+    const operation = this.#begin("owned_401_superseded");
+    const authority = await this.#coordinator.readAuthority();
+    this.#assertCurrent(operation);
+    await this.#convergeAuthority(authority, operation, false);
+  }
+
+  #retryPendingTerminalActiveHttp401(): Promise<PendingTerminalActiveHttp401Result | null> {
+    const pending = this.#pendingTerminalActiveHttp401;
+    if (!pending) return Promise.resolve(null);
+    if (this.#pendingTerminalActiveHttp401Task) return this.#pendingTerminalActiveHttp401Task;
+    const task = this.#coordinator
+      .retireActiveHttpAfterTerminal401(pending.response, pending.generation)
+      .then((retirement) => {
+        if (this.#pendingTerminalActiveHttp401 === pending) this.#pendingTerminalActiveHttp401 = null;
+        return Object.freeze({ source: pending.source, retirement });
+      });
+    this.#pendingTerminalActiveHttp401Task = task;
+    const clear = (): void => {
+      if (this.#pendingTerminalActiveHttp401Task === task) this.#pendingTerminalActiveHttp401Task = null;
+    };
+    void task.then(clear, clear);
+    return task;
+  }
+
+  #stageTerminalActiveHttp401(owner: ActiveHttpOwner, response: ActiveHttpResponse): void {
+    if (this.#pendingUiRetirementEpoch === owner.active.activation.sessionEpoch) {
+      throw new SessionError(
+        sessionErrorCodes.staleOperation,
+        "Authenticated rejection arrived after local retirement began",
+      );
+    }
+    const existing = this.#pendingTerminalActiveHttp401;
+    if (existing) {
+      if (!sameActivation(existing.source, owner.active.activation)) {
+        throw new SessionError(
+          sessionErrorCodes.recoveryRequired,
+          "Another account owns the pending authenticated HTTP retirement",
+        );
+      }
+      return;
+    }
+    this.#pendingTerminalActiveHttp401 = Object.freeze({
+      source: owner.active.activation,
+      response,
+      generation: this.#freshGeneration("owned-401-http"),
+    });
+  }
+
+  async #retireTerminalActiveHttp401(owner: ActiveHttpOwner, response: ActiveHttpResponse): Promise<never> {
+    this.#stageTerminalActiveHttp401(owner, response);
+    const operation = this.#begin("owned_401_http_retirement");
+    try {
+      const result = await this.#retryPendingTerminalActiveHttp401();
+      if (!result) {
+        throw new SessionError(sessionErrorCodes.recoveryRequired, "Authenticated HTTP retirement disappeared");
+      }
+      await this.#convergeActiveHttpRetirement(result.source, result.retirement);
+      throw new SessionError(
+        sessionErrorCodes.admissionDenied,
+        "Authenticated request remained unauthorized after credential refresh",
+      );
+    } catch (error) {
+      if (this.#pendingTerminalActiveHttp401) {
+        const active = this.#active;
+        if (active && sameActivation(active.activation, owner.active.activation)) this.#retireLocalActive(active);
+        this.#registry.invalidateEpoch(owner.active.activation.sessionEpoch);
+        this.#recoveryLogoutOwner = owner.active.activation;
+        this.#fail(operation, error);
+      }
+      throw error;
+    }
+  }
+
+  async #refreshActiveHttpCredential(owner: ActiveHttpOwner): Promise<ActiveHttpOwner> {
+    const current = await this.#assertActiveHttpOwner(owner, owner.credential);
+    const existing = this.#pendingActiveHttpRefresh;
+    if (
+      existing &&
+      sameActivation(existing.activation, owner.active.activation) &&
+      sameCredentialCursor(existing.credential, owner.credential)
+    ) {
+      await existing.promise;
+      return this.#assertActiveHttpOwner(owner);
+    }
+    if (existing) {
+      await existing.promise;
+      return this.#assertActiveHttpOwner(owner);
+    }
+
+    let task!: Promise<ActiveRuntime>;
+    task = (async (): Promise<ActiveRuntime> => {
+      try {
+        const cursor = await this.#coordinator.refreshAccountCredential(
+          current.accountLease,
+          current.credential,
+          this.#freshGeneration("owned-401-http-refresh"),
+        );
+        const session = await this.#coordinator.readActiveSession();
+        if (
+          !sameActivation(session.authority.session, current.active.activation) ||
+          !sameCredentialCursor(session.credential, cursor)
+        ) {
+          throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated HTTP refresh was superseded");
+        }
+        try {
+          this.#announceAuthorityAdvanced();
+        } catch (error) {
+          const operation = this.#begin("credential_refresh_notification_failure");
+          const active = this.#active;
+          if (active && sameActivation(active.activation, current.active.activation)) this.#retireLocalActive(active);
+          this.#recoveryLogoutOwner = current.active.activation;
+          this.#fail(operation, error);
+          throw error;
+        }
+        return this.#publishActiveHttpCredential(owner, session);
+      } catch (error) {
+        const retirement = owned401Retirement(error);
+        if (retirement !== null) {
+          await this.#convergeActiveHttpRetirement(current.active.activation, retirement);
+        } else {
+          const status = sessionHttpStatus(error, "refresh_http_status");
+          if (status === 421 || status === 503) {
+            await this.#reconcileActiveHttpTransport(current, status);
+          }
+        }
+        throw error;
+      } finally {
+        if (this.#pendingActiveHttpRefresh?.promise === task) this.#pendingActiveHttpRefresh = null;
+      }
+    })();
+    this.#pendingActiveHttpRefresh = Object.freeze({
+      activation: current.active.activation,
+      credential: current.credential,
+      promise: task,
+    });
+    await task;
+    return this.#assertActiveHttpOwner(owner);
+  }
+
+  async #requestActiveHttpOwned(
+    owner: ActiveHttpOwner,
+    input: CapturedBrowserSessionHttpRequest,
+  ): Promise<ActiveHttpResponse> {
+    const pending = await this.#retryPendingTerminalActiveHttp401();
+    if (pending) await this.#convergeActiveHttpRetirement(pending.source, pending.retirement);
+    let current = await this.#assertActiveHttpOwner(owner);
+    const path = selectedHttpPath(input.target, owner.view.organizationId);
+    const request = (attemptOwner: ActiveHttpOwner): Promise<ActiveHttpResponse> =>
+      this.#coordinator.requestActiveHttp({
+        view: attemptOwner.view,
+        credential: attemptOwner.credential,
+        scope: input.target.kind,
+        path,
+        ...(input.method === undefined ? {} : { method: input.method }),
+        ...(input.headers === undefined ? {} : { headers: input.headers }),
+        ...(input.body === undefined ? {} : { body: input.body }),
+        responseType: input.responseType,
+        ...(input.maxResponseBytes === undefined ? {} : { maxResponseBytes: input.maxResponseBytes }),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+
+    let response = await request(current);
+    if (response.status === 421 || response.status === 503) {
+      await this.#reconcileActiveHttpTransport(current, response.status);
+    }
+    current = await this.#assertActiveHttpOwner(owner, current.credential);
+    if (response.status !== 401) {
+      this.#readCurrentActiveHttpOwner(owner);
+      return response;
+    }
+
+    current = await this.#refreshActiveHttpCredential(current);
+    current = await this.#assertActiveHttpOwner(owner, current.credential);
+    response = await request(current);
+    if (response.status === 401) {
+      // The coordinator returned this object only after its exact
+      // credential/view response gate. Persist the realm-local capability
+      // synchronously before any further await so pagehide, org replacement,
+      // or selected-head I/O can suppress UI delivery but cannot lose the
+      // decisive retirement.
+      this.#stageTerminalActiveHttp401(current, response);
+      return this.#retireTerminalActiveHttp401(current, response);
+    }
+    if (response.status === 421 || response.status === 503) {
+      await this.#reconcileActiveHttpTransport(current, response.status);
+    }
+    await this.#assertActiveHttpOwner(owner, current.credential);
+    this.#readCurrentActiveHttpOwner(owner);
+    return response;
   }
 
   #requireActive(): ActiveRuntime {

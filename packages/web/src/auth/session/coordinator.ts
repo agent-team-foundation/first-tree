@@ -7,6 +7,7 @@ import { expectedAuthorityHeaders, readBoundedResponseText } from "../../api/ser
 import { type CapturedAccountRuntimeFence, captureAccountRuntimeFence } from "./account-store-runtime.js";
 import { createCandidateTokenSnapshot, fingerprintCandidateTokenSnapshot } from "./candidate-tokens.js";
 import { claimVerifiedPurgeCompletion, type VerifiedPurgeCompletion } from "./content-barrier.js";
+import { type CapturedContentStoreRuntime, captureContentStoreRuntime } from "./content-store-runtime.js";
 import { SessionError, sessionErrorCodes, toSessionError } from "./errors.js";
 import { type LegacyScrubOptions, scrubLegacyPersistence } from "./legacy-scrub.js";
 import { createAccountScopeKey } from "./scope.js";
@@ -22,6 +23,7 @@ import {
   type CredentialRecord,
   createCredentialRecord,
   credentialCursor,
+  type JsonValue,
   sameAccountLease,
   sameActivation,
   sameCredentialCursor,
@@ -96,29 +98,94 @@ export type VerifiedActiveMeResult = Readonly<{
   proof: VerifiedActiveMeProof;
 }>;
 
+export type ActiveHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type ActiveHttpResponseType = "json" | "text" | "bytes";
+export type ActiveHttpScope = "selected-organization" | "selected-resource";
+
+export type ActiveHttpRequestBody =
+  | Readonly<{ kind: "json"; value: JsonValue }>
+  | Readonly<{ kind: "text"; value: string; contentType: string }>
+  | Readonly<{ kind: "bytes"; value: ArrayBuffer | ArrayBufferView; contentType: string }>
+  | Readonly<{ kind: "blob"; value: Blob; contentType: string }>;
+
+export type ActiveHttpRequest = Readonly<{
+  view: ViewLease;
+  credential: CredentialCursor;
+  scope: ActiveHttpScope;
+  path: string;
+  method?: ActiveHttpMethod;
+  headers?: Readonly<Record<string, string>>;
+  body?: ActiveHttpRequestBody;
+  responseType: ActiveHttpResponseType;
+  maxResponseBytes?: number;
+  signal?: AbortSignal;
+}>;
+
+type ActiveHttpResponseBase = Readonly<{
+  status: number;
+  ok: boolean;
+  headers: Readonly<Record<string, string>>;
+}>;
+
+export type ActiveHttpResponse =
+  | (ActiveHttpResponseBase & Readonly<{ responseType: "json"; body: JsonValue | null }>)
+  | (ActiveHttpResponseBase & Readonly<{ responseType: "text"; body: string }>)
+  | (ActiveHttpResponseBase & Readonly<{ responseType: "bytes"; body: Uint8Array }>);
+
 const REFRESH_ENDPOINT = "/api/v1/auth/refresh";
+const ACTIVE_HTTP_BASE_URL = "/api/v1";
 const MAX_REFRESH_RESPONSE_BYTES = 64 * 1024;
 const MAX_ACTIVE_ME_RESPONSE_BYTES = 512 * 1024;
 const MAX_ACTIVE_ME_MEMBERSHIPS = 100_000;
+const MAX_ACTIVE_HTTP_PATH_BYTES = 4096;
+const MAX_ACTIVE_HTTP_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_ACTIVE_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_ACTIVE_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_ACTIVE_HTTP_JSON_DEPTH = 100;
+const MAX_ACTIVE_HTTP_JSON_NODES = 100_000;
+const MAX_ACTIVE_HTTP_REQUEST_HEADERS = 64;
+const MAX_ACTIVE_HTTP_RESPONSE_HEADERS = 128;
+const MAX_ACTIVE_HTTP_HEADER_NAME_BYTES = 256;
+const MAX_ACTIVE_HTTP_HEADER_VALUE_BYTES = 8 * 1024;
+const MAX_ACTIVE_HTTP_HEADERS_BYTES = 64 * 1024;
+const ACTIVE_HTTP_METHODS = new Set<ActiveHttpMethod>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const ACTIVE_HTTP_RESOURCE_ROOTS = new Set([
+  "activity",
+  "agents",
+  "attachments",
+  "chats",
+  "docs",
+  "resources",
+  "sessions",
+]);
+const FORBIDDEN_ACTIVE_HTTP_HEADERS = new Set([
+  "accept",
+  "authorization",
+  "connection",
+  "content-length",
+  "content-type",
+  "cookie",
+  "forwarded",
+  "host",
+  "origin",
+  "proxy-authorization",
+  "referer",
+  "referrer",
+  "refresh-token",
+  "transfer-encoding",
+  "upgrade",
+  "x-first-tree-expected-authority",
+]);
+const HTTP_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+const HTTP_HEADER_VALUE = /^[\t\u0020-\u007e\u0080-\u00ff]*$/u;
 
-declare const activeDispatchAdmissionType: unique symbol;
 declare const verifiedCandidateProofType: unique symbol;
 declare const refreshResponseProofType: unique symbol;
 declare const accountRefreshResponseProofType: unique symbol;
 declare const verifiedActiveMeProofType: unique symbol;
 
-export type ActiveDispatchAdmission = Readonly<{ [activeDispatchAdmissionType]: never }>;
-
 export type VerifiedCandidateProof = Readonly<{ [verifiedCandidateProofType]: never }>;
 export type VerifiedActiveMeProof = Readonly<{ [verifiedActiveMeProofType]: never }>;
-
-type ActiveDispatchState = Readonly<{
-  activation: ActivationCertificate;
-  credential: CredentialCursor;
-  capturedCredential: CredentialRecord;
-  view: ViewLease;
-  lifecycleGeneration: number;
-}>;
 
 type VerifiedCandidateEvidence = Readonly<{
   candidate: CandidateMeResult["candidate"];
@@ -223,6 +290,15 @@ type CommittedAccountRefresh = Readonly<{
   authorityRevision: number;
 }>;
 
+type ActiveHttpResponseState = {
+  activation: ActivationCertificate;
+  credential: CredentialCursor;
+  capturedCredential: CredentialRecord;
+  authorityRevision: number;
+  status: number;
+  state: "available" | "claimed" | "consumed";
+};
+
 export type ClaimedVerifiedActiveMeProof = Readonly<{
   membershipIds: readonly string[];
   defaultOrganizationId: string | null;
@@ -230,7 +306,6 @@ export type ClaimedVerifiedActiveMeProof = Readonly<{
   settle: () => void;
 }>;
 
-const activeDispatchAdmissions = new WeakMap<ActiveDispatchAdmission, ActiveDispatchState>();
 const verifiedCandidateProofs = new WeakMap<VerifiedCandidateProof, CandidateProofState>();
 const refreshResponseProofs = new WeakMap<RefreshResponseProof, RefreshResponseState>();
 const accountRefreshResponseProofs = new WeakMap<AccountRefreshResponseProof, AccountRefreshResponseState>();
@@ -239,25 +314,12 @@ const activeMe401Rejections = new WeakMap<SessionError, ActiveMe401State>();
 const activeMeRetryClaims = new WeakMap<SessionError, ActiveMeRetryState>();
 const latestActiveMeRequests = new Map<string, number>();
 const activeMe401RefreshOwners = new Map<string, ActiveMe401State>();
-
-export type ActiveDispatch<T> = Readonly<{
-  admission: ActiveDispatchAdmission;
-  request: T;
-}>;
-
-export type ActiveDispatchToken = Readonly<{ kind: "access"; token: string }>;
-
-function readActiveDispatchAdmission(value: unknown): ActiveDispatchState {
-  if (typeof value !== "object" || value === null) {
-    throw new SessionError(sessionErrorCodes.invalidState, "Dispatch admission is malformed");
-  }
-  const state = activeDispatchAdmissions.get(value as ActiveDispatchAdmission);
-  if (!state) throw new SessionError(sessionErrorCodes.invalidState, "Dispatch admission is malformed");
-  if (state.view.signal.aborted || state.lifecycleGeneration !== coordinatorLifecycleGeneration) {
-    throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch admission crossed a lifecycle fence");
-  }
-  return state;
-}
+/**
+ * The original result object, not its public status, is the capability that a
+ * later coordinator-owned 401 retirement path may consume. This deliberately
+ * has no exported reader and cannot be copied with object spread.
+ */
+const activeHttpResponses = new WeakMap<ActiveHttpResponse, ActiveHttpResponseState>();
 
 export type CoordinatorOptions = Readonly<{
   indexedDB?: IDBFactory;
@@ -279,7 +341,8 @@ function requireActiveMeOrganizationId(value: unknown): string {
   return value;
 }
 
-function freezeParsedJson(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+function freezeParsedJson<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
   const pending: object[] = [value];
   const seen = new Set<object>();
   while (pending.length > 0) {
@@ -295,6 +358,422 @@ function freezeParsedJson(value: Readonly<Record<string, unknown>>): Readonly<Re
     Object.freeze(current);
   }
   return value;
+}
+
+function activeHttpInvalid(message: string): SessionError {
+  return new SessionError(sessionErrorCodes.invalidState, message);
+}
+
+function activeHttpStale(message: string): SessionError {
+  return new SessionError(sessionErrorCodes.staleOperation, message);
+}
+
+function hasUnsafeActiveHttpPathCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x20 || codePoint === 0x7f || character === "\\") return true;
+  }
+  return false;
+}
+
+function decodeCanonicalActiveHttpPath(rawPathname: string): readonly string[] {
+  const rawSegments = rawPathname.split("/");
+  if (rawSegments.shift() !== "" || rawSegments.length === 0) {
+    throw activeHttpInvalid("Authenticated request path is malformed");
+  }
+  const decodedSegments: string[] = [];
+  for (let index = 0; index < rawSegments.length; index += 1) {
+    const rawSegment = rawSegments[index] ?? "";
+    if (rawSegment.length === 0) {
+      if (index === rawSegments.length - 1 && rawSegments.length > 1) continue;
+      throw activeHttpInvalid("Authenticated request path contains an empty segment");
+    }
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawSegment);
+    } catch {
+      throw activeHttpInvalid("Authenticated request path encoding is malformed");
+    }
+    if (
+      rawSegment !== encodeURIComponent(decoded) ||
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\") ||
+      hasUnsafeActiveHttpPathCharacter(decoded)
+    ) {
+      throw activeHttpInvalid("Authenticated request path segment is not canonical");
+    }
+    decodedSegments.push(decoded);
+  }
+  if (decodedSegments.length === 0) {
+    throw activeHttpInvalid("Authenticated request path is malformed");
+  }
+  return Object.freeze(decodedSegments);
+}
+
+function isOAuthManagementPath(segments: readonly string[]): boolean {
+  const isInstallationManagement =
+    segments.length === 4 &&
+    segments[0] === "orgs" &&
+    segments[2] === "github-app-installation" &&
+    (segments[3] === "install-url" || segments[3] === "connect" || segments[3] === "finalize");
+  const isProviderKickoff =
+    segments.length === 5 &&
+    segments[0] === "me" &&
+    segments[1] === "auth-providers" &&
+    (segments[3] === "link" || segments[3] === "unlink") &&
+    segments[4] === "start";
+  return isInstallationManagement || isProviderKickoff;
+}
+
+function requireActiveHttpPath(value: unknown, scope: unknown, view: ViewLease, method: ActiveHttpMethod): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw activeHttpInvalid("Authenticated request path is malformed");
+  }
+  if (new TextEncoder().encode(value).byteLength > MAX_ACTIVE_HTTP_PATH_BYTES) {
+    throw activeHttpInvalid("Authenticated request path is oversized");
+  }
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("#") ||
+    hasUnsafeActiveHttpPathCharacter(value)
+  ) {
+    throw activeHttpInvalid("Authenticated request path is unsafe");
+  }
+  const rawPathname = value.split("?", 1)[0] ?? "";
+  const decodedSegments = decodeCanonicalActiveHttpPath(rawPathname);
+  if (isOAuthManagementPath(decodedSegments)) {
+    throw activeHttpInvalid("Authenticated requests may not use an OAuth management surface");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(`${ACTIVE_HTTP_BASE_URL}${value}`, "https://first-tree.invalid");
+  } catch {
+    throw activeHttpInvalid("Authenticated request path is malformed");
+  }
+  if (
+    url.origin !== "https://first-tree.invalid" ||
+    `${url.pathname}${url.search}` !== `${ACTIVE_HTTP_BASE_URL}${value}` ||
+    (url.pathname !== ACTIVE_HTTP_BASE_URL && !url.pathname.startsWith(`${ACTIVE_HTTP_BASE_URL}/`))
+  ) {
+    throw activeHttpInvalid("Authenticated request path is not canonical");
+  }
+
+  if (scope === "selected-organization") {
+    if (decodedSegments[0] !== "orgs") {
+      throw activeHttpInvalid("Organization-scoped request path is malformed");
+    }
+    const organizationId = decodedSegments[1];
+    if (organizationId === undefined || organizationId !== view.organizationId) {
+      throw activeHttpInvalid("Authenticated request targets another organization");
+    }
+  } else if (scope === "selected-resource") {
+    if (!ACTIVE_HTTP_RESOURCE_ROOTS.has(decodedSegments[0] ?? "")) {
+      throw activeHttpInvalid("Authenticated request is outside the active resource surface");
+    }
+    if (
+      method === "GET" &&
+      decodedSegments.length === 3 &&
+      decodedSegments[0] === "agents" &&
+      decodedSegments[2] === "avatar"
+    ) {
+      throw activeHttpInvalid("Public avatar reads may not use authenticated transport");
+    }
+  } else {
+    throw activeHttpInvalid("Authenticated request scope is malformed");
+  }
+  return value;
+}
+
+function requireActiveHttpMethod(value: unknown): ActiveHttpMethod {
+  const method = value ?? "GET";
+  if (typeof method !== "string" || !ACTIVE_HTTP_METHODS.has(method as ActiveHttpMethod)) {
+    throw activeHttpInvalid("Authenticated request method is unsupported");
+  }
+  return method as ActiveHttpMethod;
+}
+
+function requireActiveHttpResponseType(value: unknown): ActiveHttpResponseType {
+  if (value !== "json" && value !== "text" && value !== "bytes") {
+    throw activeHttpInvalid("Authenticated response type is unsupported");
+  }
+  return value;
+}
+
+function requireActiveHttpResponseLimit(value: unknown): number {
+  if (value === undefined) return DEFAULT_ACTIVE_HTTP_RESPONSE_BYTES;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > MAX_ACTIVE_HTTP_RESPONSE_BYTES
+  ) {
+    throw activeHttpInvalid("Authenticated response byte limit is invalid");
+  }
+  return value;
+}
+
+function requireActiveHttpContentType(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256 || !HTTP_HEADER_VALUE.test(value)) {
+    throw activeHttpInvalid("Authenticated request content type is malformed");
+  }
+  return value;
+}
+
+function snapshotActiveHttpHeaders(value: unknown): Readonly<Record<string, string>> {
+  if (value === undefined) return Object.freeze({});
+  if (!isRecord(value)) throw activeHttpInvalid("Authenticated request headers are malformed");
+  const prototype = Reflect.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw activeHttpInvalid("Authenticated request headers are malformed");
+  }
+  const output: Record<string, string> = Object.create(null) as Record<string, string>;
+  const normalizedNames = new Set<string>();
+  let encodedBytes = 0;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw activeHttpInvalid("Authenticated request headers are malformed");
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || typeof descriptor.value !== "string") {
+      throw activeHttpInvalid("Authenticated request headers are malformed");
+    }
+    const normalized = key.toLowerCase();
+    const keyBytes = new TextEncoder().encode(key).byteLength;
+    const valueBytes = new TextEncoder().encode(descriptor.value).byteLength;
+    encodedBytes += keyBytes + valueBytes + 4;
+    if (
+      !HTTP_HEADER_NAME.test(key) ||
+      !HTTP_HEADER_VALUE.test(descriptor.value) ||
+      normalizedNames.size >= MAX_ACTIVE_HTTP_REQUEST_HEADERS ||
+      keyBytes > MAX_ACTIVE_HTTP_HEADER_NAME_BYTES ||
+      valueBytes > MAX_ACTIVE_HTTP_HEADER_VALUE_BYTES ||
+      encodedBytes > MAX_ACTIVE_HTTP_HEADERS_BYTES ||
+      normalizedNames.has(normalized) ||
+      FORBIDDEN_ACTIVE_HTTP_HEADERS.has(normalized) ||
+      normalized.startsWith("sec-") ||
+      normalized.startsWith("proxy-") ||
+      normalized.startsWith("x-forwarded-")
+    ) {
+      throw activeHttpInvalid("Authenticated request header is unsafe");
+    }
+    normalizedNames.add(normalized);
+    output[key] = descriptor.value;
+  }
+  return Object.freeze(output);
+}
+
+type JsonSnapshotState = {
+  nodes: number;
+  seen: Set<object>;
+};
+
+function snapshotActiveHttpJson(value: unknown, depth = 0, state?: JsonSnapshotState): JsonValue {
+  const currentState = state ?? { nodes: 0, seen: new Set<object>() };
+  currentState.nodes += 1;
+  if (currentState.nodes > MAX_ACTIVE_HTTP_JSON_NODES || depth > MAX_ACTIVE_HTTP_JSON_DEPTH) {
+    throw activeHttpInvalid("Authenticated JSON request body is too complex");
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw activeHttpInvalid("Authenticated JSON request body is malformed");
+    return value;
+  }
+  if (typeof value !== "object") throw activeHttpInvalid("Authenticated JSON request body is malformed");
+  if (currentState.seen.has(value)) throw activeHttpInvalid("Authenticated JSON request body is cyclic");
+  currentState.seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const output: JsonValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor)) {
+          throw activeHttpInvalid("Authenticated JSON request body is sparse or accessor-backed");
+        }
+        output.push(snapshotActiveHttpJson(descriptor.value, depth + 1, currentState));
+      }
+      return Object.freeze(output);
+    }
+    const prototype = Reflect.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw activeHttpInvalid("Authenticated JSON request body is malformed");
+    }
+    const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") throw activeHttpInvalid("Authenticated JSON request body is malformed");
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
+        throw activeHttpInvalid("Authenticated JSON request body is accessor-backed");
+      }
+      output[key] = snapshotActiveHttpJson(descriptor.value, depth + 1, currentState);
+    }
+    return Object.freeze(output);
+  } finally {
+    currentState.seen.delete(value);
+  }
+}
+
+type CapturedActiveHttpBody = Readonly<{
+  body: BodyInit | undefined;
+  contentType: string | null;
+}>;
+
+function snapshotActiveHttpBody(value: unknown, method: ActiveHttpMethod): CapturedActiveHttpBody {
+  if (value === undefined) return Object.freeze({ body: undefined, contentType: null });
+  if (method === "GET" || !isRecord(value)) {
+    throw activeHttpInvalid("Authenticated request body is not allowed");
+  }
+  const kind = value.kind;
+  const bodyValue = value.value;
+  const contentTypeValue = value.contentType;
+  let body: BodyInit;
+  let contentType: string;
+  if (kind === "json") {
+    const json = JSON.stringify(snapshotActiveHttpJson(bodyValue));
+    if (new TextEncoder().encode(json).byteLength > MAX_ACTIVE_HTTP_BODY_BYTES) {
+      throw activeHttpInvalid("Authenticated request body is oversized");
+    }
+    body = json;
+    contentType = "application/json";
+  } else if (kind === "text") {
+    if (typeof bodyValue !== "string") throw activeHttpInvalid("Authenticated text request body is malformed");
+    if (new TextEncoder().encode(bodyValue).byteLength > MAX_ACTIVE_HTTP_BODY_BYTES) {
+      throw activeHttpInvalid("Authenticated request body is oversized");
+    }
+    body = bodyValue;
+    contentType = requireActiveHttpContentType(contentTypeValue);
+  } else if (kind === "bytes") {
+    let bytes: Uint8Array;
+    if (bodyValue instanceof ArrayBuffer) {
+      bytes = new Uint8Array(bodyValue).slice();
+    } else if (ArrayBuffer.isView(bodyValue)) {
+      bytes = new Uint8Array(bodyValue.buffer, bodyValue.byteOffset, bodyValue.byteLength).slice();
+    } else {
+      throw activeHttpInvalid("Authenticated byte request body is malformed");
+    }
+    if (bytes.byteLength > MAX_ACTIVE_HTTP_BODY_BYTES) {
+      throw activeHttpInvalid("Authenticated request body is oversized");
+    }
+    const copiedBuffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(copiedBuffer).set(bytes);
+    body = copiedBuffer;
+    contentType = requireActiveHttpContentType(contentTypeValue);
+  } else if (kind === "blob") {
+    if (typeof Blob === "undefined" || !(bodyValue instanceof Blob)) {
+      throw activeHttpInvalid("Authenticated Blob request body is malformed");
+    }
+    const sizeDescriptor = Reflect.getOwnPropertyDescriptor(Blob.prototype, "size");
+    const size =
+      sizeDescriptor && typeof sizeDescriptor.get === "function" ? sizeDescriptor.get.call(bodyValue) : Number.NaN;
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_ACTIVE_HTTP_BODY_BYTES) {
+      throw activeHttpInvalid("Authenticated request body is oversized");
+    }
+    contentType = requireActiveHttpContentType(contentTypeValue);
+    try {
+      body = Blob.prototype.slice.call(bodyValue, 0, size, contentType);
+    } catch {
+      throw activeHttpInvalid("Authenticated Blob request body is malformed");
+    }
+    if (!(body instanceof Blob) || body.size !== size || body.type !== contentType.toLowerCase()) {
+      throw activeHttpInvalid("Authenticated Blob request body snapshot is malformed");
+    }
+  } else {
+    throw activeHttpInvalid("Authenticated request body kind is unsupported");
+  }
+  return Object.freeze({ body, contentType });
+}
+
+function snapshotResponseHeaders(headers: Headers, sessionBoundaryResponse: boolean): Readonly<Record<string, string>> {
+  // Control responses are consumed only by BrowserSessionRuntime. Retaining
+  // untrusted response metadata would defeat body sanitization without adding
+  // any authority signal, so expose no headers for 401/421/503.
+  if (sessionBoundaryResponse) return Object.freeze({});
+  const output: Record<string, string> = Object.create(null) as Record<string, string>;
+  let count = 0;
+  let encodedBytes = 0;
+  headers.forEach((value, key) => {
+    count += 1;
+    const keyBytes = new TextEncoder().encode(key).byteLength;
+    const valueBytes = new TextEncoder().encode(value).byteLength;
+    encodedBytes += keyBytes + valueBytes + 4;
+    if (
+      count > MAX_ACTIVE_HTTP_RESPONSE_HEADERS ||
+      keyBytes > MAX_ACTIVE_HTTP_HEADER_NAME_BYTES ||
+      valueBytes > MAX_ACTIVE_HTTP_HEADER_VALUE_BYTES ||
+      encodedBytes > MAX_ACTIVE_HTTP_HEADERS_BYTES
+    ) {
+      throw new Error("oversized response headers");
+    }
+    output[key] = value;
+  });
+  return Object.freeze(output);
+}
+
+async function readBoundedResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && (!/^\d+$/u.test(contentLength) || Number(contentLength) > maxBytes)) {
+    throw new Error("oversized response");
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > maxBytes) throw new Error("oversized response");
+      chunks.push(value.slice());
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    throw new Error("malformed response");
+  }
+  const output = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function sameCapturedContentRuntime(
+  left: CapturedContentStoreRuntime,
+  right: CapturedContentStoreRuntime | null,
+): boolean {
+  return right !== null && sameView(left.lease, right.lease);
+}
+
+function combineActiveHttpSignals(
+  lifecycleSignal: AbortSignal,
+  requestSignal: AbortSignal | undefined,
+): Readonly<{ signal: AbortSignal; dispose: () => void }> {
+  if (!requestSignal || requestSignal === lifecycleSignal) {
+    return Object.freeze({ signal: lifecycleSignal, dispose: () => undefined });
+  }
+  if (
+    typeof requestSignal !== "object" ||
+    typeof requestSignal.aborted !== "boolean" ||
+    typeof requestSignal.addEventListener !== "function" ||
+    typeof requestSignal.removeEventListener !== "function"
+  ) {
+    throw activeHttpInvalid("Authenticated request signal is malformed");
+  }
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(activeHttpStale("Authenticated request was cancelled"));
+  lifecycleSignal.addEventListener("abort", abort, { once: true });
+  requestSignal.addEventListener("abort", abort, { once: true });
+  if (lifecycleSignal.aborted || requestSignal.aborted) abort();
+  return Object.freeze({
+    signal: controller.signal,
+    dispose: () => {
+      lifecycleSignal.removeEventListener("abort", abort);
+      requestSignal.removeEventListener("abort", abort);
+    },
+  });
 }
 
 function parseActiveMeResponse(
@@ -1159,6 +1638,350 @@ export class AuthSessionCoordinator {
     );
   }
 
+  private async assertActiveHttpCurrent(
+    sourceView: ViewLease,
+    runtime: CapturedContentStoreRuntime,
+    expectedCredential: CredentialCursor,
+    capturedCredential: CredentialRecord,
+    signal: AbortSignal,
+    lifecycleGeneration: number,
+  ): Promise<ActiveSessionProjection> {
+    if (
+      signal.aborted ||
+      lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameCapturedContentRuntime(runtime, captureContentStoreRuntime(sourceView))
+    ) {
+      throw activeHttpStale("Authenticated request view is no longer current");
+    }
+    const projection = await runtime.withShared(async () => {
+      if (signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
+        throw activeHttpStale("Authenticated request crossed a lifecycle fence");
+      }
+      const current = await this.captureVerifiedCredential(sourceView.activation, signal);
+      if (
+        !sameCredentialRecord(current, capturedCredential) ||
+        !sameCredentialCursor(credentialCursor(current), expectedCredential)
+      ) {
+        throw new SessionError(
+          sessionErrorCodes.admissionDenied,
+          "Authenticated request credential is no longer current",
+        );
+      }
+      return this.finishCredentialAdmission(current, sourceView.activation, signal);
+    });
+    if (
+      signal.aborted ||
+      lifecycleGeneration !== coordinatorLifecycleGeneration ||
+      !sameCapturedContentRuntime(runtime, captureContentStoreRuntime(sourceView)) ||
+      !sameCredentialCursor(projection.credential, expectedCredential)
+    ) {
+      throw activeHttpStale("Authenticated request became stale before delivery");
+    }
+    return projection;
+  }
+
+  /**
+   * Coordinator-owned authenticated HTTP transport. Credential bytes and the
+   * raw Response never cross this boundary; every delivered byte is fenced by
+   * the exact installed organization view and credential cursor.
+   */
+  public async requestActiveHttp(inputValue: ActiveHttpRequest): Promise<ActiveHttpResponse> {
+    if (!isRecord(inputValue)) throw activeHttpInvalid("Authenticated request is malformed");
+
+    // Snapshot every caller-controlled field before the first await. Runtime
+    // `Readonly` types do not prevent mutable/accessor-backed request objects.
+    const viewValue = inputValue.view;
+    const credentialValue = inputValue.credential;
+    const scopeValue = inputValue.scope;
+    const pathValue = inputValue.path;
+    const methodValue = inputValue.method;
+    const headersValue = inputValue.headers;
+    const bodyValue = inputValue.body;
+    const responseTypeValue = inputValue.responseType;
+    const maxResponseBytesValue = inputValue.maxResponseBytes;
+    const requestSignalValue = inputValue.signal;
+
+    const sourceView = validateViewLease(viewValue);
+    const expectedCredential = validateCredentialCursor(credentialValue);
+    const method = requireActiveHttpMethod(methodValue);
+    const path = requireActiveHttpPath(pathValue, scopeValue, sourceView, method);
+    const customHeaders = snapshotActiveHttpHeaders(headersValue);
+    const capturedBody = snapshotActiveHttpBody(bodyValue, method);
+    const responseType = requireActiveHttpResponseType(responseTypeValue);
+    const maxResponseBytes = requireActiveHttpResponseLimit(maxResponseBytesValue);
+    const runtime = captureContentStoreRuntime(sourceView);
+    if (!runtime) throw activeHttpStale("Authenticated request view is not installed");
+    const combinedSignals = combineActiveHttpSignals(
+      runtime.lease.signal,
+      requestSignalValue as AbortSignal | undefined,
+    );
+    const signal = combinedSignals.signal;
+    const lifecycleGeneration = coordinatorLifecycleGeneration;
+
+    try {
+      if (signal.aborted) throw activeHttpStale("Authenticated request was cancelled");
+      const capturedCredential = await this.captureVerifiedCredential(sourceView.activation, signal);
+      if (!sameCredentialCursor(credentialCursor(capturedCredential), expectedCredential)) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Authenticated request credential is stale");
+      }
+      await this.assertActiveHttpCurrent(
+        sourceView,
+        runtime,
+        expectedCredential,
+        capturedCredential,
+        signal,
+        lifecycleGeneration,
+      );
+
+      const dispatch = await executeCoordinatorTransaction(
+        this.factory,
+        "readonly",
+        false,
+        this.onBlocked,
+        (snapshot): CoordinatorDecision<Readonly<{ request: Promise<Response> }>> => {
+          if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
+          if (
+            signal.aborted ||
+            lifecycleGeneration !== coordinatorLifecycleGeneration ||
+            !sameCapturedContentRuntime(runtime, captureContentStoreRuntime(sourceView))
+          ) {
+            throw activeHttpStale("Authenticated request became stale before dispatch");
+          }
+          const projection = activeProjection(snapshot, sourceView.activation);
+          const current = matchingCredential(snapshot, projection.authority.session);
+          if (
+            !current ||
+            !sameCredentialRecord(current, capturedCredential) ||
+            !sameCredentialCursor(projection.credential, expectedCredential)
+          ) {
+            throw new SessionError(
+              sessionErrorCodes.admissionDenied,
+              "Authenticated request credential changed before dispatch",
+            );
+          }
+          const headers: Record<string, string> = {
+            ...customHeaders,
+            Accept: responseType === "json" ? "application/json" : "*/*",
+            Authorization: `Bearer ${current.accessToken}`,
+            ...expectedAuthorityHeaders(sourceView.activation.serverAuthority),
+          };
+          if (capturedBody.contentType !== null) headers["Content-Type"] = capturedBody.contentType;
+          let request: Promise<Response>;
+          try {
+            request = fetch(`${ACTIVE_HTTP_BASE_URL}${path}`, {
+              method,
+              cache: "no-store",
+              credentials: "omit",
+              referrerPolicy: "no-referrer",
+              redirect: "error",
+              headers,
+              body: capturedBody.body,
+              signal,
+            });
+          } catch {
+            request = Promise.reject(new Error("authenticated request dispatch failed"));
+          }
+          return keepCoordinatorSnapshot(Object.freeze({ request }));
+        },
+        signal,
+      );
+
+      let response: Response;
+      try {
+        response = await dispatch.request;
+      } catch {
+        await this.assertActiveHttpCurrent(
+          sourceView,
+          runtime,
+          expectedCredential,
+          capturedCredential,
+          signal,
+          lifecycleGeneration,
+        );
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Authenticated request is unavailable");
+      }
+
+      const status = response.status;
+      const ok = response.ok;
+      const isSessionBoundaryResponse = status === 401 || status === 421 || status === 503;
+      let responseHeaders: Readonly<Record<string, string>>;
+      try {
+        responseHeaders = snapshotResponseHeaders(response.headers, isSessionBoundaryResponse);
+      } catch {
+        await this.assertActiveHttpCurrent(
+          sourceView,
+          runtime,
+          expectedCredential,
+          capturedCredential,
+          signal,
+          lifecycleGeneration,
+        );
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Authenticated response headers are malformed");
+      }
+      let body: JsonValue | null | string | Uint8Array;
+      let consumeFailed = false;
+      try {
+        if (responseType === "bytes") {
+          body = await readBoundedResponseBytes(response, maxResponseBytes);
+        } else {
+          const text = await readBoundedResponseText(response, maxResponseBytes);
+          if (responseType === "text") {
+            body = text;
+          } else if (text.length === 0) {
+            body = null;
+          } else {
+            body = freezeParsedJson(JSON.parse(text) as JsonValue);
+          }
+        }
+      } catch {
+        consumeFailed = true;
+        body = responseType === "bytes" ? new Uint8Array() : responseType === "text" ? "" : null;
+      }
+
+      // A 401/421/503 is account+server authority evidence, not organization
+      // content. Once the owned request has received it, an organization
+      // replacement may suppress business delivery but must not erase the
+      // evidence before BrowserSessionRuntime can refresh, retire, or
+      // reconcile the live server. A newer credential or session still wins
+      // in the durable coordinator.
+      const projection = isSessionBoundaryResponse
+        ? await this.finishCredentialAdmission(capturedCredential, sourceView.activation)
+        : await this.assertActiveHttpCurrent(
+            sourceView,
+            runtime,
+            expectedCredential,
+            capturedCredential,
+            signal,
+            lifecycleGeneration,
+          );
+      if (
+        !isSessionBoundaryResponse &&
+        (signal.aborted ||
+          lifecycleGeneration !== coordinatorLifecycleGeneration ||
+          !sameCapturedContentRuntime(runtime, captureContentStoreRuntime(sourceView)) ||
+          !sameCredentialCursor(projection.credential, expectedCredential))
+      ) {
+        throw activeHttpStale("Authenticated response crossed its final delivery fence");
+      }
+      if (consumeFailed && status !== 401 && status !== 421 && status !== 503) {
+        throw new SessionError(sessionErrorCodes.admissionDenied, "Authenticated response is malformed");
+      }
+
+      let result: ActiveHttpResponse;
+      if (responseType === "json") {
+        result = Object.freeze({ status, ok, headers: responseHeaders, responseType, body: body as JsonValue | null });
+      } else if (responseType === "text") {
+        result = Object.freeze({ status, ok, headers: responseHeaders, responseType, body: body as string });
+      } else {
+        result = Object.freeze({ status, ok, headers: responseHeaders, responseType, body: body as Uint8Array });
+      }
+      activeHttpResponses.set(result, {
+        activation: sourceView.activation,
+        credential: expectedCredential,
+        capturedCredential,
+        authorityRevision: projection.authority.revision,
+        status,
+        state: "available",
+      });
+      if (isSessionBoundaryResponse) {
+        try {
+          const finalProjection = await this.finishCredentialAdmission(capturedCredential, sourceView.activation);
+          if (!sameCredentialCursor(finalProjection.credential, expectedCredential)) {
+            throw activeHttpStale("Authenticated transport evidence belongs to a stale credential");
+          }
+        } catch (error) {
+          activeHttpResponses.delete(result);
+          throw error;
+        }
+      } else if (
+        signal.aborted ||
+        lifecycleGeneration !== coordinatorLifecycleGeneration ||
+        !sameCapturedContentRuntime(runtime, captureContentStoreRuntime(sourceView)) ||
+        !sameCredentialCursor(projection.credential, expectedCredential)
+      ) {
+        activeHttpResponses.delete(result);
+        throw activeHttpStale("Authenticated response became stale before return");
+      }
+      return result;
+    } finally {
+      combinedSignals.dispose();
+    }
+  }
+
+  /**
+   * Consumes only the original, coordinator-minted terminal 401 result. Once
+   * that exact request crossed its durable activation/credential response
+   * gates, organization or lifecycle teardown may suppress local delivery but
+   * cannot outrank the durable retirement transaction below.
+   */
+  public async retireActiveHttpAfterTerminal401(
+    responseValue: unknown,
+    owned401GenerationValue: string,
+  ): Promise<RetirementResult> {
+    if (typeof responseValue !== "object" || responseValue === null) {
+      throw activeHttpInvalid("Authenticated response retirement capability is malformed");
+    }
+    const evidence = activeHttpResponses.get(responseValue as ActiveHttpResponse);
+    if (!evidence || evidence.status !== 401 || evidence.state !== "available") {
+      throw new SessionError(sessionErrorCodes.staleOperation, "Authenticated response retirement capability is stale");
+    }
+    const owned401Generation = requireGeneration(owned401GenerationValue);
+    evidence.state = "claimed";
+    try {
+      const result = await this.commit(
+        (snapshot): CoordinatorDecision<RetirementResult> => {
+          const authority = snapshot.authority;
+          if (
+            authority.mode === "retiring" &&
+            authority.cause === "owned_401" &&
+            sameActivation(authority.source, evidence.activation)
+          ) {
+            return keepCoordinatorSnapshot("already_retiring");
+          }
+          if (
+            authority.mode !== "active" ||
+            authority.revision !== evidence.authorityRevision ||
+            !sameActivation(authority.session, evidence.activation)
+          ) {
+            return keepCoordinatorSnapshot("superseded");
+          }
+          const current = matchingCredential(snapshot, evidence.activation);
+          if (
+            !current ||
+            !sameCredentialCursor(credentialCursor(current), evidence.credential) ||
+            !sameCredentialRecord(current, evidence.capturedCredential)
+          ) {
+            return keepCoordinatorSnapshot("superseded");
+          }
+          if (
+            owned401Generation === authority.generation ||
+            owned401Generation === evidence.activation.authGeneration
+          ) {
+            throw activeHttpInvalid("Owned 401 retirement must rotate the auth generation");
+          }
+          const retiring: AuthAuthority = {
+            v: 6,
+            mode: "retiring",
+            generation: owned401Generation,
+            revision: authority.revision + 1,
+            source: evidence.activation,
+            cause: "owned_401",
+            forbiddenGenerations: Object.freeze([]),
+            phase: "revoked",
+          };
+          return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
+        },
+        undefined,
+        "transaction",
+      );
+      evidence.state = "consumed";
+      return result;
+    } catch (error) {
+      if (evidence.state === "claimed") evidence.state = "available";
+      throw error;
+    }
+  }
+
   public async bootstrapAnonymous(generation: string): Promise<AuthAuthority> {
     const initialGeneration = requireGeneration(generation);
     return executeCoordinatorTransaction(
@@ -1592,93 +2415,6 @@ export class AuthSessionCoordinator {
       }),
     );
     return Object.freeze({ accountId: result.accountId, payload: result.payload, proof });
-  }
-
-  /**
-   * Orders dispatch behind every earlier retirement writer. `start` is called
-   * synchronously while the fresh readonly authority transaction is live; its
-   * return value is deliberately wrapped so a network promise is never awaited
-   * from inside IndexedDB.
-   */
-  public async startActiveDispatch<T>(
-    viewValue: unknown,
-    expectedCredentialValue: unknown,
-    tokenKind: ActiveDispatchToken["kind"],
-    start: (credential: ActiveDispatchToken) => T,
-  ): Promise<ActiveDispatch<T>> {
-    const lifecycleGeneration = coordinatorLifecycleGeneration;
-    if (tokenKind !== "access") {
-      throw new SessionError(sessionErrorCodes.invalidState, "Generic dispatch may use only an access credential");
-    }
-    const view = validateViewLease(viewValue);
-    const expectedCredential = validateCredentialCursor(expectedCredentialValue);
-    if (view.signal.aborted) {
-      throw new SessionError(sessionErrorCodes.staleOperation, "Captured view has been invalidated");
-    }
-    const captured = await this.captureVerifiedCredential(view.activation, view.signal);
-    if (
-      lifecycleGeneration !== coordinatorLifecycleGeneration ||
-      !sameCredentialCursor(credentialCursor(captured), expectedCredential)
-    ) {
-      throw new SessionError(sessionErrorCodes.admissionDenied, "Captured credential revision is stale");
-    }
-
-    return executeCoordinatorTransaction(
-      this.factory,
-      "readonly",
-      false,
-      this.onBlocked,
-      (snapshot): CoordinatorDecision<ActiveDispatch<T>> => {
-        if (snapshot === null) throw invariantFailure("Auth coordinator authority is missing");
-        if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
-          throw new SessionError(sessionErrorCodes.staleOperation, "Captured view has been invalidated");
-        }
-        const projection = activeProjection(snapshot, view.activation);
-        if (!sameCredentialCursor(projection.credential, expectedCredential)) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Captured credential revision is stale");
-        }
-        const record = matchingCredential(snapshot, view.activation);
-        if (!record) throw invariantFailure("Active activation does not own its exact credential");
-        if (!sameCredentialRecord(record, captured)) {
-          throw new SessionError(sessionErrorCodes.admissionDenied, "Credential changed before dispatch");
-        }
-        const token: ActiveDispatchToken = Object.freeze({ kind: "access", token: record.accessToken });
-        const request = start(token);
-        if (view.signal.aborted || lifecycleGeneration !== coordinatorLifecycleGeneration) {
-          throw new SessionError(sessionErrorCodes.staleOperation, "Captured view was invalidated during dispatch");
-        }
-        const admission = Object.freeze({}) as ActiveDispatchAdmission;
-        activeDispatchAdmissions.set(
-          admission,
-          Object.freeze({
-            activation: view.activation,
-            credential: projection.credential,
-            capturedCredential: captured,
-            view,
-            lifecycleGeneration,
-          }),
-        );
-        return keepCoordinatorSnapshot(Object.freeze({ admission, request }));
-      },
-      view.signal,
-    );
-  }
-
-  /** Fresh post-response authority gate. It intentionally tolerates a routine credential rotation. */
-  public async assertActiveDispatchResponse(admissionValue: unknown, viewValue: unknown): Promise<void> {
-    const admission = readActiveDispatchAdmission(admissionValue);
-    const view = validateViewLease(viewValue);
-    if (
-      view.signal.aborted ||
-      admission.lifecycleGeneration !== coordinatorLifecycleGeneration ||
-      !sameView(view, admission.view)
-    ) {
-      throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch view is no longer current");
-    }
-    await this.admitView(view);
-    if (view.signal.aborted || admission.lifecycleGeneration !== coordinatorLifecycleGeneration) {
-      throw new SessionError(sessionErrorCodes.staleOperation, "Dispatch view was invalidated after authority check");
-    }
   }
 
   private async commitAccountRefreshResponse(
@@ -2667,51 +3403,6 @@ export class AuthSessionCoordinator {
       };
       return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
     });
-  }
-
-  public async beginOwned401Retirement(
-    admissionValue: unknown,
-    viewValue: unknown,
-    nextGeneration: string,
-  ): Promise<RetirementResult> {
-    const admission = readActiveDispatchAdmission(admissionValue);
-    const view = validateViewLease(viewValue);
-    const generation = requireGeneration(nextGeneration);
-    if (view.signal.aborted || !sameView(view, admission.view)) {
-      return "superseded";
-    }
-
-    return this.commit((snapshot): CoordinatorDecision<RetirementResult> => {
-      if (
-        view.signal.aborted ||
-        admission.view.signal.aborted ||
-        admission.lifecycleGeneration !== coordinatorLifecycleGeneration
-      ) {
-        return keepCoordinatorSnapshot("superseded");
-      }
-      const authority = snapshot.authority;
-      if (authority.mode !== "active" || !sameActivation(authority.session, admission.activation)) {
-        return keepCoordinatorSnapshot("superseded");
-      }
-      const credential = matchingCredential(snapshot, admission.activation);
-      if (!credential || !sameCredentialCursor(credentialCursor(credential), admission.credential)) {
-        return keepCoordinatorSnapshot("superseded");
-      }
-      if (generation === authority.generation || generation === admission.activation.authGeneration) {
-        throw new SessionError(sessionErrorCodes.invalidState, "Retirement must rotate the auth generation");
-      }
-      const retiring: AuthAuthority = {
-        v: 6,
-        mode: "retiring",
-        generation,
-        revision: authority.revision + 1,
-        source: admission.activation,
-        cause: "owned_401",
-        forbiddenGenerations: Object.freeze([]),
-        phase: "revoked",
-      };
-      return replaceCoordinatorSnapshot(nextSnapshot(snapshot, retiring, [], []), "retired");
-    }, admission.view.signal);
   }
 
   public async assertPurgeSource(capturedValue: unknown, signal?: AbortSignal): Promise<AuthAuthority> {

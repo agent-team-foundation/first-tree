@@ -3385,4 +3385,923 @@ describe("BrowserSessionRuntime", () => {
     expect(firstActiveLease.signal.aborted).toBe(false);
     expect(secondaryActiveLeases).toEqual([firstActiveLease]);
   });
+
+  it("rejects oversized authenticated HTTP facade headers synchronously before dispatch", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-header-bound");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-header-bound");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-header-bound",
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    await harness.runtime.start();
+    fetch.mockClear();
+
+    const facade = harness.runtime.captureActiveHttp();
+    expect(() =>
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        headers: { "X-Large": "x".repeat(8 * 1024 + 1) },
+        responseType: "json",
+      }),
+    ).toThrow("Authenticated browser headers are oversized");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("refreshes one authenticated HTTP request without replacing its verified account or organization view", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-refresh");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-refresh");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-refresh",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "active-http-refresh-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "active-http-refresh-rotated");
+    const requests: Array<Readonly<{ url: string; authorization: string | null }>> = [];
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push(Object.freeze({ url, authorization: new Headers(init?.headers).get("authorization") }));
+      if (url === "/api/v1/me") return activeMe(seeded.activation.accountId, ["org-a"], "org-a");
+      if (url === "/api/v1/auth/refresh") {
+        return new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      resourceCalls += 1;
+      return resourceCalls === 1
+        ? new Response("expired", { status: 401 })
+        : new Response(JSON.stringify({ value: "fresh" }), {
+            headers: { "Content-Type": "application/json" },
+          });
+    });
+
+    const before = activeProjection(await harness.runtime.start());
+    const beforeView = before.publication.viewLease;
+    const beforeMe = before.me;
+    const facade = harness.runtime.captureActiveHttp();
+    const response = await facade.request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "json",
+    });
+
+    expect(response).toMatchObject({ status: 200, body: { value: "fresh" } });
+    expect(requests.map(({ url }) => url)).toEqual([
+      "/api/v1/me",
+      "/api/v1/agents/agent-a",
+      "/api/v1/auth/refresh",
+      "/api/v1/agents/agent-a",
+    ]);
+    expect(requests.at(-1)?.authorization).toBe(`Bearer ${replacementAccess}`);
+    const after = activeProjection(harness.runtime.getProjection());
+    expect(after.accountLease).toBe(before.accountLease);
+    expect(after.publication).toBe(before.publication);
+    expect(after.publication.viewLease).toBe(beforeView);
+    expect(after.me).toBe(beforeMe);
+    expect(after.credential.credentialRevision).toBe(before.credential.credentialRevision + 1);
+    expect(harness.notices.authorityAdvancedCount).toBe(1);
+  });
+
+  it("single-flights concurrent authenticated HTTP 401 refreshes for one exact credential", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-single-flight");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-single-flight");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-single-flight",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "active-http-single-flight-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "active-http-single-flight-rotated");
+    const firstUnauthorized = deferredResponse();
+    const secondUnauthorized = deferredResponse();
+    const refreshResponse = deferredResponse();
+    let initialResourceCalls = 0;
+    let refreshCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+      }
+      if (url === "/api/v1/auth/refresh") {
+        refreshCalls += 1;
+        return refreshResponse.promise;
+      }
+      initialResourceCalls += 1;
+      if (initialResourceCalls === 1) return firstUnauthorized.promise;
+      if (initialResourceCalls === 2) return secondUnauthorized.promise;
+      return Promise.resolve(
+        new Response(JSON.stringify({ call: initialResourceCalls }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    await harness.runtime.start();
+    const facade = harness.runtime.captureActiveHttp();
+    const first = facade.request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "json",
+    });
+    const second = facade.request({
+      target: { kind: "selected-resource", path: "/agents/agent-b" },
+      responseType: "json",
+    });
+    await vi.waitFor(() => expect(initialResourceCalls).toBe(2));
+    firstUnauthorized.resolve(new Response("expired", { status: 401 }));
+    secondUnauthorized.resolve(new Response("expired", { status: 401 }));
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    refreshResponse.resolve(
+      new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ status: 200 }),
+      expect.objectContaining({ status: 200 }),
+    ]);
+    expect(refreshCalls).toBe(1);
+    expect(initialResourceCalls).toBe(4);
+    expect(activeProjection(harness.runtime.getProjection()).credential.credentialRevision).toBe(1);
+    expect(harness.notices.authorityAdvancedCount).toBe(1);
+  });
+
+  it("never delivers or redispatches a captured organization facade after a newer organization wins", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-old-org");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-old-org");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-old-org",
+    );
+    const held = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      resourceCalls += 1;
+      return held.promise;
+    });
+
+    await harness.runtime.start();
+    const oldFacade = harness.runtime.captureActiveHttp();
+    const oldRequest = oldFacade.request({
+      target: { kind: "selected-organization", path: "/widgets" },
+      responseType: "json",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(1));
+    await expect(harness.runtime.switchOrganization("org-b")).resolves.toMatchObject({
+      kind: "active",
+      publication: { state: { kind: "selected", organizationId: "org-b" } },
+    });
+    held.resolve(
+      new Response(JSON.stringify({ secret: "org-a" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(oldRequest).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    const callsBeforeRedispatch = resourceCalls;
+    await expect(
+      oldFacade.request({
+        target: { kind: "selected-organization", path: "/widgets" },
+        responseType: "json",
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(resourceCalls).toBe(callsBeforeRedispatch);
+  });
+
+  it("does not refresh a first 401 whose organization view was replaced before the response", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-first-401-switch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-first-401-switch");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-first-401-switch",
+    );
+    const held = deferredResponse();
+    let resourceCalls = 0;
+    let refreshCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      if (url === "/api/v1/auth/refresh") {
+        refreshCalls += 1;
+        return Promise.resolve(new Response("unexpected refresh", { status: 500 }));
+      }
+      resourceCalls += 1;
+      return held.promise;
+    });
+
+    const before = activeProjection(await harness.runtime.start());
+    const request = harness.runtime.captureActiveHttp().request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(1));
+    const current = activeProjection(await harness.runtime.switchOrganization("org-b"));
+    held.resolve(new Response("expired", { status: 401 }));
+
+    await expect(request).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(refreshCalls).toBe(0);
+    expect(activeProjection(harness.runtime.getProjection()).publication.state).toMatchObject({
+      kind: "selected",
+      organizationId: "org-b",
+    });
+    expect(current.credential).toEqual(before.credential);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({
+      mode: "active",
+      session: seeded.activation,
+    });
+  });
+
+  it("applies a held 421 to the current organization of the same session after an organization switch", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-held-421-switch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-held-421-switch");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-held-421-switch",
+    );
+    const held = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      if (String(input) === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      resourceCalls += 1;
+      return held.promise;
+    });
+
+    await harness.runtime.start();
+    const oldFacade = harness.runtime.captureActiveHttp();
+    const request = oldFacade.request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(1));
+    await expect(harness.runtime.switchOrganization("org-b")).resolves.toMatchObject({
+      kind: "active",
+      publication: { state: { kind: "selected", organizationId: "org-b" } },
+    });
+    harness.authority.reconcile.mockResolvedValueOnce({
+      kind: "mismatch",
+      expected: seeded.activation.serverAuthority,
+      observed: "https://other.example.test/api/v1",
+    });
+    held.resolve(new Response("wrong authority", { status: 421 }));
+
+    await expect(request).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+  });
+
+  it("veils the current organization when a held same-session 503 cannot revalidate its Vite generation", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-held-503-switch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-held-503-switch");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-held-503-switch",
+    );
+    const held = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      if (String(input) === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      resourceCalls += 1;
+      return held.promise;
+    });
+
+    await harness.runtime.start();
+    const oldFacade = harness.runtime.captureActiveHttp();
+    const request = oldFacade.request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(1));
+    const current = activeProjection(await harness.runtime.switchOrganization("org-b"));
+    harness.authority.reconcile.mockRejectedValueOnce(new TypeError("Vite generation changed"));
+    held.resolve(new Response("temporarily unavailable", { status: 503 }));
+
+    await expect(request).rejects.toThrow("Vite generation changed");
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({
+      mode: "active",
+      session: seeded.activation,
+    });
+    expect(harness.runtime.getProjection()).toMatchObject({ kind: "recovery" });
+    expect(current.accountLease.signal.aborted).toBe(true);
+    expect(harness.notices.retiredEpochs).toEqual([]);
+  });
+
+  it.each([
+    421, 503,
+  ] as const)("never applies a held authenticated HTTP %i response to a newer active session", async (status) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-active-http-held-${status}-new-session`);
+    const locks = new ImmediateLocks();
+    const source = await seedActive(factory, localStorage, sessionStorage, locks, `active-http-held-${status}-source`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      source.activation,
+      `runtime-active-http-held-${status}-new-session`,
+    );
+    const held = deferredResponse();
+    const fetch = vi.spyOn(globalThis, "fetch");
+    fetch.mockResolvedValueOnce(activeMe(source.activation.accountId, ["org-a"], "org-a"));
+    await harness.runtime.start();
+    fetch.mockReturnValueOnce(held.promise);
+    const oldRequest = harness.runtime.captureActiveHttp().request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    const external = new AuthSessionCoordinator({ indexedDB: factory });
+    await external.beginRetirement(source.activation, "logout", `active-http-held-${status}-source-retiring`);
+    const receipt = await source.barrier.purgeAccountScope(source.activation, { localStorage, sessionStorage });
+    await external.completeRetirement(source.activation, receipt, `active-http-held-${status}-source-none`);
+    const target = await seedActive(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      `active-http-held-${status}-target`,
+      undefined,
+      undefined,
+      false,
+    );
+    const targetSession = await target.coordinator.readActiveSession();
+    const targetDatabase = createScopedDatabaseName("chat-content", 1, target.activation.scopeKey);
+    await putRawRow(factory, targetDatabase, "owner", "target-row");
+    harness.authority.reconcile.mockClear();
+
+    held.resolve(new Response("stale transport evidence", { status }));
+    await expect(oldRequest).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+
+    expect(harness.authority.reconcile).not.toHaveBeenCalled();
+    expect(await target.coordinator.readActiveSession()).toEqual(targetSession);
+    expect(await readRawRow(factory, targetDatabase, "owner")).toBe("target-row");
+    expect(harness.notices.retiredEpochs).not.toContain(target.activation.sessionEpoch);
+  });
+
+  it("publishes a held authenticated HTTP refresh to the current organization but stales the old request", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-refresh-switch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-refresh-switch");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-refresh-switch",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "active-http-refresh-switch-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "active-http-refresh-switch-rotated");
+    const refreshResponse = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      if (url === "/api/v1/auth/refresh") return refreshResponse.promise;
+      resourceCalls += 1;
+      if (resourceCalls === 1) return Promise.resolve(new Response("expired", { status: 401 }));
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${replacementAccess}`);
+      return Promise.resolve(
+        new Response(JSON.stringify({ organization: "org-b" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    await harness.runtime.start();
+    const oldFacade = harness.runtime.captureActiveHttp();
+    const oldRequest = oldFacade.request({
+      target: { kind: "selected-organization", path: "/widgets" },
+      responseType: "json",
+    });
+    await vi.waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/v1/auth/refresh",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    await expect(harness.runtime.switchOrganization("org-b")).resolves.toMatchObject({
+      kind: "active",
+      publication: { state: { kind: "selected", organizationId: "org-b" } },
+    });
+    refreshResponse.resolve(
+      new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(oldRequest).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    const afterRefresh = activeProjection(harness.runtime.getProjection());
+    expect(afterRefresh.publication.state).toMatchObject({ kind: "selected", organizationId: "org-b" });
+    expect(afterRefresh.credential.credentialRevision).toBe(1);
+    expect(resourceCalls).toBe(1);
+
+    const currentFacade = harness.runtime.captureActiveHttp();
+    await expect(
+      currentFacade.request({
+        target: { kind: "selected-organization", path: "/widgets" },
+        responseType: "json",
+      }),
+    ).resolves.toMatchObject({ status: 200, body: { organization: "org-b" } });
+    expect(resourceCalls).toBe(2);
+  });
+
+  it("retires the current same-session organization after a held post-refresh 401", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-held-terminal-401-switch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      "active-http-held-terminal-401-switch",
+    );
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-held-terminal-401-switch",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "held-terminal-401-switch-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "held-terminal-401-switch-rotated");
+    const heldTerminal = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a", "org-b"], "org-a"));
+      }
+      if (url === "/api/v1/auth/refresh") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      resourceCalls += 1;
+      return resourceCalls === 1 ? Promise.resolve(new Response("expired", { status: 401 })) : heldTerminal.promise;
+    });
+
+    await harness.runtime.start();
+    const request = harness.runtime.captureActiveHttp().request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(2));
+    await expect(harness.runtime.switchOrganization("org-b")).resolves.toMatchObject({
+      kind: "active",
+      publication: { state: { kind: "selected", organizationId: "org-b" } },
+    });
+    heldTerminal.resolve(new Response("still unauthorized", { status: 401 }));
+
+    await expect(request).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+  });
+
+  it("purges on an authenticated HTTP 421 only when live authority proves a mismatch", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-421-mismatch");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-421-mismatch");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-421-mismatch",
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/v1/me"
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("wrong authority", { status: 421 }),
+    );
+    await harness.runtime.start();
+    const facade = harness.runtime.captureActiveHttp();
+    harness.authority.reconcile.mockResolvedValueOnce({
+      kind: "mismatch",
+      expected: seeded.activation.serverAuthority,
+      observed: "https://other.example.test/api/v1",
+    });
+
+    await expect(
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        responseType: "text",
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+  });
+
+  it("fails closed without purging when an authenticated HTTP 421 still matches the pinned authority", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-421-match");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-421-match");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-421-match",
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/v1/me"
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("authority rejected", { status: 421 }),
+    );
+    const before = activeProjection(await harness.runtime.start());
+    const facade = harness.runtime.captureActiveHttp();
+
+    await expect(
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        responseType: "text",
+      }),
+    ).rejects.toMatchObject({ code: sessionErrorCodes.recoveryRequired });
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "active", session: seeded.activation });
+    expect(harness.runtime.getProjection()).toMatchObject({ kind: "recovery" });
+    expect(before.accountLease.signal.aborted).toBe(true);
+    expect(harness.notices.retiredEpochs).toEqual([]);
+  });
+
+  it.each([
+    ["unavailable", { kind: "unavailable", expected: SERVER_AUTHORITY }],
+    ["match", { kind: "match", authority: SERVER_AUTHORITY }],
+  ] as const)("delivers a bounded authenticated HTTP 503 when authority reconciliation is %s", async (_label, result) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-active-http-503-${_label}`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `active-http-503-${_label}`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-active-http-503-${_label}`,
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/v1/me"
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("temporarily unavailable", { status: 503 }),
+    );
+    const before = activeProjection(await harness.runtime.start());
+    const facade = harness.runtime.captureActiveHttp();
+    harness.authority.reconcile.mockResolvedValueOnce(result);
+
+    await expect(
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        responseType: "text",
+      }),
+    ).resolves.toMatchObject({ status: 503, body: "temporarily unavailable" });
+    const after = activeProjection(harness.runtime.getProjection());
+    expect(after.accountLease).toBe(before.accountLease);
+    expect(after.publication).toBe(before.publication);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "active", session: seeded.activation });
+  });
+
+  it("fails closed in recovery when authenticated HTTP 503 authority reconciliation throws", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-503-throw");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-503-throw");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-503-throw",
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/v1/me"
+        ? activeMe(seeded.activation.accountId, ["org-a"], "org-a")
+        : new Response("temporarily unavailable", { status: 503 }),
+    );
+    const before = activeProjection(await harness.runtime.start());
+    const facade = harness.runtime.captureActiveHttp();
+    harness.authority.reconcile.mockRejectedValueOnce(new TypeError("authority transport rejected"));
+
+    await expect(
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        responseType: "text",
+      }),
+    ).rejects.toThrow("authority transport rejected");
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "active", session: seeded.activation });
+    expect(harness.runtime.getProjection()).toMatchObject({ kind: "recovery" });
+    expect(before.accountLease.signal.aborted).toBe(true);
+  });
+
+  it.each([
+    421, 503,
+  ] as const)("lets an explicit logout own cleanup when a held authenticated HTTP %i arrives before its retirement CAS", async (status) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-active-http-${status}-logout-race`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `active-http-${status}-logout-race`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-active-http-${status}-logout-race`,
+    );
+    const held = deferredResponse();
+    const fetch = vi.spyOn(globalThis, "fetch");
+    fetch.mockResolvedValueOnce(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    await harness.runtime.start();
+    fetch.mockReturnValueOnce(held.promise);
+    const request = harness.runtime.captureActiveHttp().request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    const retirementStarted = deferredValue<void>();
+    const releaseRetirement = deferredValue<void>();
+    const originalBeginRetirement = AuthSessionCoordinator.prototype.beginRetirement;
+    const beginRetirement = vi
+      .spyOn(AuthSessionCoordinator.prototype, "beginRetirement")
+      .mockImplementation(async function (this: AuthSessionCoordinator, source, cause, generation) {
+        if (cause === "logout") {
+          retirementStarted.resolve();
+          await releaseRetirement.promise;
+        }
+        return originalBeginRetirement.call(this, source, cause, generation);
+      });
+
+    const logout = harness.runtime.logout();
+    await retirementStarted.promise;
+    if (status === 503) {
+      harness.authority.reconcile.mockRejectedValueOnce(new TypeError("Vite generation changed"));
+    } else {
+      harness.authority.reconcile.mockResolvedValueOnce({
+        kind: "mismatch",
+        expected: seeded.activation.serverAuthority,
+        observed: "https://other.example.test/api/v1",
+      });
+    }
+    held.resolve(new Response("late transport evidence", { status }));
+    await expect(request).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+    expect(harness.authority.reconcile).not.toHaveBeenCalled();
+
+    releaseRetirement.resolve();
+    await expect(logout).resolves.toBe("completed");
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(beginRetirement.mock.calls.filter(([, cause]) => cause === "logout")).toHaveLength(1);
+    expect(beginRetirement.mock.calls.filter(([, cause]) => cause === "server_mismatch")).toHaveLength(0);
+  });
+
+  it("lets an explicit logout outrank a held post-refresh terminal authenticated HTTP 401", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-terminal-401-logout-race");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      "active-http-terminal-401-logout-race",
+    );
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-terminal-401-logout-race",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "terminal-401-logout-race-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "terminal-401-logout-race-rotated");
+    const heldTerminal = deferredResponse();
+    let resourceCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url === "/api/v1/me") {
+        return Promise.resolve(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+      }
+      if (url === "/api/v1/auth/refresh") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      resourceCalls += 1;
+      return resourceCalls === 1 ? Promise.resolve(new Response("expired", { status: 401 })) : heldTerminal.promise;
+    });
+
+    await harness.runtime.start();
+    const request = harness.runtime.captureActiveHttp().request({
+      target: { kind: "selected-resource", path: "/agents/agent-a" },
+      responseType: "text",
+    });
+    await vi.waitFor(() => expect(resourceCalls).toBe(2));
+
+    const retirementStarted = deferredValue<void>();
+    const releaseRetirement = deferredValue<void>();
+    const originalBeginRetirement = AuthSessionCoordinator.prototype.beginRetirement;
+    const beginRetirement = vi
+      .spyOn(AuthSessionCoordinator.prototype, "beginRetirement")
+      .mockImplementation(async function (this: AuthSessionCoordinator, source, cause, generation) {
+        if (cause === "logout") {
+          retirementStarted.resolve();
+          await releaseRetirement.promise;
+        }
+        return originalBeginRetirement.call(this, source, cause, generation);
+      });
+    const terminalRetirement = vi.spyOn(AuthSessionCoordinator.prototype, "retireActiveHttpAfterTerminal401");
+
+    const logout = harness.runtime.logout();
+    await retirementStarted.promise;
+    heldTerminal.resolve(new Response("still unauthorized", { status: 401 }));
+    await expect(request).rejects.toMatchObject({ code: sessionErrorCodes.staleOperation });
+
+    releaseRetirement.resolve();
+    await expect(logout).resolves.toBe("completed");
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.runtime.getProjection()).toEqual({ kind: "anonymous" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(beginRetirement.mock.calls.filter(([, cause]) => cause === "logout")).toHaveLength(1);
+    expect(terminalRetirement).not.toHaveBeenCalled();
+  });
+
+  it("retries the same terminal authenticated HTTP 401 retirement before any resume network", async () => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, "owner-active-http-terminal-401-retry");
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, "active-http-terminal-401-retry");
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      "runtime-active-http-terminal-401-retry",
+    );
+    const replacementAccess = jwt(seeded.activation.accountId, "access", "active-http-terminal-401-retry-rotated");
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", "active-http-terminal-401-retry-rotated");
+    const requests: string[] = [];
+    let resourceCalls = 0;
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/v1/me") return activeMe(seeded.activation.accountId, ["org-a"], "org-a");
+      if (url === "/api/v1/auth/refresh") {
+        return new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      resourceCalls += 1;
+      return new Response("expired", { status: 401 });
+    });
+    await harness.runtime.start();
+    requests.length = 0;
+    const facade = harness.runtime.captureActiveHttp();
+
+    const originalRetirement = AuthSessionCoordinator.prototype.retireActiveHttpAfterTerminal401;
+    const retirementInputs: Array<readonly [unknown, string]> = [];
+    let retirementCalls = 0;
+    vi.spyOn(AuthSessionCoordinator.prototype, "retireActiveHttpAfterTerminal401").mockImplementation(async function (
+      this: AuthSessionCoordinator,
+      response,
+      generation,
+    ) {
+      retirementCalls += 1;
+      retirementInputs.push([response, generation]);
+      if (retirementCalls === 1) {
+        vi.spyOn(factory, "open").mockImplementationOnce(() => {
+          throw new Error("transient authenticated HTTP retirement open failure");
+        });
+      }
+      return originalRetirement.call(this, response, generation);
+    });
+
+    await expect(
+      facade.request({
+        target: { kind: "selected-resource", path: "/agents/agent-a" },
+        responseType: "text",
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(requests).toEqual(["/api/v1/agents/agent-a", "/api/v1/auth/refresh", "/api/v1/agents/agent-a"]);
+    expect(resourceCalls).toBe(2);
+    expect(retirementCalls).toBe(1);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "active", session: seeded.activation });
+    expect(harness.runtime.getProjection()).toMatchObject({ kind: "recovery" });
+
+    fetch.mockRejectedValue(new Error("pending authenticated HTTP retirement must suppress network"));
+    await expect(harness.runtime.resume()).resolves.toEqual({ kind: "anonymous" });
+    expect(requests).toEqual(["/api/v1/agents/agent-a", "/api/v1/auth/refresh", "/api/v1/agents/agent-a"]);
+    expect(retirementCalls).toBe(2);
+    expect(retirementInputs[1]?.[0]).toBe(retirementInputs[0]?.[0]);
+    expect(retirementInputs[1]?.[1]).toBe(retirementInputs[0]?.[1]);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+  });
 });

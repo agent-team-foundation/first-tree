@@ -1535,36 +1535,6 @@ describe("AuthSessionCoordinator", () => {
     expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
   });
 
-  it("does not let a copied access admission or replacement signal cross capability domains", async () => {
-    const factory = new IDBFactory();
-    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
-    await coordinator.bootstrapAnonymous("generation-0");
-    const certificate = activation("a", "generation-a");
-    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
-    const controller = new AbortController();
-    const view = createViewLease({
-      activation: certificate,
-      organizationId: "org-a",
-      orgRevision: "org-revision-a",
-      ownerTabId: "owner-tab-a",
-      documentId: "document-a",
-      signal: controller.signal,
-    });
-    const before = await coordinator.readActiveSession();
-    const access = await coordinator.startActiveDispatch(view, before.credential, "access", () => Promise.resolve(401));
-    const copied = { ...access.admission, tokenKind: "refresh" };
-    await expect(coordinator.beginOwned401Retirement(copied, view, "generation-copied")).rejects.toMatchObject({
-      code: sessionErrorCodes.invalidState,
-    });
-
-    const replacementView = createViewLease({ ...view, signal: new AbortController().signal });
-    controller.abort();
-    await expect(coordinator.assertActiveDispatchResponse(access.admission, replacementView)).rejects.toMatchObject({
-      code: sessionErrorCodes.staleOperation,
-    });
-    expect((await coordinator.readActiveSession()).credential).toEqual(before.credential);
-  });
-
   it.each([
     ["network", () => Promise.reject(new Error("secret refresh failure"))],
     ["401", async () => new Response("unauthorized", { status: 401 })],
@@ -1689,47 +1659,6 @@ describe("AuthSessionCoordinator", () => {
         null,
       ),
     ).rejects.toMatchObject({ code: sessionErrorCodes.admissionDenied });
-  });
-
-  it("orders dispatch with retirement and rejects a response delivered after retirement", async () => {
-    const factory = new IDBFactory();
-    const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
-    await coordinator.bootstrapAnonymous("generation-0");
-    const certificate = activation("a", "generation-a");
-    await activateAnonymous(factory, coordinator, certificate, "attempt-a");
-    const controller = new AbortController();
-    const view = createViewLease({
-      activation: certificate,
-      organizationId: "org-a",
-      orgRevision: "org-revision-a",
-      ownerTabId: "owner-tab-a",
-      documentId: "document-a",
-      signal: controller.signal,
-    });
-    const { credential: cursor } = await coordinator.readActiveSession();
-    const persisted = await readCoordinatorSnapshot(factory);
-    const expectedAccessToken = persisted.credentials[0]?.accessToken;
-    let resolveRequest = (_value: string): void => undefined;
-    const requestPromise = new Promise<string>((resolve) => {
-      resolveRequest = resolve;
-    });
-    const dispatch = await coordinator.startActiveDispatch(view, cursor, "access", (token) => {
-      expect(token).toEqual({ kind: "access", token: expectedAccessToken });
-      return requestPromise;
-    });
-
-    await coordinator.beginRetirement(certificate, "logout", "generation-retiring");
-    resolveRequest("late-response");
-    await expect(dispatch.request).resolves.toBe("late-response");
-    await expect(coordinator.assertActiveDispatchResponse(dispatch.admission, view)).rejects.toMatchObject({
-      code: sessionErrorCodes.admissionDenied,
-    });
-
-    const dispatchStart = vi.fn();
-    await expect(coordinator.startActiveDispatch(view, cursor, "access", dispatchStart)).rejects.toMatchObject({
-      code: sessionErrorCodes.admissionDenied,
-    });
-    expect(dispatchStart).not.toHaveBeenCalled();
   });
 
   it("uses only transactional coordinator state when Web Storage propagation is stale", async () => {
@@ -2834,48 +2763,6 @@ describe("AuthSessionCoordinator", () => {
     disposeFirst();
   });
 
-  it("lets logout retire a refreshed session but ignores an old-revision owned 401", async () => {
-    const firstFactory = new IDBFactory();
-    const first = new AuthSessionCoordinator({ indexedDB: firstFactory });
-    await first.bootstrapAnonymous("generation-0");
-    const certificate = activation("a", "generation-a");
-    await activateAnonymous(firstFactory, first, certificate, "attempt-a");
-    const controller = new AbortController();
-    const view = createViewLease({
-      activation: certificate,
-      organizationId: "org-a",
-      orgRevision: "org-revision-a",
-      ownerTabId: "owner-tab-a",
-      documentId: "document-a",
-      signal: controller.signal,
-    });
-    const before = await first.readActiveSession();
-    const oldDispatch = await first.startActiveDispatch(view, before.credential, "access", () => Promise.resolve(401));
-    const refreshed = await credential(certificate, 1, "refreshed-a");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken })),
-    );
-    await first.refreshActiveCredential(view, before.credential);
-
-    await expect(first.beginOwned401Retirement(oldDispatch.admission, view, "generation-old-401")).resolves.toBe(
-      "superseded",
-    );
-    await expect(first.beginRetirement(certificate, "logout", "generation-logout")).resolves.toBe("retired");
-
-    const secondFactory = new IDBFactory();
-    const second = new AuthSessionCoordinator({ indexedDB: secondFactory });
-    await second.bootstrapAnonymous("generation-0");
-    await activateAnonymous(secondFactory, second, certificate, "attempt-a");
-    const current = await second.readActiveSession();
-    const currentDispatch = await second.startActiveDispatch(view, current.credential, "access", () =>
-      Promise.resolve(401),
-    );
-    await expect(
-      second.beginOwned401Retirement(currentDispatch.admission, view, "generation-current-401"),
-    ).resolves.toBe("retired");
-  });
-
   it("fails closed on impossible persisted cleaning, retirement, and transition graphs", async () => {
     const cleaningFactory = new IDBFactory();
     const cleaningCoordinator = new AuthSessionCoordinator({ indexedDB: cleaningFactory });
@@ -3031,22 +2918,13 @@ describe("AuthSessionCoordinator", () => {
     });
   });
 
-  it("rejects a persisted token swap that retains the old cursor and never dispatches it", async () => {
+  it("rejects a persisted token swap that retains the old cursor", async () => {
     const factory = new IDBFactory();
     const coordinator = new AuthSessionCoordinator({ indexedDB: factory });
     await coordinator.bootstrapAnonymous("generation-0");
     const certificate = activation("a", "generation-a");
     await activateAnonymous(factory, coordinator, certificate, "attempt-a");
-    const controller = new AbortController();
-    const view = createViewLease({
-      activation: certificate,
-      organizationId: "org-a",
-      orgRevision: "org-revision-a",
-      ownerTabId: "owner-tab-a",
-      documentId: "document-a",
-      signal: controller.signal,
-    });
-    const before = await coordinator.readActiveSession();
+    await coordinator.readActiveSession();
     await replaceCoordinatorSnapshotForTest(factory, (snapshot) => {
       const current = snapshot.credentials[0];
       if (!current) throw new Error("missing credential fixture");
@@ -3057,11 +2935,6 @@ describe("AuthSessionCoordinator", () => {
       };
     });
 
-    const start = vi.fn();
-    await expect(coordinator.startActiveDispatch(view, before.credential, "access", start)).rejects.toMatchObject({
-      code: sessionErrorCodes.recoveryRequired,
-    });
-    expect(start).not.toHaveBeenCalled();
     await expect(coordinator.readActiveSession()).rejects.toMatchObject({
       code: sessionErrorCodes.recoveryRequired,
     });

@@ -27,9 +27,10 @@ export {
   retireContentStoreRuntime,
 } from "./content-store-runtime.js";
 export {
-  type ActiveDispatch,
-  type ActiveDispatchAdmission,
-  type ActiveDispatchToken,
+  type ActiveHttpMethod,
+  type ActiveHttpRequestBody,
+  type ActiveHttpResponse,
+  type ActiveHttpResponseType,
   type ActiveSessionProjection,
   type AnonymousCancellationResult,
   AUTH_COORDINATOR_DATABASE_NAME,
