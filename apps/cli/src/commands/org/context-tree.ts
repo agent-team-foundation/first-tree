@@ -140,6 +140,18 @@ export function registerOrgContextTreeCommand(org: Command): void {
       print.status("Provider", config.provider ?? "Unknown");
       print.status("Repository", config.repo ?? "Unbound");
       print.status("Branch", config.branch ?? "Unbound");
+      print.status(
+        "Repository authority",
+        config.providerMatchesRepository === null
+          ? "Unavailable in member mode"
+          : config.providerMatchesRepository
+            ? "Current"
+            : "Mismatch",
+      );
+      if (config.provider === "gitlab") {
+        print.status("GitLab connection", config.gitlabConnection?.id ?? "Unavailable");
+        print.status("GitLab origin", config.gitlabConnection?.instanceOrigin ?? "Unavailable");
+      }
       success(config);
     });
 }

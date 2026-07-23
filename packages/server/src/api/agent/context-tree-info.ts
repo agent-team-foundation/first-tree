@@ -15,6 +15,14 @@ export async function agentContextTreeInfoRoutes(app: FastifyInstance): Promise<
       provider: runtime.provider,
       repo: runtime.repo,
       branch: runtime.branch,
+      providerMatchesRepository: runtime.providerMatchesRepository,
+      gitlabConnection:
+        runtime.provider === "gitlab" && runtime.gitlabConnection
+          ? {
+              id: runtime.gitlabConnection.id,
+              instanceOrigin: runtime.gitlabConnection.instanceOrigin,
+            }
+          : null,
       contextReviewer: runtime.contextReviewer,
     };
   });

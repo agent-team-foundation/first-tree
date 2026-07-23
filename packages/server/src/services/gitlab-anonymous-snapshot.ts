@@ -73,6 +73,26 @@ export async function revalidateGitlabDestination(
   }
 }
 
+export class GitLabSnapshotAuthorityChangedError extends Error {
+  constructor() {
+    super("The GitLab Context Tree binding or connection changed before snapshot publication.");
+    this.name = "GitLabSnapshotAuthorityChangedError";
+  }
+}
+
+/** Revalidate both the live authority tuple and the pinned destination before publishing content. */
+export async function revalidateGitlabSnapshotPublication(
+  before: GitlabPinnedDestination,
+  allowlist: readonly GitlabEgressAllowlistEntry[],
+  lookup?: GitlabDnsLookup,
+  executionGuard?: () => Promise<boolean>,
+): Promise<void> {
+  if (executionGuard && !(await executionGuard())) {
+    throw new GitLabSnapshotAuthorityChangedError();
+  }
+  await revalidateGitlabDestination(true, before, allowlist, lookup);
+}
+
 /** Reject cached repositories whose local config could restore auth, redirects, or alternate egress. */
 export async function assertAnonymousLocalConfigSafe(root: string): Promise<void> {
   const raw = await readFile(join(root, ".git", "config"), "utf8");
@@ -113,5 +133,5 @@ export function isGitlabAnonymousAuthenticationFailure(error: unknown): boolean 
 }
 
 export function isGitlabRedirectFailure(error: unknown): boolean {
-  return /\bredirect(?:ed|ion)?\b|returned (?:30[123678])\b/u.test(gitFailureText(error));
+  return /\bredirect(?:ed|ion)?\b|returned (?:error:\s*)?(?:30[123678])\b/u.test(gitFailureText(error));
 }

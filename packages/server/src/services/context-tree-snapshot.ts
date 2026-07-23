@@ -31,10 +31,12 @@ import {
   anonymousGitEnv,
   assertAnonymousLocalConfigSafe,
   GitLabAnonymousAuthenticationRequiredError,
+  GitLabSnapshotAuthorityChangedError,
   gitlabAnonymousGitConfig,
   isGitlabAnonymousAuthenticationFailure,
   isGitlabRedirectFailure,
   revalidateGitlabDestination,
+  revalidateGitlabSnapshotPublication,
 } from "./gitlab-anonymous-snapshot.js";
 import {
   type GitlabDnsLookup,
@@ -123,6 +125,7 @@ type ResolvedContextTreeRoot = {
   reason: string;
   staleReason: string | null;
   contentAvailability: ContextTreeContentAvailability;
+  publicationGuard?: () => Promise<void>;
 };
 
 type RemoteSyncResult = {
@@ -225,6 +228,7 @@ export async function getContextTreeSnapshot(
     if (cached && cached.expiresAt > Date.now()) {
       const staleCacheRecovered = cached.snapshot.snapshotStatus === "stale" && !resolved.staleReason;
       if (!staleCacheRecovered) {
+        await timeWithSink(timing, "publication_guard", () => resolved.publicationGuard?.() ?? Promise.resolve());
         return withSnapshotStatus(cached.snapshot, now, statusWarningFromResolved(resolved.staleReason, null));
       }
     }
@@ -270,9 +274,30 @@ export async function getContextTreeSnapshot(
         changes,
       } satisfies ContextTreeSnapshot;
     });
+    await timeWithSink(timing, "publication_guard", () => resolved.publicationGuard?.() ?? Promise.resolve());
     snapshotCache.set(cacheKey, { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL_MS, snapshot });
     return snapshot;
   } catch (error) {
+    if (provider === "gitlab" && error instanceof GitLabSnapshotAuthorityChangedError) {
+      return unavailableSnapshot(repo, branch, error.message, provider, {
+        status: "unavailable",
+        accessMode: "anonymous",
+        reason: "invalid_binding",
+      });
+    }
+    if (provider === "gitlab" && error instanceof GitlabEgressPolicyError) {
+      return unavailableSnapshot(
+        repo,
+        branch,
+        "GitLab Web Context origin or resolved address changed before snapshot publication.",
+        provider,
+        {
+          status: "unavailable",
+          accessMode: "anonymous",
+          reason: error.reason === "origin_not_authorized" ? "gitlab_origin_not_authorized" : "gitlab_egress_denied",
+        },
+      );
+    }
     const message = error instanceof Error ? error.message : "Unable to read Context Tree snapshot";
     return unavailableSnapshot(repo, branch, message, provider, {
       status: "unavailable",
@@ -430,6 +455,17 @@ async function resolveContextTreeRoot(
           status: "available",
           accessMode: accessModeForProvider(provider, !!githubToken),
         },
+        ...(provider === "gitlab" && gitlabDestination
+          ? {
+              publicationGuard: () =>
+                revalidateGitlabSnapshotPublication(
+                  gitlabDestination,
+                  options.gitlabEgressAllowlist ?? [],
+                  options.gitlabDnsLookup,
+                  options.gitlabExecutionGuard,
+                ),
+            }
+          : {}),
       };
     } catch (error) {
       if (provider === "gitlab" && isGitlabAnonymousAuthenticationFailure(error)) {
@@ -727,6 +763,12 @@ async function syncRemoteContextTree(
       // Never serve a cached private tree after anonymous access is revoked;
       // doing so would blur the explicit content-availability boundary.
       throw new GitLabAnonymousAuthenticationRequiredError();
+    }
+    if (anonymousGitlab && isGitlabRedirectFailure(error)) {
+      // A moved repository is an authorization-boundary change, not a
+      // transient refresh failure. Never publish stale cached content after a
+      // redirect response.
+      throw error;
     }
     if (anonymousGitlab && error instanceof GitlabEgressPolicyError) {
       // Policy, DNS-pin, and live-binding failures are authorization failures,

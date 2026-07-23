@@ -122,6 +122,8 @@ describe("agent context tree info route", () => {
       provider: "github",
       repo: "git@github.com:example/updated-side-context.git",
       branch: "updated-side",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: sideAgent.uuid },
     });
 
@@ -141,6 +143,8 @@ describe("agent context tree info route", () => {
       provider: null,
       repo: null,
       branch: null,
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: sideAgent.uuid },
     });
 

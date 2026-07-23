@@ -312,6 +312,7 @@ describe("formatInboundContent", () => {
         contextReviewRunId: "run-1",
         contextReviewRepository: "gitlab.example/acme/context-tree",
         contextReviewConnectionId: "connection-1",
+        contextReviewInstanceOrigin: "https://gitlab.example",
         contextReviewProjectId: 501,
         contextReviewMrIid: 42,
         contextReviewEntityUrl: "https://gitlab.example/acme/context-tree/-/merge_requests/42",

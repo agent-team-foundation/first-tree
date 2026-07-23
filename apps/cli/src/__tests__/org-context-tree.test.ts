@@ -84,6 +84,8 @@ describe("org context-tree CLI", () => {
       getAgentContextReviewConfig: vi.fn(async () => ({
         repo: "https://github.com/acme/context-tree.git",
         branch: "main",
+        providerMatchesRepository: true,
+        gitlabConnection: null,
         contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
       })),
     };
@@ -100,6 +102,8 @@ describe("org context-tree CLI", () => {
         provider: "github",
         repo: "https://github.com/acme/context-tree.git",
         branch: "main",
+        providerMatchesRepository: true,
+        gitlabConnection: null,
         enabled: true,
         assigned: true,
         agentUuid: "reviewer-1",

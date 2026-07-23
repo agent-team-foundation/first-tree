@@ -12,6 +12,8 @@ describe("Context Review config", () => {
         {
           repo: "https://github.com/acme/context-tree.git",
           branch: "main",
+          providerMatchesRepository: true,
+          gitlabConnection: null,
           contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
         },
         "reviewer-1",
@@ -20,6 +22,8 @@ describe("Context Review config", () => {
       provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       enabled: true,
       assigned: true,
       agentUuid: "reviewer-1",
@@ -29,7 +33,13 @@ describe("Context Review config", () => {
   it("does not assign a disabled or different Reviewer", () => {
     expect(
       normalizeContextReviewConfig(
-        { repo: null, branch: null, contextReviewer: { enabled: false, agentUuid: null } },
+        {
+          repo: null,
+          branch: null,
+          providerMatchesRepository: true,
+          gitlabConnection: null,
+          contextReviewer: { enabled: false, agentUuid: null },
+        },
         "reviewer-1",
       ).assigned,
     ).toBe(false);
@@ -38,6 +48,8 @@ describe("Context Review config", () => {
         {
           repo: "https://github.com/acme/context-tree.git",
           branch: "main",
+          providerMatchesRepository: true,
+          gitlabConnection: null,
           contextReviewer: { enabled: true, agentUuid: "reviewer-2" },
         },
         "reviewer-1",
@@ -48,7 +60,13 @@ describe("Context Review config", () => {
   it("fails closed for an invalid mixed response", () => {
     expect(() =>
       normalizeContextReviewConfig(
-        { repo: "https://github.com/acme/context-tree.git", branch: 42, contextReviewer: { enabled: true } },
+        {
+          repo: "https://github.com/acme/context-tree.git",
+          branch: 42,
+          providerMatchesRepository: true,
+          gitlabConnection: null,
+          contextReviewer: { enabled: true },
+        },
         "reviewer-1",
       ),
     ).toThrow(SyntaxError);
@@ -58,6 +76,8 @@ describe("Context Review config", () => {
     const getAgentContextReviewConfig = vi.fn(async () => ({
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
     }));
     await expect(
@@ -86,11 +106,66 @@ describe("Context Review config", () => {
       provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       enabled: true,
       assigned: true,
       agentUuid: "reviewer-private",
     });
     expect(getMemberContextTreeSetting).toHaveBeenCalledWith("org-1");
     expect(getMemberContextTreeFeatures).toHaveBeenCalledWith("org-1");
+  });
+
+  it("preserves the exact live GitLab connection authority", () => {
+    expect(
+      normalizeContextReviewConfig(
+        {
+          provider: "gitlab",
+          repo: "git@gitlab.internal:group/context-tree.git",
+          branch: "main",
+          providerMatchesRepository: true,
+          gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
+          contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+        },
+        "reviewer-1",
+      ),
+    ).toMatchObject({
+      provider: "gitlab",
+      providerMatchesRepository: true,
+      gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
+      assigned: true,
+    });
+  });
+
+  it("rejects a non-normalized GitLab authority projection", () => {
+    expect(() =>
+      normalizeContextReviewConfig(
+        {
+          provider: "gitlab",
+          repo: "git@gitlab.internal:group/context-tree.git",
+          branch: "main",
+          providerMatchesRepository: true,
+          gitlabConnection: { id: "connection-1", instanceOrigin: "https://GITLAB.internal/" },
+          contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+        },
+        "reviewer-1",
+      ),
+    ).toThrow(SyntaxError);
+  });
+
+  it("fails closed when a matching GitLab binding omits its live connection", () => {
+    expect(() =>
+      normalizeContextReviewConfig(
+        {
+          provider: "gitlab",
+          repo: "git@gitlab.internal:group/context-tree.git",
+          branch: "main",
+          providerMatchesRepository: true,
+          gitlabConnection: null,
+          contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+        },
+        "reviewer-1",
+      ),
+    ).toThrow(SyntaxError);
   });
 });

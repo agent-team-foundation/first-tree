@@ -165,6 +165,7 @@ describe("GitLab Stage 3 personnel routing", () => {
       source: "gitlab",
       contextTreeReviewer: true,
       contextReviewConnectionId: connection.connectionId,
+      contextReviewInstanceOrigin: "https://gitlab.internal",
       contextReviewProjectId: 801,
       contextReviewMrIid: 17,
       contextReviewReviewerAgentUuid: delegate.uuid,

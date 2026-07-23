@@ -32,6 +32,7 @@ describe("Context Review schemas", () => {
         contextReviewRunId: "run-2",
         contextReviewRepository: "gitlab.internal/group/subgroup/context-tree",
         contextReviewConnectionId: "connection-1",
+        contextReviewInstanceOrigin: "https://gitlab.internal",
         contextReviewProjectId: 123,
         contextReviewMrIid: 42,
         contextReviewEntityUrl: "https://gitlab.internal/group/subgroup/context-tree/-/merge_requests/42",
@@ -45,6 +46,29 @@ describe("Context Review schemas", () => {
       contextReviewProjectId: 123,
       contextReviewMrIid: 42,
     });
+  });
+
+  it("requires a normalized exact GitLab instance origin in the trusted run", () => {
+    const run = {
+      source: "gitlab",
+      contextTreeReviewer: true,
+      contextReviewRunId: "run-2",
+      contextReviewRepository: "gitlab.internal/group/context-tree",
+      contextReviewConnectionId: "connection-1",
+      contextReviewProjectId: 123,
+      contextReviewMrIid: 42,
+      contextReviewEntityUrl: "https://gitlab.internal/group/context-tree/-/merge_requests/42",
+      contextReviewOrganizationId: "org-1",
+      contextReviewReviewerAgentUuid: "reviewer-1",
+      contextReviewReviewerManagerHumanAgentId: "human-1",
+    };
+    expect(contextReviewerRunMessageMetadataSchema.safeParse(run).success).toBe(false);
+    expect(
+      contextReviewerRunMessageMetadataSchema.safeParse({
+        ...run,
+        contextReviewInstanceOrigin: "https://GITLAB.internal/",
+      }).success,
+    ).toBe(false);
   });
 
   it.each([

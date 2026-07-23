@@ -352,8 +352,14 @@ describe("small API route handlers", () => {
       resourcesService: { resolveRuntimeConfig: vi.fn().mockReturnValue({ env: { A: "1" }, resources: [] }) },
     });
     routeMocks.getOrgContextReviewRuntime.mockResolvedValue({
+      provider: "gitlab",
       branch: "main",
-      repo: "owner/tree",
+      repo: "git@gitlab.example:owner/tree.git",
+      providerMatchesRepository: true,
+      gitlabConnection: {
+        id: "connection-1",
+        instanceOrigin: "https://gitlab.example:8443",
+      },
       contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
     });
 
@@ -362,8 +368,14 @@ describe("small API route handlers", () => {
 
     await expect(route(routes, "GET", "/config").handler({})).resolves.toEqual({ env: { A: "1" }, resources: [] });
     await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
+      provider: "gitlab",
       branch: "main",
-      repo: "owner/tree",
+      repo: "git@gitlab.example:owner/tree.git",
+      providerMatchesRepository: true,
+      gitlabConnection: {
+        id: "connection-1",
+        instanceOrigin: "https://gitlab.example:8443",
+      },
       contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
     });
   });

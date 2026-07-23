@@ -165,6 +165,7 @@ export async function handleContextReviewerMrEvent(input: {
     contextReviewRunId,
     contextReviewRepository: webhookRepo,
     contextReviewConnectionId: input.connection.id,
+    contextReviewInstanceOrigin: input.connection.instanceOrigin,
     contextReviewProjectId: entity.projectId,
     contextReviewMrIid: entity.entityIid,
     contextReviewEntityUrl: entity.entityUrl,

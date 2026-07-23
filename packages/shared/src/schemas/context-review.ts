@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeGitLabWebOrigin } from "../canonical-git-repo-url.js";
 import { CONTEXT_REVIEW_BODY_MAX_BYTES, CONTEXT_REVIEW_RUN_MARKER_PREFIX } from "./context-review-constants.js";
 
 export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
@@ -104,6 +105,10 @@ const gitlabContextReviewerRunMessageMetadataSchema = z
       .trim()
       .regex(/^[^\s/]+\/[^\s]+$/),
     contextReviewConnectionId: z.string().min(1),
+    contextReviewInstanceOrigin: z
+      .string()
+      .url()
+      .refine((value) => normalizeGitLabWebOrigin(value) === value, "expected a normalized GitLab instance origin"),
     contextReviewProjectId: z.number().int().positive(),
     contextReviewMrIid: z.number().int().positive(),
     contextReviewEntityUrl: z.string().url(),

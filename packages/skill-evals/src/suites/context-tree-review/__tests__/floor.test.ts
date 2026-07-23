@@ -174,6 +174,9 @@ describe("context-tree-review floor", () => {
     expect(description).toMatch(/Review a GitHub pull request or GitLab merge request/);
     expect(skill).toContain("A local mirror\ncannot override provider authority");
     expect(skill).toContain("For a GitHub run use only\n   `gh`; for a GitLab run use only `glab`");
+    expect(skill).toContain("`contextReviewConnectionId` and\n`contextReviewInstanceOrigin`");
+    expect(skill).toContain("the same `gitlabConnection.id`, and the same\nexact normalized");
+    expect(skill).toContain("before every\nrepair edit, commit, push, MR note, and merge mutation");
     expect(skill).toContain("GitLab has no First Tree approval action");
     expect(skill).toContain("Never run `first-tree tree review`");
     expect(skill).toContain("Use `glab mr note`");
