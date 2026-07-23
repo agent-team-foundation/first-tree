@@ -71,132 +71,16 @@ function floorCommand(skill: ShippedSkillName | null): string {
   return `pnpm --filter @first-tree/skill-evals eval:floor -- --suite ${skill}`;
 }
 
-function gateCommand(skill: ShippedSkillName): string {
-  return `pnpm --filter @first-tree/skill-evals eval:gate -- --suite ${skill}`;
-}
-
-function qualityCommand(
-  skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-seed" | "first-tree-welcome">,
-): string {
-  return `pnpm --filter @first-tree/skill-evals eval:quality -- --suite ${skill}`;
-}
-
-function periodicCommand(skill: ShippedSkillName | null = null): string {
-  if (skill === null) return "pnpm --filter @first-tree/skill-evals eval:periodic";
-  return `pnpm --filter @first-tree/skill-evals eval:periodic -- --suite ${skill}`;
-}
-
-function addSuiteRecommendations(
+function addFloorRecommendation(
   recommendations: Map<string, EvalRecommendation>,
-  skill: ShippedSkillName,
+  skill: ShippedSkillName | null,
   reason: string,
 ): void {
   addRecommendation(recommendations, {
     command: floorCommand(skill),
     kind: "floor",
     reason,
-    suite: skill,
-  });
-
-  addRecommendation(recommendations, {
-    command: gateCommand(skill),
-    kind: "gate",
-    reason,
-    suite: skill,
-  });
-
-  if (skill === "first-tree-write" || skill === "first-tree-seed" || skill === "first-tree-welcome") {
-    addRecommendation(recommendations, {
-      command: qualityCommand(skill),
-      kind: "quality",
-      reason,
-      suite: skill,
-    });
-  }
-}
-
-function addAllImplementedGateRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  addRecommendation(recommendations, {
-    command: floorCommand(null),
-    kind: "floor",
-    reason,
-    suite: "all",
-  });
-  for (const skill of [
-    "first-tree-read",
-    "first-tree-write",
-    "first-tree-seed",
-    "first-tree-welcome",
-    "context-tree-review",
-    "context-tree-audit",
-    "first-tree-qa",
-  ] as const) {
-    addRecommendation(recommendations, {
-      command: gateCommand(skill),
-      kind: "gate",
-      reason,
-      suite: skill,
-    });
-  }
-}
-
-function addQualityRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  for (const skill of ["first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
-    addRecommendation(recommendations, {
-      command: qualityCommand(skill),
-      kind: "quality",
-      reason,
-      suite: skill,
-    });
-  }
-}
-
-function addProviderRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  addAllImplementedGateRecommendations(recommendations, reason);
-  addRecommendation(recommendations, {
-    command: periodicCommand("first-tree-read"),
-    kind: "periodic",
-    reason,
-    suite: "first-tree-read",
-  });
-}
-
-function addAgentBriefingRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  addRecommendation(recommendations, {
-    command: periodicCommand("first-tree-read"),
-    kind: "periodic",
-    reason,
-    suite: "first-tree-read",
-  });
-  addRecommendation(recommendations, {
-    command: gateCommand("first-tree-welcome"),
-    kind: "gate",
-    reason,
-    suite: "first-tree-welcome",
-  });
-  addRecommendation(recommendations, {
-    command: gateCommand("first-tree-seed"),
-    kind: "gate",
-    reason,
-    suite: "first-tree-seed",
-  });
-  addRecommendation(recommendations, {
-    command: gateCommand("context-tree-audit"),
-    kind: "gate",
-    reason,
-    suite: "context-tree-audit",
-  });
-  addRecommendation(recommendations, {
-    command: gateCommand("context-tree-review"),
-    kind: "gate",
-    reason,
-    suite: "context-tree-review",
-  });
-  addRecommendation(recommendations, {
-    command: gateCommand("first-tree-write"),
-    kind: "gate",
-    reason,
-    suite: "first-tree-write",
+    suite: skill ?? "all",
   });
 }
 
@@ -278,66 +162,53 @@ export function selectSkillEvalRecommendations(
     }
 
     if (isAgentBriefingRuntimePath(path)) {
-      addAgentBriefingRecommendations(
-        recommendations,
-        `${path} changes generated briefing text; run related skill behavior baseline`,
-      );
+      addFloorRecommendation(recommendations, null, `${path} changes generated briefing text`);
       continue;
     }
 
     const periodicSkill = periodicFrameworkSkill(path);
     if (periodicSkill !== null) {
-      addRecommendation(recommendations, {
-        command: periodicCommand(periodicSkill === "all" ? null : periodicSkill),
-        kind: "periodic",
-        reason: `${path} touches periodic eval framework`,
-        suite: periodicSkill,
-      });
+      addFloorRecommendation(
+        recommendations,
+        periodicSkill === "all" ? null : periodicSkill,
+        `${path} touches periodic eval framework`,
+      );
       continue;
     }
 
     const skill = matchingSkill(path);
     if (skill !== null) {
-      addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
+      addFloorRecommendation(recommendations, skill, `${path} touches ${skill}`);
       continue;
     }
 
     if (path.startsWith("packages/skill-evals/src/core/provider/")) {
-      addProviderRecommendations(recommendations, `${path} touches tested-agent provider infrastructure`);
+      addFloorRecommendation(recommendations, null, `${path} touches tested-agent provider infrastructure`);
       continue;
     }
 
     if (isSkillEvalCorePath(path) || isSkillEvalCliOrSchemaPath(path)) {
-      addAllImplementedGateRecommendations(recommendations, `${path} touches shared skill-eval infrastructure`);
-      if (path.startsWith("packages/skill-evals/src/core/judge/")) {
-        addQualityRecommendations(recommendations, `${path} touches judge infrastructure`);
-      }
+      addFloorRecommendation(recommendations, null, `${path} touches shared skill-eval infrastructure`);
       continue;
     }
 
     if (path.startsWith("packages/skill-evals/src/suites/quality/")) {
-      addRecommendation(recommendations, {
-        command: floorCommand(null),
-        kind: "floor",
-        reason: `${path} touches shared quality runner`,
-        suite: "all",
-      });
-      addQualityRecommendations(recommendations, `${path} touches shared quality runner`);
+      addFloorRecommendation(recommendations, null, `${path} touches shared quality runner`);
       continue;
     }
 
     if (isSkillEvalDocsOnly(path)) {
-      addRecommendation(recommendations, {
-        command: floorCommand(null),
-        kind: "floor",
-        reason: `${path} is skill-eval documentation or usage text`,
-        suite: "all",
-      });
+      addFloorRecommendation(recommendations, null, `${path} is skill-eval documentation or usage text`);
     }
   }
 
   if (changedFiles.length === 0) {
     notes.push("No changed files were provided; no skill eval runs selected.");
+  }
+  if (recommendations.size > 0) {
+    notes.push(
+      "Model-backed gate, quality, and periodic evals are never selected automatically; run them only on explicit human instruction.",
+    );
   }
   if (recommendations.size === 0 && changedFiles.length > 0 && notes.length === 0) {
     notes.push("No skill-eval-related changes were detected.");

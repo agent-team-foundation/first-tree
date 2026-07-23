@@ -14,243 +14,86 @@ function runGit(repoRoot: string, args: readonly string[]): void {
   });
 }
 
+const HUMAN_ONLY_NOTE =
+  "Model-backed gate, quality, and periodic evals are never selected automatically; run them only on explicit human instruction.";
+
 describe("skill eval selection", () => {
-  it("selects write floor, gate, and quality for write skill changes", () => {
-    const summary = selectSkillEvalRecommendations(["skills/first-tree-write/SKILL.md"], "main");
+  it.each([
+    ["skills/first-tree-write/SKILL.md", "first-tree-write"],
+    ["skills/first-tree-read/SKILL.md", "first-tree-read"],
+    ["skills/first-tree-seed/SKILL.md", "first-tree-seed"],
+    ["skills/first-tree-qa/SKILL.md", "first-tree-qa"],
+  ])("selects only the no-model floor for %s", (path, skill) => {
+    const summary = selectSkillEvalRecommendations([path], "main");
 
-    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
-      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-write",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
-      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write",
+    expect(summary.recommendations).toEqual([
+      {
+        command: `pnpm --filter @first-tree/skill-evals eval:floor -- --suite ${skill}`,
+        kind: "floor",
+        reason: `${path} touches ${skill}`,
+        suite: skill,
+      },
     ]);
+    expect(summary.notes).toEqual([HUMAN_ONLY_NOTE]);
   });
 
-  it("selects read floor and unified gate for read suite changes", () => {
-    const summary = selectSkillEvalRecommendations(["skills/first-tree-read/SKILL.md"]);
+  it.each([
+    "packages/skill-evals/src/core/judge/schema.ts",
+    "packages/skill-evals/src/core/provider/claude.ts",
+    "packages/client/src/runtime/agent-briefing.ts",
+    "packages/skill-evals/src/core/periodic.ts",
+    "packages/skill-evals/src/suites/quality/runner.ts",
+  ])("selects only the no-model floor for shared or model-backed infrastructure changes: %s", (path) => {
+    const summary = selectSkillEvalRecommendations([path]);
 
-    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
-      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-read",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
-    ]);
+    expect(summary.recommendations).toHaveLength(1);
+    expect(summary.recommendations[0]).toMatchObject({
+      command: "pnpm --filter @first-tree/skill-evals eval:floor",
+      kind: "floor",
+      suite: "all",
+    });
+    expect(summary.notes).toEqual([HUMAN_ONLY_NOTE]);
   });
 
-  it("selects seed floor, gate, and quality for seed skill changes", () => {
-    const summary = selectSkillEvalRecommendations(["skills/first-tree-seed/SKILL.md"]);
-
-    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
-      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-seed",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
-      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
-    ]);
-  });
-
-  it("selects QA floor and gate for skill and package changes", () => {
+  it("selects only suite-scoped floors when several skills change", () => {
     const summary = selectSkillEvalRecommendations([
-      "skills/first-tree-qa/SKILL.md",
+      "skills/first-tree-write/SKILL.md",
+      "skills/first-tree-seed/SKILL.md",
       "packages/qa/templates/qa-report.md",
     ]);
 
     expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
       "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-qa",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
+      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-seed",
+      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-write",
     ]);
+    expect(summary.recommendations.every((recommendation) => recommendation.kind === "floor")).toBe(true);
+    expect(summary.notes).toEqual([HUMAN_ONLY_NOTE]);
   });
 
-  it("selects all implemented gates and quality when shared judge core changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/judge/schema.ts"]);
-
-    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
-      "pnpm --filter @first-tree/skill-evals eval:floor",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
-      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write",
-      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
-      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome",
-    ]);
-  });
-
-  it("selects provider-sensitive gate and read periodic coverage for provider runner changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/provider/claude.ts"]);
-
-    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
-      "pnpm --filter @first-tree/skill-evals eval:floor",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
-      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
-      "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
-    ]);
-  });
-
-  it("recommends related skill behavior baselines for generated briefing changes", () => {
-    const summary = selectSkillEvalRecommendations([
-      "packages/client/src/runtime/agent-briefing.ts",
-      "packages/client/src/runtime/templates/agent-briefing.ejs",
-    ]);
+  it("selects a suite-scoped floor for periodic runner changes", () => {
+    const path = "packages/skill-evals/src/suites/first-tree-welcome/periodic.ts";
+    const summary = selectSkillEvalRecommendations([path]);
 
     expect(summary.recommendations).toEqual([
       {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
-        kind: "periodic",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-read",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-welcome",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-seed",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "context-tree-audit",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "context-tree-review",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-write",
-      },
-    ]);
-  });
-
-  it("recommends related skill behavior baselines for generated briefing template changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/client/src/runtime/templates/agent-briefing.ejs"]);
-
-    expect(summary.recommendations).toEqual([
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
-        kind: "periodic",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-read",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-welcome",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-seed",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "context-tree-audit",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "context-tree-review",
-      },
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
-        kind: "gate",
-        reason:
-          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
-        suite: "first-tree-write",
-      },
-    ]);
-  });
-
-  it("selects only periodic for shared periodic framework changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/periodic.ts"]);
-
-    expect(summary.recommendations).toEqual([
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic",
-        kind: "periodic",
-        reason: "packages/skill-evals/src/core/periodic.ts touches periodic eval framework",
-        suite: "all",
-      },
-    ]);
-  });
-
-  it("selects suite-scoped periodic for welcome periodic runner changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-welcome/periodic.ts"]);
-
-    expect(summary.recommendations).toEqual([
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome",
-        kind: "periodic",
-        reason: "packages/skill-evals/src/suites/first-tree-welcome/periodic.ts touches periodic eval framework",
+        command: "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-welcome",
+        kind: "floor",
+        reason: `${path} touches periodic eval framework`,
         suite: "first-tree-welcome",
       },
     ]);
+    expect(summary.notes).toEqual([HUMAN_ONLY_NOTE]);
   });
 
-  it("selects suite-scoped periodic for read periodic runner changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-read/periodic.ts"]);
-
-    expect(summary.recommendations).toEqual([
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
-        kind: "periodic",
-        reason: "packages/skill-evals/src/suites/first-tree-read/periodic.ts touches periodic eval framework",
-        suite: "first-tree-read",
-      },
-    ]);
-  });
-
-  it("selects suite-scoped periodic for seed periodic runner changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-seed/periodic.ts"]);
-
-    expect(summary.recommendations).toEqual([
-      {
-        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed",
-        kind: "periodic",
-        reason: "packages/skill-evals/src/suites/first-tree-seed/periodic.ts touches periodic eval framework",
-        suite: "first-tree-seed",
-      },
-    ]);
-  });
-
-  it("does not recommend live eval for unrelated files", () => {
+  it("does not recommend skill evals for unrelated files", () => {
     const summary = selectSkillEvalRecommendations(["packages/client/src/runtime/agent-slot.ts"]);
 
     expect(summary.recommendations).toEqual([]);
     expect(summary.notes).toEqual(["No skill-eval-related changes were detected."]);
   });
 
-  it.each(["first-tree-file-bug"])("emits an explicit note (not silence) for unevaluated shipped skill %s", (skill) => {
+  it.each(["first-tree-file-bug"])("emits an explicit note for unevaluated shipped skill %s", (skill) => {
     const path = `skills/${skill}/SKILL.md`;
     const summary = selectSkillEvalRecommendations([path]);
 

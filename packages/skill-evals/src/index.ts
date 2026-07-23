@@ -127,10 +127,10 @@ function usage(): string {
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
-  gate                   Run a live model gate suite and write grading.json.
-  periodic               Run opt-in broader periodic evals when implemented.
-  quality                Run opt-in LLM-as-judge quality cases.
-  select                 Recommend eval commands from changed files.
+  gate                   Run a human-directed live model gate suite and write grading.json.
+  periodic               Run human-directed broader periodic evals when implemented.
+  quality                Run human-directed LLM-as-judge quality cases.
+  select                 Recommend no-model floor commands from changed files.
   summary                Summarize one result-store run group.
   compare                Compare latest result-store run groups.
 

@@ -3,7 +3,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Opt-in live model evaluations for First Tree skills.",
+  "description": "Human-directed live model evaluations for First Tree skills.",
   "scripts": {
     "eval:floor": "tsx src/index.ts floor",
     "eval:gate": "tsx src/index.ts gate",
