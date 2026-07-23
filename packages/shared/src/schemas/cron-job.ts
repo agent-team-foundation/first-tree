@@ -142,7 +142,8 @@ export function hasNonPortableCronExtension(expression: string): boolean {
   for (const field of fields) {
     if (field.startsWith("+")) return true;
     if (/[?@#]/.test(field)) return true;
-    if (/(?:^|[,/-])H(?:\([^)]*\))?(?:$|[,/-])/i.test(field)) return true;
+    // Jenkins `H` / `H(...)` — linear atom scan (avoid anchored regex ReDoS).
+    if (fieldHasJenkinsHashAtom(field)) return true;
   }
 
   // Day-of-month never has letter aliases; any L/W is a Croner/Quartz modifier.
@@ -166,6 +167,38 @@ const CRON_MONTH_OR_DOW_ALIAS_RE =
 
 function isCronMonthOrDowAlias(atom: string): boolean {
   return CRON_MONTH_OR_DOW_ALIAS_RE.test(atom);
+}
+
+/** True when a cron field contains Jenkins hash `H` or `H(...)` as an atom. */
+function fieldHasJenkinsHashAtom(field: string): boolean {
+  const n = field.length;
+  let i = 0;
+  while (i < n) {
+    const atAtomStart = i === 0 || field.charAt(i - 1) === "," || field.charAt(i - 1) === "/" || field.charAt(i - 1) === "-";
+    const ch = field.charAt(i);
+    if (atAtomStart && (ch === "H" || ch === "h")) {
+      if (i + 1 >= n) return true;
+      const next = field.charAt(i + 1);
+      if (next === "," || next === "/" || next === "-") return true;
+      if (next === "(") {
+        let depth = 1;
+        let j = i + 2;
+        while (j < n && depth > 0) {
+          const c = field.charAt(j);
+          if (c === "(") depth += 1;
+          else if (c === ")") depth -= 1;
+          j += 1;
+        }
+        if (depth === 0 && (j >= n || field.charAt(j) === "," || field.charAt(j) === "/" || field.charAt(j) === "-")) {
+          return true;
+        }
+        // Malformed or glued `H(...` — still non-portable; reject.
+        return true;
+      }
+    }
+    i += 1;
+  }
+  return false;
 }
 
 export const cronExpressionSchema = z

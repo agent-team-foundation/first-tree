@@ -29,6 +29,8 @@ describe("cron expression schema", () => {
     expect(cronExpressionSchema.safeParse("0 0 L * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 0 * * 5L").success).toBe(false);
     expect(cronExpressionSchema.safeParse("H 0 * * *").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("H(0-29) 0 * * *").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0,H 0 * * *").success).toBe(false);
   });
 
   it("accepts day and month aliases that Croner supports", () => {
