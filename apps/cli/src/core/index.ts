@@ -144,6 +144,14 @@ export type { InstallClaudeResult } from "./install-claude-runtime.js";
 export { installClaudeRuntime } from "./install-claude-runtime.js";
 export type { InstallCodexResult } from "./install-codex-runtime.js";
 export { installCodexRuntime } from "./install-codex-runtime.js";
+// Issue #995 — retires the stranded legacy github-scan launchd runner on
+// upgrade / first daemon start of a new version.
+export type { LegacyGithubScanCleanup } from "./legacy-github-scan-cleanup.js";
+export {
+  LEGACY_GITHUB_SCAN_LABEL_PREFIX,
+  legacyGithubScanLaunchdDir,
+  retireLegacyGithubScanRunner,
+} from "./legacy-github-scan-cleanup.js";
 export {
   type MemberOrganizationProfile,
   type MemberOrganizationResolutionCode,

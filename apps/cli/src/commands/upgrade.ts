@@ -14,6 +14,7 @@ import {
   installPortableSpec,
   isServiceSupported,
   restartClientService,
+  retireLegacyGithubScanRunner,
 } from "../core/index.js";
 import { getChannelInstallCommand } from "../core/install-guidance.js";
 import { print } from "../core/output.js";
@@ -115,6 +116,23 @@ export function registerUpgradeCommand(program: Command): void {
       }
       const installed = installRes.installedVersion ?? target.version;
       print.line(`  Installed ${installed}.\n`);
+
+      // Issue #995: upgrades used to strand the legacy `github scan` launchd
+      // runner — a KeepAlive job pinned to a now-dead binary path that
+      // crash-loops and squats port 7878. Retire it as part of every upgrade,
+      // before any restart branching, so the cleanup runs even under
+      // `--no-restart` or when no background service is installed.
+      // Idempotent, darwin-only, never throws.
+      const legacyCleanup = retireLegacyGithubScanRunner();
+      for (const label of legacyCleanup.retiredLabels) {
+        print.line(`  Retired stranded legacy github-scan launchd service: ${label}\n`);
+      }
+      for (const path of legacyCleanup.removedPlists) {
+        print.line(`  Removed legacy github-scan plist: ${path}\n`);
+      }
+      for (const warning of legacyCleanup.warnings) {
+        print.line(`  warning: legacy github-scan cleanup: ${warning}\n`);
+      }
 
       // Restart the service so the new binary actually starts handling
       // connections. Skipped under --no-restart so power users can stage

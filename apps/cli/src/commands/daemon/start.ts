@@ -51,6 +51,7 @@ import {
   refreshServerUpdateTarget,
   registerClientRuntimeMarker,
   resolveClientRuntimeStopReason,
+  retireLegacyGithubScanRunner,
   runRuntimeAuthLogin,
   startClientService,
   uploadAgentSkills,
@@ -97,6 +98,24 @@ export function registerDaemonStartCommand(daemon: Command): void {
       const appliedDaemonEnv = loadDaemonEnv();
       if (appliedDaemonEnv.length > 0) {
         writeLine(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
+      }
+      // Issue #995: a pre-removal `github scan` install left a KeepAlive
+      // launchd job pointing at a dead binary path — a crash-loop that also
+      // squats port 7878. Retire it on every start (idempotent, darwin-only,
+      // never throws) BEFORE the switch-block / credentials gates so even a
+      // logged-out machine self-heals on the first run of the new version.
+      const legacyCleanup = retireLegacyGithubScanRunner();
+      if (legacyCleanup.retiredLabels.length > 0 || legacyCleanup.removedPlists.length > 0) {
+        writeStatus(
+          "•",
+          `retired stranded legacy github-scan launchd runner (${[
+            ...legacyCleanup.retiredLabels.map((label) => `booted out ${label}`),
+            ...legacyCleanup.removedPlists.map((path) => `removed ${path}`),
+          ].join(", ")})`,
+        );
+      }
+      for (const warning of legacyCleanup.warnings) {
+        writeStatus("⚠️", `legacy github-scan cleanup: ${warning}`);
       }
       const switchBlock = getClientSwitchStartupBlock();
       if (switchBlock) {
