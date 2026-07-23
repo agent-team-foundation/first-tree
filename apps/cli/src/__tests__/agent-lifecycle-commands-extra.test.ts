@@ -59,6 +59,12 @@ const coreMocks = vi.hoisted(() => ({
   removeLocalAgent: vi.fn(),
   resolveServerUrl: vi.fn(),
   restartClientService: vi.fn(),
+  retireLegacyGithubScanRunner: vi.fn(() => ({
+    checked: true,
+    retiredLabels: [],
+    removedPlists: [],
+    warnings: [],
+  })),
   stopClientService: vi.fn(),
   stopClientRuntimeProcess: vi.fn(),
 }));
@@ -1168,9 +1174,13 @@ describe("logout and upgrade commands", () => {
     coreMocks.detectInstallMode.mockReturnValue("global");
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
 
+    coreMocks.retireLegacyGithubScanRunner.mockClear();
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--no-restart"]);
     expect(coreMocks.installGlobalSpec).toHaveBeenCalledWith("99.0.0");
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree-dev daemon restart");
+    // Issue #995: a successful install retires any stranded legacy
+    // github-scan launchd runner even when the restart is skipped.
+    expect(coreMocks.retireLegacyGithubScanRunner).toHaveBeenCalledTimes(1);
 
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runTopLevel(registerUpgradeCommand, ["upgrade"]);

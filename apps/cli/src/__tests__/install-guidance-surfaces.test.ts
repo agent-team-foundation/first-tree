@@ -45,6 +45,12 @@ vi.mock("../core/index.js", () => ({
   installPortableSpec: vi.fn(),
   isServiceSupported: vi.fn(),
   restartClientService: vi.fn(),
+  retireLegacyGithubScanRunner: vi.fn(() => ({
+    checked: true,
+    retiredLabels: [],
+    removedPlists: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("../core/update.js", () => ({

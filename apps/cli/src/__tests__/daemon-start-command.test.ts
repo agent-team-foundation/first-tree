@@ -39,6 +39,12 @@ const coreMocks = vi.hoisted(() => ({
   reconcileLocalRuntimeProviders: vi.fn(),
   refreshServerUpdateTarget: vi.fn(),
   resolveClientRuntimeStopReason: vi.fn(),
+  retireLegacyGithubScanRunner: vi.fn(() => ({
+    checked: true,
+    retiredLabels: [],
+    removedPlists: [],
+    warnings: [],
+  })),
   runRuntimeAuthLogin: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
