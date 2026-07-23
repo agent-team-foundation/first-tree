@@ -52,10 +52,14 @@ function mockBackgroundTaskDependencies(): void {
 function makeApp(archiveSweepIntervalSeconds = 30): FastifyInstance {
   return {
     config: {
+      cronJobs: {
+        enabled: false,
+      },
       runtime: {
         archiveMappedIdleSeconds: 3_600,
         archiveSweepIntervalSeconds,
         presenceCleanupSeconds: 60,
+        pollingIntervalSeconds: 5,
       },
     },
     db: { name: "db" },

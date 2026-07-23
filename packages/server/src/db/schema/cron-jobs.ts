@@ -43,9 +43,7 @@ export const cronJobs = pgTable(
   },
   (table) => [
     unique("uq_cron_jobs_control_agent_name").on(table.controlChatId, table.agentId, table.name),
-    index("idx_cron_jobs_due")
-      .on(table.nextRunAt, table.id)
-      .where(sql`${table.state} = 'active'`),
+    index("idx_cron_jobs_due").on(table.nextRunAt, table.id).where(sql`${table.state} = 'active'`),
     index("idx_cron_jobs_control_created").on(table.controlChatId, table.createdAt),
     index("idx_cron_jobs_owner_created").on(table.ownerMemberId, table.createdAt),
     check("ck_cron_jobs_state", sql`${table.state} IN ('active', 'paused')`),

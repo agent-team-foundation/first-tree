@@ -2,8 +2,8 @@ import {
   buildCronRunKey,
   CRON_DISPATCH_GRACE_MS,
   CRON_TRIGGER_METADATA_KEY,
-  type CronOccurrenceSkipReason,
   type CronJobPauseReason,
+  type CronOccurrenceSkipReason,
 } from "@first-tree/shared";
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -11,23 +11,23 @@ import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
-import { cronJobs, type CronJobRow } from "../db/schema/cron-jobs.js";
+import { type CronJobRow, cronJobs } from "../db/schema/cron-jobs.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createLogger } from "../observability/index.js";
 import {
+  type CronJobsRuntimeConfig,
   databaseNow,
   isCronWorkerRunnable,
   loadOutstanding,
   revalidateOwnerChatAgent,
-  type CronJobsRuntimeConfig,
 } from "./cron-job.js";
-import { firstOccurrenceStrictlyAfter } from "./cron-schedule.js";
+import { firstOccurrenceStrictlyAfter, InvalidCronScheduleError } from "./cron-schedule.js";
 import {
+  type DeferredSendMessagePostCommitEffects,
   runDeferredSendMessagePostCommitEffects,
   sendMessage,
-  type DeferredSendMessagePostCommitEffects,
 } from "./message.js";
-import { notifyRecipients, type Notifier } from "./notifier.js";
+import { type Notifier, notifyRecipients } from "./notifier.js";
 
 const log = createLogger("CronScheduler");
 
@@ -41,7 +41,10 @@ export type CronScheduler = {
 };
 
 type DispatchOk = { ok: true };
-type DispatchFail = { ok: false; reason: Extract<CronOccurrenceSkipReason, "agent_offline" | "client_paused" | "route_stale"> };
+type DispatchFail = {
+  ok: false;
+  reason: Extract<CronOccurrenceSkipReason, "agent_offline" | "client_paused" | "route_stale">;
+};
 type DispatchResult = DispatchOk | DispatchFail;
 
 async function readCurrentDispatchability(
@@ -132,10 +135,7 @@ type SweepDecision =
     }
   | { kind: "skipped" | "auto_paused"; jobId: string; reason: string };
 
-async function claimAndProcessOne(
-  db: Database,
-  staleSeconds: number,
-): Promise<SweepDecision> {
+async function claimAndProcessOne(db: Database, staleSeconds: number): Promise<SweepDecision> {
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const claimed = await txDb
@@ -151,7 +151,6 @@ async function claimAndProcessOne(
 
     const now = await databaseNow(txDb);
     const scheduledFor = job.nextRunAt;
-    const nextRunAt = firstOccurrenceStrictlyAfter(job.cronExpression, job.timezone, now);
 
     const pause = async (reason: CronJobPauseReason): Promise<SweepDecision> => {
       await tx
@@ -176,6 +175,18 @@ async function claimAndProcessOne(
       return { kind: "auto_paused", jobId: job.id, reason };
     };
 
+    // Parser failures must pause inside the claim transaction. Throwing here
+    // rolls back the SKIP LOCKED claim and re-selects the same poison row on
+    // every replica, starving the rest of the due queue.
+    let nextRunAt: Date | null;
+    try {
+      nextRunAt = firstOccurrenceStrictlyAfter(job.cronExpression, job.timezone, now);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) {
+        return pause("invalid_schedule");
+      }
+      throw err;
+    }
     if (!nextRunAt) return pause("invalid_schedule");
 
     const permanent = await revalidateOwnerChatAgent(txDb, job);
@@ -185,10 +196,7 @@ async function claimAndProcessOne(
     if (outstanding === "missing") return pause("inbox_state_missing");
 
     const skip = async (reason: CronOccurrenceSkipReason): Promise<SweepDecision> => {
-      await tx
-        .update(cronJobs)
-        .set({ nextRunAt })
-        .where(eq(cronJobs.id, job.id));
+      await tx.update(cronJobs).set({ nextRunAt }).where(eq(cronJobs.id, job.id));
       log.info(
         {
           jobId: job.id,
@@ -294,11 +302,7 @@ async function claimAndProcessOne(
   });
 }
 
-export async function sweepCronJobs(
-  db: Database,
-  notifier: Notifier,
-  opts: { staleSeconds: number },
-): Promise<void> {
+export async function sweepCronJobs(db: Database, notifier: Notifier, opts: { staleSeconds: number }): Promise<void> {
   for (let i = 0; i < MAX_JOBS_PER_SWEEP; i++) {
     let decision: SweepDecision;
     try {

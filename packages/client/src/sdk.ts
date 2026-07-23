@@ -19,19 +19,17 @@ import {
   type ContextTreeSeedPreflightResponse,
   type ContextTreeWritePreflightRequest,
   type ContextTreeWritePreflightResponse,
+  type CreateCronJobRequest,
   type CreateDocCommentRequest,
   type CreateTaskChat,
   type CronJob,
   type CronPreviewRequest,
   type CronPreviewResponse,
-  type CreateCronJobRequest,
-  type DeleteCronJobResponse,
-  type ListCronJobsResponse,
-  type UpdateCronJobRequest,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
   contextTreeWritePreflightRequestSchema,
   contextTreeWritePreflightResponseSchema,
+  type DeleteCronJobResponse,
   type DocComment,
   type DocCommentStatus,
   type DocStatus,
@@ -42,6 +40,7 @@ import {
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
+  type ListCronJobsResponse,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
@@ -56,6 +55,7 @@ import {
   type SendMessage,
   type UnfollowChatGitlabEntityResponse,
   type UnfollowGithubEntityResponse,
+  type UpdateCronJobRequest,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
@@ -626,12 +626,7 @@ export class FirstTreeHubSDK {
     return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`);
   }
 
-  async updateCronJob(
-    chatId: string,
-    jobId: string,
-    body: UpdateCronJobRequest,
-    revision: number,
-  ): Promise<CronJob> {
+  async updateCronJob(chatId: string, jobId: string, body: UpdateCronJobRequest, revision: number): Promise<CronJob> {
     return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
       body: JSON.stringify(body),

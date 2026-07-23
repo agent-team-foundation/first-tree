@@ -181,29 +181,14 @@ escaped `\n` rows caused the Issue #389 double-encode failure. Use
 
 ## Workspace Collaboration
 
-The Communication matrix is the in-agent contract for teammate delivery:
-`chat send` reaches humans or agents, `chat ask` raises tracked human
-decisions, `chat update --description` reports progress, and agent no-op
-wake-ups do not get courtesy sends. For flags, stdin forms, history, invite,
-and related details, use `<%- bin %> chat --help` and subcommand help.
-
-Substitute this agent's CLI binary, `<%- bin %>`, anywhere docs show the
-literal `first-tree`.
+Communication matrix: `chat send` / `chat ask` / `chat update --description`; agent
+no-op wake-ups get no courtesy sends. Details: `<%- bin %> chat --help`. Substitute
+`<%- bin %>` anywhere docs show the literal `first-tree`.
 
 ## Scheduled jobs
-
-Scheduled jobs materialize one ordinary, visible markdown message into the current chat on a five-field cron + IANA timezone. The Server owns timing; you translate natural-language requests into `cron preview`, then manage jobs with the `cron` CLI namespace.
-
-1. Only the managing/owner human can authorize activation. Other chat participants cannot authorize schedules on their behalf.
-2. When a human directly asks for a specific schedule, timezone, and task, that message is the confirmation — do not manufacture a second confirmation.
-3. When you propose a schedule, or cost/frequency/side effects are unclear, run `<%- bin %> cron preview`, then `chat ask <owner-human>` with schedule, timezone, the next three occurrences, highest frequency, prompt summary, and external side-effect risks.
-4. Require explicit confirmation before create, schedule/timezone/prompt changes, target-behavior changes, or resume. Renaming alone does not need re-confirmation.
-5. Pause is a reversible risk reducer — execute immediately on owner instruction, or pause first when you spot an obvious safety issue and report after.
-6. Delete is irreversible for the configuration row; accepted triggers and in-flight turns are not cancelled. Require explicit owner delete instruction and say so.
-7. When a network result is unclear, run `<%- bin %> cron list` or `cron show` before retrying create (identical create payloads are idempotent; conflicting names return 409).
-8. After success, reply with job id, state, schedule/timezone, and next run; on failure, say whether the job actually took effect.
-
-Prompt bodies use `-F <file>` or `-F -` only — never inline shell arguments. Mutations require `FIRST_TREE_CHAT_ID`. There is no `--force`, `--yes`, or run-now shortcut.
+`<%- bin %> cron` materializes one ordinary addressed chat message. Owner authorizes
+(direct schedule+task confirms; else `cron preview` + `chat ask`). Pause immediately;
+delete irreversible for the row. Prompts `-F`; need `FIRST_TREE_CHAT_ID`; no force/yes/run-now.
 
 ## GitHub Working Posture
 

@@ -1,12 +1,12 @@
-import {
-  type CronJob,
-  type CronJobErrorCode,
-  type CronJobPauseReason,
-  type CronOutstanding,
-  type CronPreviewResponse,
-  type CreateCronJobRequest,
-  type DeleteCronJobResponse,
-  type UpdateCronJobRequest,
+import type {
+  CreateCronJobRequest,
+  CronJob,
+  CronJobErrorCode,
+  CronJobPauseReason,
+  CronOutstanding,
+  CronPreviewResponse,
+  DeleteCronJobResponse,
+  UpdateCronJobRequest,
 } from "@first-tree/shared";
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -14,7 +14,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
-import { cronJobs, type CronJobRow } from "../db/schema/cron-jobs.js";
+import { type CronJobRow, cronJobs } from "../db/schema/cron-jobs.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -254,6 +254,42 @@ export async function getCronJobForAgent(
   return projectCronJob(db, row);
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+  return code === "23505";
+}
+
+async function resolveIdenticalCreateConflict(
+  db: Database,
+  input: {
+    controlChatId: string;
+    agentId: string;
+    name: string;
+    schedule: string;
+    timezone: string;
+    prompt: string;
+  },
+): Promise<CronJob | null> {
+  const [existing] = await db
+    .select()
+    .from(cronJobs)
+    .where(
+      and(
+        eq(cronJobs.controlChatId, input.controlChatId),
+        eq(cronJobs.agentId, input.agentId),
+        eq(cronJobs.name, input.name),
+      ),
+    )
+    .limit(1);
+  if (!existing) return null;
+  const identical =
+    existing.cronExpression === input.schedule &&
+    existing.timezone === input.timezone &&
+    existing.prompt === input.prompt;
+  if (identical) return projectCronJob(db, existing);
+  return null;
+}
+
 export async function createCronJob(
   db: Database,
   input: {
@@ -291,8 +327,17 @@ export async function createCronJob(
     throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot create schedule (${validated.reason})`);
   }
 
-  const [existing] = await db
-    .select()
+  const identicalPre = await resolveIdenticalCreateConflict(db, {
+    controlChatId: input.controlChatId,
+    agentId: input.agentId,
+    name: input.body.name,
+    schedule: scheduled.schedule,
+    timezone: scheduled.timezone,
+    prompt: input.body.prompt,
+  });
+  if (identicalPre) return identicalPre;
+  const [conflicting] = await db
+    .select({ id: cronJobs.id })
     .from(cronJobs)
     .where(
       and(
@@ -302,50 +347,58 @@ export async function createCronJob(
       ),
     )
     .limit(1);
-
-  if (existing) {
-    const identical =
-      existing.cronExpression === scheduled.schedule &&
-      existing.timezone === scheduled.timezone &&
-      existing.prompt === input.body.prompt;
-    if (identical) {
-      return projectCronJob(db, existing);
-    }
+  if (conflicting) {
     throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
   }
 
   const id = uuidv7();
-  const [inserted] = await db
-    .insert(cronJobs)
-    .values({
-      id,
-      ownerMemberId: validated.ownerMemberId,
-      controlChatId: input.controlChatId,
-      agentId: input.agentId,
-      name: input.body.name,
-      chatMode: "reuse_control_chat",
-      cronExpression: scheduled.schedule,
-      timezone: scheduled.timezone,
-      prompt: input.body.prompt,
-      state: "active",
-      stateReason: null,
-      revision: 1,
-      nextRunAt: scheduled.nextRunAt,
-      lastTriggerMessageId: null,
-    })
-    .returning();
+  try {
+    const [inserted] = await db
+      .insert(cronJobs)
+      .values({
+        id,
+        ownerMemberId: validated.ownerMemberId,
+        controlChatId: input.controlChatId,
+        agentId: input.agentId,
+        name: input.body.name,
+        chatMode: "reuse_control_chat",
+        cronExpression: scheduled.schedule,
+        timezone: scheduled.timezone,
+        prompt: input.body.prompt,
+        state: "active",
+        stateReason: null,
+        revision: 1,
+        nextRunAt: scheduled.nextRunAt,
+        lastTriggerMessageId: null,
+      })
+      .returning();
 
-  if (!inserted) throw new Error("failed to insert cron job");
-  log.info(
-    {
-      jobId: inserted.id,
-      organizationId: validated.organizationId,
-      controlChatId: inserted.controlChatId,
-      agentId: inserted.agentId,
-    },
-    "cron.job.created",
-  );
-  return projectCronJob(db, inserted);
+    if (!inserted) throw new Error("failed to insert cron job");
+    log.info(
+      {
+        jobId: inserted.id,
+        organizationId: validated.organizationId,
+        controlChatId: inserted.controlChatId,
+        agentId: inserted.agentId,
+      },
+      "cron.job.created",
+    );
+    return projectCronJob(db, inserted);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      const identical = await resolveIdenticalCreateConflict(db, {
+        controlChatId: input.controlChatId,
+        agentId: input.agentId,
+        name: input.body.name,
+        schedule: scheduled.schedule,
+        timezone: scheduled.timezone,
+        prompt: input.body.prompt,
+      });
+      if (identical) return identical;
+      throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
+    }
+    throw err;
+  }
 }
 
 async function lockJob(db: Database, jobId: string): Promise<CronJobRow> {
@@ -374,7 +427,8 @@ export async function updateCronJob(
   },
 ): Promise<CronJob> {
   return db.transaction(async (tx) => {
-    const job = await lockJob(tx as unknown as Database, input.jobId);
+    const txDb = tx as unknown as Database;
+    const job = await lockJob(txDb, input.jobId);
     if (input.agentScope) {
       if (job.agentId !== input.agentScope.agentId || job.controlChatId !== input.agentScope.controlChatId) {
         throw new CronJobAppError(404, "CRON_JOB_NOT_FOUND", "Cron job not found");
@@ -386,98 +440,38 @@ export async function updateCronJob(
     assertRevision(job, input.expectedRevision);
 
     const body = input.body;
-    if (body.state === "paused") {
-      if (job.state === "paused" && job.stateReason === "user_paused") {
-        return projectCronJob(tx as unknown as Database, job);
-      }
-      const [updated] = await tx
-        .update(cronJobs)
-        .set({
-          state: "paused",
-          stateReason: "user_paused",
-          nextRunAt: null,
-          revision: job.revision + 1,
-          ...(body.name !== undefined ? { name: body.name } : {}),
-          ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
-          ...(body.schedule !== undefined || body.timezone !== undefined
-            ? {
-                cronExpression: body.schedule ?? job.cronExpression,
-                timezone: body.timezone ?? job.timezone,
-              }
-            : {}),
-        })
-        .where(eq(cronJobs.id, job.id))
-        .returning();
-      if (!updated) throw new Error("failed to pause cron job");
-      log.info({ jobId: job.id, decisionReason: "user_paused" }, "cron.job.paused");
-      return projectCronJob(tx as unknown as Database, updated);
-    }
+    const name = body.name ?? job.name;
+    const prompt = body.prompt ?? job.prompt;
+    let schedule = body.schedule ?? job.cronExpression;
+    let timezone = body.timezone ?? job.timezone;
+    const scheduleTouched = body.schedule !== undefined || body.timezone !== undefined;
 
-    if (body.state === "active") {
+    let nextState: "active" | "paused" = job.state as "active" | "paused";
+    let nextReason: string | null = job.stateReason;
+    let nextRunAt: Date | null = job.nextRunAt;
+
+    if (body.state === "paused") {
+      nextState = "paused";
+      nextReason = "user_paused";
+      nextRunAt = null;
+    } else if (body.state === "active") {
       assertMutationsAvailable(input.config);
-      const auth = await revalidateOwnerChatAgent(tx as unknown as Database, job);
+      const auth = await revalidateOwnerChatAgent(txDb, job);
       if (!auth.ok) {
         throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot resume schedule (${auth.reason})`);
       }
-      const schedule = body.schedule ?? job.cronExpression;
-      const timezone = body.timezone ?? job.timezone;
-      const now = await databaseNow(tx as unknown as Database);
-      let nextRunAt: Date;
+      nextState = "active";
+      nextReason = null;
+    }
+
+    // One validation path for every branch that touches schedule/timezone or
+    // activates the job. Never store an expression Croner cannot enumerate.
+    if (scheduleTouched || body.state === "active") {
       try {
-        nextRunAt = assertSchedulable(schedule, timezone, now).nextRunAt;
-      } catch (err) {
-        if (err instanceof InvalidCronScheduleError) {
-          throw new CronJobAppError(400, "CRON_JOB_INVALID_SCHEDULE", err.message);
-        }
-        throw err;
-      }
-      const [updated] = await tx
-        .update(cronJobs)
-        .set({
-          state: "active",
-          stateReason: null,
-          nextRunAt,
-          revision: job.revision + 1,
-          cronExpression: schedule,
-          timezone,
-          ...(body.name !== undefined ? { name: body.name } : {}),
-          ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
-        })
-        .where(eq(cronJobs.id, job.id))
-        .returning();
-      if (!updated) throw new Error("failed to resume cron job");
-      log.info({ jobId: job.id }, "cron.job.resumed");
-      return projectCronJob(tx as unknown as Database, updated);
-    }
-
-    // Config-only update
-    let schedule = job.cronExpression;
-    let timezone = job.timezone;
-    let nextRunAt = job.nextRunAt;
-    let changed = false;
-
-    if (body.name !== undefined && body.name !== job.name) changed = true;
-    if (body.prompt !== undefined && body.prompt !== job.prompt) changed = true;
-    if (body.schedule !== undefined && body.schedule !== job.cronExpression) {
-      schedule = body.schedule;
-      changed = true;
-    }
-    if (body.timezone !== undefined && body.timezone !== job.timezone) {
-      timezone = body.timezone;
-      changed = true;
-    }
-
-    if (!changed) {
-      return projectCronJob(tx as unknown as Database, job);
-    }
-
-    const scheduleChanged = body.schedule !== undefined || body.timezone !== undefined;
-    if (scheduleChanged) {
-      try {
-        const normalized = assertSchedulable(schedule, timezone, await databaseNow(tx as unknown as Database));
+        const normalized = assertSchedulable(schedule, timezone, await databaseNow(txDb));
         schedule = normalized.schedule;
         timezone = normalized.timezone;
-        if (job.state === "active") {
+        if (nextState === "active") {
           nextRunAt = normalized.nextRunAt;
         }
       } catch (err) {
@@ -488,24 +482,48 @@ export async function updateCronJob(
       }
     }
 
+    if (nextState === "paused") {
+      nextRunAt = null;
+    }
+
+    const unchanged =
+      name === job.name &&
+      prompt === job.prompt &&
+      schedule === job.cronExpression &&
+      timezone === job.timezone &&
+      nextState === job.state &&
+      nextReason === job.stateReason &&
+      (nextRunAt?.getTime() ?? null) === (job.nextRunAt?.getTime() ?? null);
+    if (unchanged) {
+      return projectCronJob(txDb, job);
+    }
+
     try {
       const [updated] = await tx
         .update(cronJobs)
         .set({
-          name: body.name ?? job.name,
-          prompt: body.prompt ?? job.prompt,
+          name,
+          prompt,
           cronExpression: schedule,
           timezone,
-          nextRunAt: job.state === "active" ? nextRunAt : null,
+          state: nextState,
+          stateReason: nextReason,
+          nextRunAt,
           revision: job.revision + 1,
         })
         .where(eq(cronJobs.id, job.id))
         .returning();
       if (!updated) throw new Error("failed to update cron job");
-      log.info({ jobId: job.id }, "cron.job.updated");
-      return projectCronJob(tx as unknown as Database, updated);
+      if (body.state === "paused" && job.state !== "paused") {
+        log.info({ jobId: job.id, decisionReason: "user_paused" }, "cron.job.paused");
+      } else if (body.state === "active" && job.state !== "active") {
+        log.info({ jobId: job.id }, "cron.job.resumed");
+      } else {
+        log.info({ jobId: job.id }, "cron.job.updated");
+      }
+      return projectCronJob(txDb, updated);
     } catch (err) {
-      if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "23505") {
+      if (isUniqueViolation(err)) {
         throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
       }
       throw err;

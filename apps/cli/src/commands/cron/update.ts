@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { success } from "../../cli/output.js";
-import { readMessageBody } from "../chat/_shared/io.js";
 import { createSdk } from "../_shared/local-agent.js";
+import { readMessageBody } from "../chat/_shared/io.js";
 import { handleCronSdkError, requireCronChatId } from "./_shared.js";
 
 interface UpdateOptions {

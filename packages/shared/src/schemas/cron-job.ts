@@ -126,8 +126,25 @@ export function normalizeCronExpression(raw: string): string {
 
 const FIVE_FIELD_CRON_RE = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/;
 
-/** Reject seconds, macros (`@daily`), and common non-portable extensions. */
-const FORBIDDEN_CRON_TOKEN_RE = /[?LW#]|^\+|@|[Hh]/;
+/**
+ * Reject non-portable / non-OR extensions without matching day/month aliases.
+ * Checked per five-field token so `THU` / `JUL` / `MARCH` stay valid while
+ * Quartz `L`/`W`/`#`/`?`, macros `@…`, Jenkins `H`, and Croner DOM/DOW AND
+ * (`+MON`) are rejected at the request boundary.
+ */
+export function hasNonPortableCronExtension(expression: string): boolean {
+  const fields = normalizeCronExpression(expression).split(" ");
+  if (fields.length !== 5) return true;
+  return fields.some((field) => {
+    if (field.startsWith("+")) return true;
+    if (/[?@#]/.test(field)) return true;
+    // Quartz last/weekday forms: L, LW, L-3, W, 15W — not letters inside JUL/WED/THU.
+    if (/(?:^|[,/-])(?:L(?:W|-\d+)?|W|\d+W)(?:$|[,/-])/i.test(field)) return true;
+    // Jenkins "H" hasher (standalone or H(1-7)).
+    if (/(?:^|[,/-])H(?:\([^)]*\))?(?:$|[,/-])/i.test(field)) return true;
+    return false;
+  });
+}
 
 export const cronExpressionSchema = z
   .string()
@@ -138,7 +155,7 @@ export const cronExpressionSchema = z
   .refine((value) => FIVE_FIELD_CRON_RE.test(value), {
     message: "schedule must be exactly five cron fields: minute hour day-of-month month day-of-week",
   })
-  .refine((value) => !FORBIDDEN_CRON_TOKEN_RE.test(value), {
+  .refine((value) => !hasNonPortableCronExtension(value), {
     message: "schedule must not use seconds, macros, or non-portable cron extensions",
   });
 
@@ -181,10 +198,7 @@ export const cronTimezoneSchema = z
 
 export const cronJobNameSchema = z.string().trim().min(1).max(CRON_JOB_NAME_MAX);
 
-export const cronJobPromptSchema = z
-  .string()
-  .min(1, "prompt must be non-empty")
-  .max(CRON_PROMPT_MAX_CHARS);
+export const cronJobPromptSchema = z.string().min(1, "prompt must be non-empty").max(CRON_PROMPT_MAX_CHARS);
 
 // ── Read model ──────────────────────────────────────────────────────────────
 

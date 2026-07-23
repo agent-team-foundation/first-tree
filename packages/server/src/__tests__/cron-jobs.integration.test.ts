@@ -14,11 +14,7 @@ import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
-async function seedDispatchRoute(
-  app: ReturnType<ReturnType<typeof useTestApp>>,
-  agentId: string,
-  clientId: string,
-) {
+async function seedDispatchRoute(app: ReturnType<ReturnType<typeof useTestApp>>, agentId: string, clientId: string) {
   const now = new Date();
   const instanceId = app.config.instanceId;
   await app.db
@@ -115,12 +111,18 @@ describe("cron jobs integration", () => {
       prompt: "tick",
     });
     const job = createRes.json() as { id: string };
-    const sent = await sendMessage(app.db, chatId, runtime.humanAgentUuid, {
-      source: "api",
-      format: "markdown",
-      content: "seed",
-      metadata: { mentions: [runtime.agent.uuid] },
-    }, { addressedToAgentIds: [runtime.agent.uuid] });
+    const sent = await sendMessage(
+      app.db,
+      chatId,
+      runtime.humanAgentUuid,
+      {
+        source: "api",
+        format: "markdown",
+        content: "seed",
+        metadata: { mentions: [runtime.agent.uuid] },
+      },
+      { addressedToAgentIds: [runtime.agent.uuid] },
+    );
     await app.db
       .update(cronJobs)
       .set({ lastTriggerMessageId: sent.message.id, nextRunAt: new Date(Date.now() - 5_000) })
@@ -187,10 +189,7 @@ describe("cron jobs integration", () => {
       content: "trigger",
       metadata: { mentions: [runtime.agent.uuid] },
     });
-    await app.db
-      .update(cronJobs)
-      .set({ lastTriggerMessageId: sent.message.id })
-      .where(eq(cronJobs.id, job.id));
+    await app.db.update(cronJobs).set({ lastTriggerMessageId: sent.message.id }).where(eq(cronJobs.id, job.id));
     await app.db
       .update(inboxEntries)
       .set({ status: "acked", ackedAt: new Date() })
@@ -199,5 +198,103 @@ describe("cron jobs integration", () => {
     const show = await runtime.request("GET", `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`);
     expect(show.statusCode).toBe(200);
     expect((show.json() as { outstanding: unknown }).outstanding).toBeNull();
+  });
+
+  it("auto-pauses an unparsable due job so a later valid job can still run", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const poisonRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "poison",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "bad",
+    });
+    const validRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "valid-follower",
+      schedule: "0 * * * *",
+      timezone: "UTC",
+      prompt: "ok",
+    });
+    expect(poisonRes.statusCode).toBe(201);
+    expect(validRes.statusCode).toBe(201);
+    const poison = poisonRes.json() as { id: string };
+    const valid = validRes.json() as { id: string };
+    const due = new Date(Date.now() - 5_000);
+    await app.db.update(cronJobs).set({ timezone: "Not/ARealZone", nextRunAt: due }).where(eq(cronJobs.id, poison.id));
+    await app.db
+      .update(cronJobs)
+      .set({ nextRunAt: new Date(due.getTime() + 1) })
+      .where(eq(cronJobs.id, valid.id));
+
+    await createCronScheduler(app).sweepOnce();
+    await createCronScheduler(app).sweepOnce();
+
+    const [poisonRow] = await app.db.select().from(cronJobs).where(eq(cronJobs.id, poison.id));
+    expect(poisonRow?.state).toBe("paused");
+    expect(poisonRow?.stateReason).toBe("invalid_schedule");
+
+    const rows = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const cronMessages = rows.filter((row) => {
+      const meta = row.metadata as Record<string, unknown>;
+      return meta?.[CRON_TRIGGER_METADATA_KEY] != null;
+    });
+    expect(cronMessages.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("applies field changes when pausing an already user-paused job", async () => {
+    const { runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "rename-while-paused",
+      schedule: "0 12 * * *",
+      timezone: "UTC",
+      prompt: "before",
+    });
+    const job = createRes.json() as { id: string; revision: number };
+    const pause = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { state: "paused" },
+      { "if-match": String(job.revision) },
+    );
+    expect(pause.statusCode).toBe(200);
+    const paused = pause.json() as { revision: number; state: string };
+    const rename = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { state: "paused", name: "renamed", prompt: "after" },
+      { "if-match": String(paused.revision) },
+    );
+    expect(rename.statusCode).toBe(200);
+    expect(rename.json()).toMatchObject({
+      name: "renamed",
+      prompt: "after",
+      state: "paused",
+      stateReason: "user_paused",
+    });
+  });
+
+  it("maps rename unique violations to CRON_JOB_NAME_CONFLICT on pause branch", async () => {
+    const { runtime, chatId } = await setupChatWithAgent();
+    const first = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "alpha",
+      schedule: "0 1 * * *",
+      timezone: "UTC",
+      prompt: "a",
+    });
+    const second = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "beta",
+      schedule: "0 2 * * *",
+      timezone: "UTC",
+      prompt: "b",
+    });
+    const job = second.json() as { id: string; revision: number };
+    const conflict = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { state: "paused", name: "alpha" },
+      { "if-match": String(job.revision) },
+    );
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ code: "CRON_JOB_NAME_CONFLICT" });
+    expect(first.statusCode).toBe(201);
   });
 });

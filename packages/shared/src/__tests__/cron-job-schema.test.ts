@@ -22,6 +22,16 @@ describe("cron expression schema", () => {
     expect(cronExpressionSchema.safeParse("0 0 0 * * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 0 L * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 0 * * 1#2").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0 12 1 * +MON").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0 0 15W * *").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("H 0 * * *").success).toBe(false);
+  });
+
+  it("accepts day and month aliases that Croner supports", () => {
+    expect(cronExpressionSchema.parse("0 9 * * THU")).toBe("0 9 * * THU");
+    expect(cronExpressionSchema.parse("0 9 * JUL *")).toBe("0 9 * JUL *");
+    expect(cronExpressionSchema.parse("0 9 * MARCH *")).toBe("0 9 * MARCH *");
+    expect(cronExpressionSchema.parse("0 9 * * WED")).toBe("0 9 * * WED");
   });
 });
 

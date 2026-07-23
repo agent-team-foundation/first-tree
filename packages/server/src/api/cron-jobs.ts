@@ -1,13 +1,9 @@
-import {
-  cronJobRevisionHeaderSchema,
-  cronPreviewRequestSchema,
-  updateCronJobRequestSchema,
-} from "@first-tree/shared";
+import { cronJobRevisionHeaderSchema, cronPreviewRequestSchema, updateCronJobRequestSchema } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
-import { type CronJobRow } from "../db/schema/cron-jobs.js";
+import type { CronJobRow } from "../db/schema/cron-jobs.js";
 import { NotFoundError } from "../errors.js";
 import { requireChatAccess } from "../scope/require-resource.js";
 import type { OrgScope } from "../scope/types.js";
