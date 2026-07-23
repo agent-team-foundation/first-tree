@@ -712,6 +712,26 @@ describe("Team setup capabilities", () => {
     });
     expect(missingInstallationProbe).not.toHaveBeenCalled();
 
+    await expect(
+      project(app, missingInstallation, missingInstallationProbe, {
+        githubAppCredentials: undefined,
+      }),
+    ).resolves.toMatchObject({
+      contextTree: {
+        automaticReview: {
+          health: "unavailable",
+          blockers: [
+            {
+              code: "github_app_not_configured",
+              resolutionOwner: "operator",
+              actionKind: null,
+            },
+          ],
+        },
+      },
+    });
+    expect(missingInstallationProbe).not.toHaveBeenCalled();
+
     const missing = await createScenario(app);
     await seedGithubReview(app, missing);
     const missingProbe = vi.fn(async () => "ready" as const);

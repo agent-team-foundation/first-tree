@@ -298,11 +298,11 @@ export async function getTeamSetupCapabilities(
     }
 
     if (binding.provider === "github") {
-      if (!installation) {
-        reviewBlockers.push(blocker("context_review_provider_prerequisite_missing", "admin", "connect_github"));
-        reviewHealth = "unavailable";
-      } else if (!options.githubAppCredentials?.webhookSecret) {
+      if (!options.githubAppCredentials?.webhookSecret) {
         reviewBlockers.push(blocker("github_app_not_configured", "operator", null));
+        reviewHealth = "unavailable";
+      } else if (!installation) {
+        reviewBlockers.push(blocker("context_review_provider_prerequisite_missing", "admin", "connect_github"));
         reviewHealth = "unavailable";
       } else if (installation.suspendedAt) {
         reviewBlockers.push(blocker("github_app_suspended", "admin", "manage_github_installation"));
