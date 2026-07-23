@@ -336,7 +336,7 @@ describe("Settings Setup overview", () => {
       ["repositories", "unknown", "circle-question-mark", "--fg-3"],
       ["repository-automation", "pending", "clock-3", "--state-idle"],
       ["context-tree", "pending", "clock-3", "--state-idle"],
-      ["automatic-review", "blocked", "circle-alert", "--state-blocked"],
+      ["automatic-review", "neutral", "circle-alert", "--fg-3"],
     ] as const;
 
     for (const [key, kind, glyph, token] of expectation) {
@@ -458,7 +458,7 @@ describe("Settings Setup overview", () => {
         },
       }),
       "Degraded",
-      "blocked",
+      "neutral",
     ],
   ] as const)("summarizes %s repository automation coverage", (_name, capabilities, label, kind) => {
     const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: capabilities } }));
@@ -581,7 +581,7 @@ describe("Settings Setup overview", () => {
     });
     const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: shared } }));
 
-    expect(row.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
+    expect(row.status).toMatchObject({ label: "Service unavailable", kind: "neutral" });
     expect(row.status.detail).toContain("deployment");
     expect(row.action).toBeUndefined();
   });
@@ -837,8 +837,9 @@ describe("Settings Setup overview", () => {
       }),
     );
 
-    expect(row.status).toMatchObject({ label: "Degraded", kind: "attention" });
-    expect(row.status.detail).toContain("Automatic review remains off");
+    expect(row.status).toMatchObject({ label: "Off", kind: "optional" });
+    expect(row.status.detail).toContain("Reviewer degraded");
+    expect(row.status.detail).toContain("runtime is currently unavailable");
     expect(row.action).toEqual({
       label: "Manage",
       to: "/settings/setup#automatic-review",
@@ -1026,7 +1027,7 @@ describe("Settings Setup overview", () => {
       }),
     );
     const view = await renderSettingsSetupPage();
-    const review = await waitForRowText(view.host, "automatic-review", "Degraded");
+    const review = await waitForRowText(view.host, "automatic-review", "Off");
     const manage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "Manage",
     );

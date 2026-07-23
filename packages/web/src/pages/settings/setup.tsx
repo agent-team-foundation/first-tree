@@ -52,7 +52,15 @@ type ContextTreeFact = {
   availability: "active" | "stale" | "unavailable" | "checking" | "unknown" | null;
 };
 
-export type SetupStatusKind = "ready" | "optional" | "loading" | "pending" | "attention" | "blocked" | "unknown";
+export type SetupStatusKind =
+  | "ready"
+  | "optional"
+  | "loading"
+  | "pending"
+  | "attention"
+  | "neutral"
+  | "blocked"
+  | "unknown";
 
 export type SetupFacts = {
   role: string | null;
@@ -258,7 +266,9 @@ function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin
   const blockers = configured.flatMap((provider) => provider.blockers);
   const issues = blockerDetail(blockers, isAdmin);
   const detail = [providerDetail, issues].filter((item): item is string => Boolean(item)).join(" · ");
-  const adminAttention = isAdmin && hasAdminBlocker(blockers);
+  const hasAdminOwnedBlocker = hasAdminBlocker(blockers);
+  const adminAttention = isAdmin && hasAdminOwnedBlocker;
+  const inactiveKind: SetupStatusKind = adminAttention ? "attention" : hasAdminOwnedBlocker ? "blocked" : "neutral";
 
   if (ready.length === configured.length) {
     return {
@@ -272,12 +282,12 @@ function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin
     return { label: "Verification pending", detail, kind: adminAttention ? "attention" : "pending" };
   }
   if (configured.some((provider) => provider.health === "degraded")) {
-    return { label: "Degraded", detail, kind: adminAttention ? "attention" : "blocked" };
+    return { label: "Degraded", detail, kind: inactiveKind };
   }
   return {
     label: hasAdminBlocker(blockers) && isAdmin ? "Needs attention" : "Service unavailable",
     detail,
-    kind: adminAttention ? "attention" : "blocked",
+    kind: inactiveKind,
   };
 }
 
@@ -381,33 +391,41 @@ function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowM
   if (review.adoption === "unavailable") {
     return { label: "Available after Context Tree", kind: "optional" };
   }
-  if (review.adoption === "disabled" && review.health === "not_observed" && review.blockers.length === 0) {
+  if (review.adoption === "disabled") {
     const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
-    return { label: "Off", detail: reviewer ? `${reviewer} · Optional` : "Optional", kind: "optional" };
+    const healthDetail =
+      review.health === "pending_verification"
+        ? "Reviewer verification pending"
+        : review.health === "degraded"
+          ? "Reviewer degraded"
+          : review.health === "unavailable"
+            ? "Reviewer unavailable"
+            : null;
+    const issues = blockerDetail(review.blockers, isAdmin);
+    const detail = [reviewer, healthDetail, issues, "Optional"]
+      .filter((item): item is string => Boolean(item))
+      .join(" · ");
+    return { label: "Off", detail, kind: "optional" };
   }
 
   const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
   const issues = blockerDetail(review.blockers, isAdmin);
-  const disabledDetail = review.adoption === "disabled" ? "Automatic review remains off" : null;
-  const detail =
-    [reviewer, issues, disabledDetail].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
-  if (review.health === "ready") {
-    return review.adoption === "disabled"
-      ? { label: "Off", detail, kind: "optional" }
-      : { label: "On", detail, kind: "ready" };
-  }
-  const adminAttention = isAdmin && hasAdminBlocker(review.blockers);
+  const detail = [reviewer, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
+  if (review.health === "ready") return { label: "On", detail, kind: "ready" };
+  const hasAdminOwnedBlocker = hasAdminBlocker(review.blockers);
+  const adminAttention = isAdmin && hasAdminOwnedBlocker;
+  const inactiveKind: SetupStatusKind = adminAttention ? "attention" : hasAdminOwnedBlocker ? "blocked" : "neutral";
   if (review.health === "pending_verification") {
     return { label: "Verification pending", detail, kind: adminAttention ? "attention" : "pending" };
   }
   if (review.health === "degraded") {
-    return { label: "Degraded", detail, kind: adminAttention ? "attention" : "blocked" };
+    return { label: "Degraded", detail, kind: inactiveKind };
   }
   if (review.health === "unavailable") {
     return {
       label: hasAdminBlocker(review.blockers) && isAdmin ? "Needs attention" : "Service unavailable",
       detail,
-      kind: adminAttention ? "attention" : "blocked",
+      kind: inactiveKind,
     };
   }
   return { label: "Status unknown", detail, kind: "unknown" };
@@ -817,6 +835,7 @@ const SETUP_STATUS_PRESENTATION: Record<SetupStatusKind, { icon: LucideIcon; col
   loading: { icon: LoaderCircle, color: "var(--state-idle)", animate: true },
   pending: { icon: Clock3, color: "var(--state-idle)" },
   attention: { icon: CircleAlert, color: "var(--state-needs-you)" },
+  neutral: { icon: CircleAlert, color: "var(--fg-3)" },
   blocked: { icon: CircleAlert, color: "var(--state-blocked)" },
   unknown: { icon: CircleHelp, color: "var(--fg-3)" },
 };
