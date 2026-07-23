@@ -673,6 +673,9 @@ function allowedPreVerifySegment(segment: string, expectation: ReviewFixtureExpe
   }
 
   if (/^gh\s+pr\s+view\b/iu.test(segment) || /^gh\s+api\s+user\b/iu.test(segment)) return true;
+  if (/^glab\s+(?:auth\s+status|mr\s+view|api\s+user)\b/iu.test(segment) && !hasUnquotedRedirection(segment)) {
+    return true;
+  }
   if (/^first-tree(?:-staging)?\s+org\s+context-tree\s+review-config\b/iu.test(segment)) return true;
   if (/^first-tree(?:-staging)?\s+tree\s+verify\b/iu.test(segment)) return true;
   if (readOnlyReviewWorktreeProbe(segment, expectation)) return true;
@@ -861,8 +864,38 @@ export function deriveMetrics(
     if (event.type === "gh_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) {
       blockedGithubAttempts += 1;
     }
-    if (event.type === "github_identity_read") {
+    if (
+      (event.type === "glab_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) ||
+      (event.type === "first_tree_result" && event.gitlabReviewFixtureViolation === true)
+    ) {
+      blockedGithubAttempts += 1;
+    }
+    if (event.type === "github_identity_read" || event.type === "gitlab_identity_read") {
       if (identityIndex < 0) identityIndex = index;
+    }
+    if (
+      event.type === "gitlab_mr_viewed" &&
+      typeof event.headRefOid === "string" &&
+      typeof event.isDraft === "boolean" &&
+      typeof event.mrIid === "number" &&
+      typeof event.repo === "string" &&
+      typeof event.state === "string"
+    ) {
+      viewEvents.push({
+        eventIndex: index,
+        headRefOid: event.headRefOid,
+        isDraft: event.isDraft,
+        prNumber: event.mrIid,
+        repo: event.repo,
+        state: event.state,
+      });
+      checksEvents.push({
+        checksPassed: event.pipelineAcceptable === true,
+        eventIndex: index,
+        head: event.headRefOid,
+        prNumber: event.mrIid,
+        repo: event.repo,
+      });
     }
     if (
       event.type === "context_review_push_denied" &&

@@ -36,13 +36,25 @@ const DEFAULT_SKILL_NAMES = [
   "first-tree-qa",
 ] as const;
 
-function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
+function workspaceAgents(
+  skills: readonly { description: string; name: string }[],
+  forgeProvider: "github" | "gitlab",
+): string {
   const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Tree Location\n\n- Path: \`./context-tree\`\n- Upstream: \`https://github.com/owner/context-tree\`\n- Default branch: \`main\`\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for all ownership changes and \`decisionLocksCode\`. Member or parent ownership does not implicitly assign an owner to another node. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The current durable review decision is that the GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.\n`;
+  const upstream =
+    forgeProvider === "gitlab"
+      ? "ssh://git@gitlab.example:2222/owner/context-tree.git"
+      : "https://github.com/owner/context-tree";
+  const reviewDecision =
+    forgeProvider === "gitlab"
+      ? "GitLab uses no approval protocol; the local reviewer identity performs safe repairs and one exact-SHA squash merge."
+      : "The GitHub App publishes the formal verdict while the local reviewer identity performs safe repairs.";
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR/MR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached change-head discovery, validation, repair, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree change.\n\n## Tree Location\n\n- Path: \`./context-tree\`\n- Upstream: \`${upstream}\`\n- Default branch: \`main\`\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for all ownership changes and \`decisionLocksCode\`. Member or parent ownership does not implicitly assign an owner to another node. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review and repair follow the installed skill. The current durable review decision is that ${reviewDecision}\n`;
 }
 
 function changedBodies(
   scenario: ContextTreeReviewEvalCase["fixture"]["scenario"],
+  forgeProvider: "github" | "gitlab",
 ): readonly { content: string; path: string }[] {
   if (scenario === "archive-only") {
     return [
@@ -107,7 +119,9 @@ function changedBodies(
       path: "system/review-contract.md",
       content: node(
         "Review Contract",
-        "## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.\n\n## Constraints\n\nRepositories dismiss stale approvals after a push.",
+        forgeProvider === "gitlab"
+          ? "## Decision\n\nThe GitLab Review Agent uses its local identity for safe repair and one exact-SHA squash merge.\n\n## Rationale\n\nBinding merge to the fully reviewed SHA prevents a concurrent push from inheriting an earlier conclusion without inventing an approval protocol.\n\n## Constraints\n\nA successor head requires a complete validator-first review."
+          : "## Decision\n\nThe GitHub App publishes the formal Context Tree pull request review.\n\n## Rationale\n\nOne provider-native verdict keeps approval visible and auditable while local agent credentials remain responsible for repair and merge.\n\n## Constraints\n\nRepositories dismiss stale approvals after a push.",
       ),
     },
   ];
@@ -146,7 +160,9 @@ function repairContentValid(fixture: ReviewFixture, sourceHeadOid: string): bool
       return shown.exitCode === 0 && original.exitCode === 0 && withoutRepairedTitle === original.stdout;
     }
     if (shown.exitCode !== 0) {
-      return /GitHub App/iu.test(show("system/NODE.md").stdout);
+      return fixture.expectation.forgeProvider === "gitlab"
+        ? /exact-SHA squash merge/iu.test(show("system/NODE.md").stdout)
+        : /GitHub App/iu.test(show("system/NODE.md").stdout);
     }
     return false;
   }
@@ -168,11 +184,12 @@ function repairContentValid(fixture: ReviewFixture, sourceHeadOid: string): bool
 }
 
 export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPaths): ReviewFixture {
+  const forgeProvider = evalCase.forgeProvider ?? "github";
   const installedSkills = DEFAULT_SKILL_NAMES.map((name) => ({
     description: parseSkillDescription(installRepoSkill(paths.repoRoot, paths.workspacePath, name)),
     name,
   }));
-  writeText(join(paths.workspacePath, "AGENTS.md"), workspaceAgents(installedSkills));
+  writeText(join(paths.workspacePath, "AGENTS.md"), workspaceAgents(installedSkills, forgeProvider));
   writeText(
     join(paths.workspacePath, ".first-tree", "workspace.json"),
     `${JSON.stringify({ tree: "context-tree" }, null, 2)}\n`,
@@ -193,7 +210,9 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     join(treePath, "system", "NODE.md"),
     node(
       "System",
-      "## Decision\n\nThe GitHub App publishes the formal review verdict while the local reviewer identity performs safely determined repairs.\n\n## Rationale\n\nThis preserves one provider-native verdict without giving App credentials to the runtime.",
+      forgeProvider === "gitlab"
+        ? "## Decision\n\nThe GitLab Review Agent performs safe repair and exact-SHA squash merge with its local identity, without a simulated approval.\n\n## Rationale\n\nThis preserves the old GitLab deployment boundary while preventing an unreviewed successor head from merging."
+        : "## Decision\n\nThe GitHub App publishes the formal review verdict while the local reviewer identity performs safely determined repairs.\n\n## Rationale\n\nThis preserves one provider-native verdict without giving App credentials to the runtime.",
     ),
   );
   writeText(
@@ -252,7 +271,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   assertCommandOk(runCommand("git", ["remote", "add", "origin", originPath], treePath));
   assertCommandOk(runCommand("git", ["push", "-u", "origin", "main"], treePath));
   assertCommandOk(runCommand("git", ["switch", "-c", "review-change"], treePath));
-  const changed = changedBodies(evalCase.fixture.scenario);
+  const changed = changedBodies(evalCase.fixture.scenario, forgeProvider);
   for (const item of changed) writeText(join(treePath, item.path), item.content);
   assertCommandOk(runCommand("git", ["add", "."], treePath));
   assertCommandOk(runCommand("git", ["commit", "-m", "docs: update review contract"], treePath));
@@ -270,13 +289,21 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     `${JSON.stringify({ exitCode: verifyResult.exitCode, stderr: verifyResult.stderr, stdout: verifyResult.stdout }, null, 2)}\n`,
   );
   assertCommandOk(runCommand("git", ["push", "-u", "origin", "review-change"], treePath));
-  assertCommandOk(runCommand("git", ["push", "origin", `HEAD:refs/pull/42/head`], treePath));
+  const changeRef = forgeProvider === "gitlab" ? "refs/merge-requests/42/head" : "refs/pull/42/head";
+  assertCommandOk(runCommand("git", ["push", "origin", `HEAD:${changeRef}`], treePath));
   assertCommandOk(runCommand("git", ["switch", "main"], treePath));
 
   const postReceivePath = join(originPath, "hooks", "post-receive");
   writeText(
     postReceivePath,
-    '#!/bin/sh\nwhile read old_oid new_oid ref_name; do\n  if [ "$ref_name" = "refs/heads/review-change" ]; then\n    git update-ref refs/pull/42/head "$new_oid"\n  fi\ndone\n',
+    `#!/bin/sh
+while read old_oid new_oid ref_name; do
+  if [ "$ref_name" = "refs/heads/review-change" ]; then
+    git update-ref ${changeRef} "$new_oid"
+    printf '{"type":"context_review_repair_pushed","fromHead":"%s","successorHead":"%s"}\\n' "$old_oid" "$new_oid" >> ${JSON.stringify(paths.eventsPath)}
+  fi
+done
+`,
   );
   chmodSync(postReceivePath, 0o755);
   if (evalCase.expected.repair === "push-denied" || evalCase.expected.repair === "none") {
@@ -297,6 +324,7 @@ exit 0
     chmodSync(preReceivePath, 0o755);
   }
 
+  const repo = forgeProvider === "gitlab" ? "gitlab.example:8443/owner/context-tree" : "owner/context-tree";
   const view = {
     author: { login: "contributor" },
     baseRefName: "main",
@@ -314,14 +342,17 @@ exit 0
     files: changed.map((item) => ({ path: item.path })),
     headRefName: "review-change",
     headRefOid: headOid,
-    headRepository: { nameWithOwner: "owner/context-tree" },
+    headRepository: { nameWithOwner: repo },
     isCrossRepository: false,
     isDraft: evalCase.fixture.scenario === "draft",
     number: 42,
     reviews: [],
     state: "OPEN",
     title: "Update review contract",
-    url: "https://github.com/owner/context-tree/pull/42",
+    url:
+      forgeProvider === "gitlab"
+        ? "https://gitlab.example:8443/owner/context-tree/-/merge_requests/42"
+        : "https://github.com/owner/context-tree/pull/42",
   };
   const reviewerLogin = "repair-first-reviewer";
   const runId = "01900000-0000-7000-8000-000000000042";
@@ -330,8 +361,7 @@ exit 0
   const runtimeSessionToken = "review-eval-runtime-session";
   const runtimeSessionTokenFile = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
   writeText(runtimeSessionTokenFile, `${runtimeSessionToken}\n`);
-  const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
-  const repo = "owner/context-tree";
+  const fixturePath = join(paths.workspacePath, ".first-tree-eval", `${forgeProvider}-review-fixture.json`);
   const prNumber = 42;
   const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
   const repairWorktreePath = join(paths.workspacePath, ".repair-worktrees", "42");
@@ -340,10 +370,14 @@ exit 0
     `${JSON.stringify(
       {
         chatId,
+        changeRef,
+        connectionId: forgeProvider === "gitlab" ? "gitlab-connection-eval" : null,
+        forgeProvider,
         initialHeadOid: headOid,
+        instanceOrigin: forgeProvider === "gitlab" ? "https://gitlab.example:8443" : null,
         originPath,
         prNumber,
-        pullRef: "refs/pull/42/head",
+        pullRef: changeRef,
         repair: evalCase.expected.repair,
         repairPaths: evalCase.expected.repairPaths,
         repairWorktreePath,
@@ -369,9 +403,11 @@ exit 0
   return {
     expectation: {
       baseOid,
+      changeRef,
       chatId,
       expectedFinalDraft: view.isDraft,
       expectedFinalState: "OPEN",
+      forgeProvider,
       forbiddenPaths:
         evalCase.fixture.scenario === "passing" || evalCase.fixture.scenario === "relationship-change"
           ? ["experience/NODE.md", "experience/navigation.md"]
@@ -441,7 +477,7 @@ export function inspectFixtureIntegrity(fixture: ReviewFixture): ReviewFixtureIn
   const actualOrigin = parseRefs(originRefsNow);
   const initialTree = parseRefs(fixture.treeRefs);
   const actualTree = parseRefs(treeRefsNow);
-  const finalHeadOid = refOid(fixture.originPath, "refs/pull/42/head");
+  const finalHeadOid = refOid(fixture.originPath, fixture.expectation.changeRef);
   const originSourceOid = refOid(fixture.originPath, "refs/heads/review-change");
   const sourceHeadOid = runCommand("git", ["rev-parse", "refs/heads/review-change"], fixture.treePath).stdout.trim();
   const expectsPush = fixture.expectation.repair === "success";
@@ -450,7 +486,7 @@ export function inspectFixtureIntegrity(fixture: ReviewFixture): ReviewFixtureIn
   const expectedOrigin = new Map(initialOrigin);
   if (expectsPush) {
     expectedOrigin.set("refs/heads/review-change", sourceHeadOid);
-    expectedOrigin.set("refs/pull/42/head", sourceHeadOid);
+    expectedOrigin.set(fixture.expectation.changeRef, sourceHeadOid);
   }
   const expectedTree = new Map(initialTree);
   if (expectsCommit) expectedTree.set("refs/heads/review-change", sourceHeadOid);

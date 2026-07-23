@@ -33,6 +33,7 @@ import { pollInbox } from "../services/inbox.js";
 import { getCallerEngagement, setChatEngagement } from "../services/me-chat.js";
 import { deleteMember } from "../services/member.js";
 import { deactivateMembership, MEMBER_STATUSES, reactivateMembership } from "../services/membership.js";
+import { putOrgSetting } from "../services/org-settings.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -46,6 +47,8 @@ function mergeRequestPayload(input: {
   actor?: string;
   projectPath?: string;
   title?: string;
+  draft?: boolean;
+  oldrev?: string;
 }) {
   const projectPath = input.projectPath ?? "Acme/Reviews";
   return {
@@ -66,6 +69,8 @@ function mergeRequestPayload(input: {
       description: "Please review",
       url: `https://gitlab.internal/${projectPath}/-/merge_requests/${input.iid ?? 17}`,
       state: "opened",
+      ...(input.draft === undefined ? {} : { draft: input.draft }),
+      ...(input.oldrev === undefined ? {} : { oldrev: input.oldrev }),
     },
   };
 }
@@ -111,6 +116,288 @@ describe("GitLab Stage 3 personnel routing", () => {
     });
     return { admin, delegate, connection, link };
   }
+
+  it("dispatches one reserved Context Reviewer run for an old-GitLab MR without personnel routing", async () => {
+    const app = getApp();
+    const { admin, delegate, connection } = await setupTarget(app);
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "git@gitlab.internal:Acme/Reviews.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [
+          { origin: "https://gitlab.internal", addressPolicy: { kind: "cidrs", cidrs: ["10.0.0.0/8"] } },
+        ],
+      },
+    );
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: delegate.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    const payload = mergeRequestPayload({ projectPath: "Acme/Reviews" });
+    const first = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/14.10.5");
+    expect(first.statusCode).toBe(200);
+
+    const reviewerChats = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
+    const reviewerChat = reviewerChats.find((chat) => chat.metadata.contextTreeReviewer === true);
+    expect(reviewerChat?.metadata).toMatchObject({
+      source: "gitlab",
+      entityType: "pull_request",
+      contextTreeReviewer: true,
+      reviewerAgentUuid: delegate.uuid,
+    });
+    expect(reviewerChat?.topic).toBe("Context Review · Reviews!17");
+
+    const reviewerMessages = reviewerChat
+      ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id))
+      : [];
+    expect(reviewerMessages).toHaveLength(1);
+    expect(reviewerMessages[0]?.metadata).toMatchObject({
+      source: "gitlab",
+      contextTreeReviewer: true,
+      contextReviewConnectionId: connection.connectionId,
+      contextReviewInstanceOrigin: "https://gitlab.internal",
+      contextReviewProjectId: 801,
+      contextReviewMrIid: 17,
+      contextReviewReviewerAgentUuid: delegate.uuid,
+    });
+    expect(reviewerMessages[0]?.metadata).not.toHaveProperty("contextReviewSubmission");
+    expect(reviewerMessages[0]?.content).toContain(`GitLab connection: ${connection.connectionId}`);
+    expect(reviewerMessages[0]?.content).toContain("Never call `first-tree tree review`");
+    expect(reviewerMessages[0]?.content).toContain("exact-SHA squash merge");
+
+    const duplicate = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/14.10.5");
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toMatchObject({ outcome: "duplicate" });
+    expect(
+      reviewerChat ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id)) : [],
+    ).toHaveLength(1);
+  });
+
+  it("fails closed for wrong repo, disabled or invalid Reviewer, handles draft-to-ready update, and ignores Notes", async () => {
+    const app = getApp();
+    const { admin, delegate, connection } = await setupTarget(app);
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/Acme/Reviews.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [
+          { origin: "https://gitlab.internal", addressPolicy: { kind: "cidrs", cidrs: ["10.0.0.0/8"] } },
+        ],
+      },
+    );
+
+    expect(
+      (
+        await postMr(
+          app,
+          connection.bearer,
+          mergeRequestPayload({ projectPath: "Acme/Other", iid: 40 }),
+          "wrong-context-repo",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await postMr(
+          app,
+          connection.bearer,
+          mergeRequestPayload({ projectPath: "Acme/Reviews", iid: 41 }),
+          "disabled-context-reviewer",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.db.select().from(chats)).filter((chat) => chat.metadata.contextTreeReviewer === true),
+    ).toHaveLength(0);
+
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: delegate.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, delegate.uuid));
+    expect(
+      (
+        await postMr(
+          app,
+          connection.bearer,
+          mergeRequestPayload({ projectPath: "Acme/Reviews", iid: 42 }),
+          "invalid-context-reviewer",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.db.select().from(chats)).filter((chat) => chat.metadata.contextTreeReviewer === true),
+    ).toHaveLength(0);
+
+    await app.db.update(agents).set({ status: "active" }).where(eq(agents.uuid, delegate.uuid));
+    const draft = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({ projectPath: "Acme/Reviews", iid: 43, draft: true }),
+      "draft-context-reviewer",
+    );
+    expect(draft.statusCode).toBe(200);
+    const ready = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({
+        action: "update",
+        projectPath: "Acme/Reviews",
+        iid: 43,
+        draft: false,
+        changes: { draft: { previous: true, current: false } },
+      }),
+      "ready-context-reviewer",
+    );
+    expect(ready.statusCode).toBe(200);
+
+    const [reviewerChat] = (await app.db.select().from(chats)).filter(
+      (chat) => chat.metadata.contextTreeReviewer === true,
+    );
+    expect(reviewerChat).toBeDefined();
+    const beforeNoteMessages = reviewerChat
+      ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id))
+      : [];
+    expect(beforeNoteMessages).toHaveLength(2);
+    expect(beforeNoteMessages.map((message) => message.metadata)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ mergeRequestDraft: true }),
+        expect.objectContaining({ mergeRequestDraft: false, action: "update" }),
+      ]),
+    );
+
+    const sourceUpdate = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({
+        action: "update",
+        projectPath: "Acme/Reviews",
+        iid: 43,
+        draft: false,
+        oldrev: "0123456789abcdef0123456789abcdef01234567",
+      }),
+      "source-update-context-reviewer",
+    );
+    expect(sourceUpdate.statusCode).toBe(200);
+    const afterSourceUpdateMessages = reviewerChat
+      ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id))
+      : [];
+    expect(afterSourceUpdateMessages).toHaveLength(3);
+    expect(afterSourceUpdateMessages.filter((message) => message.metadata.action === "update")).toHaveLength(2);
+    expect(afterSourceUpdateMessages.map((message) => message.metadata)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "update",
+          triggerEvent: "merge_request.update",
+        }),
+      ]),
+    );
+
+    const note = await app.inject({
+      method: "POST",
+      url: `/api/v1/webhooks/gitlab/${connection.bearer}`,
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Note Hook",
+        "idempotency-key": "context-reviewer-note",
+      },
+      payload: JSON.stringify({
+        object_kind: "note",
+        project: {
+          id: 801,
+          path_with_namespace: "Acme/Reviews",
+          web_url: "https://gitlab.internal/Acme/Reviews",
+        },
+        user: { username: "review-agent" },
+        object_attributes: {
+          id: 501,
+          note: "review output",
+          url: "https://gitlab.internal/Acme/Reviews/-/merge_requests/43#note_501",
+          noteable_type: "MergeRequest",
+        },
+        merge_request: {
+          iid: 43,
+          title: "Review this change",
+          url: "https://gitlab.internal/Acme/Reviews/-/merge_requests/43",
+          state: "opened",
+        },
+      }),
+    });
+    expect(note.statusCode).toBe(200);
+    expect(
+      reviewerChat ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id)) : [],
+    ).toHaveLength(3);
+  });
+
+  it("fences the replaced connection bearer before Context Reviewer dispatch", async () => {
+    const app = getApp();
+    const { admin, delegate, connection } = await setupTarget(app);
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/Acme/Reviews.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [
+          { origin: "https://gitlab.internal", addressPolicy: { kind: "cidrs", cidrs: ["10.0.0.0/8"] } },
+        ],
+      },
+    );
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: delegate.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    await replaceGitlabConnection(app.db, {
+      expectedConnectionId: connection.connectionId,
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Replacement GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+
+    const stale = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({ projectPath: "Acme/Reviews", iid: 44 }),
+      "stale-replaced-connection",
+    );
+    expect(stale.statusCode).toBe(404);
+    expect(
+      (await app.db.select().from(chats)).filter((chat) => chat.metadata.contextTreeReviewer === true),
+    ).toHaveLength(0);
+  });
 
   it("normalizes capability-driven reviewer, legacy assignee, delta, and schema-anomaly semantics", () => {
     const normalize = (body: object) =>

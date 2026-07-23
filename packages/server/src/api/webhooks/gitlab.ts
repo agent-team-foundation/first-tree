@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, NotFoundError } from "../../errors.js";
+import { handleContextReviewerMrEvent } from "../../services/context-reviewer-mr.js";
 import {
   findActiveGitlabEndpoint,
   markGitlabInboundSeen,
@@ -23,6 +24,8 @@ import {
   normalizeGitlabWebhook,
   resolveGitlabAudience,
 } from "../../services/gitlab-webhook.js";
+import { runDeferredSendMessagePostCommitEffects } from "../../services/message.js";
+import { notifyRecipients } from "../../services/notifier.js";
 import { runDeferredScmCardPostCommitEffects } from "../../services/scm-card-delivery.js";
 import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
 
@@ -138,7 +141,12 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                 if (applied.schemaAnomalyCode) {
                   await markGitlabReviewerSchemaAnomaly(tx, fencedConnection.id, applied.schemaAnomalyCode);
                 }
-                return { endpointSeen: true };
+                const contextReviewer = await handleContextReviewerMrEvent({
+                  database: tx,
+                  normalized,
+                  connection: fencedConnection,
+                });
+                return { endpointSeen: true, contextReviewer };
               },
               resolveAudience: async (event) => {
                 if (!normalized.entityIdentity || !applied.event) {
@@ -179,6 +187,11 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           for (const effects of result.deliveryStats.postCommitEffects) {
             await runDeferredScmCardPostCommitEffects(app, effects);
           }
+        }
+        const contextReviewer = result.outcome === "duplicate" ? null : result.providerResult.contextReviewer;
+        if (contextReviewer?.handled) {
+          await runDeferredSendMessagePostCommitEffects(app.db, contextReviewer.deferredPostCommitEffects);
+          notifyRecipients(app.notifier, contextReviewer.recipients, contextReviewer.messageId);
         }
         return { ok: true, outcome: result.outcome };
       } catch (err) {

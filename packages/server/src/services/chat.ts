@@ -68,6 +68,8 @@ export type CreateTaskChatInput = {
   initialMessage: SendMessage;
   /** Trusted internal capability forwarded only for Context Reviewer bootstrap. */
   allowContextReviewRun?: boolean;
+  /** Return session/kick effects to a caller that owns a wider transaction. */
+  deferPostCommitEffects?: boolean;
   source: "agent" | "manual";
 } & LandingCampaignTrialCreateOptions;
 
@@ -112,6 +114,7 @@ export type CreateTaskChatResult = {
   effectiveSenderId: string;
   initialRecipientAgentIds: string[];
   contextParticipantAgentIds: string[];
+  deferredPostCommitEffects?: DeferredSendMessagePostCommitEffects;
 };
 
 type AgentIdentityForCreate = {
@@ -521,7 +524,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         postCommitEffects: sent.deferredPostCommitEffects,
       };
     });
-    if (result.postCommitEffects) {
+    if (result.postCommitEffects && !input.deferPostCommitEffects) {
       await runDeferredSendMessagePostCommitEffects(db, result.postCommitEffects);
     }
     invalidateChatAudience(result.chat.id);
@@ -531,6 +534,9 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
       effectiveSenderId,
       initialRecipientAgentIds,
       contextParticipantAgentIds,
+      ...(input.deferPostCommitEffects && result.postCommitEffects
+        ? { deferredPostCommitEffects: result.postCommitEffects }
+        : {}),
     };
   }
 

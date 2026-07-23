@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTEXT_TREE_PROVIDERS } from "../canonical-git-repo-url.js";
 
 /**
  * Per-organization settings — schemas, namespaces, and the registry that
@@ -111,6 +112,8 @@ export const repoUrlSchema = z
   });
 
 // -- context_tree --
+
+export const contextTreeProviderSchema = z.enum(CONTEXT_TREE_PROVIDERS);
 
 const LINE_BREAK_RE = /[\r\n\u2028\u2029]/;
 const CONTEXT_TREE_URL_FORM_RE = /^(?:https|ssh):\/\/[^/\\\s]/i;
@@ -275,6 +278,7 @@ export const contextTreeBranchSchema = z
 
 export const contextTreeActiveBindingSchema = z
   .object({
+    provider: contextTreeProviderSchema.optional(),
     repo: contextTreeRepoSchema,
     branch: contextTreeBranchSchema.nullish().transform((branch) => branch ?? "main"),
   })
@@ -285,6 +289,7 @@ export const orgContextTreeStorageSchema = z.object({
   // an administrator can read and replace an invalid legacy binding.
   repo: z.string().optional(),
   branch: z.string().default("main"),
+  provider: contextTreeProviderSchema.optional(),
 });
 
 export type ContextTreeSettingState =
@@ -313,6 +318,8 @@ export function classifyContextTreeSetting(value: unknown): ContextTreeSettingSt
 
 export const orgContextTreeInputSchema = z
   .object({
+    /** Explicit provider for agent-driven initialization. Settings may omit it and let Server classify safely. */
+    provider: contextTreeProviderSchema.nullish(),
     /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
     repo: contextTreeRepoSchema.nullish(),
     /** Set / replace (valid Git branch name). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
@@ -326,6 +333,7 @@ export const orgContextTreeInputSchema = z
  */
 export const orgContextTreeFinalizeInputSchema = z
   .object({
+    provider: contextTreeProviderSchema,
     repo: contextTreeRepoSchema,
     branch: contextTreeBranchSchema,
     expectedUnboundBranch: contextTreeBranchSchema,
@@ -333,6 +341,7 @@ export const orgContextTreeFinalizeInputSchema = z
   .strict();
 
 export const orgContextTreeOutputSchema = z.object({
+  provider: contextTreeProviderSchema.optional(),
   repo: z.string().optional(),
   branch: z.string().optional(),
 });

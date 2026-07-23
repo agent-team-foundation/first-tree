@@ -429,6 +429,34 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => disconnected.root.unmount());
   });
 
+  it("explains the anonymous-only Cloud boundary for private GitLab without degrading review automation", async () => {
+    const { ContextPage } = await import("../context.js");
+    const privateGitlab = snapshot({
+      provider: "gitlab",
+      contentAvailability: {
+        status: "unavailable",
+        accessMode: "anonymous",
+        reason: "gitlab_authentication_required",
+      },
+      repo: "https://gitlab.example/acme/private-context.git",
+      branch: "main",
+      snapshotStatus: "unavailable",
+      contextStatus: {
+        label: "Team context unavailable",
+        detail:
+          "Private GitLab Context Tree content is unavailable in First Tree Cloud. Cloud only performs anonymous GitLab reads.",
+        severity: "error",
+      },
+    });
+
+    const { container, root } = await renderDom(<ContextPage previewSnapshot={privateGitlab} />);
+    expect(container.textContent).toContain("Private GitLab content is unavailable in Cloud");
+    expect(container.textContent).toContain("local git/glab access");
+    expect(container.textContent).toContain("Webhook review automation can remain active");
+    expect(container.textContent).not.toMatch(/GitLab token|credential input|upload snapshot/iu);
+    await act(async () => root.unmount());
+  });
+
   const treeAgent = {
     uuid: "agent-1",
     name: "agent-1",

@@ -351,19 +351,70 @@ describe("small API route handlers", () => {
       configService: { getDecrypted: vi.fn().mockResolvedValue({ env: { A: "1" } }) },
       resourcesService: { resolveRuntimeConfig: vi.fn().mockReturnValue({ env: { A: "1" }, resources: [] }) },
     });
-    routeMocks.getOrgContextReviewRuntime.mockResolvedValue({
-      branch: "main",
-      repo: "owner/tree",
-      contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
-    });
+    routeMocks.getOrgContextReviewRuntime
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        branch: "main",
+        repo: "git@gitlab.example:owner/tree.git",
+        providerMatchesRepository: true,
+        gitlabConnection: {
+          id: "connection-1",
+          instanceOrigin: "https://gitlab.example:8443",
+        },
+        contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+      })
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        branch: "main",
+        repo: "git@gitlab.example:owner/tree.git",
+        providerMatchesRepository: false,
+        gitlabConnection: {
+          id: "connection-2",
+          instanceOrigin: "https://gitlab.example:9443",
+        },
+        contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+      })
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        branch: "main",
+        repo: "git@gitlab.example:owner/tree.git",
+        providerMatchesRepository: false,
+        gitlabConnection: null,
+        contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+      });
 
     await agentConfigRoutes(app as never);
     await agentContextTreeInfoRoutes(app as never);
 
     await expect(route(routes, "GET", "/config").handler({})).resolves.toEqual({ env: { A: "1" }, resources: [] });
     await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
+      provider: "gitlab",
       branch: "main",
-      repo: "owner/tree",
+      repo: "git@gitlab.example:owner/tree.git",
+      providerMatchesRepository: true,
+      gitlabConnection: {
+        id: "connection-1",
+        instanceOrigin: "https://gitlab.example:8443",
+      },
+      contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+    });
+    await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
+      provider: "gitlab",
+      branch: "main",
+      repo: "git@gitlab.example:owner/tree.git",
+      providerMatchesRepository: false,
+      gitlabConnection: {
+        id: "connection-2",
+        instanceOrigin: "https://gitlab.example:9443",
+      },
+      contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+    });
+    await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
+      provider: "gitlab",
+      branch: "main",
+      repo: "git@gitlab.example:owner/tree.git",
+      providerMatchesRepository: false,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
     });
   });

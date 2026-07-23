@@ -13,16 +13,38 @@ describe("Context Tree Write preflight schemas", () => {
     expect(
       contextTreeWritePreflightResponseSchema.parse({
         organizationId: "team-a",
-        binding: { repo: "git@github.com:acme/context-tree.git", branch: "main" },
+        provider: "github",
+        binding: { provider: "github", repo: "git@github.com:acme/context-tree.git", branch: "main" },
+        gitlabInstanceOrigin: null,
         reviewerAgentUuid: "reviewer-a",
         requesterGithubLogin: "Writer",
       }),
     ).toEqual({
       organizationId: "team-a",
-      binding: { repo: "git@github.com:acme/context-tree.git", branch: "main" },
+      provider: "github",
+      binding: { provider: "github", repo: "git@github.com:acme/context-tree.git", branch: "main" },
+      gitlabInstanceOrigin: null,
       reviewerAgentUuid: "reviewer-a",
       requesterGithubLogin: "Writer",
     });
+  });
+
+  it("accepts GitLab preflight without a Cloud-linked forge identity", () => {
+    expect(contextTreeWritePreflightRequestSchema.parse({})).toEqual({});
+    expect(
+      contextTreeWritePreflightResponseSchema.parse({
+        organizationId: "team-a",
+        provider: "gitlab",
+        binding: {
+          provider: "gitlab",
+          repo: "git@gitlab.internal:group/context-tree.git",
+          branch: "main",
+        },
+        gitlabInstanceOrigin: "https://gitlab.internal",
+        reviewerAgentUuid: "reviewer-a",
+        requesterGithubLogin: null,
+      }),
+    ).toMatchObject({ provider: "gitlab", requesterGithubLogin: null });
   });
 
   it("rejects caller-supplied authority and malformed bindings", () => {
@@ -35,7 +57,9 @@ describe("Context Tree Write preflight schemas", () => {
     expect(
       contextTreeWritePreflightResponseSchema.safeParse({
         organizationId: "team-a",
+        provider: "github",
         binding: { repo: "not-a-git-url", branch: "main" },
+        gitlabInstanceOrigin: null,
         reviewerAgentUuid: "reviewer-a",
         requesterGithubLogin: "writer",
       }).success,

@@ -1,14 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { SdkError } from "@first-tree/client";
 import {
+  type ContextTreeProvider,
   type ContextTreeWritePreflightErrorCode,
   type ContextTreeWritePreflightRequest,
-  canonicalGitRepoUrl,
   contextTreeWritePreflightErrorCodeSchema,
   contextTreeWritePreflightResponseSchema,
+  resolveGitLabRepositoryWebIdentity,
+  sameContextTreeRepository,
 } from "@first-tree/shared";
 import { AuthRefreshFailedError } from "./bootstrap.js";
 import { classifyContextTreeReadError } from "./context-tree-binding.js";
@@ -29,7 +32,8 @@ export type ContextTreeWritePreflightCliErrorCode =
   | "CONTEXT_TREE_WRITE_PREFLIGHT_INVALID"
   | "CONTEXT_TREE_WRITE_BINDING_CHANGED"
   | "CONTEXT_TREE_WRITE_FETCH_FAILED"
-  | "CONTEXT_TREE_WRITE_SNAPSHOT_STALE";
+  | "CONTEXT_TREE_WRITE_SNAPSHOT_STALE"
+  | "CONTEXT_TREE_WRITE_PROVIDER_AUTH_FAILED";
 
 export type ContextTreeWriteAuthorityReader = {
   preflightMemberContextTreeWrite(
@@ -42,16 +46,18 @@ export type ContextTreeWriteAuthorityReader = {
 export type PreflightContextTreeWriteInput = {
   teamId: string;
   snapshotPath: string;
-  requesterGithubLogin: string;
+  requesterGithubLogin?: string;
 };
 
 export type ContextTreeWritePreflight = {
+  provider: ContextTreeProvider;
   teamId: string;
-  binding: { repo: string; branch: string };
+  binding: { provider?: ContextTreeProvider; repo: string; branch: string };
   baseCommit: string;
   snapshotPath: string;
   reviewerAgentUuid: string;
-  requesterGithubLogin: string;
+  requesterGithubLogin: string | null;
+  gitlabInstanceOrigin: string | null;
 };
 
 type ContextTreeWritePreflightErrorOptions = {
@@ -90,9 +96,12 @@ export async function preflightContextTreeWrite(
   reader: ContextTreeWriteAuthorityReader,
   input: PreflightContextTreeWriteInput,
   runGit: ContextTreeReadGitRunner = runContextTreeReadGit,
+  verifyProviderAuth: ContextTreeWriteProviderAuthChecker = verifyLocalContextTreeWriteProviderAuth,
 ): Promise<ContextTreeWritePreflight> {
   const teamId = validateInlineInput(input.teamId, "--team", "Team id");
-  const requesterGithubLogin = validateInlineInput(input.requesterGithubLogin, "--github-login", "GitHub login");
+  const requesterGithubLogin = input.requesterGithubLogin
+    ? validateInlineInput(input.requesterGithubLogin, "--github-login", "GitHub login")
+    : undefined;
   const snapshotPath = validateSnapshotPathInput(input.snapshotPath);
   const snapshot = readSnapshot(snapshotPath, runGit);
   if (snapshot.teamId !== teamId) {
@@ -105,7 +114,11 @@ export async function preflightContextTreeWrite(
 
   let rawAuthority: unknown;
   try {
-    rawAuthority = await reader.preflightMemberContextTreeWrite(teamId, { requesterGithubLogin }, { retry: false });
+    rawAuthority = await reader.preflightMemberContextTreeWrite(
+      teamId,
+      requesterGithubLogin ? { requesterGithubLogin } : {},
+      { retry: false },
+    );
   } catch (error) {
     throw classifyAuthorityFailure(error);
   }
@@ -121,7 +134,10 @@ export async function preflightContextTreeWrite(
   const authority = parsedAuthority.data;
   if (
     authority.organizationId !== teamId ||
-    authority.requesterGithubLogin.toLowerCase() !== requesterGithubLogin.toLowerCase()
+    (authority.provider === "github" &&
+      (!requesterGithubLogin ||
+        !authority.requesterGithubLogin ||
+        authority.requesterGithubLogin.toLowerCase() !== requesterGithubLogin.toLowerCase()))
   ) {
     throw new ContextTreeWritePreflightCliError(
       "CONTEXT_TREE_WRITE_PREFLIGHT_INVALID",
@@ -129,8 +145,9 @@ export async function preflightContextTreeWrite(
       { stage: "authority", exitCode: 1 },
     );
   }
+  verifyProviderAuth(authority.provider, authority.binding, authority.gitlabInstanceOrigin);
 
-  if (!sameBinding(snapshot.binding, authority.binding)) {
+  if (!sameBinding(snapshot.binding, authority.binding, authority.provider, authority.gitlabInstanceOrigin)) {
     throw new ContextTreeWritePreflightCliError(
       "CONTEXT_TREE_WRITE_BINDING_CHANGED",
       "The selected Team's current Context Tree binding no longer matches the exact task snapshot.",
@@ -152,19 +169,57 @@ export async function preflightContextTreeWrite(
     verifiedSnapshot.teamId !== snapshot.teamId ||
     verifiedSnapshot.commit !== snapshot.commit ||
     verifiedSnapshot.snapshotPath !== snapshot.snapshotPath ||
-    !sameBinding(verifiedSnapshot.binding, snapshot.binding)
+    !sameBinding(verifiedSnapshot.binding, snapshot.binding, authority.provider, authority.gitlabInstanceOrigin)
   ) {
     throw snapshotInvalidFailure();
   }
 
   return {
+    provider: authority.provider,
     teamId,
     binding: authority.binding,
     baseCommit: snapshot.commit,
     snapshotPath: snapshot.snapshotPath,
     reviewerAgentUuid: authority.reviewerAgentUuid,
     requesterGithubLogin: authority.requesterGithubLogin,
+    gitlabInstanceOrigin: authority.gitlabInstanceOrigin,
   };
+}
+
+export type ContextTreeWriteProviderAuthChecker = (
+  provider: ContextTreeProvider,
+  binding: { repo: string; branch: string },
+  gitlabInstanceOrigin: string | null,
+) => void;
+
+export function verifyLocalContextTreeWriteProviderAuth(
+  provider: ContextTreeProvider,
+  binding: { repo: string; branch: string },
+  gitlabInstanceOrigin: string | null,
+): void {
+  if (provider !== "gitlab") return;
+  const identity = resolveGitLabRepositoryWebIdentity(binding.repo, gitlabInstanceOrigin);
+  if (!identity?.originMatchesConnection) {
+    throw new ContextTreeWritePreflightCliError(
+      "CONTEXT_TREE_WRITE_PROVIDER_AUTH_FAILED",
+      "The GitLab Context Tree repository origin does not match the current GitLab connection.",
+      { stage: "authority", exitCode: 1 },
+    );
+  }
+  const host = new URL(identity.origin).host;
+  try {
+    execFileSync("glab", ["auth", "status", "--hostname", host], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+  } catch {
+    throw new ContextTreeWritePreflightCliError(
+      "CONTEXT_TREE_WRITE_PROVIDER_AUTH_FAILED",
+      `GitLab CLI is not authenticated for ${host}. Run \`glab auth login --hostname ${host}\` and retry.`,
+      { stage: "authority", exitCode: 3 },
+    );
+  }
 }
 
 function fetchCurrentBindingCommit(
@@ -259,6 +314,8 @@ function serverPreflightFailure(
       "Connect your GitHub identity to First Tree before starting Context Tree Write.",
     CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH:
       "The local GitHub login does not match the signed-in First Tree member.",
+    CONTEXT_TREE_WRITE_GITLAB_CONNECTION_MISMATCH:
+      "The current GitLab connection origin does not match the Context Tree repository.",
   };
   return new ContextTreeWritePreflightCliError(code, messages[code], {
     stage: authorityFailure ? "authority" : "binding",
@@ -267,10 +324,21 @@ function serverPreflightFailure(
   });
 }
 
-function sameBinding(left: { repo: string; branch: string }, right: { repo: string; branch: string }): boolean {
-  const leftRepo = canonicalGitRepoUrl(left.repo);
-  const rightRepo = canonicalGitRepoUrl(right.repo);
-  return leftRepo !== null && rightRepo !== null && leftRepo === rightRepo && left.branch === right.branch;
+function sameBinding(
+  left: { repo: string; branch: string },
+  right: { repo: string; branch: string },
+  provider: ContextTreeProvider,
+  gitlabInstanceOrigin: string | null,
+): boolean {
+  return (
+    left.branch === right.branch &&
+    sameContextTreeRepository({
+      left: left.repo,
+      right: right.repo,
+      provider,
+      gitlabInstanceOrigin,
+    })
+  );
 }
 
 function validateInlineInput(value: string, option: string, label: string): string {

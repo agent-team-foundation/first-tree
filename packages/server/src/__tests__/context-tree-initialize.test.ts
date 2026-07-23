@@ -8,6 +8,7 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { encryptValue } from "../services/crypto.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createGitlabConnection } from "../services/gitlab-connections.js";
 import { getOrgContextTreeBinding, getOrgSetting, putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -146,7 +147,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(fetchSpy).toHaveBeenCalledTimes(7);
 
     const setting = await getOrgContextTreeBinding(app.db, admin.organizationId);
-    expect(setting).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(setting).toEqual({ provider: "github", repo: CLONE_URL, branch: "main" });
   });
 
   it("does not let initialize overwrite a binding committed after its absent precheck", async () => {
@@ -156,6 +157,7 @@ owners: [${ACCOUNT_LOGIN}]
     await renameOrg(app, admin.organizationId, "Acme Labs");
 
     const setterBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/setter-context-tree.git",
       branch: "setter-branch",
     };
@@ -338,6 +340,7 @@ owners: [${ACCOUNT_LOGIN}]
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
     const concurrentBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/manual-context-tree.git",
       branch: "manual",
     };
@@ -544,7 +547,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 409 repo_unavailable when GitHub refuses to create the tree repo for the installation", async () => {
@@ -629,7 +636,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 409 repo_unavailable when an existing deterministic repo is not readable by the installation", async () => {
@@ -686,7 +697,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(0);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(6);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("adopts an existing repo with an existing validation workflow without rewriting it", async () => {
@@ -720,7 +735,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(201);
     expect(fileWrites).toBe(0);
     expect(fetchSpy).toHaveBeenCalledTimes(5);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 502 and does not persist context_tree when the validation workflow write fails", async () => {
@@ -847,7 +866,11 @@ owners: [${ACCOUNT_LOGIN}]
       expect(workflowReadCalls).toBe(2);
       expect(workflowCreateCalls).toBe(1);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
-      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
+        repo: CLONE_URL,
+        branch: "main",
+      });
     });
   }
 
@@ -897,7 +920,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(repoCreateCalls).toBe(2);
     expect(rootNodeWriteCalls).toBe(2);
     expect(workflowWriteCalls).toBe(1);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("can retry successfully when DB save failed after repo creation, root-node write, and workflow write", async () => {
@@ -948,7 +975,11 @@ owners: [${ACCOUNT_LOGIN}]
     const second = await initialize(app, admin);
     expect(second.statusCode).toBe(201);
     expect(repoCreateCalls).toBe(2);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   describe("personal GitHub account (User installation)", () => {
@@ -988,6 +1019,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(userReposCalls).toBe(0);
       expect(fetchSpy).toHaveBeenCalledTimes(6);
       expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });
@@ -1046,6 +1078,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(repoGetCalls).toBe(2);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
       expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });
@@ -1177,6 +1210,7 @@ describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
     expect(selected.json()).toEqual({
       organizationId: admin.organizationId,
       state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
     });
 
     const outside = await seedPreflight(app, outsideOrganizationId, admin.accessToken);
@@ -1190,6 +1224,41 @@ describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
       error: "Context Tree Seed requires an active Team Admin.",
       code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
     });
+  });
+});
+
+describe("POST /orgs/:orgId/context-tree/seed-preflight GitLab authority", () => {
+  const getApp = useTestApp({ githubAppPrivateKeyPem });
+
+  it("returns the current exact GitLab connection without accepting a caller-selected target", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const connection = await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.example:8443",
+    });
+
+    const current = await seedPreflight(app, admin.organizationId, admin.accessToken);
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toEqual({
+      organizationId: admin.organizationId,
+      state: { status: "unbound", branch: "main" },
+      gitlabConnection: {
+        id: connection.connectionId,
+        instanceOrigin: "https://gitlab.example:8443",
+      },
+    });
+
+    const inventedTarget = await seedPreflight(app, admin.organizationId, admin.accessToken, {
+      target: {
+        provider: "gitlab",
+        repo: "https://gitlab.example:8443/platform/context-tree.git",
+        branch: "main",
+      },
+    });
+    expect(inventedTarget.statusCode).toBe(400);
   });
 });
 
@@ -1261,12 +1330,17 @@ async function initialize(app: FastifyInstance, admin: Pick<TestAdmin, "organiza
   });
 }
 
-async function seedPreflight(app: FastifyInstance, organizationId: string, accessToken: string) {
+async function seedPreflight(
+  app: FastifyInstance,
+  organizationId: string,
+  accessToken: string,
+  payload: Record<string, unknown> = {},
+) {
   return app.inject({
     method: "POST",
     url: `/api/v1/orgs/${organizationId}/context-tree/seed-preflight`,
     headers: { authorization: `Bearer ${accessToken}` },
-    payload: {},
+    payload,
   });
 }
 

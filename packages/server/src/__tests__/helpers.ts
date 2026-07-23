@@ -77,6 +77,7 @@ export type CreateTestAppOptions = {
   runtimeHttpTokenEnforcement?: boolean;
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
+  gitlabEgressAllowlist?: NonNullable<Config["gitlab"]>["egressAllowlist"];
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
    * `/github-app-installation/install-url` 503 test — the slug is the
@@ -145,6 +146,24 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       accessTokenExpiry: "30m",
       refreshTokenExpiry: "30d",
       connectTokenExpiry: "10m",
+    },
+    gitlab: {
+      egressAllowlist:
+        opts.gitlabEgressAllowlist ??
+        [
+          "gitlab.com",
+          "gitlab.current",
+          "gitlab.customer",
+          "gitlab.duplicate",
+          "gitlab.example",
+          "gitlab.internal",
+          "gitlab.replacement",
+          "gitlab.resurrected",
+          "gitlab.stale",
+        ].map((host) => ({
+          origin: `https://${host}`,
+          addressPolicy: { kind: "public" as const },
+        })),
     },
     ...(opts.allowedOrganizationId !== undefined
       ? { access: { allowedOrganizationId: opts.allowedOrganizationId.trim() || undefined } }

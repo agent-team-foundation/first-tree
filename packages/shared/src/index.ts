@@ -6,7 +6,20 @@ export {
   type BriefingFingerprint,
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
-export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
+export {
+  type CanonicalGitRepoIdentity,
+  CONTEXT_TREE_PROVIDERS,
+  type ContextTreeProvider,
+  type ContextTreeProviderResolution,
+  type ContextTreeRepositoryMatchInput,
+  canonicalGitRepoIdentity,
+  canonicalGitRepoUrl,
+  type GitLabRepositoryWebIdentity,
+  normalizeGitLabWebOrigin,
+  resolveContextTreeProvider,
+  resolveGitLabRepositoryWebIdentity,
+  sameContextTreeRepository,
+} from "./canonical-git-repo-url.js";
 export {
   buildLoginCommand,
   buildPortableBootstrapCommand,
@@ -370,6 +383,7 @@ export {
   CONTEXT_TREE_STATUS_SEVERITIES,
   type ContextTreeChange,
   type ContextTreeChangeType,
+  type ContextTreeContentAvailability,
   type ContextTreeEdge,
   type ContextTreeEdgeKind,
   type ContextTreeInstallationInfoResponse,
@@ -398,6 +412,7 @@ export {
   type ContextTreeWriteEvent,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
+  contextTreeContentAvailabilitySchema,
   contextTreeEdgeKindSchema,
   contextTreeEdgeSchema,
   contextTreeInstallationInfoResponseSchema,
@@ -848,6 +863,7 @@ export {
   classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
   contextTreeBranchSchema,
+  contextTreeProviderSchema,
   contextTreeRepoSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACE_KEYS,

@@ -156,6 +156,7 @@ describe("org settings schemas", () => {
 
   it("requires the Context Tree finalization sentinel and keeps both inputs strict", () => {
     const input = {
+      provider: "github",
       repo: "https://github.com/org/tree.git",
       branch: "main",
       expectedUnboundBranch: "main",
@@ -164,9 +165,10 @@ describe("org settings schemas", () => {
     expect(orgContextTreeInputSchema.safeParse(input).success).toBe(false);
 
     for (const value of [
-      { branch: input.branch, expectedUnboundBranch: input.expectedUnboundBranch },
-      { repo: input.repo, expectedUnboundBranch: input.expectedUnboundBranch },
-      { repo: input.repo, branch: input.branch },
+      { provider: input.provider, branch: input.branch, expectedUnboundBranch: input.expectedUnboundBranch },
+      { provider: input.provider, repo: input.repo, expectedUnboundBranch: input.expectedUnboundBranch },
+      { provider: input.provider, repo: input.repo, branch: input.branch },
+      { repo: input.repo, branch: input.branch, expectedUnboundBranch: input.expectedUnboundBranch },
       { ...input, repo: "http://github.com/org/tree.git" },
       { ...input, branch: "bad..branch" },
       { repo: input.repo, branch: input.branch, expectedUnboundBranch: "" },
@@ -194,12 +196,27 @@ describe("org settings schemas", () => {
       branch: " legacy\nbranch ",
     });
     expect(orgContextTreeStorageSchema.parse({})).toEqual({ branch: "main" });
+    expect(
+      orgContextTreeStorageSchema.parse({
+        provider: "gitlab",
+        repo: "https://gitlab.example.com/group/tree.git",
+      }),
+    ).toEqual({
+      provider: "gitlab",
+      repo: "https://gitlab.example.com/group/tree.git",
+      branch: "main",
+    });
   });
 
   it("normalizes and validates active Context Tree bindings", () => {
     const repo = "git@github.com:org/tree.git";
 
     expect(contextTreeActiveBindingSchema.parse({ repo })).toEqual({ repo, branch: "main" });
+    expect(contextTreeActiveBindingSchema.parse({ provider: "github", repo })).toEqual({
+      provider: "github",
+      repo,
+      branch: "main",
+    });
     expect(contextTreeActiveBindingSchema.parse({ repo, branch: null })).toEqual({ repo, branch: "main" });
     expect(contextTreeActiveBindingSchema.parse({ repo, branch: "release/2026-07" })).toEqual({
       repo,
@@ -210,6 +227,7 @@ describe("org settings schemas", () => {
       {},
       { repo: "http://legacy.example.com/context-tree.git", branch: "main" },
       { repo, branch: "feature..next" },
+      { provider: "bitbucket", repo, branch: "main" },
     ]) {
       expect(contextTreeActiveBindingSchema.safeParse(binding).success, JSON.stringify(binding)).toBe(false);
     }

@@ -42,21 +42,20 @@ export function isTrustedGithubDispatcherMessage(message: TrustedSystemMessageSh
   if (message.format === "card") {
     return isGithubEventCardContent(message.content) && hasSystemSender(message.metadata, "github");
   }
-  return (
-    message.format === "markdown" &&
-    typeof message.content === "string" &&
-    contextReviewerRunMessageMetadataSchema.safeParse(message.metadata).success
-  );
+  if (message.format !== "markdown" || typeof message.content !== "string") return false;
+  const metadata = contextReviewerRunMessageMetadataSchema.safeParse(message.metadata);
+  return metadata.success && metadata.data.source === "github";
 }
 
 /** Conjunctive trust gate for GitLab dispatcher attribution. */
 export function isTrustedGitlabDispatcherMessage(message: TrustedSystemMessageShape): boolean {
-  return (
-    message.source === "gitlab" &&
-    message.format === "card" &&
-    isGitlabEventCardContent(message.content) &&
-    hasSystemSender(message.metadata, "gitlab")
-  );
+  if (message.source !== "gitlab") return false;
+  if (message.format === "card") {
+    return isGitlabEventCardContent(message.content) && hasSystemSender(message.metadata, "gitlab");
+  }
+  if (message.format !== "markdown" || typeof message.content !== "string") return false;
+  const metadata = contextReviewerRunMessageMetadataSchema.safeParse(message.metadata);
+  return metadata.success && metadata.data.source === "gitlab";
 }
 
 /** Resolve the synthetic sender shown to trusted message readers. */

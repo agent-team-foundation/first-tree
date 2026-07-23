@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree — Seed"
   short_description: "Bootstrap a team's Context Tree from readable source repos"
-  default_prompt: "Use $first-tree-seed with an explicit Team, Tree path, and readable source inputs to create or continue the team's two-phase Context Tree Seed; recover Phase 2 from merged durable progress instead of prior chat history."
+  default_prompt: "Use $first-tree-seed with an explicit Team, provider, exact Context Tree repository and branch, create/adopt mode, Tree path, and readable source inputs to create or continue the two-phase Seed. Use local gh for GitHub or exact-host glab for GitLab, and recover Phase 2 from merged durable progress."

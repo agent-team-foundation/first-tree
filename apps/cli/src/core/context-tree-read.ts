@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, renameSy
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { SdkError } from "@first-tree/client";
-import { contextTreeActiveBindingSchema } from "@first-tree/shared";
+import { type ContextTreeProvider, contextTreeActiveBindingSchema } from "@first-tree/shared";
 import { AuthRefreshFailedError } from "./bootstrap.js";
 import { classifyContextTreeReadError } from "./context-tree-binding.js";
 
@@ -32,6 +32,7 @@ export type ActivateContextTreeReadInput = {
 export type ContextTreeReadActivation = {
   teamId: string;
   binding: {
+    provider?: ContextTreeProvider;
     repo: string;
     branch: string;
   };
@@ -51,6 +52,7 @@ const SNAPSHOT_MARKER_KEY = "first-tree-read.snapshot";
 const SNAPSHOT_TEAM_KEY = "first-tree-read.team-id";
 const SNAPSHOT_REPO_KEY = "first-tree-read.binding-repo";
 const SNAPSHOT_BRANCH_KEY = "first-tree-read.binding-branch";
+const SNAPSHOT_PROVIDER_KEY = "first-tree-read.binding-provider";
 const SNAPSHOT_COMMIT_KEY = "first-tree-read.commit";
 const SNAPSHOT_REF = "refs/first-tree-read/snapshot";
 const EXACT_COMMIT_RE = /^[0-9a-f]{40,64}$/u;
@@ -174,6 +176,9 @@ export async function activateContextTreeRead(
       runGit(stagingPath, ["config", "--local", SNAPSHOT_TEAM_KEY, teamId]);
       runGit(stagingPath, ["config", "--local", SNAPSHOT_REPO_KEY, binding.repo]);
       runGit(stagingPath, ["config", "--local", SNAPSHOT_BRANCH_KEY, binding.branch]);
+      if (binding.provider) {
+        runGit(stagingPath, ["config", "--local", SNAPSHOT_PROVIDER_KEY, binding.provider]);
+      }
       runGit(stagingPath, ["config", "--local", SNAPSHOT_COMMIT_KEY, commit]);
       runGit(stagingPath, ["update-ref", SNAPSHOT_REF, commit]);
 
@@ -241,7 +246,13 @@ export function readContextTreeReadSnapshotIdentity(
     const teamId = validateSnapshotTeamId(runGit(snapshotPath, ["config", "--local", "--get", SNAPSHOT_TEAM_KEY]));
     const repo = runGit(snapshotPath, ["config", "--local", "--get", SNAPSHOT_REPO_KEY]);
     const branch = runGit(snapshotPath, ["config", "--local", "--get", SNAPSHOT_BRANCH_KEY]);
-    const binding = contextTreeActiveBindingSchema.parse({ repo, branch });
+    let provider: string | undefined;
+    try {
+      provider = runGit(snapshotPath, ["config", "--local", "--get", SNAPSHOT_PROVIDER_KEY]);
+    } catch {
+      provider = undefined;
+    }
+    const binding = contextTreeActiveBindingSchema.parse({ repo, branch, ...(provider ? { provider } : {}) });
     const commit = runGit(snapshotPath, ["config", "--local", "--get", SNAPSHOT_COMMIT_KEY]).toLowerCase();
     const head = runGit(snapshotPath, ["rev-parse", "--verify", "HEAD"]).toLowerCase();
     // Include ignored files as well as ordinary untracked files. An ignored
@@ -300,7 +311,7 @@ export function runContextTreeReadGit(cwd: string, args: readonly string[]): str
 async function readCurrentTeamBinding(
   reader: ContextTreeReadAuthorityReader,
   teamId: string,
-): Promise<{ repo: string; branch: string }> {
+): Promise<{ provider?: ContextTreeProvider; repo: string; branch: string }> {
   let response: unknown;
   try {
     // The activation contract is one live authority request, not merely one

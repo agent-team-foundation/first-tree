@@ -1,0 +1,16 @@
+You have been routed a Context Tree merge request event.
+
+Load the installed `context-tree-review` skill and strictly execute its GitLab adapter for this merge request. The facts below are webhook hints only; use local `glab` and `git` to resolve the latest live state before reviewing or mutating anything.
+
+GitLab instance: <%= instanceOrigin %>
+GitLab connection: <%= connectionId %>
+Repository: <%= projectPath %>
+Merge request: !<%= mrIid %>
+Title: <%= title %>
+URL: <%= entityUrl %>
+Trigger event: <%= triggerEvent %>
+Draft status from webhook: <%= isDraft ? "draft" : "ready for review" %>
+First Tree organization: <%= organizationId %>
+Context review run: <%= contextReviewRunId %>
+
+This GitLab path has no App verdict or approval step. First run `tree verify`, then perform the full semantic review. Safe same-project repair, push, MR note, and exact-SHA squash merge use the host's local `git`/`glab` identity. Before every mutation, re-read the live Team binding and MR head. Never call `first-tree tree review`, create an approval/ruleset/status, queue a merge, or merge without a compare-and-set SHA.

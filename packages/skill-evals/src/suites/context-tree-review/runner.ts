@@ -1,17 +1,19 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { appendEvent, readEvents } from "../../core/events.js";
+import { appendEvent, isRecord, readEvents } from "../../core/events.js";
 import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths, writeShellPathBootstrap } from "../../core/paths.js";
 import { runAgentProvider } from "../../core/provider/index.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { createGhShim } from "../../core/shims/gh.js";
+import { createGlabShim } from "../../core/shims/glab.js";
 import { inspectFixtureIntegrity, setupFixture } from "./fixture.js";
 import { createContextTreeReviewGitShim } from "./git-shim.js";
+import { deriveGitlabReviewBehavior, gradeGitlabReviewBehavior } from "./gitlab-behavior-grader.js";
 import { casePassed, deriveMetrics } from "./grader.js";
-import { buildGrading, writeCaseSummaries } from "./summary.js";
+import { buildGitlabGrading, buildGrading, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, ContextTreeReviewEvalCase } from "./types.js";
 
 export async function runContextTreeReviewCase(
@@ -34,7 +36,12 @@ export async function runContextTreeReviewCase(
     reviewFixturePath: fixture.fixturePath,
     reviewVerifyRunnerPath: fixture.verifyRunnerPath,
   });
-  createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
+  if (evalCase.forgeProvider === "gitlab") {
+    createGhShim(modelPaths);
+    createGlabShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
+  } else {
+    createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
+  }
   writeShellPathBootstrap(modelPaths, {
     FIRST_TREE_AGENT_ID: fixture.expectation.reviewerAgentUuid,
     FIRST_TREE_CHAT_ID: fixture.expectation.chatId,
@@ -60,8 +67,21 @@ export async function runContextTreeReviewCase(
     inspectFixtureIntegrity(fixture),
     runner.exitCode,
   );
-  const passed = casePassed(evalCase, metrics);
-  const grading = buildGrading(evalCase, metrics, passed);
+  const workflowPassed = casePassed(evalCase, metrics);
+  const gitlabBehavior =
+    evalCase.forgeProvider === "gitlab" ? deriveGitlabReviewBehavior(events, metrics, fixture.expectation) : [];
+  const gitlabBehaviorGrade = gradeGitlabReviewBehavior(gitlabBehavior);
+  const blockedGlabAttempts = events.filter(
+    (event) =>
+      isRecord(event) &&
+      ((event.type === "glab_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) ||
+        (event.type === "first_tree_result" && event.gitlabReviewFixtureViolation === true)),
+  ).length;
+  const grading =
+    evalCase.forgeProvider === "gitlab"
+      ? buildGitlabGrading(evalCase, metrics, workflowPassed, gitlabBehavior, gitlabBehaviorGrade, blockedGlabAttempts)
+      : buildGrading(evalCase, metrics, workflowPassed);
+  const passed = grading.passed;
   const observability = deriveRunObservability(events);
   const summary: CaseRunSummary = {
     caseId: evalCase.id,

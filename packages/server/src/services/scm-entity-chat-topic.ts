@@ -44,6 +44,7 @@ function repositorySegment(repositoryPath: string): string {
   return repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath;
 }
 
+/** Stable provider-neutral topic for one retained Context Reviewer chat. */
 export function formatContextReviewTopic(entity: ContextReviewTopicEntity): string {
   const repository = repositorySegment(entity.repositoryPath);
   const referencePrefix = entity.provider === "github" ? "#" : "!";

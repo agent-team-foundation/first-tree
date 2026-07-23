@@ -110,7 +110,12 @@ export function slugifyToken(text: string): string {
   return normalized === "" ? "workspace" : normalized;
 }
 
-export function runCommand(command: string, args: string[], cwd: string): string {
+export function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  envOverrides: Readonly<Record<string, string>> = {},
+): string {
   const env = { ...process.env };
   for (const key of [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -129,6 +134,7 @@ export function runCommand(command: string, args: string[], cwd: string): string
     encoding: "utf-8",
     env: {
       ...env,
+      ...envOverrides,
       GIT_TERMINAL_PROMPT: "0",
     },
     stdio: ["ignore", "pipe", "pipe"],

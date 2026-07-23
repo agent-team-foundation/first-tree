@@ -19,6 +19,52 @@ const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
   })
   .default("codex");
 
+const gitlabEgressAllowlistSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  },
+  z.array(
+    z
+      .object({
+        origin: z.string().transform((raw, ctx) => {
+          try {
+            const url = new URL(raw);
+            if (
+              url.protocol !== "https:" ||
+              url.username ||
+              url.password ||
+              url.pathname !== "/" ||
+              url.search ||
+              url.hash
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                message: "GitLab egress origin must be an exact credential-free HTTPS origin",
+              });
+              return z.NEVER;
+            }
+            return url.origin.toLowerCase();
+          } catch {
+            ctx.addIssue({ code: "custom", message: "GitLab egress origin must be a valid HTTPS origin" });
+            return z.NEVER;
+          }
+        }),
+        addressPolicy: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("public") }).strict(),
+          z.object({ kind: z.literal("cidrs"), cidrs: z.array(z.string().trim().min(1)).min(1) }).strict(),
+        ]),
+      })
+      .strict(),
+  ),
+);
+
 const googleOauthConfig = optional({
   clientId: field(z.string().min(1), { env: "FIRST_TREE_GOOGLE_CLIENT_ID" }),
   clientSecret: field(z.string().min(1), {
@@ -216,6 +262,16 @@ export const serverConfigSchema = defineConfig({
   // The server-managed Context Tree mirror mints a per-org GitHub App
   // installation token at request time (see `services/github-app-token.ts`);
   // no global token belongs here.
+  gitlab: optional({
+    /**
+     * Deployment-operator-owned outbound authorization for anonymous GitLab
+     * Context Tree snapshots. JSON array of exact HTTPS origins and either a
+     * public-address policy or explicit IPv4/IPv6 CIDRs. Empty means deny all.
+     */
+    egressAllowlist: field(gitlabEgressAllowlistSchema.default([]), {
+      env: "FIRST_TREE_GITLAB_EGRESS_ALLOWLIST",
+    }),
+  }),
   oauth: optional({
     ...({ google: googleOauthConfig } as { google?: typeof googleOauthConfig }),
     /**

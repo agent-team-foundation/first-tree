@@ -1,9 +1,9 @@
 ---
 name: first-tree-write
-version: 0.12.0
+version: 0.13.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations against GitHub-bound Context Trees. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. Managed GitLab trees use the ordinary MR path. If no source artifact is available, there is no write task; ask the user for one.
+description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations against GitHub- or GitLab-bound Context Trees. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. If no source artifact is available, there is no write task; ask the user for one.
 ---
 
 # First Tree Write
@@ -63,34 +63,43 @@ Choose one mode before target selection:
 
 - **Managed:** use the generated workspace binding and briefing when present;
   the source gate and write policy below remain unchanged.
-- **BYO clean (GitHub-bound Context Trees only):** require the user's explicit Team id, the existing exact
+- **BYO clean (GitHub- or GitLab-bound Context Trees):** require the user's explicit Team id, the existing exact
   snapshot created by `tree read`, a concrete source artifact and revision,
   current source context, current target/parent/linked tree context, and the
   user's write intent. Do not require or reconstruct a Workspace manifest,
   managed briefing, setup-chat transcript, Web selection, default/current
   Team, cached owner/role, or prior task.
 
-Clean BYO Write preflight requires a GitHub-hosted tree. A GitLab-bound tree
-cannot use this activation: do not request `gh`, claim App Reviewer authority,
-or mutate; report the boundary and stop. Managed GitLab uses ordinary MRs.
-For eligible GitHub BYO, obtain the current local `gh` login and run:
+Clean BYO Write preflight returns the live provider and binding. For GitHub,
+obtain the current local `gh` login and run:
 
 ```text
 first-tree --json tree write --team "<team-id>" \
   --snapshot "<exact-snapshot>" --github-login "<gh-login>"
 ```
 
+For GitLab, do not pass a GitHub login:
+
+```text
+first-tree --json tree write --team "<team-id>" \
+  --snapshot "<exact-snapshot>"
+```
+
 This stateless command verifies the snapshot identity, explicit Team, live
-binding, current Reviewer, linked GitHub identity, and remote branch tip. It
+binding, current Reviewer, linked GitHub identity when applicable, exact-host
+GitLab `glab` authentication when applicable, and remote branch tip. It
 creates no branch, PR, task key, or Chat. Keep the snapshot immutable; create a
 separate task worktree and branch from the returned exact base commit with
 standard Git. Re-run the identical command immediately before the first push
 or PR creation. A changed binding or advanced base requires a new exact
 snapshot and fresh authoring base; do not publish the stale diff.
 
-The returned Reviewer UUID is observability only, never local routing
-authority. Do not cache it or address a handoff from it; the GitHub App webhook
-resolves the Server current Reviewer when the pull request event arrives.
+The returned provider and binding are mutation authority; re-run the same
+preflight immediately before each push and PR/MR creation. The returned
+Reviewer UUID is observability only, never local routing authority. Do not
+cache it, address a handoff from it, create a Reviewer Chat or invoke the
+reviewer. GitHub App or GitLab inbound Webhook dispatch resolves the Server's
+current Reviewer when the forge event arrives.
 
 ## Workflow
 
@@ -125,22 +134,22 @@ resolves the Server current Reviewer when the pull request event arrives.
 7. **Prepare the PR/MR.** Detect the Context Tree forge from its own `origin`,
    never the source artifact. One source artifact maps to one tree PR/MR. Keep
    delivery history out of node bodies. Audit-originated tree PRs/MRs must be created as draft and left draft.
-   A GitHub PR uses independent `context-tree-review`.
-   An Audit-originated GitLab MR stays draft for ordinary independent review;
-   never claim an automated verdict or merge. After creating, resolving or
+   A ready GitHub PR or GitLab MR uses independent `context-tree-review`;
+   Audit-originated artifacts stay draft and therefore receive read-only
+   review. After creating, resolving or
    reusing any GitLab MR, run `first-tree gitlab follow <mr-url>` in the task Chat. A
    returned pending or active state is success; failure does not invalidate the
    MR, so report only the Chat attention gap.
-8. **Let the App reviewer own GitHub review dispatch.** For a ready GitHub PR
-   against the bound Context Tree repository, the GitHub App webhook creates or
-   reuses the PR-scoped Reviewer Chat and trusted review run. The writer
+8. **Let provider automation own review dispatch.** For a ready GitHub PR, the
+   GitHub App webhook creates or reuses the PR-scoped Reviewer Chat and trusted
+   run. For a ready GitLab MR, a valid matching inbound Webhook creates or
+   reuses the MR-scoped Reviewer Chat and trusted run. The writer
    must not create a review Chat, construct a task packet, add a protocol marker,
    publish a verdict, retry review delivery, or merge the PR.
 
-## GitHub Context Review handoff
+## Context Review handoff
 
-Use this section only for a GitHub Context Tree PR. GitLab MRs use ordinary
-independent review. When Context Reviewer is enabled, keep the PR body useful to a human reviewer:
+When Context Reviewer is enabled, keep the PR/MR body useful to a human reviewer:
 summarize the source artifact, durable decision and rationale, changed nodes and
 verification result. Do not add a repair-consent block, exact-file permission
 list, legacy dispatch marker or task payload. The configured review agent may
@@ -151,7 +160,10 @@ Push without force. If push or PR creation has an unknown result, inspect the
 remote branch and open PRs before retrying. Once the PR exists, preserve its URL
 and branch if later review dispatch is delayed or unavailable. Do not
 use removed member-dispatch or task-packet surfaces, and do not wake the Reviewer
-directly. Supported GitHub App webhooks are the sole dispatch owner.
+directly. Supported GitHub App or GitLab inbound Webhooks are the sole dispatch
+owner. GitLab does not use App approval, rulesets or a simulated verdict; the
+Review Agent may repair and exact-SHA merge with its own local `git` / `glab`
+identity after a complete final-head review.
 
 ## Write Rules
 
@@ -335,7 +347,7 @@ The Context-management CLI you actually depend on while writing is small:
 - `first-tree tree verify` — validate frontmatter and node structure;
   the write gate that must pass before any commit.
 - `first-tree tree write` — in BYO mode, revalidate one explicit Team and
-  exact snapshot before mutation; currently requires a GitHub-hosted tree.
+  exact snapshot and provider authentication before mutation.
 - `first-tree gitlab follow` — after a GitLab MR exists, wire inbound activity
   into the task Chat; a returned pending or active state is success.
 

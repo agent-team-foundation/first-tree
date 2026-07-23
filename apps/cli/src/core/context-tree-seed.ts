@@ -31,6 +31,7 @@ export type PreflightContextTreeSeedInput = {
 export type ContextTreeSeedPreflight = {
   teamId: string;
   state: ContextTreeSeedPreflightState;
+  gitlabConnection: { id: string; instanceOrigin: string } | null;
 };
 
 type ContextTreeSeedPreflightErrorOptions = {
@@ -67,7 +68,13 @@ export async function preflightContextTreeSeed(
 
   let rawAuthority: unknown;
   try {
-    rawAuthority = await reader.preflightMemberContextTreeSeed(teamId, {}, { retry: false });
+    rawAuthority = await reader.preflightMemberContextTreeSeed(
+      teamId,
+      {},
+      {
+        retry: false,
+      },
+    );
   } catch (error) {
     throw classifyAuthorityFailure(error);
   }
@@ -81,7 +88,7 @@ export async function preflightContextTreeSeed(
     );
   }
 
-  return { teamId, state: parsed.data.state };
+  return { teamId, state: parsed.data.state, gitlabConnection: parsed.data.gitlabConnection };
 }
 
 function validateTeamId(value: string): string {
@@ -131,9 +138,10 @@ function serverPreflightFailure(
     CONTEXT_TREE_SEED_CONFIGURATION_INVALID:
       "The selected Team's Context Tree binding is invalid and must be repaired by an Admin before Seed can continue.",
   };
+  const configurationFailure = code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID";
   return new ContextTreeSeedPreflightCliError(code, messages[code], {
-    stage: code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" ? "configuration" : "authority",
-    exitCode: code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" ? 1 : 3,
+    stage: configurationFailure ? "configuration" : "authority",
+    exitCode: configurationFailure ? 1 : 3,
     httpStatus,
   });
 }

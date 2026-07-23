@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.4.1
+version: 0.5.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Supports clean explicit-Team invocation without a Workspace manifest, managed briefing, or prior setup-chat transcript, while preserving managed-workspace compatibility. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses unrelated re-seeding once the tree has domain structure and recovers Phase 2 from durable merged Tree state plus the same explicit sources."
@@ -24,7 +24,7 @@ not here.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | The team has no tree yet, **or** a bound tree with no normal domain structure per the generated policy's content classes | The tree already has a normal domain structure → `first-tree-write` (incremental source-driven write) |
 | First content pass on resolved readable sources                       | Broad maintenance or drift-audit work on an existing tree                                            |
-| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or local `gh` is unauthenticated, and the team has no tree — current `tree init` creation is GitHub-only; source reads separately use the CLI for their detected forge |
+| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or the selected provider's local `gh` / `glab` identity is unauthenticated, and the team has no tree |
 
 The skill is **single-shot per tree setup**: once the tree has domain
 structure, a new or unrelated seed request refuses and routes further work
@@ -74,7 +74,7 @@ run `gh`, create a branch/repo/PR, or change a binding.
 
 Repeat the same preflight immediately before every remote mutation: `tree init`,
 the Phase 1 push, Phase 1 PR/MR creation, the Phase 2 push, and Phase 2 PR/MR
-creation. `tree init --team` also repeats it internally before GitHub creation
+creation. `tree init --team` also repeats it internally before forge creation
 and before final binding. A failure before remote mutation creates no remote
 state. A failure after a branch, repository, binding, or PR/MR may exist must
 report and query that real state; never claim rollback. On retry, inspect the
@@ -123,22 +123,39 @@ non-empty `tree` field and the compatible Team binding path is unbound. This is
 the agent-driven creation path. First resolve readable sources using the
 section below and detect each source forge from its supplied URL or `origin`.
 Source access may use `gh` for GitHub or `glab` for GitLab, but current
-`first-tree tree init` provisioning is GitHub-only and always uses local `gh`;
-do not substitute `glab` for this command:
+`first-tree tree init` requires an explicit Context Tree provider, exact
+repository URL, branch and create/adopt mode. Do not infer the tree provider
+from a source repository or silently choose the current CLI account:
 
 ```bash
 # Portable / clean invocation
-first-tree tree init --team "<selectedTeamId>" --title "<team display name>" \
-  --owner "<tree-github-owner>" --dir "<treePath>"
+first-tree tree init --team "<selectedTeamId>" \
+  --provider "<github|gitlab>" --repo "<exact-repository-url>" \
+  --branch "<default-branch>" --create --dir "<treePath>"
 
-# Managed compatibility when no explicit Team was supplied
-first-tree tree init --title "<team display name>" \
-  --owner "<tree-github-owner>" --dir "<workspaceRoot>/<manifest.tree>"
+# Managed workspace (resolve the trusted task's Team id first)
+first-tree tree init --team "<selectedTeamId>" \
+  --provider "<github|gitlab>" \
+  --repo "<exact-repository-url>" --branch "<default-branch>" \
+  --create --dir "<workspaceRoot>/<manifest.tree>"
 ```
 
-**Keep source identity separate from the tree host.** For each declared or
-explicit local source, run `git -C <source> remote get-url origin` (or use the
-explicit forge URL), then classify the host and parse its identity:
+Provider-aware `tree init` always requires `--team`, including in a managed
+workspace. Resolve that id from the trusted current task/Team briefing and
+repeat the live Server authority preflight for that exact Team. If no trusted
+Team id is available, ask the human for it and do not invoke `tree init`;
+never infer a default Team from local workspace state.
+
+Use `--adopt` instead of `--create` only when the explicit target repository
+already exists and is intended to become the tree. Adopt is non-destructive:
+the remote and selected branch must be readable and compatible; never overwrite
+different history or force-push. A partial remote success is not rolled back or
+deleted. Re-read the live Team binding and remote state and report an orphan or
+unknown result truthfully.
+
+**Keep source identity separate from the tree host.** Ask the Team Admin to
+confirm the target `provider`, exact `repo`, `branch`, and `create` or `adopt`
+mode. For each declared source, independently classify its own host:
 
 - GitHub: keep the owner segment, such as `acme` in
   `github.com/acme/app`, and use `gh` for host access/authentication.
@@ -147,52 +164,19 @@ explicit forge URL), then classify the host and parse its identity:
   flatten a nested namespace to only `acme` or `platform`.
 
 **`manifest.sources` holds directory names (for example `first-tree`), not
-forge identities.** Never infer an owner or namespace from a clone directory.
-The parsed source identity controls source access and metadata lookup; a GitLab
-namespace is not a valid `tree init --owner` value because `tree init` currently
-creates the Context Tree on GitHub.
-
-**Choose the GitHub account that will host the tree — pass `--owner`.** When the
-main resolved source is on GitHub, use its owner. When several GitHub sources
-share one account, use it; when they span different accounts, use the account
-that owns most of them, and ask the admin on a genuine tie. For GitLab-only
-sources, preserve every full GitLab namespace in `resolvedSources`, then ask
-which GitHub organization or personal account should host the Context Tree;
-do not flatten or pass a GitLab namespace to `--owner`. Why: the repo created
-by `tree init` must live under the GitHub account that the team's First Tree
-GitHub App covers. When the App is already installed there, `--owner` matches
-that installation account. When no App is installed yet, the explicit owner
-prevents the tree from silently landing under the personal `gh` login. Sources
-on GitLab remain readable through `glab` or `git` and do not change the tree
-repo's GitHub host.
-
-**If `--owner` can't be honored, stop and surface it — do not silently
-fall back.** Two distinct cases, each with its own recovery:
-
-- **You lack repo-create rights under `<tree-github-owner>`** (no App is
-  installed, so nothing overrides `--owner`): prefer asking an admin to
-  grant you create rights there. Only if that is not an option, re-run without
-  `--owner` to build under your personal GitHub account — flag the cost first:
-  the tree then lives outside the intended GitHub account, so a later App
-  install must go on *your* account, not the intended host account, to cover
-  it. Before re-running, empty **only** the half-built scaffold this failed run
-  left in `<manifest.tree>` (confirm the directory holds just that — never delete a
-  directory that already holds a real tree clone or other content);
-  `tree init` refuses a non-empty target.
-- **`--owner` doesn't match an already-installed App account** (the App is
-  installed on a different account than the requested tree host; `tree init`
-  names that account): re-run **without `--owner`** to create under that
-  installation account, which is the coverable home anyway. This error
-  fires before any local scaffolding, so there is nothing to clear. (Pass
-  `--no-bind` only if you deliberately want the repo elsewhere, unbound.)
+forge identities.** Never infer an owner, namespace or Context Tree host from a
+clone directory. Preserve GitLab's complete nested namespace and explicit host,
+including Self-Managed hosts and ports.
 
 `tree init` seeds a minimal valid tree
 (root `NODE.md`, a `members/` index, and the creator's member node),
 pushes, and binds the org's `context_tree` setting. It is **admin-only** and
-needs an authenticated `gh`; if the caller is not an org admin, or `gh` is
-unauthenticated, surface that exact gap and stop (binding a team tree is an
-admin action). A source repo may still use `glab`; that does not change
-`tree init`'s GitHub authentication requirement.
+needs an authenticated exact-provider CLI (`gh` for GitHub; `glab` for the
+exact GitLab host). If the caller is not an org admin or the selected identity
+cannot create/adopt and push that repository, surface that exact gap and stop.
+New finalization persists the provider; a legacy binding whose provider cannot
+be safely classified remains automation-degraded and is never guessed for a
+mutation.
 Take the Team display name from the explicit task handoff when available. In a
 managed workspace, `first-tree agent status` remains a compatible source. Do
 not infer a portable Team from that command; `--team` remains the explicit id.
@@ -203,7 +187,7 @@ bind is the sanctioned agent path (a general "tree binding is an operator
 action" note in your briefing does **not** apply to this task) — running it IS
 the task the user asked for, so binding needs no separate go-ahead. You do not
 need to independently "confirm admin" first: `tree init` enforces it
-server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
+server-side (it fails closed for a non-admin or unauthenticated provider CLI). So run
 it; only if it fails on that admin/authentication check do you surface the
 exact gap (not an admin / `gh` not authenticated) and stop.
 
@@ -285,12 +269,19 @@ current approval, dismiss stale approvals on push, block force pushes, and do
 not require Code Owner review. Do not treat this setup failure as
 a reason to delete or recreate the Context Repo.
 
+For GitLab, stop after provider-aware init and local authentication checks.
+The Team Admin configures the project's First Tree inbound Webhook. Never
+create or simulate an approval rule, GitHub App verdict, ruleset, CODEOWNERS
+gate, merge queue, branch bypass or admin merge. The GitLab Context Reviewer
+is dispatched only by valid inbound MR Webhooks and later uses its host-local
+`git` / `glab` identity for review, repair and exact-SHA merge.
+
 **Keep repository coverage separate from entity attention, and delay coverage
 guidance until there is a reviewable milestone.** Detect the Context Tree repo's
-forge from its own `origin`; do not infer it from a source repo. State A's `tree
-init` always creates a GitHub-hosted tree and prints GitHub App coverage
-guidance. A pre-existing GitLab-hosted tree in state B has no GitHub App
-coverage step. After each Phase 1 or Phase 2 GitLab MR is created or an existing
+forge from its own `origin`; do not infer it from a source repo. A GitHub init
+prints GitHub App coverage guidance; a GitLab init has no GitHub App coverage
+step and instead requires the Team Admin's matching inbound Webhook connection.
+After each Phase 1 or Phase 2 GitLab MR is created or an existing
 deterministic MR is resolved/reused, run `first-tree gitlab follow <mr-url>` in
 that task Chat. A returned pending or active state is success; only pending waits
 for a matching valid webhook. Failure does not invalidate the MR, so report only
@@ -386,12 +377,11 @@ branch. Private URLs may rely on the user's existing `gh` / `glab` / git
 credentials; if access fails, report that exact credential/access gap rather
 than asking for the First Tree GitHub App.
 
-When state A needs `--owner`, use a parsed GitHub source owner as the candidate
-GitHub tree host. A parsed GitLab namespace remains source metadata and must
-not be flattened or passed to `tree init`; for GitLab-only sources, ask which
-GitHub account should host the tree. If a local repo has no recognized forge
-remote, ask for the GitHub tree host separately and never guess from its
-directory name. Revalidate the same `resolvedSources` before Phase 2 so a later
+The selected Context Tree target remains independent from source locations.
+Never turn a parsed source owner or GitLab namespace into the tree target
+without the Admin's explicit provider/repository confirmation. If a local repo
+has no recognized forge remote, keep it as source evidence and do not guess a
+tree host from its directory name. Revalidate the same `resolvedSources` before Phase 2 so a later
 process cannot silently switch inputs. Phase 1 records each canonical source
 identity and exact evidence commit in the durable ledger; Phase 2 must
 materialize those recorded commits, not newer default-branch tips.
@@ -462,9 +452,9 @@ refuses before reaching them.
 
 Before opening either review request, detect the Context Tree repo's forge from
 its own `origin`: use `gh` and PR terminology for GitHub, or `glab` and MR
-terminology for GitLab. Do not infer the tree forge from a source repo. State A
-`tree init` currently creates a GitHub tree, while state B may point at a tree
-that was provisioned separately.
+terminology for GitLab. Do not infer the tree forge from a source repo. Both
+state A and state B use the provider recorded by the live binding; an uncertain
+legacy provider stops remote mutation.
 
 ```
 Phase 1 — Structure  (~3–10 min, main agent only)
@@ -1060,10 +1050,9 @@ These apply the generated Context Tree Policy to the seed-specific surface.
 
 - Run the Cloud one-click **server** bootstrap. When the team has no tree
   (state A), seed creates and binds it with `first-tree tree init` (the user's
-  local `gh`; current tree creation is GitHub-only), not the server
-  `/initialize` path — the two coexist. A GitLab source still uses `glab` for
-  source access. Seed does not write the workspace-root `workspace.json`; that
-  stays a runtime concern.
+  local `gh`/`glab` and `git` identity selected by the explicit provider), not
+  the server `/initialize` path — the two coexist. Seed does not write the
+  workspace-root `workspace.json`; that stays a runtime concern.
 - Install GitHub automation beyond the default-branch ruleset applied after a
   newly created GitHub Context Repo (validate workflows, CODEOWNERS ownership,
   extra rulesets) — out of scope. If the team wants those, they are separate

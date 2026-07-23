@@ -7,8 +7,9 @@ import {
 } from "../schemas/context-tree-seed.js";
 
 describe("Context Tree Seed preflight schemas", () => {
-  it("keeps the admission request empty so callers cannot choose authority", () => {
+  it("accepts no caller-selected authority or repository target", () => {
     expect(contextTreeSeedPreflightRequestSchema.parse({})).toEqual({});
+    expect(contextTreeSeedPreflightRequestSchema.safeParse({ target: {} }).success).toBe(false);
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ role: "admin" }).success).toBe(false);
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ binding: {} }).success).toBe(false);
   });
@@ -18,8 +19,13 @@ describe("Context Tree Seed preflight schemas", () => {
       contextTreeSeedPreflightResponseSchema.parse({
         organizationId: "team-a",
         state: { status: "unbound", branch: "main" },
+        gitlabConnection: null,
       }),
-    ).toEqual({ organizationId: "team-a", state: { status: "unbound", branch: "main" } });
+    ).toEqual({
+      organizationId: "team-a",
+      state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
+    });
 
     expect(
       contextTreeSeedPreflightResponseSchema.parse({
@@ -28,6 +34,7 @@ describe("Context Tree Seed preflight schemas", () => {
           status: "bound",
           binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
         },
+        gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
       }),
     ).toEqual({
       organizationId: "team-a",
@@ -35,6 +42,7 @@ describe("Context Tree Seed preflight schemas", () => {
         status: "bound",
         binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       },
+      gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
     });
   });
 

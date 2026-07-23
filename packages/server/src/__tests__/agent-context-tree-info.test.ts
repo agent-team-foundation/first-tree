@@ -107,6 +107,7 @@ describe("agent context tree info route", () => {
     });
     expect(updatedSide.statusCode).toBe(200);
     expect(updatedSide.json()).toEqual({
+      provider: "github",
       repo: "git@github.com:example/updated-side-context.git",
       branch: "updated-side",
     });
@@ -118,8 +119,11 @@ describe("agent context tree info route", () => {
     });
     expect(agentScoped.statusCode).toBe(200);
     expect(agentScoped.json()).toEqual({
+      provider: "github",
       repo: "git@github.com:example/updated-side-context.git",
       branch: "updated-side",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: sideAgent.uuid },
     });
 
@@ -136,8 +140,11 @@ describe("agent context tree info route", () => {
     });
     expect(invalidAgentScoped.statusCode).toBe(200);
     expect(invalidAgentScoped.json()).toEqual({
+      provider: null,
       repo: null,
       branch: null,
+      providerMatchesRepository: false,
+      gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: sideAgent.uuid },
     });
 

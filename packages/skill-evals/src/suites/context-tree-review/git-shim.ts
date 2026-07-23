@@ -40,6 +40,29 @@ const result = spawnSync(REAL_GIT, argv, {
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 
+if (
+  result.status === 0 &&
+  fixture.forgeProvider === "gitlab" &&
+  context.command[0] === "worktree" &&
+  context.command[1] === "add" &&
+  context.command.includes("--detach")
+) {
+  const pathIndex = context.command.indexOf("--detach") + 1;
+  const worktreePath = context.command[pathIndex];
+  if (worktreePath) {
+    const head = spawnSync(REAL_GIT, ["-C", resolve(context.repoPath, worktreePath), "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    });
+    if (head.status === 0) {
+      append({
+        type: "gitlab_detached_checkout",
+        phase: process.env.FIRST_TREE_EVAL_PHASE || "model",
+        head: head.stdout.trim(),
+      });
+    }
+  }
+}
+
 if (result.status === 0 && context.command[0] === "diff") {
   const args = context.command.slice(1).filter((arg) => arg !== "--no-ext-diff");
   const expectedRanges = [fixture.view.baseRefOid + "..HEAD", fixture.view.baseRefOid + "...HEAD"];

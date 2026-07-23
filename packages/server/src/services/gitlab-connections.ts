@@ -1,11 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { GitlabConnectionSummary, GitlabReviewerMode } from "@first-tree/shared";
+import {
+  type GitlabConnectionSummary,
+  type GitlabReviewerMode,
+  resolveGitLabRepositoryWebIdentity,
+} from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { organizations } from "../db/schema/organizations.js";
 import { ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { getOrgContextTreeBinding } from "./org-settings.js";
 
 export function mintGitlabUrlBearer(): string {
   return randomBytes(32).toString("base64url");
@@ -93,6 +98,22 @@ async function insertGitlabConnection(db: Database, input: GitlabConnectionInput
   return connectionId;
 }
 
+async function assertConnectionOriginMatchesContextTree(
+  db: Database,
+  organizationId: string,
+  instanceOrigin: string,
+): Promise<void> {
+  const binding = await getOrgContextTreeBinding(db, organizationId);
+  if (!binding || binding.provider !== "gitlab") return;
+  const normalizedOrigin = normalizeGitlabOrigin(instanceOrigin);
+  const repository = resolveGitLabRepositoryWebIdentity(binding.repo, normalizedOrigin);
+  if (!repository?.originMatchesConnection || repository.origin !== normalizedOrigin) {
+    throw new ConflictError(
+      "The GitLab connection origin must match the Team's current GitLab Context Tree repository origin.",
+    );
+  }
+}
+
 /**
  * Serialize current-connection work with create/replace/delete using the
  * canonical organization -> connection lock order.
@@ -136,6 +157,7 @@ export async function createGitlabConnection(
       .where(eq(gitlabConnections.organizationId, input.organizationId))
       .limit(1);
     if (existing) throw new ConflictError("Organization already has a GitLab connection");
+    await assertConnectionOriginMatchesContextTree(tx, input.organizationId, input.instanceOrigin);
     return insertGitlabConnection(tx, input, bearer);
   });
   return { connectionId, bearer };
@@ -161,6 +183,7 @@ export async function replaceGitlabConnection(
     if (!current || current.id !== input.expectedConnectionId) {
       throw new ConflictError("GitLab connection changed or was removed; refresh before replacing it");
     }
+    await assertConnectionOriginMatchesContextTree(tx, input.organizationId, input.instanceOrigin);
     const [deleted] = await tx
       .delete(gitlabConnections)
       .where(eq(gitlabConnections.id, input.expectedConnectionId))
