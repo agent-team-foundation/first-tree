@@ -1772,10 +1772,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 for (const id of boundAgents.keys()) {
                   if (await ensureAgentStillRoutedHere(id)) routedAgentIds.push(id);
                 }
+                const pausedReason =
+                  msg && typeof msg === "object" && "pausedReason" in msg
+                    ? ((msg as { pausedReason?: "auth_rejected" | "auth_refresh_failed" | null }).pausedReason ?? null)
+                    : null;
                 const liveness = await runtimeLivenessService.recordClientHeartbeat(app.db, {
                   clientId,
                   instanceId,
                   routedAgentIds,
+                  pausedReason,
                 });
                 const repairableAgentIds = new Set(liveness.restoredAgentIds);
                 for (const info of boundAgents.values()) {

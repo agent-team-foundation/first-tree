@@ -548,9 +548,34 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(asking).not.toContain("--close");
   });
 
+  it("keeps Scheduled jobs briefing contract compact and fail-closed", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const scheduled = briefing.slice(
+      briefing.indexOf("## Scheduled jobs"),
+      briefing.indexOf("## GitHub Working Posture"),
+    );
+
+    expect(scheduled).toContain("cron` only");
+    expect(scheduled).toContain("never provider-native schedulers");
+    expect(scheduled).toContain("Managing human's explicit instruction for that create/update/pause/resume/delete");
+    expect(scheduled).toContain("no re-`chat ask`");
+    expect(scheduled).toContain("fail closed");
+    expect(scheduled).toContain("cron preview");
+    expect(scheduled).toContain("chat ask` managing human");
+    expect(scheduled).toContain("applied/not-applied");
+    expect(scheduled).toContain("cron list");
+    expect(scheduled).toContain("Pause blocks future accepts only");
+    expect(scheduled).toContain("accepted/delivered/running continue");
+    expect(scheduled).toContain("acceptedWorkPreserved");
+    expect(scheduled).toContain("FIRST_TREE_CHAT_ID");
+    expect(scheduled).not.toContain("Current-Chat human instruction");
+    expect(scheduled).not.toContain("CronCreate");
+  });
+
   it("keeps GitHub posture and follow-after-create rules inline", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const orderedHeadings = [
+      "## Scheduled jobs",
       "## GitHub Working Posture",
       "## GitHub Entity Attention",
       "## GitLab Working Posture",

@@ -8,6 +8,8 @@ export type ClientHeartbeatRecord = {
   clientId: string;
   instanceId: string;
   routedAgentIds: readonly string[];
+  /** Optional pause reason from the client heartbeat frame. Absent/null clears. */
+  pausedReason?: "auth_rejected" | "auth_refresh_failed" | null;
 };
 
 export type ClientHeartbeatResult = {
@@ -31,6 +33,7 @@ export async function recordClientHeartbeat(db: Database, data: ClientHeartbeatR
       status: "connected",
       instanceId: data.instanceId,
       lastSeenAt: now,
+      pausedReason: data.pausedReason ?? null,
     })
     .where(
       and(

@@ -181,14 +181,13 @@ escaped `\n` rows caused the Issue #389 double-encode failure. Use
 
 ## Workspace Collaboration
 
-The Communication matrix is the in-agent contract for teammate delivery:
-`chat send` reaches humans or agents, `chat ask` raises tracked human
-decisions, `chat update --description` reports progress, and agent no-op
-wake-ups do not get courtesy sends. For flags, stdin forms, history, invite,
-and related details, use `<%- bin %> chat --help` and subcommand help.
+Communication matrix: `chat send` / `chat ask` / `chat update --description`; agent
+no-op wake-ups get no courtesy sends. Details: `<%- bin %> chat --help`. Substitute
+`<%- bin %>` anywhere docs show the literal `first-tree`.
 
-Substitute this agent's CLI binary, `<%- bin %>`, anywhere docs show the
-literal `first-tree`.
+## Scheduled jobs
+`<%- bin %> cron` only → addressed Chat message (bound Agent); if `cron` missing/unsupported, stop and report — never provider-native schedulers. Managing human's explicit instruction for that create/update/pause/resume/delete authorizes (no re-`chat ask`); else fail closed — `cron preview`+`chat ask` managing human. Report applied/not-applied; unknown → `cron list`/`show` before retry. Pause blocks future accepts only (accepted/delivered/running continue); delete irreversible (`acceptedWorkPreserved`). `-F`/stdin; `FIRST_TREE_CHAT_ID`; no force/yes/run-now/cross-agent.
+
 
 ## GitHub Working Posture
 

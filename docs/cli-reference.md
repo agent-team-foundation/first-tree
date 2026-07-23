@@ -64,6 +64,7 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── doc ...                  Org document library (publish, comments, reply, resolve, status)
+├── cron ...                 Scheduled jobs in the current chat (preview, create, list, show, update, pause, resume, delete)
 ├── github ...               GitHub entity attention
 ├── gitlab ...               GitLab Issue/MR entity attention
 ├── org ...                  Organization-level operations
@@ -568,6 +569,43 @@ version come back with `outdated: true` (computed on read). `import` skips
 `NODE.md` / `README.md` index files and is idempotent (re-runs only add
 versions for changed content); `export` is the guaranteed way out — plain
 markdown files plus a `manifest.json` of metadata.
+
+---
+
+## cron
+
+Scheduled jobs in the current chat. At due time the Server writes one
+ordinary addressed markdown message to wake this agent. Every cron command
+(including `preview`, `list`, and `show`) requires `FIRST_TREE_CHAT_ID` from
+the agent session; prompt bodies use `-F <file>` or `-F -` only. Create and
+resume (transitions to active) also require the server kill switch
+`FIRST_TREE_CRON_JOBS_ENABLED=true` and `FIRST_TREE_POLLING_INTERVAL_SECONDS`
+in `1..10` (worker run / activate gate). When the feature is off or outside
+that cadence, preview, list, show, pause, delete, and updates that do not
+activate the job remain usable so owners can still inspect and recover
+existing jobs.
+
+```
+first-tree cron
+├── preview --schedule <expr> --timezone <iana>
+├── create --name <name> --schedule <expr> --timezone <iana> -F <prompt.md|->
+├── list
+├── show <jobId>
+├── update <jobId> [--name ...] [--schedule ...] [--timezone ...] [-F <prompt.md|->]
+├── pause <jobId>
+├── resume <jobId>
+└── delete <jobId>
+```
+
+```bash
+first-tree cron preview --schedule "0 9 * * 1-5" --timezone America/New_York
+first-tree cron create --name daily-triage --schedule "0 9 * * 1-5" --timezone America/New_York -F ./prompt.md
+first-tree cron list
+first-tree cron show <jobId>
+first-tree cron pause <jobId>
+first-tree cron resume <jobId>
+first-tree cron delete <jobId>
+```
 
 ---
 
@@ -1516,7 +1554,7 @@ agent process can talk to the server without extra setup:
 | `FIRST_TREE_ACCESS_TOKEN` | The signed-in member's access JWT (short-lived). |
 | `FIRST_TREE_AGENT_ID` | The agent's own UUID — the CLI uses it to identify the sender. |
 | `FIRST_TREE_CLIENT_ID` | The client (machine) the agent is bound to. |
-| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by `chat send` / `chat invite`. |
+| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by `chat send` / `chat invite`, and by every `cron` command (including `preview` / `list` / `show`). |
 | `FIRST_TREE_SERVER_URL` | Server URL override; falls back to client config. |
 
 ### Server (SaaS internal)
@@ -1671,6 +1709,13 @@ Old per-route rate-limit env vars are no longer read.
 threshold. Mapped GitHub/GitLab chats also require all bound entities to be
 closed/merged; provider-owned chats with no mapping use the same idle
 threshold.
+
+**Scheduled jobs (cron):**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_CRON_JOBS_ENABLED` | Kill switch for scheduled jobs. When `false`, the worker does not run and create/resume (activate) are rejected; preview, list, show, pause, delete, and non-activating updates remain available. | `false` |
+| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker gate. Worker run / create / resume require the value in `1..10` when the kill switch is on. | `5` |
 
 **Observability:**
 

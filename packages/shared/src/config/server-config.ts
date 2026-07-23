@@ -188,6 +188,17 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_DOCS_ENABLED",
     }),
   },
+  cronJobs: {
+    /**
+     * Deployment kill switch for First Tree scheduled jobs. When off: the
+     * worker does not run, and create/resume are rejected; read, preview,
+     * pause, and delete remain available so owners can still manage existing
+     * jobs. Defaults off until an operator enables the feature.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_CRON_JOBS_ENABLED",
+    }),
+  },
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",

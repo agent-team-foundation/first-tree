@@ -47,6 +47,7 @@ function makeNotifier(handlers: CapturedHandlers): Notifier {
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
     notify: vi.fn(),
+    notifyStrict: vi.fn(),
     notifyConfigChange: vi.fn(),
     notifySessionStateChange: vi.fn(),
     notifySessionEvent: vi.fn(),

@@ -13,6 +13,7 @@ export { chats } from "./chats.js";
 export { clients } from "./clients.js";
 export { connectCodes } from "./connect-codes.js";
 export { contextTreeIoEvents } from "./context-tree-io-events.js";
+export { cronJobs } from "./cron-jobs.js";
 export { docComments, docDocuments, docVersions } from "./doc-documents.js";
 export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";

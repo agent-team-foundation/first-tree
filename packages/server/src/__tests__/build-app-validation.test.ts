@@ -24,6 +24,7 @@ const baseConfig: Config = {
     landingCampaignMaxTrialsPerUserPer24Hours: 5,
   },
   docs: { enabled: false },
+  cronJobs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
