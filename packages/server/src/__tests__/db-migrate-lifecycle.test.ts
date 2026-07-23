@@ -65,7 +65,7 @@ function makeHarness() {
     sleep: vi.fn(async (ms: number) => {
       nowMs += ms;
     }),
-    armWatchdog: vi.fn((fire: () => void) => {
+    armWatchdog: vi.fn((fire: () => void, _timeoutMs: number) => {
       fireWatchdog = fire;
       return cancelWatchdog;
     }),
@@ -95,11 +95,11 @@ function makeHarness() {
   };
 }
 
-function runHarness(harness: ReturnType<typeof makeHarness>, lockTimeoutMs = 15_000): Promise<number> {
+function runHarness(harness: ReturnType<typeof makeHarness>, lockTimeoutMs?: number): Promise<number> {
   return runMigrationsWithDependencies(
     "postgres://credentials-must-not-be-logged.invalid/database",
     "/valid/migrations",
-    { lockTimeoutMs },
+    lockTimeoutMs === undefined ? {} : { lockTimeoutMs },
     harness.dependencies,
   );
 }
@@ -116,7 +116,8 @@ describe("runMigrations fixed-session lifecycle", () => {
 
     const outcome = await track(runHarness(harness));
 
-    expect(outcome).toEqual({ status: "rejected", reason: primary });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBe(primary);
     expect(harness.session.unlock).toHaveBeenCalledTimes(1);
     expect(harness.session.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
     expect(harness.logger.warn.mock.calls).toEqual([
@@ -143,7 +144,8 @@ describe("runMigrations fixed-session lifecycle", () => {
 
     const outcome = await track(runHarness(harness));
 
-    expect(outcome).toEqual({ status: "rejected", reason: unlockError });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBe(unlockError);
     expect(harness.session.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
   });
 
@@ -154,7 +156,8 @@ describe("runMigrations fixed-session lifecycle", () => {
 
     const outcome = await track(runHarness(harness));
 
-    expect(outcome).toEqual({ status: "rejected", reason: endError });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBe(endError);
     expect(harness.session.unlock).toHaveBeenCalledTimes(1);
   });
 
@@ -164,7 +167,8 @@ describe("runMigrations fixed-session lifecycle", () => {
 
     const outcome = await track(runHarness(harness));
 
-    expect(outcome).toEqual({ status: "rejected", reason: undefined });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBeUndefined();
     expect(harness.session.unlock).toHaveBeenCalledTimes(1);
   });
 
@@ -187,6 +191,24 @@ describe("runMigrations fixed-session lifecycle", () => {
     expect(harness.session.unlock).not.toHaveBeenCalled();
     expect(harness.session.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
     expect(harness.cancelWatchdog).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms the acquisition watchdog with the default timeout", async () => {
+    const harness = makeHarness();
+
+    await expect(runHarness(harness)).resolves.toBe(7);
+
+    expect(harness.dependencies.armWatchdog).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 15_000);
+    expect(harness.openSession).toHaveBeenCalledWith(expect.objectContaining({ connectTimeoutSeconds: 15 }));
+  });
+
+  it("passes a timeout override to both the watchdog and connection timer", async () => {
+    const harness = makeHarness();
+
+    await expect(runHarness(harness, 1_501)).resolves.toBe(7);
+
+    expect(harness.dependencies.armWatchdog).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 1_501);
+    expect(harness.openSession).toHaveBeenCalledWith(expect.objectContaining({ connectTimeoutSeconds: 2 }));
   });
 
   it("keeps connection loss primary when forced termination also fails", async () => {
@@ -300,7 +322,8 @@ describe("runMigrations fixed-session lifecycle", () => {
     unlock.resolve(true);
     const outcome = await outcomePromise;
 
-    expect(outcome).toEqual({ status: "rejected", reason: primary });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBe(primary);
     expect(harness.logger.warn).toHaveBeenCalledTimes(1);
     expect(harness.logger.warn).toHaveBeenCalledWith(
       {
@@ -342,7 +365,8 @@ describe("runMigrations fixed-session lifecycle", () => {
 
     const outcome = await track(runHarness(harness));
 
-    expect(outcome).toEqual({ status: "rejected", reason: primary });
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.reason).toBe(primary);
     expect(harness.session.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
     expect(harness.cancelWatchdog).toHaveBeenCalledTimes(1);
   });
@@ -436,6 +460,16 @@ describe("runMigrations fixed-session lifecycle", () => {
       ],
     ]);
     expect(harness.cancelWatchdog).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps the connection timer at Node's safe maximum while preserving the watchdog deadline", async () => {
+    const harness = makeHarness();
+    const maximumTimerDelayMs = 2_147_483_647;
+
+    await expect(runHarness(harness, maximumTimerDelayMs)).resolves.toBe(7);
+
+    expect(harness.openSession).toHaveBeenCalledWith(expect.objectContaining({ connectTimeoutSeconds: 2_147_483 }));
+    expect(harness.dependencies.armWatchdog).toHaveBeenCalledExactlyOnceWith(expect.any(Function), maximumTimerDelayMs);
   });
 
   it.each([

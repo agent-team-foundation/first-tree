@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { type AddressInfo, createConnection, createServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -15,6 +16,9 @@ const REPLICA_B_DDL_GATE = 2;
 const SCRATCH_CASE_TIMEOUT_MS = 60_000;
 const SCRATCH_BODY_TIMEOUT_MS = 35_000;
 const SCRATCH_DRAIN_TIMEOUT_MS = 5_000;
+const RECONNECT_BACKOFF_MS = 3_000;
+const RECONNECT_LOCK_TIMEOUT_MS = 2_200;
+const RECONNECT_OBSERVATION_MS = RECONNECT_BACKOFF_MS + 500;
 
 const journal = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../drizzle/meta/_journal.json", import.meta.url)), "utf8"),
@@ -55,6 +59,76 @@ function databaseUrlWithApplicationName(url: string, applicationName: string): s
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type TcpForwardingGate = {
+  port: number;
+  acceptedConnections(): number;
+  setForwarding(enabled: boolean): void;
+  close(): Promise<void>;
+};
+
+async function createTcpForwardingGate(targetUrl: string): Promise<TcpForwardingGate> {
+  const target = new URL(targetUrl);
+  const targetPort = Number(target.port || "5432");
+  let forwarding = true;
+  let acceptedConnections = 0;
+  const sockets = new Set<Socket>();
+  const server = createServer((downstream) => {
+    acceptedConnections += 1;
+    sockets.add(downstream);
+    downstream.on("error", () => undefined);
+    downstream.once("close", () => sockets.delete(downstream));
+
+    if (!forwarding) {
+      downstream.destroy();
+      return;
+    }
+
+    const upstream = createConnection({ host: target.hostname, port: targetPort });
+    sockets.add(upstream);
+    upstream.on("error", () => undefined);
+    upstream.once("close", () => {
+      sockets.delete(upstream);
+      downstream.destroy();
+    });
+    downstream.once("close", () => upstream.destroy());
+    downstream.pipe(upstream).pipe(downstream);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => reject(error);
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw new Error(`TCP forwarding gate did not bind an IP port: ${String(address)}`);
+  }
+
+  return {
+    port: (address as AddressInfo).port,
+    acceptedConnections: () => acceptedConnections,
+    setForwarding(enabled) {
+      forwarding = enabled;
+      if (enabled) return;
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+    },
+    async close() {
+      forwarding = false;
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      if (!server.listening) return;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 async function readBackendStates(
@@ -113,7 +187,7 @@ async function waitForBackendState(
   predicate: (state: BackendState) => boolean,
   description: string,
 ): Promise<BackendState> {
-  const deadline = performance.now() + 8_000;
+  const deadline = performance.now() + 20_000;
   let lastStates: BackendState[] = [];
   while (performance.now() < deadline) {
     lastStates = await readBackendStates(observer, applicationName);
@@ -401,6 +475,114 @@ describe("startup migration advisory lock", () => {
       }
       await Promise.allSettled([holder.end({ timeout: 0 }), observer.end({ timeout: 0 })]);
     }
+  });
+
+  it("cancels a queued initial reconnect without creating a backend after returning", { timeout: 30_000 }, async () => {
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(databaseUrl, "DATABASE_URL must be set by global setup").toBeTruthy();
+    const url = databaseUrl ?? "";
+    const applicationName = `ft_migration_reconnect_${randomUUID().slice(0, 8)}`;
+    const holder = postgres(url, { max: 1, ...sslOptions(url) });
+    const observer = postgres(url, { max: 1, ...sslOptions(url) });
+    const tcpGate = await createTcpForwardingGate(url);
+    const migrationUrl = new URL(url);
+    migrationUrl.hostname = "127.0.0.1";
+    migrationUrl.port = String(tcpGate.port);
+    migrationUrl.searchParams.set("application_name", applicationName);
+    migrationUrl.searchParams.set("backoff", String(RECONNECT_BACKOFF_MS / 1_000));
+
+    let holderLocked = false;
+    let migrationSettled = false;
+    let migration: Promise<Outcome<number>> | undefined;
+    let primaryError: unknown;
+    try {
+      await holder`SELECT pg_advisory_lock(hashtext('drizzle_migrations'))`;
+      holderLocked = true;
+      const startedAt = performance.now();
+      migration = track(runMigrations(migrationUrl.toString(), { lockTimeoutMs: RECONNECT_LOCK_TIMEOUT_MS })).then(
+        (outcome) => {
+          migrationSettled = true;
+          return outcome;
+        },
+      );
+
+      const firstBackend = await waitForBackendState(
+        observer,
+        applicationName,
+        (state) => state.state === "idle" && /pg_try_advisory_lock/i.test(state.query),
+        "the first migration lock miss before forcing a reconnect",
+      );
+      expect(tcpGate.acceptedConnections()).toBeGreaterThan(0);
+      const terminated = await observer<Array<{ terminated: boolean }>>`
+          SELECT pg_terminate_backend(${firstBackend.pid}) AS terminated
+        `;
+      expect(terminated[0]?.terminated).toBe(true);
+      tcpGate.setForwarding(false);
+      await waitForNoBackend(observer, applicationName);
+
+      // The migration loop polls after one second. Keep the endpoint down
+      // until that second query is queued in postgres-js's initial reconnect
+      // state, but restore it only after the acquisition watchdog returns.
+      const untilSecondPollMs = startedAt + 1_250 - performance.now();
+      if (untilSecondPollMs > 0) await delay(untilSecondPollMs);
+      expect(migrationSettled).toBe(false);
+
+      const outcome = await migration;
+      const elapsedMs = performance.now() - startedAt;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.reason).toBeInstanceOf(Error);
+        if (outcome.reason instanceof Error) expect(outcome.reason.message).toMatch(/migration lock contention/);
+      }
+      expect(elapsedMs).toBeGreaterThanOrEqual(RECONNECT_LOCK_TIMEOUT_MS - 300);
+      expect(elapsedMs).toBeLessThan(RECONNECT_LOCK_TIMEOUT_MS + 750);
+      expect(await readBackendStates(observer, applicationName)).toEqual([]);
+
+      const acceptedAtRejection = tcpGate.acceptedConnections();
+      tcpGate.setForwarding(true);
+      await delay(RECONNECT_OBSERVATION_MS);
+      expect(tcpGate.acceptedConnections()).toBe(acceptedAtRejection);
+      expect(await readBackendStates(observer, applicationName)).toEqual([]);
+    } catch (error) {
+      primaryError = error;
+    }
+
+    const cleanupErrors: unknown[] = [];
+    tcpGate.setForwarding(false);
+    try {
+      await observer<Array<{ terminated: boolean }>>`
+          SELECT pg_terminate_backend(pid) AS terminated
+          FROM pg_stat_activity
+          WHERE datname = current_database() AND application_name = ${applicationName}
+        `;
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (holderLocked) {
+      try {
+        await holder`SELECT pg_advisory_unlock_all()`;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (migration !== undefined && !(await settlesWithin([migration], 5_000))) {
+      cleanupErrors.push(new Error("migration reconnect regression did not settle during cleanup"));
+    }
+    try {
+      await tcpGate.close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    const connectionCleanup = await Promise.allSettled([holder.end({ timeout: 0 }), observer.end({ timeout: 0 })]);
+    for (const result of connectionCleanup) {
+      if (result.status === "rejected") cleanupErrors.push(result.reason);
+    }
+
+    if (primaryError !== undefined && cleanupErrors.length > 0) {
+      throw new AggregateError([primaryError, ...cleanupErrors], "test and reconnect cleanup both failed");
+    }
+    if (primaryError !== undefined) throw primaryError;
+    if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "reconnect cleanup failed");
   });
 
   it("serializes two real migrations through the final journal commit", {

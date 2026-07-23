@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -115,11 +116,83 @@ type SettledOperation<T> =
   | { readonly kind: "value"; readonly value: T }
   | { readonly kind: "error"; readonly error: unknown };
 
+type PostgresSocketOptions = {
+  host: string[];
+  port: number[];
+  path?: string | false;
+};
+
+type TrackedPostgresSocket = Socket & {
+  host?: string;
+  port?: number;
+};
+
+/**
+ * postgres-js 3.4.8 does not cancel a reconnect timer queued while a query is
+ * in its initial connection state. `end({ timeout: 0 })` can therefore resolve
+ * before that timer creates a replacement socket. This session-private socket
+ * gate preserves normal pre-shutdown retries, but makes socket creation
+ * impossible synchronously once cleanup starts. It destroys sockets that are
+ * still connecting while postgres-js closes established sockets itself.
+ */
+function createMigrationSocketGate(): {
+  connect(options: PostgresSocketOptions): Socket;
+  stop(): void;
+} {
+  let acceptingSockets = true;
+  let nextHostIndex = 0;
+  const rawSockets = new Set<Socket>();
+  const shutdownError = new Error("migration database session is shutting down");
+
+  return {
+    connect(options) {
+      if (!acceptingSockets) throw shutdownError;
+
+      const hosts = options.host;
+      const ports = options.port;
+      const hostIndex = nextHostIndex % Math.max(hosts.length, 1);
+      nextHostIndex += 1;
+      const host = hosts[hostIndex] ?? "localhost";
+      const port = ports[hostIndex % Math.max(ports.length, 1)] ?? 5432;
+      const socket = (
+        options.path ? createConnection(options.path) : createConnection({ host, port })
+      ) as TrackedPostgresSocket;
+      // postgres-js reads these properties when it upgrades a custom socket
+      // to TLS. Its public custom-socket API is documented but missing from
+      // the 3.4.8 Options declaration.
+      socket.host = host;
+      socket.port = port;
+      rawSockets.add(socket);
+      socket.once("close", () => rawSockets.delete(socket));
+
+      if (!acceptingSockets) {
+        socket.destroy();
+        throw shutdownError;
+      }
+      return socket;
+    },
+    stop() {
+      acceptingSockets = false;
+      // postgres-js may have wrapped a connected raw socket in a TLSSocket.
+      // Let client.end() close sockets it already owns; destroying the raw
+      // socket first races the driver's Terminate write. Only sockets still
+      // connecting are outside that reliable shutdown path. Use the Socket's
+      // state instead of a listener-maintained set: direct TLS negotiation
+      // removes the raw socket's listeners before its TCP connect completes.
+      for (const socket of rawSockets) {
+        if (socket.connecting) socket.destroy();
+      }
+      rawSockets.clear();
+    },
+  };
+}
+
 function createDefaultDependencies(): RunMigrationsDependencies {
   return {
     openSession({ databaseUrl, migrationsFolder, connectTimeoutSeconds, onLockAcquired, onClose }) {
       let connectionClosed = false;
-      const client = postgres(databaseUrl, {
+      const socketGate = createMigrationSocketGate();
+      const clientOptions = {
         ...sslOptions(databaseUrl),
         max: 1,
         // postgres-js 3.4.8 treats an explicit 0 as disabled. Keep the own
@@ -127,11 +200,15 @@ function createDefaultDependencies(): RunMigrationsDependencies {
         idle_timeout: 0,
         max_lifetime: null,
         connect_timeout: connectTimeoutSeconds,
+        socket: socketGate.connect,
         onclose(connectionId) {
           connectionClosed = true;
           onClose(connectionId);
         },
-      });
+      } as NonNullable<Parameters<typeof postgres>[1]> & {
+        socket(options: PostgresSocketOptions): Socket;
+      };
+      const client = postgres(databaseUrl, clientOptions);
 
       type TransactionCallback = (transactionClient: typeof client) => unknown;
       const migrationClient = new Proxy(client, {
@@ -205,6 +282,10 @@ function createDefaultDependencies(): RunMigrationsDependencies {
           return rows[0]?.unlocked === true;
         },
         end(options) {
+          // Close the socket-creation gate before asking postgres-js to end.
+          // Any already-queued reconnect callback can still run, but it can no
+          // longer create a socket or backend after this point.
+          socketGate.stop();
           return client.end(options);
         },
       };
@@ -327,7 +408,7 @@ export async function runMigrationsWithDependencies(
   session = dependencies.openSession({
     databaseUrl,
     migrationsFolder,
-    connectTimeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1_000)),
+    connectTimeoutSeconds: Math.max(1, Math.min(Math.ceil(timeoutMs / 1_000), Math.floor(MAX_TIMER_DELAY_MS / 1_000))),
     onLockAcquired() {
       // Set synchronously inside the session adapter, before its query promise
       // resolves to this lifecycle. A socket close in that microtask gap must
