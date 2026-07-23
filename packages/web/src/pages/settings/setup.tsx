@@ -10,6 +10,7 @@ import { getContextTreeSetting } from "../../api/org-settings.js";
 import { listTeamResourcesForOrg } from "../../api/resources.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
+import { GITLAB_CONNECTION_READINESS, gitlabConnectionReadiness } from "../../lib/gitlab-connection-readiness.js";
 import { cn } from "../../lib/utils.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 
@@ -46,6 +47,7 @@ export type SetupFacts = {
     endpointSeen: boolean;
     health: {
       lastValidInboundAt: string | null;
+      lastSystemHookMergeRequestInboundAt: string | null;
       lastProcessingFailureAt: string | null;
     };
   } | null>;
@@ -137,10 +139,10 @@ function gitlabOriginLabel(origin: string): string {
 function gitlabConnectionIssue(
   gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
 ): string | null {
-  // A valid inbound clears the failure fields server-side, so any remaining
-  // failure is current and takes precedence over first-inbound readiness.
-  if (gitlab.health.lastProcessingFailureAt) return "Processing issue";
-  if (!gitlab.endpointSeen) return "Waiting for inbound webhook";
+  const readiness = gitlabConnectionReadiness(gitlab);
+  if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "Processing issue";
+  if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "Waiting for System Hook";
+  if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "Waiting for merge request event";
   return null;
 }
 
@@ -474,6 +476,7 @@ export function SettingsSetupPage() {
                   endpointSeen: gitlab.value[0].endpointSeen,
                   health: {
                     lastValidInboundAt: gitlab.value[0].health.lastValidInboundAt,
+                    lastSystemHookMergeRequestInboundAt: gitlab.value[0].health.lastSystemHookMergeRequestInboundAt,
                     lastProcessingFailureAt: gitlab.value[0].health.lastProcessingFailureAt,
                   },
                 }

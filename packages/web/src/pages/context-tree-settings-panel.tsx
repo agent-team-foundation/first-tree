@@ -23,6 +23,7 @@ import { Section } from "../components/ui/section.js";
 import { Select } from "../components/ui/select.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { Switch } from "../components/ui/switch.js";
+import { GITLAB_CONNECTION_READINESS, gitlabConnectionReadiness } from "../lib/gitlab-connection-readiness.js";
 import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.js";
 import { fetchAllAgents } from "./team/index.js";
 
@@ -260,23 +261,32 @@ function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organi
   const originMatches =
     connection !== null &&
     resolveGitLabRepositoryWebIdentity(repo, connection.instanceOrigin)?.originMatchesConnection === true;
+  const readiness = connection ? gitlabConnectionReadiness(connection) : null;
   const status = !connection
     ? "Degraded · no GitLab Webhook connection"
     : !originMatches
       ? `Degraded · Webhook origin ${connection.instanceOrigin} does not match the repository origin`
-      : connection.endpointSeen
-        ? "Healthy · inbound Webhook observed"
-        : "Waiting · configure the project Webhook";
+      : readiness === GITLAB_CONNECTION_READINESS.needsAttention
+        ? "Degraded · Webhook processing needs attention"
+        : readiness === GITLAB_CONNECTION_READINESS.routingVerified
+          ? "Healthy · MR routing observed"
+          : readiness === GITLAB_CONNECTION_READINESS.transportReceived
+            ? "Waiting · Webhook received; waiting for an MR event"
+            : "Waiting · configure the System Hook";
   return (
     <div
       className="text-label"
       style={{
-        color: originMatches && connection?.endpointSeen ? "var(--success)" : "var(--fg-3)",
+        color:
+          originMatches && readiness === GITLAB_CONNECTION_READINESS.routingVerified ? "var(--success)" : "var(--fg-3)",
         marginTop: "var(--sp-2)",
       }}
     >
       GitLab Webhook: {status}
       {connection?.health.lastValidInboundAt ? ` · last valid inbound ${connection.health.lastValidInboundAt}` : ""}
+      {connection?.health.lastSystemHookMergeRequestInboundAt
+        ? ` · last System Hook MR event ${connection.health.lastSystemHookMergeRequestInboundAt}`
+        : ""}
     </div>
   );
 }

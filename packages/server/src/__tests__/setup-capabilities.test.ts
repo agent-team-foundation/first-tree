@@ -143,6 +143,7 @@ async function seedGitlabConnection(
     origin?: string;
     firstSeenAt?: Date | null;
     lastValidInboundAt?: Date | null;
+    lastSystemHookMergeRequestInboundAt?: Date | null;
     lastProcessingFailureAt?: Date | null;
   } = {},
 ): Promise<string> {
@@ -155,6 +156,7 @@ async function seedGitlabConnection(
     tokenHash: `setup-${randomUUID()}`,
     endpointFirstSeenAt: options.firstSeenAt ?? null,
     lastValidInboundAt: options.lastValidInboundAt ?? null,
+    lastSystemHookMergeRequestInboundAt: options.lastSystemHookMergeRequestInboundAt ?? null,
     lastProcessingFailureAt: options.lastProcessingFailureAt ?? null,
     createdByMemberId: scenario.memberId,
     updatedByMemberId: scenario.memberId,
@@ -227,6 +229,7 @@ async function seedGitlabReview(
     repoOrigin?: string;
     firstSeenAt?: Date | null;
     lastValidInboundAt?: Date | null;
+    lastSystemHookMergeRequestInboundAt?: Date | null;
     lastProcessingFailureAt?: Date | null;
     reviewer: { uuid: string };
   },
@@ -235,6 +238,7 @@ async function seedGitlabReview(
     origin: options.connectionOrigin,
     firstSeenAt: options.firstSeenAt,
     lastValidInboundAt: options.lastValidInboundAt,
+    lastSystemHookMergeRequestInboundAt: options.lastSystemHookMergeRequestInboundAt,
     lastProcessingFailureAt: options.lastProcessingFailureAt,
   });
   await seedSetting(app, scenario, "context_tree", {
@@ -809,12 +813,53 @@ describe("Team setup capabilities", () => {
       },
     });
 
+    const transportOnly = await createScenario(app);
+    const transportOnlyReviewer = await createReviewer(app, transportOnly);
+    await seedGitlabReview(app, transportOnly, {
+      reviewer: transportOnlyReviewer,
+      firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
+      lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+    });
+    await expect(project(app, transportOnly)).resolves.toMatchObject({
+      repositoryAutomation: {
+        providers: [
+          {},
+          {
+            provider: "gitlab",
+            adoption: "configuring",
+            health: "pending_verification",
+            blockers: [
+              {
+                code: "gitlab_merge_request_event_not_seen",
+                resolutionOwner: "admin",
+                actionKind: "configure_gitlab_webhook",
+              },
+            ],
+          },
+        ],
+      },
+      contextTree: {
+        automaticReview: {
+          health: "pending_verification",
+          blockers: [
+            {
+              code: "gitlab_merge_request_event_not_seen",
+              resolutionOwner: "admin",
+              actionKind: "configure_gitlab_webhook",
+            },
+          ],
+        },
+      },
+    });
+
     const ready = await createScenario(app);
     const readyReviewer = await createReviewer(app, ready);
     await seedGitlabReview(app, ready, {
       reviewer: readyReviewer,
       firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
       lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastSystemHookMergeRequestInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastProcessingFailureAt: new Date("2026-07-22T08:30:00.000Z"),
     });
     await seedGithubInstallation(app, ready);
     await expect(project(app, ready)).resolves.toMatchObject({
@@ -829,12 +874,40 @@ describe("Team setup capabilities", () => {
       },
     });
 
+    const failedWithoutMr = await createScenario(app);
+    const failedWithoutMrReviewer = await createReviewer(app, failedWithoutMr);
+    await seedGitlabReview(app, failedWithoutMr, {
+      reviewer: failedWithoutMrReviewer,
+      firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
+      lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastProcessingFailureAt: new Date("2026-07-22T10:00:00.000Z"),
+    });
+    await expect(project(app, failedWithoutMr)).resolves.toMatchObject({
+      repositoryAutomation: {
+        providers: [
+          {},
+          {
+            provider: "gitlab",
+            health: "degraded",
+            blockers: [{ code: "gitlab_processing_failed" }],
+          },
+        ],
+      },
+      contextTree: {
+        automaticReview: {
+          health: "degraded",
+          blockers: [{ code: "gitlab_processing_failed" }],
+        },
+      },
+    });
+
     const degraded = await createScenario(app);
     const degradedReviewer = await createReviewer(app, degraded);
     await seedGitlabReview(app, degraded, {
       reviewer: degradedReviewer,
       firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
       lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastSystemHookMergeRequestInboundAt: new Date("2026-07-22T10:00:00.000Z"),
       lastProcessingFailureAt: new Date("2026-07-22T10:00:00.000Z"),
     });
     await expect(project(app, degraded)).resolves.toMatchObject({
@@ -865,6 +938,7 @@ describe("Team setup capabilities", () => {
       repoOrigin: "https://gitlab.previous",
       firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
       lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastSystemHookMergeRequestInboundAt: new Date("2026-07-22T09:00:00.000Z"),
     });
     await expect(project(app, mismatch)).resolves.toMatchObject({
       contextTree: {
@@ -890,6 +964,7 @@ describe("Team setup capabilities", () => {
       reviewer: missingConnectionReviewer,
       firstSeenAt: new Date("2026-07-22T08:00:00.000Z"),
       lastValidInboundAt: new Date("2026-07-22T09:00:00.000Z"),
+      lastSystemHookMergeRequestInboundAt: new Date("2026-07-22T09:00:00.000Z"),
     });
     await app.db
       .delete(gitlabConnections)

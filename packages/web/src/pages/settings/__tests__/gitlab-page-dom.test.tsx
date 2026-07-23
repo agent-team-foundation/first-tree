@@ -47,6 +47,7 @@ function connection(overrides: Partial<GitlabConnectionSummary> = {}): GitlabCon
     },
     health: {
       lastValidInboundAt: "2026-07-15T08:00:00.000Z",
+      lastSystemHookMergeRequestInboundAt: "2026-07-15T08:00:00.000Z",
       lastProcessingFailureAt: null,
       lastProcessingFailureCode: null,
     },
@@ -148,6 +149,8 @@ describe("SettingsGitlabPage", () => {
 
   it("shows the secret exactly once outside query/mutation caches", async () => {
     const webhookUrl = "https://first-tree.example/api/v1/webhooks/gitlab/one-time-secret";
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     apiMocks.createGitlabConnection.mockResolvedValue({ connection: connection(), webhookUrl });
     const rendered = await renderPage();
     expect(rendered.container.textContent).toContain("No GitLab connection");
@@ -165,6 +168,13 @@ describe("SettingsGitlabPage", () => {
     await act(async () => button(document, "Create").click());
     await flush();
     expect(document.body.textContent).toContain(webhookUrl);
+    expect(document.body.textContent).toContain("Finish GitLab System Hook setup");
+    expect(document.body.textContent).toContain("Push events");
+    expect(document.body.textContent).toContain("Merge request events");
+    expect(document.body.textContent).toContain("default payload");
+    expect(document.body.textContent).toContain("System Hooks do not deliver Issue or Note events");
+    expect(document.body.textContent).not.toContain("project webhook");
+    expect(document.querySelector<HTMLAnchorElement>('a[href="https://gitlab.internal/admin/hooks"]')).not.toBeNull();
     expect(
       JSON.stringify(
         rendered.queryClient
@@ -181,6 +191,14 @@ describe("SettingsGitlabPage", () => {
           .map((mutation) => mutation.state.data),
       ),
     ).not.toContain("one-time-secret");
+    await act(async () => button(document, "Copy URL").click());
+    await flush();
+    expect(writeText).toHaveBeenCalledWith(webhookUrl);
+    expect(document.body.textContent).toContain("Copied");
+    writeText.mockRejectedValueOnce(new Error("clipboard denied"));
+    await act(async () => button(document, "Copied").click());
+    await flush();
+    expect(document.body.textContent).toContain("Copy failed");
     await act(async () => button(document, "Done").click());
     expect(document.body.textContent).not.toContain(webhookUrl);
     await act(async () => rendered.root.unmount());
@@ -263,7 +281,7 @@ describe("SettingsGitlabPage", () => {
     authMock.value = { role: "member", organizationId: "org-member" };
     apiMocks.listGitlabConnections.mockResolvedValue([connection({ organizationId: "org-member" })]);
     const { container, root } = await renderPage();
-    expect(container.textContent).toContain("Inbound webhook observed");
+    expect(container.textContent).toContain("MR routing verified");
     expect(container.textContent).toContain("GitLab version");
     expect(container.textContent).not.toContain("Regenerate URL");
     expect(container.textContent).not.toContain("GitLab account bindings");
@@ -274,7 +292,16 @@ describe("SettingsGitlabPage", () => {
   it("requires a destructive confirmation before regenerating the URL", async () => {
     apiMocks.listGitlabConnections.mockResolvedValue([connection()]);
     apiMocks.regenerateGitlabBearer.mockResolvedValue({
-      connection: connection({ endpointSeen: false }),
+      connection: connection({
+        endpointSeen: false,
+        stableDeliveryObserved: false,
+        health: {
+          lastValidInboundAt: null,
+          lastSystemHookMergeRequestInboundAt: null,
+          lastProcessingFailureAt: null,
+          lastProcessingFailureCode: null,
+        },
+      }),
       webhookUrl: "https://first-tree.example/api/v1/webhooks/gitlab/new-secret",
     });
     const { container, root } = await renderPage();
@@ -289,7 +316,59 @@ describe("SettingsGitlabPage", () => {
     await flush();
     expect(apiMocks.regenerateGitlabBearer).toHaveBeenCalledWith("connection-1");
     expect(document.body.textContent).toContain("new-secret");
+    expect(document.body.textContent).toContain("Finish GitLab System Hook setup");
+    expect(document.querySelector('[data-testid="gitlab-one-time-setup-status"]')?.textContent).toContain(
+      "Waiting for webhook",
+    );
     await act(async () => root.unmount());
+  });
+
+  it("separates transport receipt, MR routing verification, and processing failure", async () => {
+    apiMocks.listGitlabConnections.mockResolvedValue([
+      connection({
+        instanceOrigin: "https://gitlab.internal:8443",
+        health: {
+          lastValidInboundAt: "2026-07-15T08:00:00.000Z",
+          lastSystemHookMergeRequestInboundAt: null,
+          lastProcessingFailureAt: null,
+          lastProcessingFailureCode: null,
+        },
+      }),
+    ]);
+    const received = await renderPage();
+    expect(received.container.textContent).toContain("Webhook received · waiting for MR event");
+    expect(received.container.textContent).toContain("Finish MR verification");
+    expect(received.container.textContent).toContain("System Hooks do not deliver Issue or Note events");
+    expect(received.container.textContent).toContain("Regenerate only if it was not saved");
+    expect(
+      received.container.querySelector<HTMLAnchorElement>('a[href="https://gitlab.internal:8443/admin/hooks"]'),
+    ).not.toBeNull();
+    await act(async () => received.root.unmount());
+
+    apiMocks.listGitlabConnections.mockResolvedValue([
+      connection({
+        health: {
+          lastValidInboundAt: "2026-07-15T08:00:00.000Z",
+          lastSystemHookMergeRequestInboundAt: "2026-07-15T08:00:00.000Z",
+          lastProcessingFailureAt: "2026-07-15T08:00:00.000Z",
+          lastProcessingFailureCode: "malformed_payload",
+        },
+      }),
+    ]);
+    const failed = await renderPage();
+    expect(failed.container.textContent).toContain("Webhook needs attention");
+    expect(failed.container.textContent).toContain("Resolve the processing issue");
+    expect(failed.container.textContent).toContain("Latest processing issue: malformed_payload");
+    expect(failed.container.querySelector('[data-testid="gitlab-system-hook-recovery"]')?.textContent).not.toContain(
+      "malformed_payload",
+    );
+    await act(async () => failed.root.unmount());
+
+    apiMocks.listGitlabConnections.mockResolvedValue([connection()]);
+    const verified = await renderPage();
+    expect(verified.container.textContent).toContain("MR routing verified");
+    expect(verified.container.querySelector('[data-testid="gitlab-system-hook-recovery"]')).toBeNull();
+    await act(async () => verified.root.unmount());
   });
 
   it("uses organization-scoped query keys when switching Teams", async () => {

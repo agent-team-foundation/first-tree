@@ -215,8 +215,10 @@ export async function regenerateGitlabConnectionBearer(
         tokenHash: hashGitlabUrlBearer(bearer),
         endpointFirstSeenAt: null,
         lastValidInboundAt: null,
+        lastSystemHookMergeRequestInboundAt: null,
         lastProcessingFailureAt: null,
         lastProcessingFailureCode: null,
+        stableDeliveryObservedAt: null,
         reviewerMode: "unknown",
         lastObservedVersion: null,
         lastReviewerSchemaAnomalyAt: null,
@@ -318,6 +320,22 @@ export async function markGitlabInboundSeen(db: Database, connectionId: string, 
     .set({
       endpointFirstSeenAt: sql`coalesce(${gitlabConnections.endpointFirstSeenAt}, now())`,
       lastValidInboundAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.tokenHash, tokenHash)));
+}
+
+/** Record a processed System Hook MR and clear the current MR processing failure atomically. */
+export async function markGitlabSystemHookMergeRequestProcessed(
+  db: Database,
+  connectionId: string,
+  tokenHash: string,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(gitlabConnections)
+    .set({
+      lastSystemHookMergeRequestInboundAt: now,
       lastProcessingFailureAt: null,
       lastProcessingFailureCode: null,
       updatedAt: now,
@@ -390,6 +408,7 @@ export async function getGitlabConnectionSummary(db: Database, connectionId: str
     },
     health: {
       lastValidInboundAt: connection.lastValidInboundAt?.toISOString() ?? null,
+      lastSystemHookMergeRequestInboundAt: connection.lastSystemHookMergeRequestInboundAt?.toISOString() ?? null,
       lastProcessingFailureAt: connection.lastProcessingFailureAt?.toISOString() ?? null,
       lastProcessingFailureCode: connection.lastProcessingFailureCode,
     },

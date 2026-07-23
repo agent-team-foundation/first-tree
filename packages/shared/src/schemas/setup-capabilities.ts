@@ -17,6 +17,7 @@ export const setupBlockerCodeSchema = z.enum([
   "github_pull_requests_permission_required",
   "github_tree_repo_not_covered",
   "gitlab_webhook_not_seen",
+  "gitlab_merge_request_event_not_seen",
   "gitlab_processing_failed",
   "context_tree_binding_invalid",
   "context_tree_provider_unresolved",

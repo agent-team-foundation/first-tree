@@ -18,6 +18,10 @@ export const gitlabConnections = pgTable(
     /** First valid inbound request observed for the current bearer. Reset on regeneration. */
     endpointFirstSeenAt: timestamp("endpoint_first_seen_at", { withTimezone: true }),
     lastValidInboundAt: timestamp("last_valid_inbound_at", { withTimezone: true }),
+    /** Most recent successfully processed Merge Request event received through a GitLab System Hook. */
+    lastSystemHookMergeRequestInboundAt: timestamp("last_system_hook_merge_request_inbound_at", {
+      withTimezone: true,
+    }),
     lastProcessingFailureAt: timestamp("last_processing_failure_at", { withTimezone: true }),
     lastProcessingFailureCode: text("last_processing_failure_code"),
     stableDeliveryObservedAt: timestamp("stable_delivery_observed_at", { withTimezone: true }),

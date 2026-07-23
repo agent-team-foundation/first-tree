@@ -7,6 +7,7 @@ import {
   markGitlabProcessingFailure,
   markGitlabReviewerSchemaAnomaly,
   markGitlabStableDeliveryObserved,
+  markGitlabSystemHookMergeRequestProcessed,
   observeGitlabCompatibility,
   parseDeclaredGitlabVersion,
   resolveGitlabReviewerMode,
@@ -139,6 +140,13 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                   normalized.entityIdentity,
                 );
                 await refreshGitlabChatTopics(tx, fencedConnection.id, normalized.entityIdentity);
+                if (eventHeader === "System Hook" && normalized.hookEventKind === "merge_request") {
+                  await markGitlabSystemHookMergeRequestProcessed(
+                    tx,
+                    endpoint.connection.id,
+                    endpoint.connection.tokenHash,
+                  );
+                }
               },
               runProviderWork: async () => {
                 await markGitlabInboundSeen(tx, endpoint.connection.id, endpoint.connection.tokenHash);

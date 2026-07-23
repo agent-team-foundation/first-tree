@@ -473,6 +473,7 @@ describe("settings panels", () => {
         },
         health: {
           lastValidInboundAt: "2026-05-28T11:00:00.000Z",
+          lastSystemHookMergeRequestInboundAt: "2026-05-28T11:00:00.000Z",
           lastProcessingFailureAt: null,
           lastProcessingFailureCode: null,
         },
@@ -483,13 +484,14 @@ describe("settings panels", () => {
 
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Healthy · inbound Webhook observed");
+    await waitForText(container, "Healthy · MR routing observed");
 
     expect(container.textContent).toContain("gitlab");
     expect(container.textContent).not.toContain("Provider unresolved");
     expect(container.textContent).toContain("GitLab Webhook");
     expect(container.textContent).toContain("Automatic MR review");
     expect(container.textContent).toContain("last valid inbound 2026-05-28T11:00:00.000Z");
+    expect(container.textContent).toContain("last System Hook MR event 2026-05-28T11:00:00.000Z");
     await click(buttonByText(container, "Edit"));
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://gitlab.internal/acme/platform/context-tree.git");
     await act(async () => root.unmount());

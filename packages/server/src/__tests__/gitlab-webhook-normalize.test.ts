@@ -18,29 +18,35 @@ function project() {
   return { id: 99, path_with_namespace: "Acme/API", web_url: "https://gitlab.internal/Acme/API" };
 }
 
+function mergeRequestBody() {
+  return {
+    object_kind: "merge_request",
+    event_type: "merge_request",
+    project: project(),
+    user: { username: "alice" },
+    reviewers: [],
+    object_attributes: {
+      iid: 7,
+      action: "open",
+      title: "System Hook MR",
+      url: "https://gitlab.internal/Acme/API/-/merge_requests/7",
+    },
+  };
+}
+
 describe("GitLab webhook normalization", () => {
-  it("classifies GitLab System Hook merge requests and ignores unrelated instance events", () => {
+  it("classifies only GitLab System Hook merge requests and ignores unrelated instance events", () => {
     const mr = normalizeGitlabWebhook({
       ...base,
       eventHeader: "System Hook",
-      body: {
-        object_kind: "merge_request",
-        project: project(),
-        user: { username: "alice" },
-        reviewers: [],
-        object_attributes: {
-          iid: 7,
-          action: "open",
-          title: "System Hook MR",
-          url: "https://gitlab.internal/Acme/API/-/merge_requests/7",
-        },
-      },
+      body: mergeRequestBody(),
     });
     expect(mr.event).toMatchObject({
       eventType: "merge_request",
       kind: "opened",
       entity: { type: "pull_request", key: "99:pull_request:7" },
     });
+    expect(mr.hookEventKind).toBe("merge_request");
 
     const repositoryUpdate = normalizeGitlabWebhook({
       ...base,
@@ -48,6 +54,60 @@ describe("GitLab webhook normalization", () => {
       body: { event_name: "repository_update", project_id: 99 },
     });
     expect(repositoryUpdate).toMatchObject({
+      hookEventKind: null,
+      observation: null,
+      event: null,
+      entityIdentity: null,
+    });
+
+    const objectKindOnlyLifecycle = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "System Hook",
+      body: { object_kind: "gitlab_subscription_member_approval", action: "enqueue" },
+    });
+    expect(objectKindOnlyLifecycle).toMatchObject({
+      hookEventKind: null,
+      observation: null,
+      event: null,
+      entityIdentity: null,
+    });
+
+    const noteOnMr = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "System Hook",
+      body: {
+        event_name: "note",
+        object_kind: "note",
+        project: project(),
+        user: { username: "alice" },
+        object_attributes: { noteable_type: "MergeRequest", note: "hello", action: "create" },
+        merge_request: {
+          iid: 7,
+          title: "System Hook MR",
+          url: "https://gitlab.internal/Acme/API/-/merge_requests/7",
+        },
+      },
+    });
+    expect(noteOnMr).toMatchObject({
+      hookEventKind: null,
+      observation: null,
+      event: null,
+      entityIdentity: null,
+    });
+
+    const issue = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "System Hook",
+      body: {
+        event_name: "issue",
+        object_kind: "issue",
+        project: project(),
+        user: { username: "alice" },
+        object_attributes: { iid: 8, action: "open", title: "Unsupported issue" },
+      },
+    });
+    expect(issue).toMatchObject({
+      hookEventKind: null,
       observation: null,
       event: null,
       entityIdentity: null,
@@ -61,7 +121,7 @@ describe("GitLab webhook normalization", () => {
         eventHeader: "System Hook",
         body: {},
       }),
-    ).toThrow("requires event_name or object_kind=merge_request");
+    ).toThrow("requires event_name or object_kind");
     expect(() =>
       normalizeGitlabWebhook({
         ...base,
@@ -69,6 +129,13 @@ describe("GitLab webhook normalization", () => {
         body: { event_name: "repository_update", object_kind: "merge_request" },
       }),
     ).toThrow("event_name does not match object_kind");
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "System Hook",
+        body: { ...mergeRequestBody(), event_type: "push" },
+      }),
+    ).toThrow("event_type does not match event_name or object_kind");
   });
 
   it("normalizes merge request, issue, and note payloads without exposing raw provider fields", () => {

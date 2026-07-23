@@ -32,6 +32,7 @@ export const gitlabConnectionSummarySchema = z.object({
   }),
   health: z.object({
     lastValidInboundAt: z.string().nullable(),
+    lastSystemHookMergeRequestInboundAt: z.string().nullable(),
     lastProcessingFailureAt: z.string().nullable(),
     lastProcessingFailureCode: z.string().nullable(),
   }),

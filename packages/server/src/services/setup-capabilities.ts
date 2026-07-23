@@ -55,8 +55,8 @@ function blocker(
 function gitlabProcessingIsDegraded(connection: typeof gitlabConnections.$inferSelect): boolean {
   if (!connection.lastProcessingFailureAt) return false;
   return (
-    !connection.lastValidInboundAt ||
-    connection.lastProcessingFailureAt.getTime() > connection.lastValidInboundAt.getTime()
+    !connection.lastSystemHookMergeRequestInboundAt ||
+    connection.lastProcessingFailureAt.getTime() >= connection.lastSystemHookMergeRequestInboundAt.getTime()
   );
 }
 
@@ -182,6 +182,14 @@ function projectRepositoryAutomation(
       blockers: [],
       observedAt,
     };
+  } else if (gitlabProcessingIsDegraded(gitlabConnection)) {
+    gitlab = {
+      provider: "gitlab",
+      adoption: "enabled",
+      health: "degraded",
+      blockers: [blocker("gitlab_processing_failed", "admin", null)],
+      observedAt,
+    };
   } else if (!gitlabConnection.endpointFirstSeenAt) {
     gitlab = {
       provider: "gitlab",
@@ -190,12 +198,12 @@ function projectRepositoryAutomation(
       blockers: [blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook")],
       observedAt,
     };
-  } else if (gitlabProcessingIsDegraded(gitlabConnection)) {
+  } else if (!gitlabConnection.lastSystemHookMergeRequestInboundAt) {
     gitlab = {
       provider: "gitlab",
-      adoption: "enabled",
-      health: "degraded",
-      blockers: [blocker("gitlab_processing_failed", "admin", null)],
+      adoption: "configuring",
+      health: "pending_verification",
+      blockers: [blocker("gitlab_merge_request_event_not_seen", "admin", "configure_gitlab_webhook")],
       observedAt,
     };
   } else {
@@ -350,12 +358,15 @@ export async function getTeamSetupCapabilities(
         ),
       );
       reviewHealth = "unavailable";
-    } else if (!gitlabConnection.endpointFirstSeenAt) {
-      reviewBlockers.push(blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook"));
-      if (reviewHealth === "ready") reviewHealth = "pending_verification";
     } else if (gitlabProcessingIsDegraded(gitlabConnection)) {
       reviewBlockers.push(blocker("gitlab_processing_failed", "admin", null));
       if (reviewHealth === "ready") reviewHealth = "degraded";
+    } else if (!gitlabConnection.endpointFirstSeenAt) {
+      reviewBlockers.push(blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook"));
+      if (reviewHealth === "ready") reviewHealth = "pending_verification";
+    } else if (!gitlabConnection.lastSystemHookMergeRequestInboundAt) {
+      reviewBlockers.push(blocker("gitlab_merge_request_event_not_seen", "admin", "configure_gitlab_webhook"));
+      if (reviewHealth === "ready") reviewHealth = "pending_verification";
     }
   }
 
