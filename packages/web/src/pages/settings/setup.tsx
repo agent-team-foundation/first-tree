@@ -428,11 +428,7 @@ export function SetupOverview({
 
   return (
     <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }} data-setup-overview={roleLabel.toLowerCase()}>
-      <p
-        className="text-body"
-        data-setup-context
-        style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-3)" }}
-      >
+      <p className="text-body" data-setup-context style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-3)" }}>
         {facts.teamName ?? "This team"} · {roleLabel}
       </p>
 
