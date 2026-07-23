@@ -19,7 +19,17 @@ const chatMocks = vi.hoisted(() => ({
   patchChatEngagement: vi.fn(),
 }));
 
+const cronMocks = vi.hoisted(() => ({
+  listChatCronJobs: vi.fn(),
+}));
+
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
+// Archive/Delete consult the chat's schedules before applying; default to an
+// empty schedule list so legacy engagement cases keep their one-click path.
+vi.mock("../../../../api/cron-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../api/cron-jobs.js")>()),
+  listChatCronJobs: cronMocks.listChatCronJobs,
+}));
 // Rows render RowEngagementMenu, which uses the toast hook; the harness has no
 // ToastProvider, so stub it with a STABLE addToast so a test can assert the
 // pin/unpin toast direction across an optimistic rerender.
@@ -282,6 +292,8 @@ beforeEach(() => {
   meChatMocks.pinMeChat.mockResolvedValue({ chatId: "chat", pinnedAt: null });
   toastMocks.addToast.mockReset();
   chatMocks.patchChatEngagement.mockReset();
+  cronMocks.listChatCronJobs.mockReset();
+  cronMocks.listChatCronJobs.mockResolvedValue({ items: [] });
   meChatMocks.listMeChats.mockImplementation(
     async (params?: { cursor?: string; engagement?: string; filter?: string }) => {
       if (params?.cursor) {

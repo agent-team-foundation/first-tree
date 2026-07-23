@@ -25,6 +25,10 @@ const toastMock = vi.hoisted(() => ({
   addToast: vi.fn(),
 }));
 
+const authMock = vi.hoisted(() => ({
+  memberId: "member-owner" as string | null,
+}));
+
 vi.mock("../../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/chats.js")>()),
   patchChatEngagement: chatApiMocks.patchChatEngagement,
@@ -41,6 +45,10 @@ vi.mock("../../../../api/me-chats.js", async (importOriginal) => ({
   pinMeChat: meChatMocks.pinMeChat,
 }));
 
+vi.mock("../../../../auth/auth-context.js", () => ({
+  useAuth: () => ({ memberId: authMock.memberId }),
+}));
+
 vi.mock("../../../../components/ui/toast.js", () => ({
   useToast: () => ({ addToast: toastMock.addToast }),
 }));
@@ -48,7 +56,7 @@ vi.mock("../../../../components/ui/toast.js", () => ({
 function activeJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: overrides.id ?? "job-1",
-    ownerMemberId: "member-owner",
+    ownerMemberId: overrides.ownerMemberId ?? "member-owner",
     controlChatId: "chat-1",
     agentId: "agent-1",
     name: "Daily summary",
@@ -66,6 +74,7 @@ function activeJob(overrides: Partial<CronJob> = {}): CronJob {
 }
 
 let root: Root | null = null;
+let queryClient: QueryClient;
 
 async function flush(): Promise<void> {
   await act(async () => {
@@ -76,7 +85,7 @@ async function flush(): Promise<void> {
 
 async function renderMenu(status: "active" | "archived"): Promise<void> {
   const { RowEngagementMenu } = await import("../row-engagement-menu.js");
-  const queryClient = new QueryClient({
+  queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const container = document.createElement("div");
@@ -112,6 +121,7 @@ function buttonByText(text: string): HTMLButtonElement | undefined {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authMock.memberId = "member-owner";
   chatApiMocks.patchChatEngagement.mockResolvedValue({ chatId: "chat-1", engagementStatus: "archived" });
   cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
   document.body.innerHTML = "";
@@ -143,13 +153,15 @@ describe("RowEngagementMenu schedule warnings", () => {
   });
 
   it("warns before archiving a chat with active schedules, then proceeds on confirm", async () => {
-    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [activeJob(), activeJob({ id: "job-2", ownerMemberId: "member-other" })],
+    });
     await renderMenu("active");
     await selectMenuItem("Archive");
 
     expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Archive this chat?");
-    expect(document.body.textContent).toContain("1 active schedule");
+    expect(document.body.textContent).toContain("2 active schedules");
     expect(document.body.textContent).toContain("keep running while the chat is archived");
     expect(document.body.textContent).toContain("visible in your list again");
 
@@ -157,19 +169,65 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
   });
 
-  it("warns that delete pauses active schedules and restore will not resume them", async () => {
-    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob(), activeJob({ id: "job-2" })] });
+  it("always re-checks schedules at action time instead of trusting the sidebar cache", async () => {
+    await renderMenu("active");
+    // Seed a FRESH cached list containing an active job. If the guard reused
+    // the sidebar's 30s-fresh cache, it would warn; the forced-fresh lookup
+    // must instead re-request and see the current empty server state.
+    queryClient.setQueryData(["chat-right-sidebar", "cron-jobs", "chat-1"], { items: [activeJob()] });
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [] });
+
+    await selectMenuItem("Archive");
+
+    expect(cronApiMocks.listChatCronJobs).toHaveBeenCalledWith("chat-1");
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
+    expect(document.body.textContent).not.toContain("Archive this chat?");
+  });
+
+  it("delete warning only promises to pause the caller's own schedules", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
     await renderMenu("active");
     await selectMenuItem("Delete");
 
-    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Delete this chat?");
-    expect(document.body.textContent).toContain("2 active schedules");
+    expect(document.body.textContent).toContain("1 active schedule");
     expect(document.body.textContent).toContain("Deleting pauses them first");
-    expect(document.body.textContent).toContain("will not resume them");
+    expect(document.body.textContent).toContain("you must resume each schedule");
 
     await click(buttonByText("Delete chat"));
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+  });
+
+  it("delete warning says other members' schedules keep running (none of the caller's)", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [
+        activeJob({ id: "job-a", ownerMemberId: "member-other" }),
+        activeJob({ id: "job-b", ownerMemberId: "member-third" }),
+      ],
+    });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
+
+    expect(document.body.textContent).toContain("2 active schedules");
+    expect(document.body.textContent).toContain("owned by other members");
+    expect(document.body.textContent).toContain("does not pause them");
+    expect(document.body.textContent).not.toContain("Deleting pauses them first");
+
+    await click(buttonByText("Delete chat"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+  });
+
+  it("delete warning splits caller-owned and other-owned schedules in a mixed chat", async () => {
+    cronApiMocks.listChatCronJobs.mockResolvedValue({
+      items: [activeJob(), activeJob({ id: "job-2", ownerMemberId: "member-other" })],
+    });
+    await renderMenu("active");
+    await selectMenuItem("Delete");
+
+    expect(document.body.textContent).toContain("(1 yours, 1 owned by others)");
+    expect(document.body.textContent).toContain("Deleting pauses only your 1 active schedule first");
+    expect(document.body.textContent).toContain("owned by other members keep running");
+    expect(document.body.textContent).toContain("will not resume yours");
   });
 
   it("cancel leaves the engagement unchanged", async () => {
@@ -182,12 +240,36 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(document.body.textContent).not.toContain("Delete this chat?");
   });
 
-  it("fails open when the schedule lookup errors — the warning is advisory, not a gate", async () => {
+  it("a failed lookup fails safe: nothing applied until the owner chooses", async () => {
     cronApiMocks.listChatCronJobs.mockRejectedValue(new Error("endpoint down"));
     await renderMenu("active");
     await selectMenuItem("Delete");
 
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Couldn't confirm schedules");
+    expect(document.body.textContent).toContain("Nothing has been applied");
+
+    // Retry re-runs the lookup; a healthy server then shows the real warning.
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+    await click(buttonByText("Retry"));
+    expect(document.body.textContent).toContain("Delete this chat?");
+    expect(document.body.textContent).toContain("1 active schedule");
+    expect(chatApiMocks.patchChatEngagement).not.toHaveBeenCalled();
+
+    await click(buttonByText("Delete chat"));
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+  });
+
+  it("proceed-anyway after a failed lookup is an explicit informed choice", async () => {
+    cronApiMocks.listChatCronJobs.mockRejectedValue(new Error("endpoint down"));
+    await renderMenu("active");
+    await selectMenuItem("Archive");
+
+    expect(document.body.textContent).toContain("Couldn't confirm schedules");
+    expect(document.body.textContent).toContain("any active schedules keep running");
+
+    await click(buttonByText("Archive anyway"));
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
   });
 
   it("unarchive never consults schedules", async () => {

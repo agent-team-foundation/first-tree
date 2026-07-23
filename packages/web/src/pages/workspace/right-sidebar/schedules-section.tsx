@@ -142,7 +142,9 @@ export function activeJobCount(items: CronJob[]): number {
 }
 
 function isRevisionConflict(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409;
+  // Branch on the stable machine code, not the bare status: any other 409 is
+  // not a stale-revision signal and must not masquerade as one.
+  return err instanceof ApiError && err.status === 409 && err.code === "CRON_JOB_REVISION_MISMATCH";
 }
 
 export function SchedulesSection({ chatId, participants }: { chatId: string; participants: ChatParticipantDetail[] }) {
@@ -150,10 +152,27 @@ export function SchedulesSection({ chatId, participants }: { chatId: string; par
   const { items, isLoading, isError, retry } = useChatCronJobs(chatId);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
-  // First load: render nothing rather than flashing an empty state that could
-  // read as "no schedules". An error WITH no cached data must not silently
-  // hide schedules that may exist, so it gets an explicit retry row.
-  if (isLoading) return null;
+  // First load gets an identifiable lightweight row: rendering nothing could
+  // read as "this chat has no schedules" while the answer is still unknown.
+  if (isLoading) {
+    return (
+      <section style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+        <div
+          className="text-eyebrow"
+          style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-1)", color: "var(--fg-4)" }}
+        >
+          Schedules
+        </div>
+        <div
+          className="text-body"
+          aria-busy="true"
+          style={{ padding: "var(--sp-1_5) var(--sp-2) var(--sp-2)", color: "var(--fg-4)" }}
+        >
+          Loading schedules…
+        </div>
+      </section>
+    );
+  }
 
   if (isError && items.length === 0) {
     return (
@@ -302,9 +321,8 @@ function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob
   const preview = useQuery({
     queryKey: cronPreviewQueryKey(chatId, job.schedule, job.timezone),
     queryFn: () => previewChatCronJobs(chatId, { schedule: job.schedule, timezone: job.timezone }),
-    // A paused job has no upcoming runs (UpcomingRuns returns null); the
-    // resume dialog fetches its own preview when actually opened.
-    enabled: job.state === "active",
+    // Active and paused jobs both show occurrences (paused is labeled
+    // "if resumed"); the resume dialog fetches its own forced-fresh preview.
     staleTime: 30_000,
   });
 
@@ -321,7 +339,12 @@ function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob
       {/* The full prompt is shared with every reader — it is the schedule's
           durable instruction and must stay inspectable. Whitespace is
           preserved; long content scrolls instead of breaking the rail. */}
-      <div style={{ paddingTop: "var(--sp-2)" }}>
+      {job.state === "active" && job.nextRunAt ? (
+        <div className="text-body" style={{ paddingTop: "var(--sp-2)", color: "var(--fg-2)" }}>
+          Next run: {formatFutureRelative(job.nextRunAt)} · {formatAbsoluteInZone(job.nextRunAt, job.timezone)}
+        </div>
+      ) : null}
+      <div style={{ paddingTop: job.state === "active" && job.nextRunAt ? 0 : "var(--sp-2)" }}>
         <div className="text-eyebrow" style={{ color: "var(--fg-4)", paddingBottom: "var(--sp-1)" }}>
           Prompt
         </div>
@@ -347,11 +370,13 @@ function ScheduleDetail({ chatId, job, isOwner }: { chatId: string; job: CronJob
 }
 
 function UpcomingRuns({ job, preview }: { job: CronJob; preview: UseQueryResult<CronPreviewResponse> }) {
-  if (job.state === "paused") return null;
+  // Paused jobs keep the occurrences visible, qualified as hypothetical:
+  // readers still inspect what the schedule WOULD run; only the label
+  // changes so nobody mistakes them for committed runs.
   return (
     <div>
       <div className="text-eyebrow" style={{ color: "var(--fg-4)", paddingBottom: "var(--sp-1)" }}>
-        Upcoming runs
+        {job.state === "paused" ? "Upcoming runs (if resumed)" : "Upcoming runs"}
       </div>
       {preview.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -505,15 +530,24 @@ function ResumeDialog({
   pending: boolean;
   onConfirm: () => void;
 }) {
-  // Only fetched while the dialog is open; the Server is the only Croner
-  // evaluator, so the "first run after resume" time always comes from preview.
+  // The resume confirmation contract is "see the real first future run, then
+  // confirm". This query MUST NOT share the expanded detail's preview cache:
+  // that cache can be up to 30s stale, so a cached first occurrence may
+  // already be in the past by the time the owner resumes. A dialog-scoped
+  // key + staleTime: 0 + always-refetch-on-mount guarantees the displayed
+  // time is computed now, by the Server (the only Croner evaluator).
   const preview = useQuery({
-    queryKey: cronPreviewQueryKey(chatId, job.schedule, job.timezone),
+    queryKey: ["chat-right-sidebar", "cron-preview-resume", chatId, job.id],
     queryFn: () => previewChatCronJobs(chatId, { schedule: job.schedule, timezone: job.timezone }),
     enabled: open,
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const first = preview.data?.occurrences[0];
+  // Confirm stays disabled until a FRESH preview has succeeded — resuming
+  // without seeing the actual first run is not allowed. On failure the owner
+  // gets an explicit Retry; there is no silent "resume anyway" path.
+  const confirmDisabled = pending || !preview.isSuccess;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -525,13 +559,24 @@ function ResumeDialog({
           <DialogDescription style={{ color: "var(--fg-2)" }}>
             The schedule becomes active again on <span className="mono">{job.schedule}</span> ({job.timezone}).
           </DialogDescription>
-          <p className="text-body" style={{ color: "var(--fg-2)" }}>
-            {preview.isLoading
-              ? "Computing the first run…"
-              : first
-                ? `First run: ${formatAbsoluteInZone(first.at, job.timezone)}.`
-                : "The first run time could not be computed, but the schedule can still be resumed."}
-          </p>
+          {preview.isLoading || preview.isFetching ? (
+            <p className="text-body" style={{ color: "var(--fg-2)" }}>
+              Computing the first run…
+            </p>
+          ) : preview.isError ? (
+            <div className="space-y-2">
+              <p className="text-body" style={{ color: "var(--state-error)" }}>
+                The first run time could not be loaded. Resume is only available once it can be shown.
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={() => void preview.refetch()}>
+                Retry
+              </Button>
+            </div>
+          ) : first ? (
+            <p className="text-body" style={{ color: "var(--fg-2)" }}>
+              First run: {formatAbsoluteInZone(first.at, job.timezone)}.
+            </p>
+          ) : null}
           <p className="text-body" style={{ color: "var(--fg-2)" }}>
             Occurrences missed while paused are not replayed — the schedule continues from the next future time.
           </p>
@@ -540,7 +585,7 @@ function ResumeDialog({
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel
           </Button>
-          <Button type="button" onClick={onConfirm} disabled={pending}>
+          <Button type="button" onClick={onConfirm} disabled={confirmDisabled}>
             {pending ? "Resuming…" : "Resume schedule"}
           </Button>
         </DialogFooter>

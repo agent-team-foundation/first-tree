@@ -76,17 +76,15 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function previewResponse(): CronPreviewResponse {
+function previewResponse(firstAt = "2030-01-05T14:00:00.000Z"): CronPreviewResponse {
+  const start = new Date(firstAt).getTime();
   return {
     schedule: "0 9 * * 1-5",
     timezone: "America/New_York",
-    occurrences: [
-      { at: "2030-01-05T14:00:00.000Z", local: "2030-01-05 09:00 EST", timezone: "America/New_York" },
-      { at: "2030-01-06T14:00:00.000Z", local: "2030-01-06 09:00 EST", timezone: "America/New_York" },
-      { at: "2030-01-07T14:00:00.000Z", local: "2030-01-07 09:00 EST", timezone: "America/New_York" },
-      { at: "2030-01-08T14:00:00.000Z", local: "2030-01-08 09:00 EST", timezone: "America/New_York" },
-      { at: "2030-01-09T14:00:00.000Z", local: "2030-01-09 09:00 EST", timezone: "America/New_York" },
-    ],
+    occurrences: [0, 1, 2, 3, 4].map((i) => {
+      const at = new Date(start + i * 86_400_000).toISOString();
+      return { at, local: `${at} (job tz)`, timezone: "America/New_York" };
+    }),
   };
 }
 
@@ -179,7 +177,16 @@ describe("SchedulesSection rendering", () => {
     expect(document.body.textContent).toContain("Weekly digest");
   });
 
-  it("hides entirely when the chat has no schedules", async () => {
+  it("shows an identifiable loading row instead of looking schedule-free", async () => {
+    cronApiMocks.listChatCronJobs.mockReturnValue(new Promise(() => {}));
+    const { SchedulesSection } = await import("../right-sidebar/schedules-section.js");
+    await renderDom(<SchedulesSection chatId="chat-1" participants={[]} />);
+
+    expect(document.body.textContent).toContain("Schedules");
+    expect(document.body.textContent).toContain("Loading schedules…");
+  });
+
+  it("hides entirely once the chat is known to have no schedules", async () => {
     await renderSection([]);
     expect(document.body.textContent).not.toContain("Schedules");
   });
@@ -195,22 +202,31 @@ describe("SchedulesSection rendering", () => {
     expect(document.body.textContent).toContain("Daily standup summary");
   });
 
-  it("expands a row to show the full prompt and previewed upcoming runs", async () => {
+  it("expands a row to show prompt, visible absolute next run, and previewed upcoming runs", async () => {
     const longPrompt = "Line one\n\nLine two with details ".repeat(20);
     await renderSection([makeJob({ prompt: longPrompt })]);
 
     expect(document.body.textContent).not.toContain("Line two with details");
-    await click(
-      buttonByLabel("Expand schedule Daily standup summary") ?? document.querySelector("button[aria-expanded]"),
-    );
+    await click(document.querySelector("button[aria-expanded]"));
 
     expect(document.body.textContent).toContain("Line two with details");
+    // Absolute next run is visible text (keyboard/AT reachable), not only a tooltip.
+    expect(document.body.textContent).toContain("Next run:");
     expect(document.body.textContent).toContain("Upcoming runs");
     expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledWith("chat-1", {
       schedule: "0 9 * * 1-5",
       timezone: "America/New_York",
     });
-    // Occurrences render in the job timezone with the raw UTC instant alongside.
+    expect(document.body.textContent).toContain("2030-01-05T14:00:00.000Z");
+  });
+
+  it("paused jobs still show prompt and future occurrences, labeled as if-resumed", async () => {
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+
+    expect(document.body.textContent).toContain("Summarize the standup.");
+    expect(document.body.textContent).toContain("Upcoming runs (if resumed)");
+    expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalled();
     expect(document.body.textContent).toContain("2030-01-05T14:00:00.000Z");
   });
 
@@ -253,33 +269,74 @@ describe("SchedulesSection owner actions", () => {
     expect(toastMock.addToast).toHaveBeenCalledWith({ title: "Schedule paused" });
   });
 
-  it("resume dialog shows the first future run and no-replay wording, then sends state:active", async () => {
+  it("resume dialog fetches a FRESH preview even when the expanded cache is warm", async () => {
+    // Expanded detail fills the shared preview cache with occurrences A…
+    cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2020-01-05T14:00:00.000Z"));
     await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
     await click(document.querySelector("button[aria-expanded]"));
+    expect(document.body.textContent).toContain("2020-01-05T14:00:00.000Z");
+
+    // …but the resume dialog must re-ask the Server and show occurrences B.
+    cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse("2030-02-10T14:00:00.000Z"));
     await click(buttonByLabel("Resume schedule Daily standup summary"));
 
-    expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalled();
-    expect(document.body.textContent).toContain('Resume "Daily standup summary"?');
-    expect(document.body.textContent).toContain("First run:");
-    expect(document.body.textContent).toContain("Occurrences missed while paused are not replayed");
+    expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("First run:");
+    expect(dialog?.textContent).toContain("Feb 10, 2030");
+    expect(dialog?.textContent).not.toContain("2020");
+    expect(dialog?.textContent).toContain("Occurrences missed while paused are not replayed");
 
     await click(buttonByText("Resume schedule"));
     expect(cronApiMocks.patchCronJob).toHaveBeenCalledWith("job-1", { state: "active" }, 3);
     expect(toastMock.addToast).toHaveBeenCalledWith({ title: "Schedule resumed" });
   });
 
-  it("resume stays confirmable when preview fails, with honest fallback copy", async () => {
-    cronApiMocks.previewChatCronJobs.mockRejectedValue(new ApiError(500, "no preview"));
+  it("resume confirm stays disabled until the fresh preview succeeds", async () => {
+    let resolvePreview: ((value: CronPreviewResponse) => void) | null = null;
+    cronApiMocks.previewChatCronJobs.mockImplementation(
+      () =>
+        new Promise<CronPreviewResponse>((resolve) => {
+          resolvePreview = resolve;
+        }),
+    );
     await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
     await click(document.querySelector("button[aria-expanded]"));
     await click(buttonByLabel("Resume schedule Daily standup summary"));
 
-    expect(document.body.textContent).toContain("could not be computed");
+    const confirm = buttonByText("Resume schedule");
+    expect(confirm?.disabled).toBe(true);
+    expect(document.body.textContent).toContain("Computing the first run…");
+
+    await act(async () => resolvePreview?.(previewResponse()));
+    await flush();
+    expect(buttonByText("Resume schedule")?.disabled).toBe(false);
     await click(buttonByText("Resume schedule"));
     expect(cronApiMocks.patchCronJob).toHaveBeenCalledWith("job-1", { state: "active" }, 3);
   });
 
-  it("a stale revision (409) refetches, closes the dialog, and explains instead of retrying", async () => {
+  it("preview failure blocks resume behind an explicit retry — no resume anyway", async () => {
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+    // The dialog's forced-fresh fetch is the one that fails (the expanded
+    // detail's earlier fetch already succeeded via the default mock).
+    cronApiMocks.previewChatCronJobs.mockRejectedValueOnce(new ApiError(500, "no preview"));
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+
+    expect(document.body.textContent).toContain("could not be loaded");
+    expect(buttonByText("Resume schedule")?.disabled).toBe(true);
+
+    // Retry recovers; only then does resume become available.
+    cronApiMocks.previewChatCronJobs.mockResolvedValueOnce(previewResponse());
+    await click(buttonByText("Retry"));
+    expect(document.body.textContent).toContain("First run:");
+    expect(buttonByText("Resume schedule")?.disabled).toBe(false);
+
+    await click(buttonByText("Resume schedule"));
+    expect(cronApiMocks.patchCronJob).toHaveBeenCalledWith("job-1", { state: "active" }, 3);
+  });
+
+  it("a stale revision (409 with machine code) refetches, closes the dialog, and explains", async () => {
     cronApiMocks.patchCronJob.mockRejectedValue(
       new ApiError(409, "Revision mismatch", undefined, "CRON_JOB_REVISION_MISMATCH"),
     );
@@ -293,6 +350,21 @@ describe("SchedulesSection owner actions", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
     expect(document.body.textContent).not.toContain('Resume "Daily standup summary"?');
     expect(toastMock.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Schedule changed elsewhere" }));
+  });
+
+  it("a 409 WITHOUT the revision machine code is a generic error, not a stale-state reset", async () => {
+    cronApiMocks.patchCronJob.mockRejectedValue(new ApiError(409, "Some other conflict"));
+    await renderSection([makeJob({ state: "paused", stateReason: "user_paused", nextRunAt: null })]);
+    await click(document.querySelector("button[aria-expanded]"));
+    await click(buttonByLabel("Resume schedule Daily standup summary"));
+    await click(buttonByText("Resume schedule"));
+
+    expect(toastMock.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't update the schedule" }));
+    expect(toastMock.addToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Schedule changed elsewhere" }),
+    );
+    // Dialog stays open — no false "state changed" reset.
+    expect(document.body.textContent).toContain('Resume "Daily standup summary"?');
   });
 
   it("delete dialog carries irreversibility and accepted-work wording, then deletes with revision", async () => {
