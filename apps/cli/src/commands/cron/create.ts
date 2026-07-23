@@ -9,7 +9,6 @@ interface CreateOptions {
   schedule: string;
   timezone: string;
   F: string;
-  agent?: string;
 }
 
 export function registerCronCreateCommand(cron: Command): void {
@@ -20,7 +19,6 @@ export function registerCronCreateCommand(cron: Command): void {
     .requiredOption("--schedule <expr>", "Five-field cron expression")
     .requiredOption("--timezone <iana>", "IANA timezone")
     .requiredOption("-F <file>", "Prompt body from file or stdin (-)")
-    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: CreateOptions) => {
       try {
         const chatId = requireCronChatId();
@@ -28,7 +26,7 @@ export function registerCronCreateCommand(cron: Command): void {
         if (prompt === null || prompt.trim().length === 0) {
           handleCronSdkError(new Error("prompt must be non-empty"));
         }
-        const sdk = createSdk(options.agent);
+        const sdk = createSdk();
         const job = await sdk.createCronJob(chatId, {
           name: options.name,
           schedule: options.schedule,

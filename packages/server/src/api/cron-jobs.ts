@@ -16,20 +16,7 @@ import {
   projectCronJob,
   updateCronJob,
 } from "../services/cron-job.js";
-
-function cronConfig(app: FastifyInstance) {
-  return {
-    enabled: app.config.cronJobs.enabled,
-    pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-  };
-}
-
-function sendCronError(reply: { status: (code: number) => { send: (body: unknown) => unknown } }, err: unknown) {
-  if (err instanceof CronJobAppError) {
-    return reply.status(err.statusCode).send({ error: err.message, code: err.code });
-  }
-  throw err;
-}
+import { cronConfig, notifyCronChatUpdated, sendCronError } from "./cron-http.js";
 
 /**
  * Load a cron job by UUID and verify the caller can see its control Chat.
@@ -82,19 +69,21 @@ export async function chatCronJobRoutes(app: FastifyInstance): Promise<void> {
 export async function cronJobRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string } }>("/:id", async (request, reply) => {
     try {
-      const { scope } = await requireCronJobAccess(request, app.db, "mutate");
+      const { job, scope } = await requireCronJobAccess(request, app.db, "mutate");
       const body = updateCronJobRequestSchema.parse(request.body);
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
         Array.isArray(revisionHeader) ? revisionHeader[0] : revisionHeader,
       );
-      return await updateCronJob(app.db, {
+      const updated = await updateCronJob(app.db, {
         jobId: request.params.id,
         expectedRevision,
         body,
         config: cronConfig(app),
         ownerMemberId: scope.memberId,
       });
+      notifyCronChatUpdated(app, job.controlChatId);
+      return updated;
     } catch (err) {
       if (err instanceof NotFoundError) {
         return reply.status(404).send({ error: err.message, code: "CRON_JOB_NOT_FOUND" });
@@ -105,16 +94,18 @@ export async function cronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
     try {
-      const { scope } = await requireCronJobAccess(request, app.db, "mutate");
+      const { job, scope } = await requireCronJobAccess(request, app.db, "mutate");
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
         Array.isArray(revisionHeader) ? revisionHeader[0] : revisionHeader,
       );
-      return await deleteCronJob(app.db, {
+      const result = await deleteCronJob(app.db, {
         jobId: request.params.id,
         expectedRevision,
         ownerMemberId: scope.memberId,
       });
+      notifyCronChatUpdated(app, job.controlChatId);
+      return result;
     } catch (err) {
       if (err instanceof NotFoundError) {
         return reply.status(404).send({ error: err.message, code: "CRON_JOB_NOT_FOUND" });
@@ -123,7 +114,6 @@ export async function cronJobRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // Optional read-by-id for completeness (not required by handoff, but useful).
   app.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
     try {
       const { job } = await requireCronJobAccess(request, app.db, "read");

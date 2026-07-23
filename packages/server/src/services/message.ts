@@ -59,6 +59,7 @@ function stripUntrustedMetadataKeys(
   if (CRON_TRIGGER_METADATA_KEY in meta && !options.allowCronTrigger) {
     throw new BadRequestError(
       `Metadata key "${CRON_TRIGGER_METADATA_KEY}" is reserved for server-authored scheduled job triggers.`,
+      { code: "CRON_TRIGGER_METADATA_RESERVED" },
     );
   }
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;

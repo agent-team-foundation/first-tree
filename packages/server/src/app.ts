@@ -449,7 +449,11 @@ export async function buildApp(config: Config) {
         [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
-      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
+      return reply.status(error.statusCode).send({
+        error: error.message,
+        ...(typeof error.attrs?.code === "string" ? { code: error.attrs.code } : {}),
+        ...traceField,
+      });
     }
 
     if (error instanceof ZodError) {

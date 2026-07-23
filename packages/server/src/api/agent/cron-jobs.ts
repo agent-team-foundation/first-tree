@@ -5,10 +5,7 @@ import {
   updateCronJobRequestSchema,
 } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { requireAgent } from "../../middleware/require-identity.js";
-import * as chatService from "../../services/chat.js";
 import {
-  CronJobAppError,
   createCronJob,
   deleteCronJob,
   getCronJobForAgent,
@@ -16,29 +13,16 @@ import {
   previewCronSchedule,
   updateCronJob,
 } from "../../services/cron-job.js";
-
-function cronConfig(app: FastifyInstance) {
-  return {
-    enabled: app.config.cronJobs.enabled,
-    pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-  };
-}
-
-function sendCronError(reply: { status: (code: number) => { send: (body: unknown) => unknown } }, err: unknown) {
-  if (err instanceof CronJobAppError) {
-    return reply.status(err.statusCode).send({ error: err.message, code: err.code });
-  }
-  throw err;
-}
+import { cronConfig, notifyCronChatUpdated, requireCronAgentCaller, sendCronError } from "../cron-http.js";
 
 /**
  * Class D — agent self surface for scheduled jobs under the current chat.
+ * Every handler runs `assertCronAgentRouteAccess` via `requireCronAgentCaller`.
  */
 export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/cron-jobs/preview", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      await requireCronAgentCaller(app, request, request.params.chatId);
       const body = cronPreviewRequestSchema.parse(request.body);
       return await previewCronSchedule(body.schedule, body.timezone);
     } catch (err) {
@@ -48,10 +32,9 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { chatId: string } }>("/:chatId/cron-jobs", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const items = await listCronJobsForChat(app.db, request.params.chatId);
-      return { items: items.filter((job) => job.agentId === identity.uuid) };
+      return { items: items.filter((job) => job.agentId === agentId) };
     } catch (err) {
       return sendCronError(reply, err);
     }
@@ -59,15 +42,15 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { chatId: string } }>("/:chatId/cron-jobs", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const body = createCronJobRequestSchema.parse(request.body);
       const job = await createCronJob(app.db, {
         controlChatId: request.params.chatId,
-        agentId: identity.uuid,
+        agentId,
         body,
         config: cronConfig(app),
       });
+      notifyCronChatUpdated(app, request.params.chatId);
       return reply.code(201).send(job);
     } catch (err) {
       return sendCronError(reply, err);
@@ -76,9 +59,8 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-      return await getCronJobForAgent(app.db, request.params.chatId, identity.uuid, request.params.id);
+      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
+      return await getCronJobForAgent(app.db, request.params.chatId, agentId, request.params.id);
     } catch (err) {
       return sendCronError(reply, err);
     }
@@ -86,20 +68,21 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const body = updateCronJobRequestSchema.parse(request.body);
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
         Array.isArray(revisionHeader) ? revisionHeader[0] : revisionHeader,
       );
-      return await updateCronJob(app.db, {
+      const job = await updateCronJob(app.db, {
         jobId: request.params.id,
         expectedRevision,
         body,
         config: cronConfig(app),
-        agentScope: { agentId: identity.uuid, controlChatId: request.params.chatId },
+        agentScope: { agentId, controlChatId: request.params.chatId },
       });
+      notifyCronChatUpdated(app, request.params.chatId);
+      return job;
     } catch (err) {
       return sendCronError(reply, err);
     }
@@ -107,17 +90,18 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { chatId: string; id: string } }>("/:chatId/cron-jobs/:id", async (request, reply) => {
     try {
-      const identity = requireAgent(request);
-      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const { agentId } = await requireCronAgentCaller(app, request, request.params.chatId);
       const revisionHeader = request.headers["if-match"];
       const expectedRevision = cronJobRevisionHeaderSchema.parse(
         Array.isArray(revisionHeader) ? revisionHeader[0] : revisionHeader,
       );
-      return await deleteCronJob(app.db, {
+      const result = await deleteCronJob(app.db, {
         jobId: request.params.id,
         expectedRevision,
-        agentScope: { agentId: identity.uuid, controlChatId: request.params.chatId },
+        agentScope: { agentId, controlChatId: request.params.chatId },
       });
+      notifyCronChatUpdated(app, request.params.chatId);
+      return result;
     } catch (err) {
       return sendCronError(reply, err);
     }

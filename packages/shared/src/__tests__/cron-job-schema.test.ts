@@ -23,6 +23,7 @@ describe("cron expression schema", () => {
     expect(cronExpressionSchema.safeParse("0 0 L * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 0 * * 1#2").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 12 1 * +MON").success).toBe(false);
+    expect(cronExpressionSchema.safeParse("0 +9 * * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("0 0 15W * *").success).toBe(false);
     expect(cronExpressionSchema.safeParse("H 0 * * *").success).toBe(false);
   });

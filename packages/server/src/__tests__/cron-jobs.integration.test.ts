@@ -2,6 +2,7 @@ import { CRON_TRIGGER_METADATA_KEY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agents } from "../db/schema/agents.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { clients } from "../db/schema/clients.js";
 import { cronJobs } from "../db/schema/cron-jobs.js";
@@ -9,6 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createChat } from "../services/chat.js";
+import { createCronJob } from "../services/cron-job.js";
 import { createCronScheduler } from "../services/cron-scheduler.js";
 import { setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
@@ -91,8 +93,9 @@ describe("cron jobs integration", () => {
       .set({ nextRunAt: new Date(Date.now() - 5_000) })
       .where(eq(cronJobs.id, job.id));
 
-    const scheduler = createCronScheduler(app);
-    await Promise.all([scheduler.sweepOnce(), scheduler.sweepOnce()]);
+    const schedulerA = createCronScheduler(app);
+    const schedulerB = createCronScheduler(app);
+    await Promise.all([schedulerA.sweepOnce(), schedulerB.sweepOnce()]);
 
     const rows = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     const cronMessages = rows.filter((row) => {
@@ -296,5 +299,139 @@ describe("cron jobs integration", () => {
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json()).toMatchObject({ code: "CRON_JOB_NAME_CONFLICT" });
     expect(first.statusCode).toBe(201);
+  });
+
+  it("keeps revision and nextRunAt stable on already-active state:active no-op", async () => {
+    const { runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "noop-active",
+      schedule: "0 12 * * *",
+      timezone: "UTC",
+      prompt: "keep",
+    });
+    const job = createRes.json() as { id: string; revision: number; nextRunAt: string };
+    const patch = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { state: "active" },
+      { "if-match": String(job.revision) },
+    );
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json()).toMatchObject({
+      revision: job.revision,
+      nextRunAt: job.nextRunAt,
+      state: "active",
+    });
+  });
+
+  it("preserves nextRunAt on prompt-only edit of an active job", async () => {
+    const { runtime, chatId } = await setupChatWithAgent();
+    const createRes = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "prompt-only",
+      schedule: "0 15 * * *",
+      timezone: "UTC",
+      prompt: "before",
+    });
+    const job = createRes.json() as { id: string; revision: number; nextRunAt: string };
+    const patch = await runtime.request(
+      "PATCH",
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${job.id}`,
+      { prompt: "after" },
+      { "if-match": String(job.revision) },
+    );
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json()).toMatchObject({
+      prompt: "after",
+      nextRunAt: job.nextRunAt,
+      revision: job.revision + 1,
+    });
+  });
+
+  it("rejects former manager after agent reassignment", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const other = await createTestAgent(app, { name: `cron-other-${crypto.randomUUID().slice(0, 6)}` });
+    await app.db.update(agents).set({ managerId: other.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
+    const denied = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "stolen",
+      schedule: "0 3 * * *",
+      timezone: "UTC",
+      prompt: "no",
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ code: "CRON_JOB_FORBIDDEN" });
+  });
+
+  it("rejects create when owner engagement is deleted", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    await setChatEngagement(app.db, chatId, runtime.humanAgentUuid, "deleted");
+    const denied = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      name: "after-delete",
+      schedule: "0 4 * * *",
+      timezone: "UTC",
+      prompt: "no",
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ code: "CRON_JOB_FORBIDDEN" });
+  });
+
+  it("returns stable codes for invalid timezone and reserved cronTrigger forge", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const preview = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/cron-jobs/preview`, {
+      schedule: "0 9 * * *",
+      timezone: "Not/AZone",
+    });
+    expect(preview.statusCode).toBe(400);
+    expect(preview.json()).toMatchObject({ code: "CRON_JOB_INVALID_TIMEZONE" });
+
+    await expect(
+      sendMessage(app.db, chatId, runtime.humanAgentUuid, {
+        source: "api",
+        format: "markdown",
+        content: "forged",
+        metadata: {
+          mentions: [runtime.agent.uuid],
+          [CRON_TRIGGER_METADATA_KEY]: {
+            jobId: "job-1",
+            scheduledFor: new Date().toISOString(),
+            runKey: "cron/job-1/now",
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ attrs: { code: "CRON_TRIGGER_METADATA_RESERVED" } });
+  });
+
+  it("idempotently returns the same job for concurrent identical creates", async () => {
+    const { app, runtime, chatId } = await setupChatWithAgent();
+    const body = {
+      name: "concurrent-identical",
+      schedule: "0 6 * * *",
+      timezone: "UTC",
+      prompt: "same",
+    };
+    const config = {
+      enabled: true,
+      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
+    };
+    const [a, b] = await Promise.all([
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body,
+        config,
+      }),
+      createCronJob(app.db, {
+        controlChatId: chatId,
+        agentId: runtime.agent.uuid,
+        body,
+        config,
+      }),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect(a.revision).toBe(b.revision);
+    const rows = await app.db
+      .select()
+      .from(cronJobs)
+      .where(and(eq(cronJobs.controlChatId, chatId), eq(cronJobs.name, body.name)));
+    expect(rows).toHaveLength(1);
   });
 });

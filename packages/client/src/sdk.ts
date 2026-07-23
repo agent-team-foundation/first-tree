@@ -627,11 +627,16 @@ export class FirstTreeHubSDK {
   }
 
   async updateCronJob(chatId: string, jobId: string, body: UpdateCronJobRequest, revision: number): Promise<CronJob> {
-    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-      headers: { "If-Match": String(revision) },
-    });
+    return this.requestJson<CronJob>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+        headers: { "If-Match": String(revision) },
+      },
+      // Revisioned mutations are not safe to replay after a lost response.
+      { retry: false },
+    );
   }
 
   async deleteCronJob(chatId: string, jobId: string, revision: number): Promise<DeleteCronJobResponse> {
@@ -641,6 +646,7 @@ export class FirstTreeHubSDK {
         method: "DELETE",
         headers: { "If-Match": String(revision) },
       },
+      { retry: false },
     );
   }
 

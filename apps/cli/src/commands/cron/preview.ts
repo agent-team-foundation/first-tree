@@ -6,7 +6,6 @@ import { handleCronSdkError, requireCronChatId } from "./_shared.js";
 interface PreviewOptions {
   schedule: string;
   timezone: string;
-  agent?: string;
 }
 
 export function registerCronPreviewCommand(cron: Command): void {
@@ -15,11 +14,10 @@ export function registerCronPreviewCommand(cron: Command): void {
     .description("Preview a five-field cron schedule and the next five occurrences (no side effects).")
     .requiredOption("--schedule <expr>", "Five-field cron expression")
     .requiredOption("--timezone <iana>", "IANA timezone, e.g. Asia/Taipei")
-    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: PreviewOptions) => {
       try {
         const chatId = requireCronChatId();
-        const sdk = createSdk(options.agent);
+        const sdk = createSdk();
         const result = await sdk.previewCronJob(chatId, {
           schedule: options.schedule,
           timezone: options.timezone,

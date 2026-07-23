@@ -3,19 +3,16 @@ import { success } from "../../cli/output.js";
 import { createSdk } from "../_shared/local-agent.js";
 import { handleCronSdkError, requireCronChatId } from "./_shared.js";
 
-interface ListOptions {
-  agent?: string;
-}
+type ListOptions = {};
 
 export function registerCronListCommand(cron: Command): void {
   cron
     .command("list")
     .description("List scheduled jobs for the current agent in this chat.")
-    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: ListOptions) => {
       try {
         const chatId = requireCronChatId();
-        const sdk = createSdk(options.agent);
+        const sdk = createSdk();
         const result = await sdk.listCronJobs(chatId);
         success(result);
       } catch (error) {

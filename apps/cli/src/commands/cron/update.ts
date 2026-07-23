@@ -9,7 +9,6 @@ interface UpdateOptions {
   schedule?: string;
   timezone?: string;
   F?: string;
-  agent?: string;
 }
 
 export function registerCronUpdateCommand(cron: Command): void {
@@ -20,11 +19,10 @@ export function registerCronUpdateCommand(cron: Command): void {
     .option("--schedule <expr>", "New five-field cron expression")
     .option("--timezone <iana>", "New IANA timezone")
     .option("-F <file>", "Replace prompt from file or stdin (-)")
-    .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (jobId: string, options: UpdateOptions) => {
       try {
         const chatId = requireCronChatId();
-        const sdk = createSdk(options.agent);
+        const sdk = createSdk();
         const current = await sdk.getCronJob(chatId, jobId);
         const body: Record<string, string> = {};
         if (options.name !== undefined) body.name = options.name;

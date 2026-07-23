@@ -259,6 +259,18 @@ function isUniqueViolation(err: unknown): boolean {
   return code === "23505";
 }
 
+/**
+ * Serialize owner-chat delete/pause against create/resume so an active row
+ * cannot be inserted after the pause scan but before the engagement UPSERT.
+ */
+export async function lockOwnerChatCronBarrier(
+  db: Database,
+  controlChatId: string,
+  ownerMemberId: string,
+): Promise<void> {
+  await db.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${controlChatId}), hashtext(${ownerMemberId}))`);
+}
+
 async function resolveIdenticalCreateConflict(
   db: Database,
   input: {
@@ -312,93 +324,99 @@ export async function createCronJob(
     throw err;
   }
 
-  const [agent] = await db.select().from(agents).where(eq(agents.uuid, input.agentId)).limit(1);
-  if (!agent || agent.status !== "active") {
-    throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
-  }
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const [agent] = await txDb.select().from(agents).where(eq(agents.uuid, input.agentId)).limit(1);
+    if (!agent || agent.status !== "active") {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", "Agent is not eligible to create scheduled jobs");
+    }
 
-  const validated = await revalidateOwnerChatAgent(db, {
-    ownerMemberId: agent.managerId,
-    controlChatId: input.controlChatId,
-    agentId: input.agentId,
-    chatMode: "reuse_control_chat",
-  });
-  if (!validated.ok) {
-    throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot create schedule (${validated.reason})`);
-  }
+    await lockOwnerChatCronBarrier(txDb, input.controlChatId, agent.managerId);
 
-  const identicalPre = await resolveIdenticalCreateConflict(db, {
-    controlChatId: input.controlChatId,
-    agentId: input.agentId,
-    name: input.body.name,
-    schedule: scheduled.schedule,
-    timezone: scheduled.timezone,
-    prompt: input.body.prompt,
-  });
-  if (identicalPre) return identicalPre;
-  const [conflicting] = await db
-    .select({ id: cronJobs.id })
-    .from(cronJobs)
-    .where(
-      and(
-        eq(cronJobs.controlChatId, input.controlChatId),
-        eq(cronJobs.agentId, input.agentId),
-        eq(cronJobs.name, input.body.name),
-      ),
-    )
-    .limit(1);
-  if (conflicting) {
-    throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
-  }
+    const validated = await revalidateOwnerChatAgent(txDb, {
+      ownerMemberId: agent.managerId,
+      controlChatId: input.controlChatId,
+      agentId: input.agentId,
+      chatMode: "reuse_control_chat",
+    });
+    if (!validated.ok) {
+      throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot create schedule (${validated.reason})`);
+    }
 
-  const id = uuidv7();
-  try {
-    const [inserted] = await db
-      .insert(cronJobs)
-      .values({
-        id,
-        ownerMemberId: validated.ownerMemberId,
-        controlChatId: input.controlChatId,
-        agentId: input.agentId,
-        name: input.body.name,
-        chatMode: "reuse_control_chat",
-        cronExpression: scheduled.schedule,
-        timezone: scheduled.timezone,
-        prompt: input.body.prompt,
-        state: "active",
-        stateReason: null,
-        revision: 1,
-        nextRunAt: scheduled.nextRunAt,
-        lastTriggerMessageId: null,
-      })
-      .returning();
+    const identicalPre = await resolveIdenticalCreateConflict(txDb, {
+      controlChatId: input.controlChatId,
+      agentId: input.agentId,
+      name: input.body.name,
+      schedule: scheduled.schedule,
+      timezone: scheduled.timezone,
+      prompt: input.body.prompt,
+    });
+    if (identicalPre) return identicalPre;
 
-    if (!inserted) throw new Error("failed to insert cron job");
-    log.info(
-      {
-        jobId: inserted.id,
-        organizationId: validated.organizationId,
-        controlChatId: inserted.controlChatId,
-        agentId: inserted.agentId,
-      },
-      "cron.job.created",
-    );
-    return projectCronJob(db, inserted);
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      const identical = await resolveIdenticalCreateConflict(db, {
-        controlChatId: input.controlChatId,
-        agentId: input.agentId,
-        name: input.body.name,
-        schedule: scheduled.schedule,
-        timezone: scheduled.timezone,
-        prompt: input.body.prompt,
-      });
-      if (identical) return identical;
+    const [conflicting] = await txDb
+      .select({ id: cronJobs.id })
+      .from(cronJobs)
+      .where(
+        and(
+          eq(cronJobs.controlChatId, input.controlChatId),
+          eq(cronJobs.agentId, input.agentId),
+          eq(cronJobs.name, input.body.name),
+        ),
+      )
+      .limit(1);
+    if (conflicting) {
       throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
     }
-    throw err;
-  }
+
+    const id = uuidv7();
+    try {
+      const [inserted] = await tx
+        .insert(cronJobs)
+        .values({
+          id,
+          ownerMemberId: validated.ownerMemberId,
+          controlChatId: input.controlChatId,
+          agentId: input.agentId,
+          name: input.body.name,
+          chatMode: "reuse_control_chat",
+          cronExpression: scheduled.schedule,
+          timezone: scheduled.timezone,
+          prompt: input.body.prompt,
+          state: "active",
+          stateReason: null,
+          revision: 1,
+          nextRunAt: scheduled.nextRunAt,
+          lastTriggerMessageId: null,
+        })
+        .returning();
+
+      if (!inserted) throw new Error("failed to insert cron job");
+      log.info(
+        {
+          jobId: inserted.id,
+          organizationId: validated.organizationId,
+          controlChatId: inserted.controlChatId,
+          agentId: inserted.agentId,
+        },
+        "cron.job.created",
+      );
+      return projectCronJob(txDb, inserted);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        const identical = await resolveIdenticalCreateConflict(txDb, {
+          controlChatId: input.controlChatId,
+          agentId: input.agentId,
+          name: input.body.name,
+          schedule: scheduled.schedule,
+          timezone: scheduled.timezone,
+          prompt: input.body.prompt,
+        });
+        if (identical) return identical;
+        throw new CronJobAppError(409, "CRON_JOB_NAME_CONFLICT", "A cron job with this name already exists");
+      }
+      throw err;
+    }
+  });
 }
 
 async function lockJob(db: Database, jobId: string): Promise<CronJobRow> {
@@ -456,6 +474,7 @@ export async function updateCronJob(
       nextRunAt = null;
     } else if (body.state === "active") {
       assertMutationsAvailable(input.config);
+      await lockOwnerChatCronBarrier(txDb, job.controlChatId, job.ownerMemberId);
       const auth = await revalidateOwnerChatAgent(txDb, job);
       if (!auth.ok) {
         throw new CronJobAppError(403, "CRON_JOB_FORBIDDEN", `Cannot resume schedule (${auth.reason})`);
@@ -464,9 +483,11 @@ export async function updateCronJob(
       nextReason = null;
     }
 
-    // One validation path for every branch that touches schedule/timezone or
-    // activates the job. Never store an expression Croner cannot enumerate.
-    if (scheduleTouched || body.state === "active") {
+    const resuming = body.state === "active" && job.state !== "active";
+    // Recompute nextRunAt only when schedule/timezone change or a real resume
+    // requires a fresh future fire. Already-active + state:active is a no-op
+    // for nextRunAt. Every schedule/timezone write still goes through Croner.
+    if (scheduleTouched || resuming) {
       try {
         const normalized = assertSchedulable(schedule, timezone, await databaseNow(txDb));
         schedule = normalized.schedule;
@@ -570,6 +591,8 @@ export async function pauseActiveJobsForOwnerChatDelete(
   db: Database,
   input: { controlChatId: string; ownerMemberId: string },
 ): Promise<number> {
+  await lockOwnerChatCronBarrier(db, input.controlChatId, input.ownerMemberId);
+
   const locked = await db
     .select({ id: cronJobs.id })
     .from(cronJobs)
