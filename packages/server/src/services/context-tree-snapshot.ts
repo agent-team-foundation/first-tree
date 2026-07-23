@@ -379,7 +379,7 @@ async function resolveContextTreeRoot(
     };
   }
 
-  if (!provider) {
+  if (!provider && isNetworkRepository(repo)) {
     return {
       root: null,
       reason: "The configured Context Tree repository provider could not be resolved.",
@@ -573,6 +573,17 @@ function normalizeRemoteRepoUrl(value: string): string {
     return `https://github.com/${value}`;
   }
   return value;
+}
+
+function isNetworkRepository(repo: string): boolean {
+  if (/^file:\/\//i.test(repo)) {
+    return false;
+  }
+  return (
+    /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(repo) ||
+    /^(?:[^@\s/:]+@)?[^/\s:]+:.+/.test(repo) ||
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(repo)
+  );
 }
 
 function accessModeForProvider(
