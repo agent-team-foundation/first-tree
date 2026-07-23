@@ -13,7 +13,16 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const activityMocks = vi.hoisted(() => ({ listClients: vi.fn() }));
 const contextTreeMocks = vi.hoisted(() => ({ getContextTreeSnapshot: vi.fn() }));
 const onboardingEventMocks = vi.hoisted(() => ({ reportOnboardingEvent: vi.fn() }));
+const orgSettingsMocks = vi.hoisted(() => ({
+  getRawContextTreeSetting: vi.fn(),
+  putContextTreeSetting: vi.fn(),
+}));
 const resourceMocks = vi.hoisted(() => ({ listTeamResourcesForOrg: vi.fn() }));
+const reviewerMocks = vi.hoisted(() => ({
+  getContextReviewerCandidates: vi.fn(),
+  putContextReviewerAssignment: vi.fn(),
+  putContextReviewerEnablement: vi.fn(),
+}));
 const setupCapabilityMocks = vi.hoisted(() => ({ getTeamSetupCapabilitiesAt: vi.fn() }));
 const authMock = vi.hoisted(() => ({
   value: {
@@ -32,7 +41,9 @@ const authMock = vi.hoisted(() => ({
 
 vi.mock("../../../api/activity.js", () => activityMocks);
 vi.mock("../../../api/context-tree.js", () => contextTreeMocks);
+vi.mock("../../../api/context-reviewer-settings.js", () => reviewerMocks);
 vi.mock("../../../api/onboarding-events.js", () => onboardingEventMocks);
+vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
 vi.mock("../../../api/resources.js", () => resourceMocks);
 vi.mock("../../../api/setup-capabilities.js", () => ({
   ...setupCapabilityMocks,
@@ -149,7 +160,7 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderSettingsSetupPage() {
+async function renderSettingsSetupPage(initialEntry = "/") {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -158,7 +169,7 @@ async function renderSettingsSetupPage() {
   });
   await act(async () => {
     root.render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <QueryClientProvider client={queryClient}>
           <SettingsSetupPage />
           <LocationProbe />
@@ -190,10 +201,56 @@ async function waitForRowText(
   throw new Error(`Expected ${key} row to include "${expected}"`);
 }
 
+async function waitForSelector<T extends Element>(host: ParentNode, selector: string, timeoutMs = 3000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const element = host.querySelector<T>(selector);
+    if (element) return element;
+    await flush();
+  }
+  throw new Error(`Expected selector "${selector}"`);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   activityMocks.listClients.mockResolvedValue([]);
   resourceMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+  orgSettingsMocks.getRawContextTreeSetting.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree.git",
+    branch: "main",
+    provider: "github",
+  });
+  orgSettingsMocks.putContextTreeSetting.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree.git",
+    branch: "release",
+    provider: "github",
+  });
+  reviewerMocks.getContextReviewerCandidates.mockResolvedValue({
+    items: [
+      {
+        uuid: "reviewer-1",
+        name: "context-reviewer",
+        displayName: "Context Reviewer",
+        visibility: "organization",
+        runtime: { health: "ready", blockers: [] },
+      },
+    ],
+    blockers: [],
+  });
+  reviewerMocks.putContextReviewerAssignment.mockResolvedValue({
+    contextReviewer: {
+      enabled: false,
+      agentUuid: "reviewer-1",
+      reviewerAgent: { uuid: "reviewer-1", name: "context-reviewer", displayName: "Context Reviewer" },
+    },
+  });
+  reviewerMocks.putContextReviewerEnablement.mockResolvedValue({
+    contextReviewer: {
+      enabled: true,
+      agentUuid: "reviewer-1",
+      reviewerAgent: { uuid: "reviewer-1", name: "context-reviewer", displayName: "Context Reviewer" },
+    },
+  });
   setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(capabilityFixture());
   contextTreeMocks.getContextTreeSnapshot.mockResolvedValue({
     snapshotStatus: "active",
@@ -278,8 +335,8 @@ describe("Settings Setup overview", () => {
       ["agent", "attention", "circle-alert", "--state-needs-you"],
       ["repositories", "unknown", "circle-question-mark", "--fg-3"],
       ["repository-automation", "pending", "clock-3", "--state-idle"],
-      ["context-tree", "neutral", "circle-alert", "--fg-3"],
-      ["automatic-review", "neutral", "circle-alert", "--fg-3"],
+      ["context-tree", "pending", "clock-3", "--state-idle"],
+      ["automatic-review", "blocked", "circle-alert", "--state-blocked"],
     ] as const;
 
     for (const [key, kind, glyph, token] of expectation) {
@@ -401,7 +458,7 @@ describe("Settings Setup overview", () => {
         },
       }),
       "Degraded",
-      "neutral",
+      "blocked",
     ],
   ] as const)("summarizes %s repository automation coverage", (_name, capabilities, label, kind) => {
     const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: capabilities } }));
@@ -471,17 +528,17 @@ describe("Settings Setup overview", () => {
     const adminFacts = facts({ role: "admin", capabilities: { state: "ready", value: capabilities } });
     const memberFacts = facts({ role: "member", capabilities: { state: "ready", value: capabilities } });
 
-    for (const key of ["repository-automation", "automatic-review"] as const) {
-      expect(rowFor(key, adminFacts).action).toEqual({
-        label: "Set up GitLab",
-        to: "/settings/integrations/gitlab",
-      });
-    }
-    expect(rowFor("repository-automation", memberFacts).action).toBeUndefined();
-    expect(rowFor("automatic-review", memberFacts).action).toEqual({
-      label: "View",
-      to: "/settings/repositories#context-tree",
+    expect(rowFor("repository-automation", adminFacts).action).toEqual({
+      label: "Set up GitLab",
+      to: "/settings/integrations/gitlab",
     });
+    expect(rowFor("automatic-review", adminFacts).action).toEqual({
+      label: "Manage",
+      to: "/settings/setup#automatic-review",
+      intent: "open-reviewer-controls",
+    });
+    expect(rowFor("repository-automation", memberFacts).action).toBeUndefined();
+    expect(rowFor("automatic-review", memberFacts).action).toBeUndefined();
   });
 
   it("turns the same Team blocker into admin attention and member read-only explanation", () => {
@@ -509,7 +566,7 @@ describe("Settings Setup overview", () => {
 
     expect(admin.status).toMatchObject({ label: "Needs attention", kind: "attention" });
     expect(admin.action).toEqual({ label: "Manage GitHub", to: "/settings/integrations/github" });
-    expect(member.status).toMatchObject({ label: "Service unavailable", kind: "neutral" });
+    expect(member.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
     expect(member.status.detail).toContain("Ask an admin");
     expect(member.action).toBeUndefined();
   });
@@ -524,14 +581,14 @@ describe("Settings Setup overview", () => {
     });
     const row = rowFor("repository-automation", facts({ capabilities: { state: "ready", value: shared } }));
 
-    expect(row.status).toMatchObject({ label: "Service unavailable", kind: "neutral" });
+    expect(row.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
     expect(row.status.detail).toContain("deployment");
     expect(row.action).toBeUndefined();
   });
 
   it.each([
     ["active", "Available", "ready", "Manage"],
-    ["stale", "Available · update delayed", "neutral", "Manage"],
+    ["stale", "Available · update delayed", "pending", "Manage"],
     ["unavailable", "Needs recovery", "attention", "Recover"],
   ] as const)("maps bound Context Tree snapshot %s without equating binding to health", (value, label, kind, action) => {
     const row = rowFor("context-tree", facts({ contextTreeSnapshot: { state: "ready", value } }));
@@ -589,13 +646,21 @@ describe("Settings Setup overview", () => {
     );
 
     expect(unbound.status).toEqual({ label: "Not set up", detail: "Optional", kind: "optional" });
-    expect(unbound.action).toEqual({ label: "Set up", to: "/context" });
+    expect(unbound.action).toEqual({
+      label: "Set up",
+      to: "/settings/setup#context-tree",
+      intent: "open-context-tree-controls",
+    });
     expect(unboundMember.status).toMatchObject({ label: "Not set up", kind: "optional" });
     expect(unboundMember.status.detail).toContain("Ask an admin");
     expect(unboundMember.action).toBeUndefined();
     expect(invalidAdmin.status).toMatchObject({ label: "Needs repair", kind: "attention" });
-    expect(invalidAdmin.action).toEqual({ label: "Repair", to: "/settings/repositories#context-tree" });
-    expect(invalidMember.status).toMatchObject({ label: "Unavailable", kind: "neutral" });
+    expect(invalidAdmin.action).toEqual({
+      label: "Repair",
+      to: "/settings/setup#context-tree",
+      intent: "open-context-tree-controls",
+    });
+    expect(invalidMember.status).toMatchObject({ label: "Unavailable", kind: "blocked" });
     expect(invalidMember.status.detail).toContain("Ask an admin");
     expect(invalidMember.action).toEqual({ label: "View", to: "/context" });
   });
@@ -609,7 +674,7 @@ describe("Settings Setup overview", () => {
       }),
     );
 
-    expect(row.status).toMatchObject({ label: "Unavailable", kind: "neutral" });
+    expect(row.status).toMatchObject({ label: "Unavailable", kind: "blocked" });
     expect(row.status.detail).toContain("Ask an admin to recover");
     expect(row.action).toEqual({ label: "View", to: "/context" });
   });
@@ -618,7 +683,11 @@ describe("Settings Setup overview", () => {
     const row = rowFor("context-tree", facts({ contextTreeSnapshot: { state: "error" } }));
 
     expect(row.status).toMatchObject({ label: "Status unknown", kind: "unknown" });
-    expect(row.action).toEqual({ label: "Manage", to: "/settings/repositories#context-tree" });
+    expect(row.action).toEqual({
+      label: "Manage",
+      to: "/settings/setup#context-tree",
+      intent: "open-context-tree-controls",
+    });
   });
 
   it.each([
@@ -653,7 +722,7 @@ describe("Settings Setup overview", () => {
       }),
       "Verification pending",
       "pending",
-      undefined,
+      "Manage",
     ],
     [
       "degraded",
@@ -672,7 +741,7 @@ describe("Settings Setup overview", () => {
       }),
       "Degraded",
       "attention",
-      "Set up GitLab",
+      "Manage",
     ],
   ] as const)("maps Automatic review %s without making it a Start Chat gate", (_name, capabilities, label, kind, action) => {
     const input = facts({ capabilities: { state: "ready", value: capabilities } });
@@ -705,10 +774,76 @@ describe("Settings Setup overview", () => {
     );
 
     expect(admin.status).toMatchObject({ label: "Needs attention", kind: "attention" });
-    expect(admin.action).toEqual({ label: "Replace reviewer", to: "/settings/repositories#context-tree" });
-    expect(member.status).toMatchObject({ label: "Service unavailable", kind: "neutral" });
+    expect(admin.action).toEqual({
+      label: "Manage",
+      to: "/settings/setup#automatic-review",
+      intent: "open-reviewer-controls",
+    });
+    expect(member.status).toMatchObject({ label: "Service unavailable", kind: "blocked" });
     expect(member.status.detail).toContain("Ask an admin");
-    expect(member.action).toEqual({ label: "View", to: "/settings/repositories#context-tree" });
+    expect(member.action).toBeUndefined();
+  });
+
+  it("shows a retained Reviewer selection while Automatic Review is off", () => {
+    const row = rowFor(
+      "automatic-review",
+      facts({
+        capabilities: {
+          state: "ready",
+          value: capabilityFixture({
+            review: {
+              adoption: "disabled",
+              health: "not_observed",
+              reviewerAgent: { uuid: "reviewer-1", displayName: "Context Reviewer" },
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(row.status).toEqual({
+      label: "Off",
+      detail: "Reviewer · Context Reviewer · Optional",
+      kind: "optional",
+    });
+    expect(row.action).toEqual({
+      label: "Manage",
+      to: "/settings/setup#automatic-review",
+      intent: "open-reviewer-controls",
+    });
+  });
+
+  it("preserves degraded Server facts and inline recovery controls while Automatic Review is off", () => {
+    const row = rowFor(
+      "automatic-review",
+      facts({
+        capabilities: {
+          state: "ready",
+          value: capabilityFixture({
+            review: {
+              adoption: "disabled",
+              health: "degraded",
+              reviewerAgent: { uuid: "reviewer-1", displayName: "Offline Reviewer" },
+              blockers: [
+                {
+                  code: "context_review_agent_runtime_unavailable",
+                  resolutionOwner: "admin",
+                  actionKind: "open_agent_owner_flow",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(row.status).toMatchObject({ label: "Degraded", kind: "attention" });
+    expect(row.status.detail).toContain("Automatic review remains off");
+    expect(row.action).toEqual({
+      label: "Manage",
+      to: "/settings/setup#automatic-review",
+      intent: "open-reviewer-controls",
+    });
   });
 
   it("uses the Team projection and only asks the snapshot owner endpoint for a bound tree", async () => {
@@ -720,6 +855,264 @@ describe("Settings Setup overview", () => {
     expect(tree.textContent).toContain("acme/context-tree");
     expect(setupCapabilityMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledWith("org-1");
     expect(contextTreeMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
+    await act(async () => view.root.unmount());
+  });
+
+  it("opens Context Tree and Reviewer owner controls only for an Admin", async () => {
+    const view = await renderSettingsSetupPage();
+    const tree = await waitForRowText(view.host, "context-tree", "Available");
+    const treeManage = [...tree.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    expect(treeManage?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => treeManage?.click());
+    const treeControls = await waitForSelector<HTMLElement>(tree, '[data-setup-owner-controls="context-tree"]');
+    expect(treeControls.textContent).toContain("acme/context-tree · main branch · github");
+    expect(orgSettingsMocks.getRawContextTreeSetting).toHaveBeenCalledWith("org-1");
+
+    const review = await waitForRowText(view.host, "automatic-review", "On");
+    const reviewManage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+    await act(async () => reviewManage?.click());
+    const reviewControls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    expect(reviewControls.textContent).toContain("Context Reviewer");
+    expect(reviewerMocks.getContextReviewerCandidates).toHaveBeenCalledWith("org-1");
+    expect(view.host.querySelector('[data-setup-owner-controls="context-tree"]')).toBeNull();
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps the binding editor open and reflects the saved Server response immediately", async () => {
+    const view = await renderSettingsSetupPage();
+    const tree = await waitForRowText(view.host, "context-tree", "Available");
+    const manage = [...tree.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(tree, '[data-setup-owner-controls="context-tree"]');
+    const edit = [...controls.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Change repository or branch",
+    );
+    await act(async () => edit?.click());
+    const save = await waitForSelector<HTMLButtonElement>(controls, 'button[aria-label="Save"]');
+    await act(async () => save.click());
+    await flush();
+
+    expect(orgSettingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", {
+      repo: "https://github.com/acme/context-tree.git",
+      branch: "main",
+    });
+    expect(controls.textContent).toContain("release branch");
+    expect(controls.textContent).toContain("Saved");
+    expect(controls.querySelector('button[aria-label="Save"]')).not.toBeNull();
+    await act(async () => view.root.unmount());
+  });
+
+  it.each([
+    ["#context-tree", "context-tree"],
+    ["#automatic-review", "automatic-review"],
+  ] as const)("opens and focuses the canonical owner control for legacy hash %s", async (hash, key) => {
+    const view = await renderSettingsSetupPage(`/settings/setup${hash}`);
+    const row = await waitForSelector<HTMLElement>(view.host, `[data-setup-row="${key}"]`);
+    await waitForSelector(row, `[data-setup-owner-controls="${key}"]`);
+
+    expect(row.id).toBe(key);
+    expect(document.activeElement).toBe(row);
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps Member Setup read-only without loading owner-only settings", async () => {
+    authMock.value = { ...authMock.value, role: "member" };
+    const view = await renderSettingsSetupPage("/settings/setup#automatic-review");
+    await waitForRowText(view.host, "automatic-review", "On");
+
+    expect(view.host.getAttribute("data-setup-overview")).toBeNull();
+    expect(view.host.querySelector('[data-setup-overview="member"]')).not.toBeNull();
+    expect(view.host.querySelector("[data-setup-owner-controls]")).toBeNull();
+    expect(view.host.querySelector('[role="switch"]')).toBeNull();
+    expect(reviewerMocks.getContextReviewerCandidates).not.toHaveBeenCalled();
+    expect(orgSettingsMocks.getRawContextTreeSetting).not.toHaveBeenCalled();
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps provider recovery secondary to the initial degraded Reviewer editor", async () => {
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
+      capabilityFixture({
+        review: {
+          adoption: "disabled",
+          health: "degraded",
+          blockers: [
+            {
+              code: "context_review_agent_runtime_unavailable",
+              resolutionOwner: "admin",
+              actionKind: "open_agent_owner_flow",
+            },
+          ],
+        },
+      }),
+    );
+    const view = await renderSettingsSetupPage();
+    const review = await waitForRowText(view.host, "automatic-review", "Degraded");
+    const manage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    expect(controls.querySelector('[role="switch"]')).not.toBeNull();
+    expect([...controls.querySelectorAll("a")].some((link) => link.textContent === "Manage Team Agents")).toBe(true);
+    await act(async () => view.root.unmount());
+  });
+
+  it("enables Automatic Review without rewriting its retained assignment", async () => {
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
+      capabilityFixture({
+        review: {
+          adoption: "disabled",
+          health: "not_observed",
+          reviewerAgent: { uuid: "reviewer-1", displayName: "Context Reviewer" },
+        },
+      }),
+    );
+    const view = await renderSettingsSetupPage();
+    const review = await waitForRowText(view.host, "automatic-review", "Off");
+    const manage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    const enablement = controls.querySelector<HTMLButtonElement>('[role="switch"]');
+    expect(enablement?.getAttribute("aria-checked")).toBe("false");
+    expect(controls.textContent).toContain("selection retained while off");
+
+    await act(async () => enablement?.click());
+    await flush();
+
+    expect(reviewerMocks.putContextReviewerEnablement).toHaveBeenCalledWith("org-1", true);
+    expect(reviewerMocks.putContextReviewerAssignment).not.toHaveBeenCalled();
+    await act(async () => view.root.unmount());
+  });
+
+  it("changes assignment through its split endpoint and keeps an offline candidate selectable", async () => {
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(capabilityFixture()).mockResolvedValue(
+      capabilityFixture({
+        review: {
+          adoption: "disabled",
+          health: "degraded",
+          reviewerAgent: { uuid: "reviewer-2", displayName: "Offline Reviewer" },
+        },
+      }),
+    );
+    reviewerMocks.getContextReviewerCandidates.mockResolvedValue({
+      items: [
+        {
+          uuid: "reviewer-1",
+          name: "context-reviewer",
+          displayName: "Context Reviewer",
+          visibility: "organization",
+          runtime: { health: "ready", blockers: [] },
+        },
+        {
+          uuid: "reviewer-2",
+          name: "offline-reviewer",
+          displayName: "Offline Reviewer",
+          visibility: "organization",
+          runtime: {
+            health: "degraded",
+            blockers: [{ code: "context_review_agent_inactive", resolutionOwner: "operator", actionKind: null }],
+          },
+        },
+      ],
+      blockers: [],
+    });
+    reviewerMocks.putContextReviewerAssignment.mockResolvedValue({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: "reviewer-2",
+        reviewerAgent: { uuid: "reviewer-2", name: "offline-reviewer", displayName: "Offline Reviewer" },
+      },
+    });
+    const view = await renderSettingsSetupPage();
+    const review = await waitForRowText(view.host, "automatic-review", "On");
+    const manage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    const agentSelect = await waitForSelector<HTMLButtonElement>(controls, '[aria-label="Automatic review Agent"]');
+    await act(async () => agentSelect?.click());
+    await waitForSelector(document.body, '[role="listbox"][aria-label="Automatic review Agent"]');
+    const offlineOption = [...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((option) =>
+      option.textContent?.includes("Offline Reviewer"),
+    );
+
+    expect(offlineOption?.disabled).toBe(false);
+    expect(offlineOption?.textContent).toContain("Runtime currently unavailable");
+    await act(async () => offlineOption?.click());
+    await flush();
+
+    expect(reviewerMocks.putContextReviewerAssignment).toHaveBeenCalledWith("org-1", "reviewer-2");
+    expect(reviewerMocks.putContextReviewerEnablement).not.toHaveBeenCalled();
+    expect(controls.textContent).toContain("Offline Reviewer");
+    expect(controls.textContent).toContain("selection retained while off");
+    expect(controls.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps an empty eligible-candidate result in Setup without a create escape hatch", async () => {
+    reviewerMocks.getContextReviewerCandidates.mockResolvedValue({ items: [], blockers: [] });
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
+      capabilityFixture({
+        review: {
+          adoption: "disabled",
+          health: "not_observed",
+          reviewerAgent: null,
+        },
+      }),
+    );
+    const view = await renderSettingsSetupPage();
+    const review = await waitForRowText(view.host, "automatic-review", "Off");
+    const setup = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Set up",
+    );
+
+    await act(async () => setup?.click());
+    const controls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    await waitForRowText(view.host, "automatic-review", "No eligible organization-visible managed Agent");
+
+    expect(controls.querySelector('[aria-label="Automatic review Agent"]')).toBeNull();
+    expect(controls.querySelector<HTMLAnchorElement>('a[href="/team"]')?.textContent).toBe("Manage Team Agents");
+    expect(controls.textContent).not.toContain("Create Agent");
+    await act(async () => view.root.unmount());
+  });
+
+  it("allows an Admin to clear the retained Reviewer assignment", async () => {
+    reviewerMocks.putContextReviewerAssignment.mockResolvedValue({
+      contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null },
+    });
+    const view = await renderSettingsSetupPage();
+    const review = await waitForRowText(view.host, "automatic-review", "On");
+    const manage = [...review.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Manage",
+    );
+
+    await act(async () => manage?.click());
+    const controls = await waitForSelector<HTMLElement>(review, '[data-setup-owner-controls="automatic-review"]');
+    const agentSelect = await waitForSelector<HTMLButtonElement>(controls, '[aria-label="Automatic review Agent"]');
+    await act(async () => agentSelect.click());
+    const clearOption = [...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(
+      (option) => option.textContent === "No Reviewer selected",
+    );
+    await act(async () => clearOption?.click());
+    await flush();
+
+    expect(reviewerMocks.putContextReviewerAssignment).toHaveBeenCalledWith("org-1", null);
+    expect(controls.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
     await act(async () => view.root.unmount());
   });
 
@@ -735,6 +1128,33 @@ describe("Settings Setup overview", () => {
     await waitForRowText(view.host, "context-tree", "Not set up");
 
     expect(contextTreeMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    await act(async () => view.root.unmount());
+  });
+
+  it("offers binding repair without a misleading build-chat entry for an invalid Context Tree", async () => {
+    setupCapabilityMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(
+      capabilityFixture({
+        binding: { state: "invalid" },
+        contextTreeBlockers: [
+          {
+            code: "context_tree_binding_invalid",
+            resolutionOwner: "admin",
+            actionKind: "repair_tree_binding",
+          },
+        ],
+        review: { adoption: "unavailable", health: "not_observed", reviewerAgent: null },
+      }),
+    );
+    const view = await renderSettingsSetupPage();
+    const tree = await waitForRowText(view.host, "context-tree", "Needs repair");
+    const repair = [...tree.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Repair",
+    );
+
+    await act(async () => repair?.click());
+    const controls = await waitForSelector<HTMLElement>(tree, '[data-setup-owner-controls="context-tree"]');
+    expect(controls.textContent).toContain("Bind it manually");
+    expect(controls.textContent).not.toContain("Build your Context Tree");
     await act(async () => view.root.unmount());
   });
 

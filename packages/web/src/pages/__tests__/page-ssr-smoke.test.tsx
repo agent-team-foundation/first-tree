@@ -960,14 +960,14 @@ describe("page SSR smoke coverage", () => {
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
     const repositories = renderPage(<SettingsRepositoriesPage />, "/settings/repositories");
     expect(repositories).toContain("Code repositories");
-    expect(repositories).toContain("Context Tree");
+    expect(repositories).not.toContain("Context Tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: "member" };
     // Settings GitHub, Repositories, and Resources stay visible (read-only)
     // for members.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsRepositoriesPage />, "/settings/repositories")).toContain("Context Tree");
+    expect(renderPage(<SettingsRepositoriesPage />, "/settings/repositories")).not.toContain("Context Tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: null };

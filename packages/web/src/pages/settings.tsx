@@ -47,7 +47,7 @@ const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
 const REPOSITORIES_ITEM: Item = {
   to: "/settings/repositories",
   label: "Repositories",
-  description: "Manage code available to agents and the repository backing your team's Context Tree.",
+  description: "Manage the Team code repositories available to agents.",
 };
 const RESOURCES_ITEM: Item = {
   to: "/settings/resources",

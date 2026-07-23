@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -11,15 +11,6 @@ const authMock = vi.hoisted(() => ({ role: "admin" as "admin" | "member" | null 
 
 vi.mock("../../../auth/auth-context.js", () => ({
   useAuth: () => ({ role: authMock.role }),
-}));
-
-vi.mock("../../context-tree-settings-panel.js", () => ({
-  ContextTreeSettingsPanel: () => (
-    <section data-testid="context-tree-panel">
-      <h2>Context Tree</h2>
-      <div>Context Tree rows</div>
-    </section>
-  ),
 }));
 
 vi.mock("../resource-sections.js", () => ({
@@ -55,11 +46,19 @@ async function renderPage(path = "/settings/repositories"): Promise<{ container:
   await act(async () => {
     root.render(
       <MemoryRouter initialEntries={[path]}>
-        <SettingsRepositoriesPage />
+        <Routes>
+          <Route path="/settings/repositories" element={<SettingsRepositoriesPage />} />
+          <Route path="/settings/setup" element={<LocationProbe />} />
+        </Routes>
       </MemoryRouter>,
     );
   });
   return { container, root };
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-location={`${location.pathname}${location.hash}`} />;
 }
 
 beforeEach(() => {
@@ -76,7 +75,7 @@ afterEach(() => {
 });
 
 describe("SettingsRepositoriesPage", () => {
-  it("composes the two repository models with only two visible section headings", async () => {
+  it("renders only the Team code repository catalog", async () => {
     const { container, root } = await renderPage();
     const resources = container.querySelector<HTMLElement>('[data-testid="resource-sections"]');
 
@@ -88,28 +87,35 @@ describe("SettingsRepositoriesPage", () => {
     expect(resources?.textContent).toContain("Git credentials on each agent computer");
 
     const headings = [...container.querySelectorAll("h2")].map((heading) => heading.textContent);
-    expect(headings).toEqual(["Code repositories", "Context Tree"]);
+    expect(headings).toEqual(["Code repositories"]);
     expect(container.querySelector("h1")).toBeNull();
-    expect((container.textContent ?? "").indexOf("Code repositories")).toBeLessThan(
-      (container.textContent ?? "").indexOf("Context Tree"),
-    );
+    expect(container.textContent).not.toContain("Context Tree rows");
+    expect(container.textContent).not.toContain("Automatic PR review");
+    expect(container.textContent).not.toContain("Automatic MR review");
     expect(scrollIntoView).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 
-  it.each([
-    ["#code-repositories", "Code repositories"],
-    ["#context-tree", "Context Tree"],
-  ])("positions and focuses %s", async (hash, label) => {
-    const { container, root } = await renderPage(`/settings/repositories${hash}`);
-    const target = container.querySelector<HTMLElement>(hash);
+  it("positions and focuses the code catalog anchor", async () => {
+    const { container, root } = await renderPage("/settings/repositories#code-repositories");
+    const target = container.querySelector<HTMLElement>("#code-repositories");
 
     expect(target?.tagName).toBe("SECTION");
-    expect(target?.getAttribute("aria-label")).toBe(label);
+    expect(target?.getAttribute("aria-label")).toBe("Code repositories");
     expect(target?.tabIndex).toBe(-1);
     expect(scrollIntoView).toHaveBeenCalledOnce();
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
     expect(document.activeElement).toBe(target);
+    await act(async () => root.unmount());
+  });
+
+  it("redirects the retired Context Tree anchor to canonical Setup controls", async () => {
+    const { container, root } = await renderPage("/settings/repositories#context-tree");
+
+    expect(container.querySelector("[data-location]")?.getAttribute("data-location")).toBe(
+      "/settings/setup#context-tree",
+    );
+    expect(container.querySelector('[data-testid="resource-sections"]')).toBeNull();
     await act(async () => root.unmount());
   });
 
