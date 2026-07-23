@@ -1,4 +1,4 @@
-import { IDBFactory } from "fake-indexeddb";
+import { IDBDatabase, IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountStateStore } from "../../api/account-state-store.js";
 import {
@@ -1019,6 +1019,78 @@ describe("BrowserSessionRuntime", () => {
   });
 
   it.each([
+    "pagehide",
+    "freeze",
+  ] as const)("hands an in-flight offline remount to a new %s lifecycle cycle", async (eventName) => {
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-double-suspend-${eventName}`);
+    const locks = new NavigationDeliveryGateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, `double-suspend-${eventName}`);
+    const harness = createRuntime(
+      factory,
+      localStorage,
+      sessionStorage,
+      locks,
+      seeded.activation,
+      `runtime-double-suspend-${eventName}`,
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(activeMe(seeded.activation.accountId, ["org-a"], "org-a"));
+    const before = activeProjection(await harness.runtime.start());
+    const beforeView = before.publication.viewLease;
+    if (!beforeView) throw new Error("Expected selected organization view");
+    fetch.mockClear();
+    harness.authority.reconcile.mockReset();
+    harness.authority.reconcile.mockResolvedValue({ kind: "unavailable", expected: SERVER_AUTHORITY });
+    locks.holdNavigationDelivery();
+
+    const lifecycleTarget = eventName === "pagehide" ? harness.windowTarget : harness.documentTarget;
+    lifecycleTarget.dispatchEvent(new Event(eventName));
+    const delivered: BrowserSessionProjection[] = [];
+    const unsubscribe = harness.runtime.subscribe((projection) => delivered.push(projection));
+    delivered.length = 0;
+    const firstResume = harness.runtime.resume();
+    await locks.navigationCommitted;
+
+    expect(harness.runtime.getProjection().kind).toBe("veiled");
+    lifecycleTarget.dispatchEvent(new Event(eventName));
+    const secondResume = harness.runtime.resume();
+    locks.releaseNavigationDelivery();
+
+    await expect(firstResume).resolves.toMatchObject({ kind: "veiled" });
+    const after = activeProjection(await secondResume);
+    const afterView = after.publication.viewLease;
+    if (!afterView) throw new Error("Expected rebound organization view");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(delivered.filter((projection) => projection.kind === "active")).toEqual([after]);
+    expect(delivered.some((projection) => projection.kind === "recovery")).toBe(false);
+    expect(after.accountLease.accountRevision).not.toBe(before.accountLease.accountRevision);
+    expect(after.publication.state).toMatchObject({ kind: "selected", organizationId: "org-a" });
+    expect(after.publication.state.orgRevision).not.toBe(before.publication.state.orgRevision);
+    expect(captureAccountStoreRuntime(before.accountLease)).toBeNull();
+    expect(captureContentStoreRuntime(beforeView)).toBeNull();
+    expect(captureAccountStoreRuntime(after.accountLease)).not.toBeNull();
+    expect(captureContentStoreRuntime(afterView)).not.toBeNull();
+    await expect(
+      new AccountStateStore().getAccountEntry(after.accountLease, {
+        kind: "selected-organization",
+        key: "current",
+        tabId: after.accountLease.ownerTabId,
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        state: "selected",
+        organizationId: "org-a",
+        orgRevision: after.publication.state.orgRevision,
+      },
+    });
+    unsubscribe();
+  });
+
+  it.each([
     "retirement",
     "selected-head",
   ] as const)("rechecks durable %s ownership after the final suspended authority probe", async (winner) => {
@@ -1252,6 +1324,86 @@ describe("BrowserSessionRuntime", () => {
     expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
     expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
     expect(harness.notices.authorityAdvancedCount).toBe(1);
+  });
+
+  it.each([
+    "open",
+    "transaction",
+  ] as const)("retries a retained terminal identity retirement after a pre-commit %s failure", async (failurePoint) => {
+    const testId = `terminal-active-me-401-retry-${failurePoint}`;
+    const factory = new IDBFactory();
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    sessionStorage.setItem(OWNER_TAB_STORAGE_KEY, `owner-${testId}`);
+    const locks = new ImmediateLocks();
+    const seeded = await seedActive(factory, localStorage, sessionStorage, locks, testId);
+    const harness = createRuntime(factory, localStorage, sessionStorage, locks, seeded.activation, `runtime-${testId}`);
+    const replacementAccess = jwt(seeded.activation.accountId, "access", `${testId}-rotated`);
+    const replacementRefresh = jwt(seeded.activation.accountId, "refresh", `${testId}-rotated`);
+    let bootIdentityPending = true;
+    const requests: string[] = [];
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/v1/auth/refresh") {
+        return new Response(JSON.stringify({ accessToken: replacementAccess, refreshToken: replacementRefresh }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (bootIdentityPending) {
+        bootIdentityPending = false;
+        return activeMe(seeded.activation.accountId, ["org-a"], "org-a");
+      }
+      return new Response("expired", { status: 401 });
+    });
+    const before = activeProjection(await harness.runtime.start());
+    requests.length = 0;
+
+    const originalRetirement = AuthSessionCoordinator.prototype.retireAccountAfterTerminalActiveMe401;
+    let retirementCalls = 0;
+    const retirementInputs: Array<readonly [unknown, unknown]> = [];
+    const retirementResults: string[] = [];
+    vi.spyOn(AuthSessionCoordinator.prototype, "retireAccountAfterTerminalActiveMe401").mockImplementation(
+      async function (this: AuthSessionCoordinator, leaseValue, rejectionValue) {
+        retirementCalls += 1;
+        retirementInputs.push([leaseValue, rejectionValue]);
+        if (retirementCalls === 1) {
+          if (failurePoint === "open") {
+            vi.spyOn(factory, "open").mockImplementationOnce(() => {
+              throw new Error("transient terminal retirement open failure");
+            });
+          } else {
+            vi.spyOn(IDBDatabase.prototype, "transaction").mockImplementationOnce(() => {
+              throw new DOMException("transient terminal retirement transaction failure", "UnknownError");
+            });
+          }
+        }
+        const result = await originalRetirement.call(this, leaseValue, rejectionValue);
+        retirementResults.push(result);
+        return result;
+      },
+    );
+
+    await expect(harness.runtime.refresh()).resolves.toMatchObject({ kind: "recovery" });
+    expect(requests).toEqual(["/api/v1/me", "/api/v1/auth/refresh", "/api/v1/me"]);
+    expect(retirementCalls).toBe(1);
+    expect(before.accountLease.signal.aborted).toBe(true);
+    await expect(seeded.coordinator.readAuthority()).resolves.toMatchObject({ mode: "active" });
+
+    fetch.mockRejectedValue(new Error("pending terminal retirement must prevent another network request"));
+    await expect(harness.runtime.resume()).resolves.toEqual({ kind: "anonymous" });
+    expect(requests).toEqual(["/api/v1/me", "/api/v1/auth/refresh", "/api/v1/me"]);
+    expect(retirementCalls).toBe(2);
+    expect(retirementInputs[1]?.[0]).toBe(retirementInputs[0]?.[0]);
+    expect(retirementInputs[1]?.[1]).toBe(retirementInputs[0]?.[1]);
+    expect(retirementResults).toEqual(["retired"]);
+    expect(await seeded.coordinator.readAuthority()).toMatchObject({ mode: "none" });
+    expect(harness.notices.retiredEpochs).toEqual([seeded.activation.sessionEpoch]);
+    expect(harness.notices.authorityAdvancedCount).toBe(1);
+
+    await expect(harness.runtime.resume()).resolves.toEqual({ kind: "anonymous" });
+    expect(retirementCalls).toBe(2);
+    expect(requests).toHaveLength(3);
   });
 
   it("transfers transaction-first terminal identity retirement to a fresh local cleanup operation", async () => {

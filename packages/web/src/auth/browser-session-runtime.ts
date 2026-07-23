@@ -132,6 +132,22 @@ type PendingResume = Readonly<{
   promise: Promise<BrowserSessionProjection>;
 }>;
 
+type PendingTerminalActiveMe401 = Readonly<{
+  lease: AccountLease;
+  rejection: SessionError;
+}>;
+
+type PendingTerminalActiveMe401Result = Readonly<{
+  source: ActivationCertificate;
+  retirement: RetirementResult;
+}>;
+
+type SuspendedRemount = Readonly<{
+  handle: AccountRuntimeHandle;
+  session: ActiveSessionProjection;
+  me: Readonly<Record<string, unknown>>;
+}>;
+
 function captureNoticeTransport(value: CrossDocumentNoticeTransport): CrossDocumentNoticeTransport {
   const available = value.available;
   const publishSourceRetired = value.publishSourceRetired;
@@ -295,8 +311,10 @@ export class BrowserSessionRuntime {
   #pendingSourceNotices = new Set<string>();
   #pendingAuthorityNotice = false;
   #hardSuspendedActive: ActiveRuntime | null = null;
+  #suspendedRemount: SuspendedRemount | null = null;
   #resumeCycle = 0;
   #pendingResume: PendingResume | null = null;
+  #pendingTerminalActiveMe401: PendingTerminalActiveMe401 | null = null;
 
   public constructor(options: BrowserSessionRuntimeOptions = {}) {
     const indexedDBOption = options.indexedDB;
@@ -510,12 +528,24 @@ export class BrowserSessionRuntime {
     const hardSuspendedActive = this.#hardSuspendedActive;
     this.#suspended = false;
     for (let attempts = 0; attempts < MAX_RECONCILIATION_ATTEMPTS; attempts += 1) {
-      const active = this.#active;
+      const active = this.#active ?? hardSuspendedActive;
       const operation = this.#begin("lifecycle_reconciliation", !this.#noticeProcessingReady);
       if (active) this.#recoveryLogoutOwner = active.activation;
       try {
         await this.#ensureBootLegacyScrub();
         this.#assertCurrent(operation);
+        const pendingRetirement = await this.#retryPendingTerminalActiveMe401();
+        if (pendingRetirement) {
+          if (pendingRetirement.retirement === "superseded") {
+            const authority = await this.#coordinator.readAuthority();
+            this.#assertCurrent(operation);
+            await this.#convergeAuthority(authority, operation, false);
+            this.#finishNoticeFence(operation);
+          } else {
+            await this.#convergeCommittedOwned401(pendingRetirement.source);
+          }
+          return this.getProjection();
+        }
         if (!this.#noticeProcessingReady) {
           const durable = await this.#coordinator.readAuthority();
           this.#assertCurrent(operation);
@@ -599,6 +629,12 @@ export class BrowserSessionRuntime {
           });
           this.#retireLocalActive(active);
           const handle = this.#installAccountRuntime(active.activation);
+          const suspendedRemount = Object.freeze({
+            handle,
+            session,
+            me: suspendedMe,
+          });
+          this.#suspendedRemount = suspendedRemount;
           try {
             const publication = await this.#selectedOrganization.rebindSuspendedPublication({
               lease: handle.accountLease,
@@ -659,6 +695,8 @@ export class BrowserSessionRuntime {
               expectedState: latestPublication?.state ?? suspendedPublication.state,
             });
             throw error;
+          } finally {
+            if (this.#suspendedRemount === suspendedRemount) this.#suspendedRemount = null;
           }
           this.#finishNoticeFence(operation);
           return this.getProjection();
@@ -794,6 +832,8 @@ export class BrowserSessionRuntime {
     this.#notices.dispose();
     this.#detachVeilSubscription();
     this.#hardSuspendedActive = null;
+    this.#suspendedRemount = null;
+    this.#pendingTerminalActiveMe401 = null;
     this.#subscribers.clear();
   }
 
@@ -801,7 +841,21 @@ export class BrowserSessionRuntime {
     this.#started = true;
     const onSuspend = (): void => {
       if (this.#disposed) return;
-      this.#hardSuspendedActive = this.#active;
+      const active = this.#active;
+      if (active) {
+        this.#hardSuspendedActive = active;
+      } else {
+        const remount = this.#suspendedRemount;
+        const publication = remount ? this.#selectedOrganization.readCurrentPublication() : null;
+        if (
+          remount &&
+          publication &&
+          (publication.viewLease === null ||
+            sameActivation(publication.viewLease.activation, remount.handle.activation))
+        ) {
+          this.#hardSuspendedActive = this.#captureSuspendedRemount(remount, publication);
+        }
+      }
       this.#suspended = true;
       this.#noticeProcessingReady = false;
     };
@@ -1273,6 +1327,43 @@ export class BrowserSessionRuntime {
     });
   }
 
+  #captureSuspendedRemount(remount: SuspendedRemount, publication: SelectedOrganizationPublication): ActiveRuntime {
+    const projection: BrowserSessionActiveProjection = Object.freeze({
+      kind: "active",
+      activation: remount.handle.activation,
+      accountLease: remount.handle.accountLease,
+      credential: remount.session.credential,
+      me: remount.me,
+      publication,
+    });
+    return Object.freeze({
+      activation: remount.handle.activation,
+      accountLease: remount.handle.accountLease,
+      sourceController: remount.handle.sourceController,
+      disposeAccountRuntime: remount.handle.disposeAccountRuntime,
+      projection,
+    });
+  }
+
+  #terminalActiveMe401Error(retirement: RetirementResult): SessionError {
+    return new SessionError(
+      sessionErrorCodes.admissionDenied,
+      "Account identity remained unauthorized after credential refresh",
+      Object.freeze({ kind: "refresh_http_status", status: 401, retirement }),
+    );
+  }
+
+  #retryPendingTerminalActiveMe401(): Promise<PendingTerminalActiveMe401Result | null> {
+    const pending = this.#pendingTerminalActiveMe401;
+    if (!pending) return Promise.resolve(null);
+    return this.#coordinator
+      .retireAccountAfterTerminalActiveMe401(pending.lease, pending.rejection)
+      .then((retirement) => {
+        if (this.#pendingTerminalActiveMe401 === pending) this.#pendingTerminalActiveMe401 = null;
+        return Object.freeze({ source: pending.lease.activation, retirement });
+      });
+  }
+
   async #reconcileSelection(
     accountLease: AccountLease,
     reason: SelectedOrganizationReason,
@@ -1281,6 +1372,8 @@ export class BrowserSessionRuntime {
     operation: RuntimeOperation,
     rotateObservedRevision = false,
   ): Promise<ReconciledSelection> {
+    const pendingRetirement = await this.#retryPendingTerminalActiveMe401();
+    if (pendingRetirement) throw this.#terminalActiveMe401Error(pendingRetirement.retirement);
     let currentReason = reason;
     let currentExpected = expectedState;
     let latestMe: Readonly<Record<string, unknown>> | null = null;
@@ -1292,12 +1385,35 @@ export class BrowserSessionRuntime {
         identity = await this.#coordinator.requestActiveMe(accountLease, activeMeRetryClaim);
       } catch (error) {
         if (activeMeRetryClaim !== undefined && sessionHttpStatus(error, "active_me_http_status") === 401) {
-          const retirement = await this.#coordinator.retireAccountAfterTerminalActiveMe401(accountLease, error);
-          throw new SessionError(
-            sessionErrorCodes.admissionDenied,
-            "Account identity remained unauthorized after credential refresh",
-            Object.freeze({ kind: "refresh_http_status", status: 401, retirement }),
-          );
+          if (!(error instanceof SessionError)) {
+            throw new SessionError(sessionErrorCodes.invalidState, "Terminal account identity rejection is malformed");
+          }
+          const existing = this.#pendingTerminalActiveMe401;
+          if (existing && !sameActivation(existing.lease.activation, accountLease.activation)) {
+            throw new SessionError(
+              sessionErrorCodes.recoveryRequired,
+              "Another account owns the pending terminal identity retirement",
+            );
+          }
+          if (existing) {
+            const retirement = await this.#retryPendingTerminalActiveMe401();
+            if (!retirement) {
+              throw new SessionError(
+                sessionErrorCodes.recoveryRequired,
+                "Terminal identity retirement was not retained",
+              );
+            }
+            throw this.#terminalActiveMe401Error(retirement.retirement);
+          }
+
+          let retirement: RetirementResult;
+          try {
+            retirement = await this.#coordinator.retireAccountAfterTerminalActiveMe401(accountLease, error);
+          } catch (retirementError) {
+            this.#pendingTerminalActiveMe401 = Object.freeze({ lease: accountLease, rejection: error });
+            throw retirementError;
+          }
+          throw this.#terminalActiveMe401Error(retirement);
         }
         if (credentialRefreshAttempted || sessionHttpStatus(error, "active_me_http_status") !== 401) throw error;
         await this.#coordinator.refreshAccountCredentialAfterActiveMe401(
