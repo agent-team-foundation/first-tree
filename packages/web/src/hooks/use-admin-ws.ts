@@ -265,6 +265,10 @@ function broadcast(msg: WsMessage) {
         // refresh them on the same kick so a new (or just-resolved) ask flips
         // the takeover without waiting for its own 5s poll.
         latestQc.invalidateQueries({ queryKey: ["chat-open-requests", chatId] });
+        // The new message may be an accepted cron trigger (or its result),
+        // which flips the schedule's outstanding state. The WS frame carries
+        // no metadata, so conservatively refresh the chat's schedule list.
+        latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", chatId] });
       }
     } else if (msg.type === "chat:updated") {
       // A chat's metadata changed (e.g. an agent ran `chat update --description`).
@@ -276,6 +280,10 @@ function broadcast(msg: WsMessage) {
       meChatsInvalidator.invalidate(latestQc);
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+        // Cron CRUD (create/update/pause/resume/delete, by the agent or the
+        // owner) reuses this same notifier, so the sidebar schedule list
+        // rides the same frame.
+        latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", chatId] });
       }
     } else if (msg.type === "me-chats:changed") {
       // The viewer's OWN private me-chats projection changed on another device
@@ -348,6 +356,9 @@ function connect() {
       // self-poll, so reconnect must refresh them too.
       latestQc.invalidateQueries({ queryKey: ["session"] });
       latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
+      // Schedule facts can move via `chat:updated` / `chat:message` frames
+      // that fired during the WS gap; catch the sidebar list up too.
+      latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs"] });
       latestQc.invalidateQueries({ queryKey: ["session-events"] });
       latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
       latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });

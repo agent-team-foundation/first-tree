@@ -170,6 +170,32 @@ describe("useAdminWs", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-session-events", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-messages", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-detail", "chat-1"] });
+    // A new message may be an accepted cron trigger — the schedule list rides
+    // the same chat-scoped invalidation.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+  });
+
+  it("invalidates the chat's cron-jobs query on chat:updated and on reconnect catch-up", async () => {
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await renderHook();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error("socket missing");
+
+    await act(async () => {
+      socket.emit({ type: "chat:updated", chatId: "chat-9" });
+    });
+    // Cron CRUD reuses the chat:updated notifier, so the sidebar schedule
+    // list follows it — scoped to exactly the updated chat.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-9"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+
+    // Reconnect catch-up prefix-invalidates every cached schedule list so a
+    // frame missed during a WS gap self-heals.
+    invalidateSpy.mockClear();
+    await act(async () => {
+      socket.open();
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs"] });
   });
 
   it("refreshes access tokens on auth close and reconnects immediately", async () => {

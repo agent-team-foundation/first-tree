@@ -1,9 +1,21 @@
 import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus, type ListMeChatsResponse } from "@first-tree/shared";
 import { type InfiniteData, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { patchChatEngagement } from "../../../api/chats.js";
+import { listChatCronJobs } from "../../../api/cron-jobs.js";
 import { markMeChatUnread, pinMeChat } from "../../../api/me-chats.js";
+import { Button } from "../../../components/ui/button.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog.js";
 import { type RowAction, RowActionsMenu } from "../../../components/ui/row-actions-menu.js";
 import { useToast } from "../../../components/ui/toast.js";
+import { cronJobsQueryKey } from "../right-sidebar/schedules-section.js";
 import { applyOptimisticPin } from "./optimistic-pin.js";
 
 const { ACTIVE, ARCHIVED, DELETED } = CHAT_ENGAGEMENT_STATUSES;
@@ -74,13 +86,22 @@ export function RowEngagementMenu({
 }) {
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  // When set, an Archive/Delete is parked behind the schedule-warning dialog:
+  // the target chat turned out to have active cron jobs.
+  const [scheduleWarning, setScheduleWarning] = useState<{
+    next: ChatEngagementStatus;
+    activeCount: number;
+  } | null>(null);
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
     queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
   };
   const engagementMut = useMutation({
     mutationFn: (next: ChatEngagementStatus) => patchChatEngagement(chatId, next),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setScheduleWarning(null);
+      invalidate();
+    },
   });
   const markUnreadMut = useMutation({
     mutationFn: () => markMeChatUnread(chatId),
@@ -139,14 +160,99 @@ export function RowEngagementMenu({
     onSettled: () => invalidate(),
   });
 
+  // Archive/Delete stay one-click for chats WITHOUT active schedules (the
+  // pre-change behavior). When the chat does have active cron jobs the action
+  // gets a single warning dialog first, because both actions change schedule
+  // behavior: archiving does NOT pause them (the next accepted scheduled
+  // message revives the chat view), deleting pauses them (and restoring the
+  // chat never auto-resumes). The schedules list rides the same query key as
+  // the sidebar section, so for the open chat this is normally a cache read.
+  // A failed lookup fails OPEN — the warning is advisory; the Server owns the
+  // real pause semantics on delete.
+  const runEngagementGuarded = (next: ChatEngagementStatus) => {
+    if (next !== ARCHIVED && next !== DELETED) {
+      engagementMut.mutate(next);
+      return;
+    }
+    queryClient
+      .fetchQuery({
+        queryKey: cronJobsQueryKey(chatId),
+        queryFn: () => listChatCronJobs(chatId),
+        staleTime: 30_000,
+      })
+      .then((data) => {
+        const activeCount = (data?.items ?? []).filter((job) => job.state === "active").length;
+        if (activeCount === 0) {
+          engagementMut.mutate(next);
+        } else {
+          setScheduleWarning({ next, activeCount });
+        }
+      })
+      .catch(() => engagementMut.mutate(next));
+  };
+
   const actions = actionsFor({
     status,
     hasUnread,
     pinned,
-    runEngagement: (next) => engagementMut.mutate(next),
+    runEngagement: runEngagementGuarded,
     runMarkUnread: () => markUnreadMut.mutate(),
     // Capture the target direction at click time (before onMutate flips `pinned`).
     runTogglePin: () => pinMut.mutate(!pinned),
   });
-  return <RowActionsMenu actions={actions} ariaLabel="Manage chat" triggerClassName={TRIGGER_HOVER_REVEAL} />;
+  return (
+    <>
+      <RowActionsMenu actions={actions} ariaLabel="Manage chat" triggerClassName={TRIGGER_HOVER_REVEAL} />
+      <ScheduleEngagementWarning
+        warning={scheduleWarning}
+        pending={engagementMut.isPending}
+        onCancel={() => setScheduleWarning(null)}
+        onConfirm={() => {
+          if (scheduleWarning) engagementMut.mutate(scheduleWarning.next);
+        }}
+      />
+    </>
+  );
+}
+
+function ScheduleEngagementWarning({
+  warning,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  warning: { next: ChatEngagementStatus; activeCount: number } | null;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const isDelete = warning?.next === DELETED;
+  const scheduleNoun = warning?.activeCount === 1 ? "schedule" : "schedules";
+  return (
+    <Dialog open={warning !== null} onOpenChange={(open) => (!open ? onCancel() : undefined)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{isDelete ? "Delete this chat?" : "Archive this chat?"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <DialogDescription style={{ color: "var(--fg-2)" }}>
+            This chat has {warning?.activeCount ?? 0} active {scheduleNoun}.
+          </DialogDescription>
+          <p className="text-body" style={{ color: "var(--fg-2)" }}>
+            {isDelete
+              ? "Deleting pauses them first. Restoring the chat later will not resume them — the owner must resume each schedule from the chat details panel."
+              : "They keep running while the chat is archived, and the next scheduled message will make the chat visible in your list again."}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="button" variant={isDelete ? "destructive" : "default"} onClick={onConfirm} disabled={pending}>
+            {isDelete ? (pending ? "Deleting…" : "Delete chat") : pending ? "Archiving…" : "Archive chat"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
