@@ -100,6 +100,14 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 - Route each check to its layer, in the same PR as the behavior: deterministic behavior -> product tests (Vitest per package; `pnpm test` before a PR); agent-skill regression -> `@first-tree/skill-evals`; judgment / live / cross-surface validation -> `@first-tree/qa` cases (`packages/qa/cases/`, prose prompts, not executable specs). If a check can be made stable, it belongs in product tests.
 - Before a PR, self-check QA risk. If the change touches a cross-surface, runtime, provider/auth, WS/inbox, or boot/health path: find or add a matching case under `packages/qa/cases/` and flag in the PR that formal QA is warranted. Formal QA is human-requested, not a CI gate or auto runner; load `skills/first-tree-qa/SKILL.md` and follow `packages/qa/AGENTS.md` when asked to run it.
 
+### Skill Change Eval Discipline
+
+- Before changing a repo-local skill, freeze the intended behavior change, explicit non-goals, and the smallest relevant verification set. Do not expand the acceptance scope during implementation or review.
+- Do not run the complete `@first-tree/skill-evals` suite for ordinary skill changes. When skill evals are needed, run only code-only, no-model checks such as `eval:floor` and package tests that cannot invoke Codex, Claude Code, a live-agent runner, or an LLM judge. Do not run `eval:gate`, `eval:quality`, `eval:periodic`, `--include-quality`, or equivalent model-backed cases.
+- Do not add or modify skill-eval cases by default. Change them only when the requested behavior contract has changed, an existing case conflicts with that confirmed contract, or a reproduced regression needs one minimal case. Add at most three directly relevant cases in one task; track broader coverage separately.
+- Skill review findings block only for a requirement or established constraint violation, a regression caused by the current diff, a safety or data-loss risk, a required deterministic check that reliably fails, or an internal contradiction that makes the skill unusable. New coverage ideas, hypothetical edge cases, wording preferences, and out-of-scope improvements are non-blocking and must not redefine the current behavior contract.
+- The first review must consolidate all blocking findings. Re-review checks those findings and regressions directly introduced by their fixes; unrelated new blocking proposals in a later round are scope disputes for human decision, not grounds for continued expansion.
+
 ## Git Conventions
 
 - Branching: trunk-based; feature branch -> PR -> squash merge -> main.
