@@ -592,9 +592,9 @@ describe("Kimi homeDir lifecycle", () => {
     const secondSession = new FakeSession("s-2", [successfulTurn("s-2")]);
     let factoryCalls = 0;
     const homes: (string | undefined)[] = [];
-    let closeResolver: (() => void) | null = null;
+    let resolveClose: (() => void) | undefined;
     const closePromise = new Promise<void>((resolve) => {
-      closeResolver = resolve;
+      resolveClose = resolve;
     });
     const payload = {
       kind: "kimi-code" as const,
@@ -637,7 +637,7 @@ describe("Kimi homeDir lifecycle", () => {
     expect(factoryCalls).toBe(1);
     expect(homes).toEqual(["/old/kimi"]);
 
-    if (closeResolver) closeResolver();
+    if (resolveClose) resolveClose();
     await resumePromise;
 
     expect(factoryCalls).toBe(2);
