@@ -3,6 +3,7 @@ import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import { createCronScheduler } from "./cron-scheduler.js";
+import * as eventDedupService from "./event-dedup.js";
 import * as inboxService from "./inbox.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
@@ -18,6 +19,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let eventClaimSweepTimer: ReturnType<typeof setInterval> | null = null;
   const cronScheduler = createCronScheduler(app);
 
   return {
@@ -33,6 +35,20 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
           }
         } catch (err) {
           log.error({ err }, "failed to prune silent inbox rows");
+        }
+      }, 60_000);
+
+      // Expired webhook claim sweep. Redelivery correctness does not depend
+      // on it (claimEvent takes expired pending claims over in place); it
+      // keeps the table from accumulating claims left by crashed processors.
+      eventClaimSweepTimer = setInterval(async () => {
+        try {
+          const swept = await eventDedupService.sweepExpiredEventClaims(app.db);
+          if (swept > 0) {
+            log.info({ swept }, "swept expired pending webhook event claims");
+          }
+        } catch (err) {
+          log.error({ err }, "failed to sweep expired webhook event claims");
         }
       }, 60_000);
 
@@ -90,6 +106,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (eventClaimSweepTimer) {
+        clearInterval(eventClaimSweepTimer);
+        eventClaimSweepTimer = null;
       }
     },
   };
