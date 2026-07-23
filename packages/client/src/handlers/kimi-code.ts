@@ -170,6 +170,7 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let ctx: SessionContext | null = null;
   let harness: KimiHarnessLike | null = null;
+  let kimiHomeDir: string | null = null;
   let session: Session | null = null;
   let sessionId: string | null = null;
   let activePayload: AgentRuntimeConfigPayload | null = null;
@@ -674,11 +675,15 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
     };
   }
 
-  function ensureHarness(): KimiHarnessLike {
-    harness ??= harnessFactory({
+  function ensureHarness(homeDir?: string): KimiHarnessLike {
+    const options: KimiHarnessOptions = {
       identity: { userAgentProduct: "first-tree", version: KIMI_IDENTITY_VERSION },
       uiMode: "first-tree",
-    });
+    };
+    if (homeDir !== undefined) {
+      options.homeDir = homeDir;
+    }
+    harness ??= harnessFactory(options);
     return harness;
   }
 
@@ -731,8 +736,9 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         roleAdditional: prepared.roleAdditional,
         ...(prepared.payload.model ? { model: prepared.payload.model } : {}),
       };
+      kimiHomeDir = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value ?? null;
       try {
-        session = await ensureHarness().createSession(options);
+        session = await ensureHarness(kimiHomeDir ?? undefined).createSession(options);
         sessionId = session.id;
         sessionActive = true;
         initialTurnPreparing = true;
@@ -758,8 +764,9 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         additionalDirs: prepared.additionalDirs,
         roleAdditional: prepared.roleAdditional,
       };
+      kimiHomeDir = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value ?? null;
       try {
-        session = await ensureHarness().resumeSession(input);
+        session = await ensureHarness(kimiHomeDir ?? undefined).resumeSession(input);
         sessionId = session.id;
         await session.setPermission("yolo");
         if (prepared.payload.model) await session.setModel(prepared.payload.model);
