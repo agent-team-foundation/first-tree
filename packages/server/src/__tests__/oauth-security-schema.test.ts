@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { authIdentityProviderHeads } from "../db/schema/auth-identity-provider-heads.js";
 import { authIdentityRefreshOperations } from "../db/schema/auth-identity-refresh-operations.js";
 import { authIdentityRetirementFences } from "../db/schema/auth-identity-retirement-fences.js";
 import { oauthTransactions } from "../db/schema/oauth-transactions.js";
@@ -18,22 +19,28 @@ function unique(label: string): string {
 }
 
 async function expectConstraint(statement: PromiseLike<unknown>, constraint: string): Promise<void> {
+  const resolved = Symbol("resolved");
+  let rejection: unknown = resolved;
   try {
     await statement;
-    expect.fail(`Expected ${constraint} to reject the row`);
   } catch (error) {
-    const evidence: string[] = [];
-    let current: unknown = error;
-    for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
-      const constraintName = Reflect.get(current, "constraint_name");
-      if (typeof constraintName === "string") evidence.push(constraintName);
-      evidence.push(current.message);
-      const cause = Reflect.get(current, "cause");
-      if (cause === current) break;
-      current = cause;
-    }
-    expect(evidence.join(" ")).toContain(constraint);
+    rejection = error;
   }
+  if (rejection === resolved) {
+    expect.fail(`Expected ${constraint} to reject the row`);
+  }
+
+  const evidence: string[] = [];
+  let current: unknown = rejection;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    const constraintName = Reflect.get(current, "constraint_name");
+    if (typeof constraintName === "string") evidence.push(constraintName);
+    evidence.push(current.message);
+    const cause = Reflect.get(current, "cause");
+    if (cause === current) break;
+    current = cause;
+  }
+  expect(evidence.join(" ")).toContain(constraint);
 }
 
 function acquisitionIssued(overrides: Partial<typeof oauthTransactions.$inferInsert> = {}) {
@@ -82,6 +89,12 @@ function refreshOperation(overrides: Partial<typeof authIdentityRefreshOperation
 describe("OAuth security schema invariants", () => {
   const getApp = useTestApp();
 
+  it("fails closed when a statement unexpectedly resolves", async () => {
+    await expect(expectConstraint(Promise.resolve(), "ck_missing_constraint")).rejects.toThrow(
+      "Expected ck_missing_constraint to reject the row",
+    );
+  });
+
   it("accepts valid OAuth phases and rejects invalid flow, expiry, lease, and terminal shapes", async () => {
     const app = getApp();
 
@@ -99,6 +112,39 @@ describe("OAuth security schema invariants", () => {
           mintLeaseRevision: 1n,
           mintLeaseId: unique("mint-lease"),
           mintLeaseUntil: at(4 * 60_000),
+        }),
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      app.db.insert(oauthTransactions).values(
+        acquisitionIssued({
+          phase: "terminal_success",
+          userId: unique("user"),
+          identityId: unique("identity"),
+          receiptId: unique("receipt"),
+          bootstrapEnvelope: unique("bootstrap"),
+          bootstrapDigest: unique("bootstrap-digest"),
+          bootstrapKeyId: "key-v1",
+          mintLeaseRevision: 1n,
+          terminalEnvelope: unique("terminal"),
+          terminalKeyId: "key-v1",
+          terminalAt: at(5 * 60_000),
+        }),
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      app.db.insert(oauthTransactions).values(
+        acquisitionIssued({
+          kind: "management",
+          flowKind: "identity_link",
+          phase: "terminal_success",
+          userId: unique("user"),
+          identityId: unique("identity"),
+          receiptId: unique("receipt"),
+          finalizationLeaseRevision: 1n,
+          terminalEnvelope: unique("terminal"),
+          terminalKeyId: "key-v1",
+          terminalAt: at(5 * 60_000),
         }),
       ),
     ).resolves.toBeDefined();
@@ -249,6 +295,25 @@ describe("OAuth security schema invariants", () => {
       ),
       "ck_auth_identity_refresh_ops_phase_shape",
     );
+  });
+
+  it("restricts provider heads to supported providers and non-negative generations", async () => {
+    const app = getApp();
+
+    await expect(
+      app.db.insert(authIdentityProviderHeads).values({ provider: "github", generation: 0n }),
+    ).resolves.toBeDefined();
+    await expectConstraint(
+      app.db.insert(authIdentityProviderHeads).values({ provider: "gitlab", generation: 0n }),
+      "ck_auth_identity_provider_heads_provider",
+    );
+    await expectConstraint(
+      app.db.insert(authIdentityProviderHeads).values({ provider: "google", generation: -1n }),
+      "ck_auth_identity_provider_heads_generation",
+    );
+    await expect(
+      app.db.insert(authIdentityProviderHeads).values({ provider: "google", generation: 2n }),
+    ).resolves.toBeDefined();
   });
 
   it("enforces exact credential revision ordering for pending refresh and reauthentication states", async () => {
