@@ -1,3 +1,4 @@
+import { GITLAB_CONNECTION_READINESS, type GitlabConnectionReadiness } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -61,8 +62,7 @@ export type SetupFacts = {
     instanceOrigin: string;
     endpointSeen: boolean;
     health: {
-      lastValidInboundAt: string | null;
-      lastProcessingFailureAt: string | null;
+      readiness: GitlabConnectionReadiness;
     };
   } | null>;
 };
@@ -152,16 +152,18 @@ function gitlabOriginLabel(origin: string): string {
 
 function gitlabConnectionIssue(
   gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
-): "processing" | "pending" | null {
-  // A valid inbound clears the failure fields server-side, so any remaining
-  // failure is current and takes precedence over first-inbound readiness.
-  if (gitlab.health.lastProcessingFailureAt) return "processing";
-  if (!gitlab.endpointSeen) return "pending";
+): "processing" | "waiting_system_hook" | "waiting_merge_request" | null {
+  const readiness = gitlab.health.readiness;
+  if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "processing";
+  if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "waiting_system_hook";
+  if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "waiting_merge_request";
   return null;
 }
 
 function gitlabIssueLabel(issue: NonNullable<ReturnType<typeof gitlabConnectionIssue>>): string {
-  return issue === "processing" ? "Processing issue" : "Waiting for inbound webhook";
+  if (issue === "processing") return "Processing issue";
+  if (issue === "waiting_system_hook") return "Waiting for System Hook";
+  return "Waiting for merge request event";
 }
 
 /**
@@ -247,7 +249,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
   const gitlab = facts.gitlab.state === "ready" ? facts.gitlab.value : null;
   const gitlabIssue = gitlab ? gitlabConnectionIssue(gitlab) : null;
   const providerIssueKind: SetupStatusKind =
-    github?.suspended || gitlabIssue === "processing" ? "blocked" : gitlabIssue === "pending" ? "pending" : "ready";
+    github?.suspended || gitlabIssue === "processing" ? "blocked" : gitlabIssue ? "pending" : "ready";
   const providerStatus: SetupRowModel["status"] =
     github && gitlab
       ? {
@@ -504,8 +506,7 @@ export function SettingsSetupPage() {
                   instanceOrigin: gitlab.value[0].instanceOrigin,
                   endpointSeen: gitlab.value[0].endpointSeen,
                   health: {
-                    lastValidInboundAt: gitlab.value[0].health.lastValidInboundAt,
-                    lastProcessingFailureAt: gitlab.value[0].health.lastProcessingFailureAt,
+                    readiness: gitlab.value[0].health.readiness,
                   },
                 }
               : null,

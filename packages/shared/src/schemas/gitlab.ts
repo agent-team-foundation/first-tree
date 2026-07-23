@@ -4,6 +4,20 @@ export const GITLAB_REVIEWER_MODES = ["unknown", "assignee", "reviewers"] as con
 export const gitlabReviewerModeSchema = z.enum(GITLAB_REVIEWER_MODES);
 export type GitlabReviewerMode = z.infer<typeof gitlabReviewerModeSchema>;
 
+export const GITLAB_CONNECTION_READINESS = {
+  waiting: "waiting",
+  transportReceived: "transport_received",
+  routingVerified: "routing_verified",
+  needsAttention: "needs_attention",
+} as const;
+export const gitlabConnectionReadinessSchema = z.enum([
+  GITLAB_CONNECTION_READINESS.waiting,
+  GITLAB_CONNECTION_READINESS.transportReceived,
+  GITLAB_CONNECTION_READINESS.routingVerified,
+  GITLAB_CONNECTION_READINESS.needsAttention,
+]);
+export type GitlabConnectionReadiness = z.infer<typeof gitlabConnectionReadinessSchema>;
+
 export const GITLAB_IDENTITY_LINK_STATES = ["active", "suspended"] as const;
 export const gitlabIdentityLinkStateSchema = z.enum(GITLAB_IDENTITY_LINK_STATES);
 export type GitlabIdentityLinkState = z.infer<typeof gitlabIdentityLinkStateSchema>;
@@ -31,7 +45,9 @@ export const gitlabConnectionSummarySchema = z.object({
     lastSchemaAnomalyCode: z.string().nullable(),
   }),
   health: z.object({
+    readiness: gitlabConnectionReadinessSchema,
     lastValidInboundAt: z.string().nullable(),
+    lastSystemHookMergeRequestInboundAt: z.string().nullable(),
     lastProcessingFailureAt: z.string().nullable(),
     lastProcessingFailureCode: z.string().nullable(),
   }),

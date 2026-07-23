@@ -1,6 +1,7 @@
 import {
   type ContextTreeProvider,
   deriveRepoLocalPath,
+  GITLAB_CONNECTION_READINESS,
   resolveContextTreeProvider,
   resolveGitLabRepositoryWebIdentity,
 } from "@first-tree/shared";
@@ -260,23 +261,32 @@ function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organi
   const originMatches =
     connection !== null &&
     resolveGitLabRepositoryWebIdentity(repo, connection.instanceOrigin)?.originMatchesConnection === true;
+  const readiness = connection?.health.readiness ?? null;
   const status = !connection
     ? "Degraded · no GitLab Webhook connection"
     : !originMatches
       ? `Degraded · Webhook origin ${connection.instanceOrigin} does not match the repository origin`
-      : connection.endpointSeen
-        ? "Healthy · inbound Webhook observed"
-        : "Waiting · configure the project Webhook";
+      : readiness === GITLAB_CONNECTION_READINESS.needsAttention
+        ? "Degraded · Webhook processing needs attention"
+        : readiness === GITLAB_CONNECTION_READINESS.routingVerified
+          ? "Healthy · MR routing observed"
+          : readiness === GITLAB_CONNECTION_READINESS.transportReceived
+            ? "Waiting · Webhook received; waiting for an MR event"
+            : "Waiting · configure the System Hook";
   return (
     <div
       className="text-label"
       style={{
-        color: originMatches && connection?.endpointSeen ? "var(--success)" : "var(--fg-3)",
+        color:
+          originMatches && readiness === GITLAB_CONNECTION_READINESS.routingVerified ? "var(--success)" : "var(--fg-3)",
         marginTop: "var(--sp-2)",
       }}
     >
       GitLab Webhook: {status}
       {connection?.health.lastValidInboundAt ? ` · last valid inbound ${connection.health.lastValidInboundAt}` : ""}
+      {connection?.health.lastSystemHookMergeRequestInboundAt
+        ? ` · last System Hook MR event ${connection.health.lastSystemHookMergeRequestInboundAt}`
+        : ""}
     </div>
   );
 }

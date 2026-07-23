@@ -56,7 +56,10 @@ export class GitlabPersonnelTargetLimitError extends BadRequestError {
   }
 }
 
+export type GitlabHookEventKind = "merge_request" | "issue" | "note" | "test";
+
 export type NormalizedGitlabWebhook = ScmNormalizedWebhook & {
+  hookEventKind: GitlabHookEventKind | null;
   entityIdentity: GitlabEntityIdentity | null;
   personnel: GitlabPersonnelEvidence;
 };
@@ -296,25 +299,33 @@ export function normalizeGitlabWebhook(input: {
   body: unknown;
 }): NormalizedGitlabWebhook {
   const payload = object(input.body, "GitLab webhook body");
-  const expectedKind: Record<string, string> = {
+  const expectedKind: Record<string, GitlabHookEventKind> = {
     "Merge Request Hook": "merge_request",
     "Issue Hook": "issue",
     "Note Hook": "note",
     "Test Hook": "test",
   };
-  let expected: string | undefined;
+  let expected: GitlabHookEventKind | undefined;
   if (input.eventHeader === "System Hook") {
     const eventName = payload.event_name === undefined ? undefined : requiredString(payload.event_name, "event_name");
     const objectKind =
       payload.object_kind === undefined ? undefined : requiredString(payload.object_kind, "object_kind");
+    const eventType = payload.event_type === undefined ? undefined : requiredString(payload.event_type, "event_type");
     if (eventName && objectKind && eventName !== objectKind) {
       throw new BadRequestError("GitLab System Hook event_name does not match object_kind");
     }
-    const discriminator = objectKind === "merge_request" ? objectKind : eventName;
+    const discriminator = objectKind ?? eventName;
     if (!discriminator) {
-      throw new BadRequestError("GitLab System Hook requires event_name or object_kind=merge_request");
+      throw new BadRequestError("GitLab System Hook requires event_name or object_kind");
     }
-    expected = ["merge_request", "issue", "note", "test"].includes(discriminator) ? discriminator : undefined;
+    if (eventType && eventType !== discriminator) {
+      throw new BadRequestError("GitLab System Hook event_type does not match event_name or object_kind");
+    }
+    // GitLab System Hooks expose full-instance merge request events, but do
+    // not expose Issue or Note triggers. Accept every well-formed instance
+    // event as transport evidence while producing routable entities only for
+    // merge requests.
+    expected = discriminator === "merge_request" ? "merge_request" : undefined;
   } else {
     const objectKind = requiredString(payload.object_kind, "object_kind");
     expected = expectedKind[input.eventHeader];
@@ -329,6 +340,7 @@ export function normalizeGitlabWebhook(input: {
   if (!expected || expected === "test") {
     return {
       ingress,
+      hookEventKind: expected ?? null,
       observation: null,
       event: null,
       entityIdentity: null,
@@ -435,6 +447,7 @@ export function normalizeGitlabWebhook(input: {
     if (noteableType !== "MergeRequest" && noteableType !== "Issue") {
       return {
         ingress,
+        hookEventKind: expected,
         observation: null,
         event: null,
         entityIdentity: null,
@@ -529,7 +542,7 @@ export function normalizeGitlabWebhook(input: {
                 )
               : [],
         };
-  return { ingress, observation, event, entityIdentity, personnel };
+  return { ingress, hookEventKind: expected, observation, event, entityIdentity, personnel };
 }
 
 export function applyGitlabPersonnelEvidence(

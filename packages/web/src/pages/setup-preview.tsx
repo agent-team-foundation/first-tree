@@ -39,8 +39,7 @@ function previewFacts(role: PreviewRole, state: PreviewState): SetupFacts {
           instanceOrigin: "https://gitlab.com",
           endpointSeen: false,
           health: {
-            lastValidInboundAt: null,
-            lastProcessingFailureAt: null,
+            readiness: "waiting",
           },
         },
       },

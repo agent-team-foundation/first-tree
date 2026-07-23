@@ -80,8 +80,7 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
         instanceOrigin: "https://gitlab.acme.test",
         endpointSeen: true,
         health: {
-          lastValidInboundAt: "2026-07-23T00:00:00.000Z",
-          lastProcessingFailureAt: null,
+          readiness: "routing_verified",
         },
       },
     },
@@ -250,8 +249,7 @@ describe("Settings Setup overview", () => {
             instanceOrigin: "https://gitlab.acme.test",
             endpointSeen: false,
             health: {
-              lastValidInboundAt: null,
-              lastProcessingFailureAt: null,
+              readiness: "waiting",
             },
           },
         },
@@ -459,16 +457,26 @@ describe("Settings Setup overview", () => {
     expect(both?.status.detail).toBe("acme · Engineering");
   });
 
-  it("keeps unverified GitLab inbound and either combined provider degradation neutral", () => {
-    const waitingGitlab = {
+  it("marks each incomplete GitLab routing stage as pending", () => {
+    const waitingSystemHook = {
       state: "ready" as const,
       value: {
         displayName: "Engineering",
         instanceOrigin: "https://gitlab.acme.test",
         endpointSeen: false,
         health: {
-          lastValidInboundAt: null,
-          lastProcessingFailureAt: null,
+          readiness: "waiting" as const,
+        },
+      },
+    };
+    const waitingGitlab = {
+      state: "ready" as const,
+      value: {
+        displayName: "Engineering",
+        instanceOrigin: "https://gitlab.acme.test",
+        endpointSeen: true,
+        health: {
+          readiness: "transport_received" as const,
         },
       },
     };
@@ -476,6 +484,12 @@ describe("Settings Setup overview", () => {
       facts({
         github: { state: "ready", value: null },
         gitlab: waitingGitlab,
+      }),
+    ).find((row) => row.key === "providers");
+    const noInbound = buildSetupRows(
+      facts({
+        github: { state: "ready", value: null },
+        gitlab: waitingSystemHook,
       }),
     ).find((row) => row.key === "providers");
     const combinedGitlabDegraded = buildSetupRows(
@@ -508,17 +522,21 @@ describe("Settings Setup overview", () => {
 
     expect(gitlabOnly?.status).toMatchObject({
       label: "GitLab · Engineering",
-      detail: "Waiting for inbound webhook",
+      detail: "Waiting for merge request event",
+      kind: "pending",
+    });
+    expect(noInbound?.status).toMatchObject({
+      detail: "Waiting for System Hook",
       kind: "pending",
     });
     expect(combinedGitlabDegraded?.status).toMatchObject({
       label: "GitHub + GitLab",
-      detail: "GitHub connected · GitLab waiting for inbound webhook",
+      detail: "GitHub connected · GitLab waiting for merge request event",
       kind: "pending",
     });
     expect(combinedGithubDegraded?.status).toMatchObject({
       label: "GitHub + GitLab",
-      detail: "GitHub suspended · GitLab waiting for inbound webhook",
+      detail: "GitHub suspended · GitLab waiting for merge request event",
       kind: "blocked",
     });
     expect(githubOnlySuspended?.status).toMatchObject({
@@ -528,7 +546,7 @@ describe("Settings Setup overview", () => {
     });
   });
 
-  it("surfaces a current GitLab processing failure before first-inbound readiness", () => {
+  it("renders the Server-projected GitLab processing state", () => {
     const providers = buildSetupRows(
       facts({
         github: { state: "ready", value: null },
@@ -537,10 +555,9 @@ describe("Settings Setup overview", () => {
           value: {
             displayName: "Engineering",
             instanceOrigin: "https://gitlab.acme.test",
-            endpointSeen: false,
+            endpointSeen: true,
             health: {
-              lastValidInboundAt: null,
-              lastProcessingFailureAt: "2026-07-23T00:01:00.000Z",
+              readiness: "needs_attention",
             },
           },
         },
@@ -626,6 +643,27 @@ describe("Settings Setup overview", () => {
     const row = await waitForRowText(view.host, "Context Tree", "We couldn't check this right now.");
     expect(row.textContent).toContain("Status unavailable");
     expect(row.textContent).not.toContain("Bound · unavailable");
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps the real Setup page neutral after transport-only GitLab System Hook traffic", async () => {
+    gitlabMocks.listGitlabConnectionsAt.mockResolvedValue([
+      {
+        displayName: "Engineering",
+        instanceOrigin: "https://gitlab.acme.test",
+        endpointSeen: true,
+        health: {
+          readiness: "transport_received",
+          lastValidInboundAt: "2026-07-23T00:00:00.000Z",
+          lastSystemHookMergeRequestInboundAt: "2026-07-23T00:01:00.000Z",
+          lastProcessingFailureAt: null,
+        },
+      },
+    ]);
+
+    const view = await renderSettingsSetupPage();
+    const row = await waitForRowText(view.host, "GitHub / GitLab", "Waiting for merge request event");
+    expect(row.textContent).not.toContain("GitLab connected");
     await act(async () => view.root.unmount());
   });
 });
