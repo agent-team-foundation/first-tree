@@ -182,7 +182,7 @@ function projectRepositoryAutomation(
       provider: "gitlab",
       adoption: "enabled",
       health: "degraded",
-      blockers: [blocker("gitlab_processing_failed", "admin", null)],
+      blockers: [blocker("gitlab_processing_failed", "admin", "configure_gitlab_webhook")],
       observedAt,
     };
   } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.waiting) {
@@ -355,7 +355,7 @@ export async function getTeamSetupCapabilities(
       );
       reviewHealth = "unavailable";
     } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.needsAttention) {
-      reviewBlockers.push(blocker("gitlab_processing_failed", "admin", null));
+      reviewBlockers.push(blocker("gitlab_processing_failed", "admin", "configure_gitlab_webhook"));
       if (reviewHealth === "ready") reviewHealth = "degraded";
     } else if (gitlabReadiness === GITLAB_CONNECTION_READINESS.waiting) {
       reviewBlockers.push(blocker("gitlab_webhook_not_seen", "admin", "configure_gitlab_webhook"));

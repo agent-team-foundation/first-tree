@@ -1,4 +1,13 @@
-import { GITLAB_CONNECTION_READINESS, type GitlabConnectionReadiness } from "@first-tree/shared";
+import type {
+  SetupActionKind,
+  SetupAutomaticReview,
+  SetupBlocker,
+  SetupBlockerCode,
+  SetupCapabilityHealth,
+  SetupContextTreeBinding,
+  SetupRepositoryAutomationProvider,
+  TeamSetupCapabilities,
+} from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -13,16 +22,15 @@ import {
   LoaderCircle,
   type LucideIcon,
   MessageCircle,
+  ShieldCheck,
   Webhook,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { listClients } from "../../api/activity.js";
 import { getContextTreeSnapshot } from "../../api/context-tree.js";
-import { getGithubAppInstallation } from "../../api/github-app.js";
-import { gitlabConnectionsQueryKey, listGitlabConnectionsAt } from "../../api/gitlab-connections.js";
 import { reportOnboardingEvent } from "../../api/onboarding-events.js";
-import { getContextTreeSetting } from "../../api/org-settings.js";
 import { listTeamResourcesForOrg } from "../../api/resources.js";
+import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../../api/setup-capabilities.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { cn } from "../../lib/utils.js";
@@ -37,13 +45,19 @@ type Fact<T> =
     };
 
 type ContextTreeFact = {
-  bound: boolean;
-  repo: string | null;
-  branch: string | null;
-  availability: "active" | "stale" | "unavailable" | "checking";
+  binding: SetupContextTreeBinding;
+  availability: "active" | "stale" | "unavailable" | "checking" | "unknown" | null;
 };
 
-export type SetupStatusKind = "ready" | "optional" | "loading" | "pending" | "attention" | "blocked" | "unknown";
+export type SetupStatusKind =
+  | "ready"
+  | "optional"
+  | "loading"
+  | "pending"
+  | "attention"
+  | "neutral"
+  | "blocked"
+  | "unknown";
 
 export type SetupFacts = {
   role: string | null;
@@ -55,23 +69,23 @@ export type SetupFacts = {
   workspaceWillEnterOnboarding: boolean;
   computers: Fact<{ connected: number; saved: number; connectedHostname: string | null }>;
   repositories: Fact<number>;
-  contextTree: Fact<ContextTreeFact>;
-  github: Fact<{ accountLogin: string; accountType: string; suspended: boolean } | null>;
-  gitlab: Fact<{
-    displayName: string;
-    instanceOrigin: string;
-    endpointSeen: boolean;
-    health: {
-      readiness: GitlabConnectionReadiness;
-    };
-  } | null>;
+  capabilities: Fact<TeamSetupCapabilities>;
+  contextTreeSnapshot: Fact<"active" | "stale" | "unavailable" | null>;
 };
 
 export type SetupRowModel = {
-  key: "work-access" | "computer" | "agent" | "repositories" | "context-tree" | "providers";
+  key:
+    | "work-access"
+    | "computer"
+    | "agent"
+    | "repositories"
+    | "repository-automation"
+    | "context-tree"
+    | "automatic-review";
   title: string;
   description: string;
   icon: LucideIcon;
+  parentKey?: "context-tree";
   status: {
     label: string;
     detail?: string;
@@ -91,32 +105,26 @@ function queryFact<T>(query: { data: T | undefined; isPending: boolean; isError:
 }
 
 function contextTreeFact(
-  setting: Fact<{ repo?: string | null; branch?: string | null }>,
-  snapshot: {
-    data?: { snapshotStatus: Exclude<ContextTreeFact["availability"], "checking"> };
-    isPending: boolean;
-  },
+  capabilities: Fact<TeamSetupCapabilities>,
+  snapshot: Fact<"active" | "stale" | "unavailable" | null>,
 ): Fact<ContextTreeFact> {
-  if (setting.state !== "ready") return setting;
+  if (capabilities.state === "loading") return { state: "loading" };
+  if (capabilities.state === "error") return { state: "error" };
 
-  const base = {
-    bound: !!setting.value.repo,
-    repo: setting.value.repo ?? null,
-    branch: setting.value.branch ?? null,
+  const binding = capabilities.value.contextTree.binding;
+  if (binding.state !== "bound") {
+    return { state: "ready", value: { binding, availability: null } };
+  }
+  if (snapshot.state === "loading") {
+    return { state: "ready", value: { binding, availability: "checking" } };
+  }
+  if (snapshot.state === "error") {
+    return { state: "ready", value: { binding, availability: "unknown" } };
+  }
+  return {
+    state: "ready",
+    value: { binding, availability: snapshot.value ?? "unknown" },
   };
-  if (!base.bound) {
-    return { state: "ready", value: { ...base, availability: "unavailable" } };
-  }
-  if (snapshot.data) {
-    return {
-      state: "ready",
-      value: { ...base, availability: snapshot.data.snapshotStatus },
-    };
-  }
-  if (snapshot.isPending) {
-    return { state: "ready", value: { ...base, availability: "checking" } };
-  }
-  return { state: "error" };
 }
 
 function loadingStatus(): SetupRowModel["status"] {
@@ -142,32 +150,276 @@ function repositoryLabel(repo: string | null): string | undefined {
   }
 }
 
-function gitlabOriginLabel(origin: string): string {
-  try {
-    return new URL(origin).hostname;
-  } catch {
-    return origin;
-  }
+const PROVIDER_LABELS = {
+  github: "GitHub",
+  gitlab: "GitLab",
+} as const;
+
+const BLOCKER_COPY = {
+  provider_probe_failed: "First Tree could not verify provider readiness.",
+  github_app_not_configured: "GitHub automation is not configured for this First Tree deployment.",
+  github_app_suspended: "The GitHub App installation is suspended.",
+  github_webhook_events_missing: "Required GitHub App webhook events are missing.",
+  github_pull_requests_permission_required: "GitHub pull-request write access is required.",
+  github_tree_repo_not_covered: "The GitHub App cannot access this Context Tree repository.",
+  gitlab_webhook_not_seen: "Waiting for the first valid GitLab webhook.",
+  gitlab_merge_request_event_not_seen: "Waiting for the first valid GitLab merge request event.",
+  gitlab_processing_failed: "Recent GitLab webhook processing failed.",
+  context_tree_binding_invalid: "The Context Tree binding is invalid.",
+  context_tree_provider_unresolved: "The Context Tree provider could not be resolved.",
+  context_tree_connection_mismatch: "The Context Tree repository does not match the current GitLab connection.",
+  context_review_provider_prerequisite_missing: "The repository provider must be connected before review can run.",
+  context_review_agent_missing: "The configured reviewer is missing.",
+  context_review_agent_inactive: "The configured reviewer is inactive.",
+} satisfies Record<SetupBlockerCode, string>;
+
+const ACTION_DESTINATIONS = {
+  connect_github: "/settings/integrations/github",
+  manage_github_installation: "/settings/integrations/github",
+  connect_gitlab: "/settings/integrations/gitlab",
+  configure_gitlab_webhook: "/settings/integrations/gitlab",
+  repair_tree_binding: "/settings/repositories#context-tree",
+  open_tree_setup_chat: "/context",
+  select_review_agent: "/settings/repositories#context-tree",
+  replace_review_agent: "/settings/repositories#context-tree",
+} satisfies Record<SetupActionKind, string>;
+
+const ACTION_LABELS = {
+  connect_github: "Connect GitHub",
+  manage_github_installation: "Manage GitHub",
+  connect_gitlab: "Connect GitLab",
+  configure_gitlab_webhook: "Set up GitLab",
+  repair_tree_binding: "Repair",
+  open_tree_setup_chat: "Open setup chat",
+  select_review_agent: "Choose reviewer",
+  replace_review_agent: "Replace reviewer",
+} satisfies Record<SetupActionKind, string>;
+
+function blockerDetail(blockers: SetupBlocker[], isAdmin: boolean): string | undefined {
+  const details = blockers.map((item) =>
+    !isAdmin && item.resolutionOwner === "admin"
+      ? `Ask an admin to resolve this: ${BLOCKER_COPY[item.code]}`
+      : BLOCKER_COPY[item.code],
+  );
+  const unique = [...new Set(details)];
+  return unique.length > 0 ? unique.join(" · ") : undefined;
 }
 
-function gitlabConnectionIssue(
-  gitlab: NonNullable<Extract<SetupFacts["gitlab"], { state: "ready" }>["value"]>,
-): "processing" | "waiting_system_hook" | "waiting_merge_request" | null {
-  const readiness = gitlab.health.readiness;
-  if (readiness === GITLAB_CONNECTION_READINESS.needsAttention) return "processing";
-  if (readiness === GITLAB_CONNECTION_READINESS.waiting) return "waiting_system_hook";
-  if (readiness === GITLAB_CONNECTION_READINESS.transportReceived) return "waiting_merge_request";
+function firstAdminAction(blockers: SetupBlocker[]): SetupActionKind | null {
+  for (const item of blockers) {
+    if (item.resolutionOwner === "admin" && item.actionKind) return item.actionKind;
+  }
   return null;
 }
 
-function gitlabIssueLabel(issue: NonNullable<ReturnType<typeof gitlabConnectionIssue>>): string {
-  if (issue === "processing") return "Processing issue";
-  if (issue === "waiting_system_hook") return "Waiting for System Hook";
-  return "Waiting for merge request event";
+function actionFromBlockers(blockers: SetupBlocker[], isAdmin: boolean): SetupRowModel["action"] | undefined {
+  if (!isAdmin) return undefined;
+  const actionKind = firstAdminAction(blockers);
+  return actionKind
+    ? {
+        label: ACTION_LABELS[actionKind],
+        to: ACTION_DESTINATIONS[actionKind],
+      }
+    : undefined;
+}
+
+function hasAdminBlocker(blockers: SetupBlocker[]): boolean {
+  return blockers.some((item) => item.resolutionOwner === "admin");
+}
+
+function providerHealthLabel(provider: SetupRepositoryAutomationProvider): string {
+  if (provider.adoption === "available") return "not configured";
+  const labels = {
+    not_observed: "not observed",
+    pending_verification: "verification pending",
+    ready: "ready",
+    degraded: "degraded",
+    unavailable: "unavailable",
+  } satisfies Record<SetupCapabilityHealth, string>;
+  return labels[provider.health];
+}
+
+function providerSummary(providers: SetupRepositoryAutomationProvider[], isAdmin: boolean): SetupRowModel["status"] {
+  const configured = providers.filter((provider) => provider.adoption !== "available");
+  if (configured.length === 0) {
+    return { label: "Not configured", detail: "Optional", kind: "optional" };
+  }
+
+  const ready = configured.filter((provider) => provider.health === "ready");
+  const providerDetail = providers
+    .map((provider) => `${PROVIDER_LABELS[provider.provider]} ${providerHealthLabel(provider)}`)
+    .join(" · ");
+  const blockers = configured.flatMap((provider) => provider.blockers);
+  const issues = blockerDetail(blockers, isAdmin);
+  const detail = [providerDetail, issues].filter((item): item is string => Boolean(item)).join(" · ");
+  const kind: SetupStatusKind =
+    isAdmin && hasAdminBlocker(blockers)
+      ? "attention"
+      : configured.some((provider) => provider.health === "degraded" || provider.health === "unavailable")
+        ? "neutral"
+        : "pending";
+
+  if (ready.length === configured.length) {
+    return {
+      label: ready.length === 2 ? "GitHub + GitLab ready" : `${PROVIDER_LABELS[ready[0]?.provider ?? "github"]} ready`,
+      detail,
+      kind: "ready",
+    };
+  }
+  if (ready.length > 0) return { label: "Partial coverage", detail, kind };
+  if (configured.some((provider) => provider.health === "pending_verification")) {
+    return { label: "Verification pending", detail, kind };
+  }
+  if (configured.some((provider) => provider.health === "degraded")) {
+    return { label: "Degraded", detail, kind };
+  }
+  return {
+    label: hasAdminBlocker(blockers) && isAdmin ? "Needs attention" : "Service unavailable",
+    detail,
+    kind,
+  };
+}
+
+function providerAction(
+  providers: SetupRepositoryAutomationProvider[],
+  isAdmin: boolean,
+): SetupRowModel["action"] | undefined {
+  const configured = providers.filter((provider) => provider.adoption !== "available");
+  const blockers = configured.flatMap((provider) => provider.blockers);
+  const blockerAction = actionFromBlockers(blockers, isAdmin);
+  if (blockerAction) return blockerAction;
+  if (blockers.length > 0) return undefined;
+  if (!isAdmin) {
+    const first = configured[0];
+    return first
+      ? {
+          label: "View",
+          to: `/settings/integrations/${first.provider}`,
+        }
+      : undefined;
+  }
+  const first = configured[0];
+  return {
+    label: configured.length === 0 ? "Set up" : "Manage",
+    to: first ? `/settings/integrations/${first.provider}` : "/settings/integrations/github",
+  };
+}
+
+function contextTreeStatus(
+  contextTree: Fact<ContextTreeFact>,
+  blockers: SetupBlocker[],
+  isAdmin: boolean,
+): SetupRowModel["status"] {
+  if (contextTree.state === "loading") return loadingStatus();
+  if (contextTree.state === "error") return unknownStatus();
+
+  const { binding, availability } = contextTree.value;
+  if (binding.state === "unbound") {
+    return {
+      label: "Not set up",
+      detail: isAdmin ? "Optional" : "Optional · Ask an admin to set this up if your team needs it.",
+      kind: "optional",
+    };
+  }
+  if (binding.state === "invalid") {
+    return {
+      label: isAdmin ? "Needs repair" : "Unavailable",
+      detail:
+        blockerDetail(blockers, isAdmin) ??
+        (isAdmin ? "The Context Tree binding is invalid." : "Ask an admin to repair the Context Tree binding."),
+      kind: isAdmin ? "attention" : "neutral",
+    };
+  }
+
+  const bindingDetail = [
+    repositoryLabel(binding.repo),
+    `${binding.branch} branch`,
+    PROVIDER_LABELS[binding.provider],
+  ].join(" · ");
+  const issueDetail = blockerDetail(blockers, isAdmin);
+  const detail = [bindingDetail, issueDetail].filter((item): item is string => Boolean(item)).join(" · ");
+  if (availability === "active") return { label: "Available", detail, kind: "ready" };
+  if (availability === "stale") return { label: "Available · update delayed", detail, kind: "neutral" };
+  if (availability === "unavailable") {
+    return isAdmin
+      ? { label: "Needs recovery", detail, kind: "attention" }
+      : {
+          label: "Unavailable",
+          detail: issueDetail ? detail : `${bindingDetail} · Ask an admin to recover Context Tree access.`,
+          kind: "neutral",
+        };
+  }
+  if (availability === "checking") return { label: "Checking availability", detail, kind: "loading" };
+  return { label: "Status unknown", detail, kind: "unknown" };
+}
+
+function contextTreeAction(
+  contextTree: Fact<ContextTreeFact>,
+  blockers: SetupBlocker[],
+  isAdmin: boolean,
+): SetupRowModel["action"] | undefined {
+  if (contextTree.state !== "ready") return undefined;
+  const { binding, availability } = contextTree.value;
+  if (binding.state === "unbound") {
+    return isAdmin ? { label: "Set up", to: "/context" } : undefined;
+  }
+  if (binding.state === "invalid") {
+    return isAdmin
+      ? (actionFromBlockers(blockers, true) ?? { label: "Repair", to: "/settings/repositories#context-tree" })
+      : { label: "View", to: "/context" };
+  }
+  if (availability === "unavailable") {
+    return isAdmin ? { label: "Recover", to: "/context" } : { label: "View", to: "/context" };
+  }
+  return isAdmin ? { label: "Manage", to: "/settings/repositories#context-tree" } : { label: "View", to: "/context" };
+}
+
+function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["status"] {
+  if (review.adoption === "unavailable") {
+    return { label: "Available after Context Tree", kind: "optional" };
+  }
+  if (review.adoption === "disabled") {
+    return { label: "Off", detail: "Optional", kind: "optional" };
+  }
+
+  const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
+  const issues = blockerDetail(review.blockers, isAdmin);
+  const detail = [reviewer, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
+  if (review.health === "ready") return { label: "On", detail, kind: "ready" };
+  const kind: SetupStatusKind =
+    isAdmin && hasAdminBlocker(review.blockers)
+      ? "attention"
+      : review.health === "pending_verification"
+        ? "pending"
+        : "neutral";
+  if (review.health === "pending_verification") return { label: "Verification pending", detail, kind };
+  if (review.health === "degraded") return { label: "Degraded", detail, kind };
+  if (review.health === "unavailable") {
+    return {
+      label: hasAdminBlocker(review.blockers) && isAdmin ? "Needs attention" : "Service unavailable",
+      detail,
+      kind,
+    };
+  }
+  return { label: "Status unknown", detail, kind: "unknown" };
+}
+
+function reviewAction(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["action"] | undefined {
+  if (review.adoption === "unavailable") return undefined;
+  if (!isAdmin) {
+    return review.adoption === "enabled" ? { label: "View", to: "/settings/repositories#context-tree" } : undefined;
+  }
+  if (review.adoption === "disabled") {
+    return { label: "Set up", to: "/settings/repositories#context-tree" };
+  }
+  const blockerAction = actionFromBlockers(review.blockers, true);
+  if (blockerAction) return blockerAction;
+  if (review.blockers.length > 0) return undefined;
+  return { label: "Manage", to: "/settings/repositories#context-tree" };
 }
 
 /**
- * Converts server-backed facts into the six stable Setup rows. Keeping this
+ * Converts server-backed facts into the stable Setup rows. Keeping this
  * pure makes the role and optional-state rules independently testable.
  */
 export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
@@ -215,81 +467,20 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
             }
           : { label: "None connected", detail: "Optional", kind: "optional" as const };
 
-  const contextStatus =
-    facts.contextTree.state === "loading"
+  const capabilities = facts.capabilities.state === "ready" ? facts.capabilities.value : null;
+  const contextTree = contextTreeFact(facts.capabilities, facts.contextTreeSnapshot);
+  const repositoryAutomationStatus =
+    facts.capabilities.state === "loading"
       ? loadingStatus()
-      : facts.contextTree.state === "error"
+      : facts.capabilities.state === "error"
         ? unknownStatus()
-        : !facts.contextTree.value.bound
-          ? { label: "Not set up", detail: "Optional", kind: "optional" as const }
-          : {
-              label:
-                facts.contextTree.value.availability === "active"
-                  ? "Available"
-                  : facts.contextTree.value.availability === "stale"
-                    ? "Available · update delayed"
-                    : facts.contextTree.value.availability === "checking"
-                      ? "Checking availability"
-                      : "Bound · unavailable",
-              detail: [
-                repositoryLabel(facts.contextTree.value.repo),
-                facts.contextTree.value.branch ? `${facts.contextTree.value.branch} branch` : null,
-              ]
-                .filter(Boolean)
-                .join(" · "),
-              kind:
-                facts.contextTree.value.availability === "active"
-                  ? ("ready" as const)
-                  : facts.contextTree.value.availability === "checking"
-                    ? ("loading" as const)
-                    : ("blocked" as const),
-            };
-
-  const github = facts.github.state === "ready" ? facts.github.value : null;
-  const gitlab = facts.gitlab.state === "ready" ? facts.gitlab.value : null;
-  const gitlabIssue = gitlab ? gitlabConnectionIssue(gitlab) : null;
-  const providerIssueKind: SetupStatusKind =
-    github?.suspended || gitlabIssue === "processing" ? "blocked" : gitlabIssue ? "pending" : "ready";
-  const providerStatus: SetupRowModel["status"] =
-    github && gitlab
-      ? {
-          label: "GitHub + GitLab",
-          detail:
-            github.suspended || gitlabIssue
-              ? `${github.suspended ? "GitHub suspended" : "GitHub connected"} · ${
-                  gitlabIssue ? `GitLab ${gitlabIssueLabel(gitlabIssue).toLowerCase()}` : "GitLab connected"
-                }`
-              : `${github.accountLogin} · ${gitlab.displayName}`,
-          kind: providerIssueKind,
-        }
-      : github
-        ? {
-            label: `GitHub · ${github.accountLogin}`,
-            detail: github.suspended ? "Connection suspended" : github.accountType,
-            kind: github.suspended ? "blocked" : "ready",
-          }
-        : gitlab
-          ? {
-              label: `GitLab · ${gitlab.displayName}`,
-              detail: gitlabIssue ? gitlabIssueLabel(gitlabIssue) : gitlabOriginLabel(gitlab.instanceOrigin),
-              kind: providerIssueKind,
-            }
-          : facts.github.state === "loading" || facts.gitlab.state === "loading"
-            ? loadingStatus()
-            : facts.github.state === "error" || facts.gitlab.state === "error"
-              ? unknownStatus()
-              : { label: "Not connected", detail: "Optional", kind: "optional" };
-  const hasProvider = !!github || !!gitlab;
-  const providersKnownAbsent =
-    facts.github.state === "ready" &&
-    facts.github.value === null &&
-    facts.gitlab.state === "ready" &&
-    facts.gitlab.value === null;
-  const providerTarget = github
-    ? "/settings/integrations/github"
-    : gitlab
-      ? "/settings/integrations/gitlab"
-      : "/settings/integrations";
+        : providerSummary(facts.capabilities.value.repositoryAutomation.providers, isAdmin);
+  const automaticReviewStatus =
+    facts.capabilities.state === "loading"
+      ? loadingStatus()
+      : facts.capabilities.state === "error"
+        ? unknownStatus()
+        : reviewStatus(facts.capabilities.value.contextTree.automaticReview, isAdmin);
 
   return [
     {
@@ -303,7 +494,11 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
             detail: facts.hasPersonalAgent ? "Your agent is available" : "A team agent is available",
             kind: "ready",
           }
-        : { label: "Agent needed", detail: "Set up an agent before starting work", kind: "attention" },
+        : {
+            label: "Agent needed",
+            detail: "Set up an agent before starting work",
+            kind: "attention",
+          },
       action: facts.hasUsableAgent
         ? { label: "Start a chat", to: facts.workspaceWillEnterOnboarding ? "/onboarding" : "/" }
         : { label: "Set up", to: "/onboarding" },
@@ -355,39 +550,29 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       },
     },
     {
+      key: "repository-automation",
+      title: "Repository automation",
+      description: "GitHub or GitLab connections for events, identity, and webhooks.",
+      icon: Webhook,
+      status: repositoryAutomationStatus,
+      action: capabilities ? providerAction(capabilities.repositoryAutomation.providers, isAdmin) : undefined,
+    },
+    {
       key: "context-tree",
       title: "Context Tree",
       description: "Shared decisions and constraints available to agents.",
       icon: GitFork,
-      status: contextStatus,
-      action: {
-        label:
-          isAdmin && facts.contextTree.state === "ready" && !facts.contextTree.value.bound
-            ? "Set up"
-            : isAdmin
-              ? "Manage"
-              : "View",
-        to:
-          isAdmin && facts.contextTree.state === "ready" && facts.contextTree.value.bound
-            ? "/settings/repositories#context-tree"
-            : "/context",
-      },
+      status: contextTreeStatus(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
+      action: contextTreeAction(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
     },
     {
-      key: "providers",
-      title: "GitHub / GitLab",
-      description: "A code provider connection for events, identity, and webhooks.",
-      icon: Webhook,
-      status: providerStatus,
-      action: isAdmin
-        ? hasProvider
-          ? { label: "Manage", to: providerTarget }
-          : providersKnownAbsent
-            ? { label: "Connect", to: providerTarget }
-            : undefined
-        : hasProvider
-          ? { label: "View", to: providerTarget }
-          : undefined,
+      key: "automatic-review",
+      title: "Automatic review",
+      description: "A managed agent reviews Context Tree pull requests or merge requests.",
+      icon: ShieldCheck,
+      parentKey: "context-tree",
+      status: automaticReviewStatus,
+      action: capabilities ? reviewAction(capabilities.contextTree.automaticReview, isAdmin) : undefined,
     },
   ];
 }
@@ -417,37 +602,30 @@ export function SettingsSetupPage() {
       organizationId ? listTeamResourcesForOrg(organizationId) : Promise.reject(new Error("no organization")),
     enabled: !!organizationId,
   });
-  const contextSettingQuery = useQuery({
-    queryKey: ["org-setting", organizationId, "context_tree", "safe"],
+  const capabilitiesQuery = useQuery({
+    queryKey: setupCapabilitiesQueryKey(organizationId),
     queryFn: () =>
-      organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no organization")),
+      organizationId ? getTeamSetupCapabilitiesAt(organizationId) : Promise.reject(new Error("no organization")),
     enabled: !!organizationId,
   });
-  const contextBound = !!contextSettingQuery.data?.repo;
+  const contextBound = capabilitiesQuery.data?.contextTree.binding.state === "bound";
   const contextSnapshotQuery = useQuery({
     queryKey: ["context-tree-snapshot", organizationId, "7d", false],
     queryFn: () =>
       organizationId ? getContextTreeSnapshot(organizationId, "7d") : Promise.reject(new Error("no organization")),
     enabled: !!organizationId && contextBound,
   });
-  const githubQuery = useQuery({
-    queryKey: ["github-app-installation", organizationId],
-    queryFn: () =>
-      organizationId ? getGithubAppInstallation(organizationId) : Promise.reject(new Error("no organization")),
-    enabled: !!organizationId,
-  });
-  const gitlabQuery = useQuery({
-    queryKey: gitlabConnectionsQueryKey(organizationId),
-    queryFn: () =>
-      organizationId ? listGitlabConnectionsAt(organizationId) : Promise.reject(new Error("no organization")),
-    enabled: !!organizationId,
-  });
 
   const computers = queryFact(computersQuery);
   const repositories = queryFact(repositoriesQuery);
-  const contextSetting = queryFact(contextSettingQuery);
-  const github = queryFact(githubQuery);
-  const gitlab = queryFact(gitlabQuery);
+  const capabilities = queryFact(capabilitiesQuery);
+  const contextTreeSnapshot: SetupFacts["contextTreeSnapshot"] = !contextBound
+    ? { state: "ready", value: null }
+    : contextSnapshotQuery.isPending
+      ? { state: "loading" }
+      : contextSnapshotQuery.isError || !contextSnapshotQuery.data
+        ? { state: "error" }
+        : { state: "ready", value: contextSnapshotQuery.data.snapshotStatus };
 
   const facts: SetupFacts = {
     role,
@@ -482,36 +660,8 @@ export function SettingsSetupPage() {
               .length,
           }
         : repositories,
-    contextTree: contextTreeFact(contextSetting, contextSnapshotQuery),
-    github:
-      github.state === "ready"
-        ? {
-            state: "ready",
-            value: github.value
-              ? {
-                  accountLogin: github.value.accountLogin,
-                  accountType: github.value.accountType,
-                  suspended: github.value.suspended,
-                }
-              : null,
-          }
-        : github,
-    gitlab:
-      gitlab.state === "ready"
-        ? {
-            state: "ready",
-            value: gitlab.value[0]
-              ? {
-                  displayName: gitlab.value[0].displayName,
-                  instanceOrigin: gitlab.value[0].instanceOrigin,
-                  endpointSeen: gitlab.value[0].endpointSeen,
-                  health: {
-                    readiness: gitlab.value[0].health.readiness,
-                  },
-                }
-              : null,
-          }
-        : gitlab,
+    capabilities,
+    contextTreeSnapshot,
   };
 
   const resumeOnboarding = async () => {
@@ -562,6 +712,7 @@ const SETUP_STATUS_PRESENTATION: Record<SetupStatusKind, { icon: LucideIcon; col
   loading: { icon: LoaderCircle, color: "var(--state-idle)", animate: true },
   pending: { icon: Clock3, color: "var(--state-idle)" },
   attention: { icon: CircleAlert, color: "var(--state-needs-you)" },
+  neutral: { icon: CircleAlert, color: "var(--fg-3)" },
   blocked: { icon: CircleAlert, color: "var(--state-blocked)" },
   unknown: { icon: CircleHelp, color: "var(--fg-3)" },
 };
@@ -592,12 +743,17 @@ function SetupRow({
     <section
       aria-labelledby={`setup-${row.key}`}
       data-setup-row={row.key}
+      data-setup-parent={row.parentKey}
       style={{
         display: "grid",
         gridTemplateColumns: narrow ? "minmax(0, 1fr)" : "minmax(0, 1fr) var(--sp-60) var(--sp-35)",
         alignItems: narrow ? "start" : "center",
         gap: narrow ? "var(--sp-3)" : "var(--sp-5)",
-        padding: "var(--sp-4) 0",
+        padding: row.parentKey
+          ? narrow
+            ? "var(--sp-4) 0 var(--sp-4) var(--sp-4)"
+            : "var(--sp-4) 0 var(--sp-4) var(--sp-6)"
+          : "var(--sp-4) 0",
         borderBottom: "var(--hairline) solid var(--border)",
       }}
     >

@@ -1,4 +1,8 @@
+import type { TeamSetupCapabilities } from "@first-tree/shared";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
+import { setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { AuthContext } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 import { buildSetupRows, type SetupFacts, SetupOverview } from "./settings/setup.js";
@@ -6,6 +10,83 @@ import { SettingsLayout } from "./settings.js";
 
 type PreviewRole = "admin" | "member";
 type PreviewState = "ready" | "mixed";
+
+const PREVIEW_CAPABILITIES: TeamSetupCapabilities = {
+  organizationId: "org-preview",
+  repositoryAutomation: {
+    providers: [
+      {
+        provider: "github",
+        adoption: "enabled",
+        health: "ready",
+        blockers: [],
+        observedAt: "2026-07-23T00:00:00.000Z",
+      },
+      {
+        provider: "gitlab",
+        adoption: "available",
+        health: "not_observed",
+        blockers: [],
+        observedAt: "2026-07-23T00:00:00.000Z",
+      },
+    ],
+  },
+  contextTree: {
+    binding: {
+      state: "bound",
+      provider: "github",
+      repo: "https://github.com/agent-team-foundation/first-tree-context",
+      branch: "main",
+    },
+    blockers: [],
+    automaticReview: {
+      adoption: "enabled",
+      health: "ready",
+      reviewerAgent: {
+        uuid: "agent-reviewer",
+        displayName: "Context Reviewer",
+      },
+      blockers: [],
+      observedAt: "2026-07-23T00:00:00.000Z",
+    },
+  },
+};
+
+const MIXED_CAPABILITIES: TeamSetupCapabilities = {
+  ...PREVIEW_CAPABILITIES,
+  repositoryAutomation: {
+    providers: [
+      {
+        provider: "github",
+        adoption: "enabled",
+        health: "ready",
+        blockers: [],
+        observedAt: "2026-07-23T00:00:00.000Z",
+      },
+      {
+        provider: "gitlab",
+        adoption: "enabled",
+        health: "pending_verification",
+        blockers: [],
+        observedAt: "2026-07-23T00:00:00.000Z",
+      },
+    ],
+  },
+  contextTree: {
+    ...PREVIEW_CAPABILITIES.contextTree,
+    automaticReview: {
+      ...PREVIEW_CAPABILITIES.contextTree.automaticReview,
+      health: "degraded",
+      blockers: [
+        {
+          code: "context_review_agent_inactive",
+          resolutionOwner: "operator",
+          actionKind: null,
+        },
+      ],
+    },
+  },
+};
 
 function previewFacts(role: PreviewRole, state: PreviewState): SetupFacts {
   if (state === "mixed") {
@@ -22,27 +103,8 @@ function previewFacts(role: PreviewRole, state: PreviewState): SetupFacts {
         value: { connected: 0, saved: 0, connectedHostname: null },
       },
       repositories: { state: "error" },
-      contextTree: {
-        state: "ready",
-        value: {
-          bound: true,
-          repo: "https://github.com/agent-team-foundation/first-tree-context",
-          branch: "main",
-          availability: "stale",
-        },
-      },
-      github: { state: "ready", value: null },
-      gitlab: {
-        state: "ready",
-        value: {
-          displayName: "First Tree",
-          instanceOrigin: "https://gitlab.com",
-          endpointSeen: false,
-          health: {
-            readiness: "waiting",
-          },
-        },
-      },
+      capabilities: { state: "ready", value: MIXED_CAPABILITIES },
+      contextTreeSnapshot: { state: "ready", value: "stale" },
     };
   }
 
@@ -59,24 +121,8 @@ function previewFacts(role: PreviewRole, state: PreviewState): SetupFacts {
       value: { connected: 1, saved: 1, connectedHostname: "Gandy-MacBook-Pro" },
     },
     repositories: { state: "ready", value: 3 },
-    contextTree: {
-      state: "ready",
-      value: {
-        bound: true,
-        repo: "https://github.com/agent-team-foundation/first-tree-context",
-        branch: "main",
-        availability: "active",
-      },
-    },
-    github: {
-      state: "ready",
-      value: {
-        accountLogin: "agent-team-foundation",
-        accountType: "Organization",
-        suspended: false,
-      },
-    },
-    gitlab: { state: "ready", value: null },
+    capabilities: { state: "ready", value: PREVIEW_CAPABILITIES },
+    contextTreeSnapshot: { state: "ready", value: "active" },
   };
 }
 
@@ -85,6 +131,18 @@ export function SetupPreviewPage() {
   const role: PreviewRole = searchParams.get("role") === "member" ? "member" : "admin";
   const state: PreviewState = searchParams.get("state") === "mixed" ? "mixed" : "ready";
   const facts = previewFacts(role, state);
+  const capabilities = state === "mixed" ? MIXED_CAPABILITIES : PREVIEW_CAPABILITIES;
+  const snapshotStatus = state === "mixed" ? "stale" : "active";
+  const queryClient = useMemo(() => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
+    });
+    client.setQueryData(setupCapabilitiesQueryKey("org-preview"), capabilities);
+    client.setQueryData(["context-tree-snapshot", "org-preview", "7d", false], {
+      snapshotStatus,
+    });
+    return client;
+  }, [capabilities, snapshotStatus]);
   const auth = {
     isAuthenticated: true,
     meLoaded: true,
@@ -93,43 +151,47 @@ export function SetupPreviewPage() {
     teamDisplayName: facts.teamName,
     currentOrgHasUsableAgent: facts.hasUsableAgent,
     currentOrgHasPersonalAgent: facts.hasPersonalAgent,
+    onboardingDismissedAt: facts.onboardingSuppressedAt,
+    onboardingCompletedAt: facts.onboardingCompletedAt,
   } as unknown as Parameters<typeof AuthContext.Provider>[0]["value"];
 
   return (
-    <AuthContext.Provider value={auth}>
-      <div style={{ minHeight: "100vh", background: "var(--bg)" }} data-setup-preview={`${role}-${state}`}>
-        <SettingsLayout activePathname="/settings/setup">
-          <SetupOverview facts={facts} rows={buildSetupRows(facts)} />
-        </SettingsLayout>
-        <nav
-          aria-label="Setup preview controls"
-          className="fixed flex"
-          style={{
-            right: "var(--sp-4)",
-            bottom: "var(--sp-4)",
-            gap: "var(--sp-1)",
-            padding: "var(--sp-1)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            background: "var(--bg-raised)",
-            boxShadow: "var(--shadow-md)",
-          }}
-        >
-          <PreviewControlGroup
-            label="Role"
-            options={["admin", "member"]}
-            selected={role}
-            href={(candidate) => `/preview/setup?role=${candidate}&state=${state}`}
-          />
-          <PreviewControlGroup
-            label="State"
-            options={["ready", "mixed"]}
-            selected={state}
-            href={(candidate) => `/preview/setup?role=${role}&state=${candidate}`}
-          />
-        </nav>
-      </div>
-    </AuthContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <AuthContext.Provider value={auth}>
+        <div style={{ minHeight: "100vh", background: "var(--bg)" }} data-setup-preview={`${role}-${state}`}>
+          <SettingsLayout activePathname="/settings/setup">
+            <SetupOverview facts={facts} rows={buildSetupRows(facts)} />
+          </SettingsLayout>
+          <nav
+            aria-label="Setup preview controls"
+            className="fixed flex"
+            style={{
+              right: "var(--sp-4)",
+              bottom: "var(--sp-4)",
+              gap: "var(--sp-1)",
+              padding: "var(--sp-1)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-raised)",
+              boxShadow: "var(--shadow-md)",
+            }}
+          >
+            <PreviewControlGroup
+              label="Role"
+              options={["admin", "member"]}
+              selected={role}
+              href={(candidate) => `/preview/setup?role=${candidate}&state=${state}`}
+            />
+            <PreviewControlGroup
+              label="State"
+              options={["ready", "mixed"]}
+              selected={state}
+              href={(candidate) => `/preview/setup?role=${role}&state=${candidate}`}
+            />
+          </nav>
+        </div>
+      </AuthContext.Provider>
+    </QueryClientProvider>
   );
 }
 

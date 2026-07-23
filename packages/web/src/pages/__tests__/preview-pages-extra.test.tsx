@@ -18,6 +18,7 @@ import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "../onboar
 import { RequestDockPreviewPage } from "../request-dock-preview.js";
 import { ResourcesPreviewPage } from "../resources-preview.js";
 import { SettingsGithubPreviewPage } from "../settings-github-preview.js";
+import { SetupPreviewPage } from "../setup-preview.js";
 import { SupportMenuPreviewPage } from "../support-menu-preview.js";
 import { TeamSwitcherPreviewPage } from "../team-switcher-preview.js";
 import { UserMenuPreviewPage } from "../user-menu-preview.js";
@@ -229,6 +230,16 @@ afterEach(() => {
 });
 
 describe("extra preview pages", () => {
+  it("renders the seeded Admin Setup preview without calling real APIs", async () => {
+    const rendered = await renderPreview(<SetupPreviewPage />, "/preview/setup?role=admin&state=ready");
+
+    expect(rendered.container.querySelector('[data-setup-preview="admin-ready"]')).not.toBeNull();
+    expect(text(rendered.container)).toContain("Context Tree");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+
+    await cleanupRendered(rendered);
+  });
+
   it("renders the seeded agent-detail preview sections", async () => {
     const rendered = await renderPreview(<AgentDetailPreviewPage />);
 
