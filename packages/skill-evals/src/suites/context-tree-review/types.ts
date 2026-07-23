@@ -27,6 +27,7 @@ export type ContextTreeReviewEvalCase = {
     repairableHandoffHints?: readonly string[];
   };
   fixture: { scenario: ReviewScenario };
+  forgeProvider?: "github" | "gitlab";
   id: string;
   prompt: string;
   provider: "codex";
@@ -60,9 +61,11 @@ export type ReviewEvent = {
 
 export type ReviewFixtureExpectation = {
   baseOid: string;
+  changeRef: string;
   chatId: string;
   expectedFinalDraft: boolean;
   expectedFinalState: "OPEN";
+  forgeProvider: "github" | "gitlab";
   forbiddenPaths: readonly string[];
   governedPaths: readonly string[];
   headOid: string;

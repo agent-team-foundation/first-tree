@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -113,6 +113,36 @@ describe("org-settings service", () => {
       binding: null,
       updatedAt: null,
     });
+  });
+
+  it("reads the complete Context Review runtime from one joined database snapshot", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const connection = await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal:8443",
+    });
+    const select = vi.spyOn(app.db, "select");
+
+    try {
+      await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+        bindingState: "unbound",
+        provider: null,
+        repo: null,
+        branch: "main",
+        providerMatchesRepository: true,
+        gitlabConnection: {
+          id: connection.connectionId,
+          instanceOrigin: "https://gitlab.internal:8443",
+        },
+        contextReviewer: { enabled: false, agentUuid: null },
+      });
+      expect(select).toHaveBeenCalledTimes(1);
+    } finally {
+      select.mockRestore();
+    }
   });
 
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
@@ -1521,6 +1551,66 @@ describe("org-settings API (admin gating + masking)", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ provider: "gitlab", ...legacyBinding });
     }
+  });
+
+  it("clears a stale provider and keeps an unclassifiable replacement binding degraded", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const initial = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/context-tree.git",
+        branch: "main",
+      },
+    });
+    expect(initial.statusCode).toBe(200);
+
+    const replacement = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "git@unknown-forge.example:acme/context-tree.git",
+        branch: "release",
+      },
+    });
+    expect(replacement.statusCode).toBe(200);
+    expect(replacement.json()).toEqual({
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+
+    await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+      bindingState: "bound",
+      provider: null,
+      providerSource: "unknown",
+      providerMatchesRepository: true,
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+    const [stored] = await app.db
+      .select({ value: organizationSettings.value })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(stored?.value).toEqual({
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
   });
 
   it("fails closed for a repo-less historical row with an invalid branch", async () => {

@@ -1866,16 +1866,14 @@ describe("tree init command action", () => {
         const url = String(input);
         if (url.endsWith("/api/v1/orgs/team_gitlab/context-tree/seed-preflight") && init?.method === "POST") {
           seedReads++;
-          expect(JSON.parse(String(init.body))).toEqual({
-            target: {
-              provider: "gitlab",
-              repo: "ssh://git@gitlab.example/acme/platform/context-tree.git",
-              branch: "main",
-            },
-          });
+          expect(JSON.parse(String(init.body))).toEqual({});
           return response({
             organizationId: "team_gitlab",
             state: { status: "unbound", branch: "main" },
+            gitlabConnection: {
+              id: "connection-1",
+              instanceOrigin: "https://gitlab.example:8443",
+            },
           });
         }
         if (url.endsWith("/api/v1/orgs/team_gitlab/settings/context_tree/initialize") && init?.method === "POST") {
@@ -1910,20 +1908,20 @@ describe("tree init command action", () => {
     expect(seedReads).toBe(3);
     expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
       "glab",
-      ["auth", "status", "--hostname", "gitlab.example"],
+      ["auth", "status", "--hostname", "gitlab.example:8443"],
       base,
     );
     expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
       "glab",
-      ["api", "user", "--hostname", "gitlab.example"],
+      ["api", "user", "--hostname", "gitlab.example:8443"],
       base,
-      { GITLAB_HOST: "gitlab.example" },
+      { GITLAB_HOST: "gitlab.example:8443" },
     );
     expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
       "glab",
       ["repo", "create", "acme/platform/context-tree", "--private", "--defaultBranch", "main"],
       expect.any(String),
-      { GITLAB_HOST: "gitlab.example" },
+      { GITLAB_HOST: "gitlab.example:8443" },
     );
     expect(treeSharedMocks.runCommand.mock.calls.some(([tool]) => tool === "gh")).toBe(false);
     const root = join(base, "gitlab-tree");
@@ -1941,7 +1939,7 @@ describe("tree init command action", () => {
     });
   });
 
-  it("stops before local auth or forge mutation when Server target admission rejects GitLab", async () => {
+  it("stops before local auth or forge mutation when the Team has no current GitLab connection", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     vi.stubGlobal(
       "fetch",
@@ -1949,20 +1947,12 @@ describe("tree init command action", () => {
         const url = String(input);
         expect(url).toMatch(/\/api\/v1\/orgs\/team_denied\/context-tree\/seed-preflight$/u);
         expect(init?.method).toBe("POST");
-        expect(JSON.parse(String(init?.body))).toEqual({
-          target: {
-            provider: "gitlab",
-            repo: "https://gitlab.example/acme/context-tree.git",
-            branch: "main",
-          },
+        expect(JSON.parse(String(init?.body))).toEqual({});
+        return response({
+          organizationId: "team_denied",
+          state: { status: "unbound", branch: "main" },
+          gitlabConnection: null,
         });
-        return response(
-          {
-            error: "The GitLab Context Tree origin is not authorized for this deployment.",
-            code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
-          },
-          { status: 409 },
-        );
       }),
     );
 
@@ -1982,7 +1972,9 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBe(1);
     expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("not compatible with the selected Team");
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(
+      "requires the Team's current GitLab connection",
+    );
   });
 
   it("requires an explicit Team for provider-aware init even in a managed working directory", async () => {

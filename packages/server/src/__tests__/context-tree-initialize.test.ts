@@ -1210,6 +1210,7 @@ describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
     expect(selected.json()).toEqual({
       organizationId: admin.organizationId,
       state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
     });
 
     const outside = await seedPreflight(app, outsideOrganizationId, admin.accessToken);
@@ -1226,79 +1227,38 @@ describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
   });
 });
 
-describe("POST /orgs/:orgId/context-tree/seed-preflight target admission", () => {
-  const getAllowedApp = useTestApp({
-    githubAppPrivateKeyPem,
-    gitlabEgressAllowlist: [
-      {
-        origin: "https://gitlab.example",
-        addressPolicy: { kind: "public" },
-      },
-    ],
-  });
-  const getDeniedApp = useTestApp({ githubAppPrivateKeyPem, gitlabEgressAllowlist: [] });
+describe("POST /orgs/:orgId/context-tree/seed-preflight GitLab authority", () => {
+  const getApp = useTestApp({ githubAppPrivateKeyPem });
 
-  it("rejects a GitLab target before forge mutation when the current connection is missing or has another origin", async () => {
-    const app = getAllowedApp();
+  it("returns the current exact GitLab connection without accepting a caller-selected target", async () => {
+    const app = getApp();
     const admin = await createTestAdmin(app);
-    const target = {
-      provider: "gitlab" as const,
-      repo: "https://gitlab.example/platform/context-tree.git",
-      branch: "main",
-    };
-
-    const missing = await seedPreflight(app, admin.organizationId, admin.accessToken, { target });
-    expect(missing.statusCode).toBe(409);
-    expect(missing.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
-
-    await createGitlabConnection(app.db, {
+    const connection = await createGitlabConnection(app.db, {
       organizationId: admin.organizationId,
       memberId: admin.memberId,
-      displayName: "Other GitLab",
-      instanceOrigin: "https://other-gitlab.example",
-    });
-    const wrongOrigin = await seedPreflight(app, admin.organizationId, admin.accessToken, { target });
-    expect(wrongOrigin.statusCode).toBe(409);
-    expect(wrongOrigin.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
-  });
-
-  it("rejects a deployment-denied GitLab target", async () => {
-    const deniedApp = getDeniedApp();
-    const deniedAdmin = await createTestAdmin(deniedApp);
-    await createGitlabConnection(deniedApp.db, {
-      organizationId: deniedAdmin.organizationId,
-      memberId: deniedAdmin.memberId,
       displayName: "GitLab",
-      instanceOrigin: "https://gitlab.example",
+      instanceOrigin: "https://gitlab.example:8443",
     });
-    const target = {
-      provider: "gitlab" as const,
-      repo: "https://gitlab.example/platform/context-tree.git",
-      branch: "main",
-    };
 
-    const denied = await seedPreflight(deniedApp, deniedAdmin.organizationId, deniedAdmin.accessToken, { target });
-    expect(denied.statusCode).toBe(409);
-    expect(denied.json()).toMatchObject({ code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE" });
-  });
-
-  it("accepts the exact deployment-authorized GitLab connection origin", async () => {
-    const allowedApp = getAllowedApp();
-    const allowedAdmin = await createTestAdmin(allowedApp);
-    await createGitlabConnection(allowedApp.db, {
-      organizationId: allowedAdmin.organizationId,
-      memberId: allowedAdmin.memberId,
-      displayName: "GitLab",
-      instanceOrigin: "https://gitlab.example",
+    const current = await seedPreflight(app, admin.organizationId, admin.accessToken);
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toEqual({
+      organizationId: admin.organizationId,
+      state: { status: "unbound", branch: "main" },
+      gitlabConnection: {
+        id: connection.connectionId,
+        instanceOrigin: "https://gitlab.example:8443",
+      },
     });
-    const target = {
-      provider: "gitlab" as const,
-      repo: "https://gitlab.example/platform/context-tree.git",
-      branch: "main",
-    };
-    const allowed = await seedPreflight(allowedApp, allowedAdmin.organizationId, allowedAdmin.accessToken, { target });
-    expect(allowed.statusCode).toBe(200);
-    expect(allowed.json()).toMatchObject({ organizationId: allowedAdmin.organizationId });
+
+    const inventedTarget = await seedPreflight(app, admin.organizationId, admin.accessToken, {
+      target: {
+        provider: "gitlab",
+        repo: "https://gitlab.example:8443/platform/context-tree.git",
+        branch: "main",
+      },
+    });
+    expect(inventedTarget.statusCode).toBe(400);
   });
 });
 

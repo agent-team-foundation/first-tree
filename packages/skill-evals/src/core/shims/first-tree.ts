@@ -488,13 +488,19 @@ trace("first-tree call: " + commandLine(argv));
 
 if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && argv[2] === "review-config") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const gitlab = fixture.forgeProvider === "gitlab";
   finish(
     argv,
     phase,
     0,
     JSON.stringify({
-      repo: "https://github.com/" + fixture.repo,
+      provider: gitlab ? "gitlab" : "github",
+      repo: gitlab ? "ssh://git@gitlab.example:2222/owner/context-tree.git" : "https://github.com/" + fixture.repo,
       branch: "main",
+      providerMatchesRepository: true,
+      gitlabConnection: gitlab
+        ? { id: fixture.connectionId, instanceOrigin: fixture.instanceOrigin }
+        : null,
       enabled: true,
       assigned: true,
       agentUuid: fixture.reviewerAgentUuid,
@@ -506,6 +512,12 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
 
 if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  if (fixture.forgeProvider === "gitlab") {
+    finish(argv, phase, 2, "", "GitLab Context Review must not call first-tree tree review.\\n", {
+      blockedByEval: true,
+      gitlabReviewFixtureViolation: true,
+    });
+  }
   const runId = optionValue(argv, "--run");
   const commitOid = liveReviewHead(fixture);
   const event = optionValue(argv, "--event");

@@ -13,7 +13,7 @@ import {
   treeSetupKickoffSchema,
 } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { BadRequestError, ConflictError } from "../../errors.js";
+import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import {
   ContextTreeRepoProvisionError,
@@ -45,7 +45,6 @@ import {
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
 import {
-  assertContextTreeBindingTargetAuthorized,
   getOrgContextReviewRuntime,
   getOrgContextTreeBinding,
   getOrgContextTreeSettingState,
@@ -176,50 +175,51 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     );
   });
 
-  app.post<{ Params: { orgId: string }; Body: unknown }>("/seed-preflight", async (request, reply) => {
-    const body = contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
-    const scope = await requireOrgMembership(request, app.db);
-    if (scope.role !== "admin") {
-      return reply.status(403).send({
-        error: "Context Tree Seed requires an active Team Admin.",
-        code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
-      });
-    }
-
-    const state = await getOrgContextTreeSettingState(app.db, scope.organizationId);
-    if (state.kind === "invalid") {
-      return reply.status(409).send({
-        error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
-        code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
-      });
-    }
-    if (body.target) {
-      try {
-        await assertContextTreeBindingTargetAuthorized(
-          app.db,
-          scope.organizationId,
-          body.target,
-          app.config.gitlab?.egressAllowlist ?? [],
-        );
-      } catch (error) {
-        if (!(error instanceof BadRequestError)) throw error;
-        return reply.status(409).send({
-          error: error.message,
-          code: "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/seed-preflight",
+    writePreflightRouteOptions,
+    async (request, reply) => {
+      contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
+      const scope = await requireOrgMembership(request, app.db);
+      if (scope.role !== "admin") {
+        return reply.status(403).send({
+          error: "Context Tree Seed requires an active Team Admin.",
+          code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
         });
       }
-    }
 
-    return reply.status(200).send(
-      contextTreeSeedPreflightResponseSchema.parse({
-        organizationId: scope.organizationId,
-        state:
-          state.kind === "bound"
-            ? { status: "bound", binding: state.binding }
-            : { status: "unbound", branch: state.branch },
-      }),
-    );
-  });
+      const runtime = await getOrgContextReviewRuntime(app.db, scope.organizationId);
+      if (runtime.bindingState === "invalid") {
+        return reply.status(409).send({
+          error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+          code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+        });
+      }
+
+      return reply.status(200).send(
+        contextTreeSeedPreflightResponseSchema.parse({
+          organizationId: scope.organizationId,
+          state:
+            runtime.bindingState === "bound" && runtime.repo && runtime.branch
+              ? {
+                  status: "bound",
+                  binding: {
+                    ...(runtime.provider ? { provider: runtime.provider } : {}),
+                    repo: runtime.repo,
+                    branch: runtime.branch,
+                  },
+                }
+              : { status: "unbound", branch: runtime.branch ?? "main" },
+          gitlabConnection: runtime.gitlabConnection
+            ? {
+                id: runtime.gitlabConnection.id,
+                instanceOrigin: runtime.gitlabConnection.instanceOrigin,
+              }
+            : null,
+        }),
+      );
+    },
+  );
 
   app.post<{ Params: { orgId: string }; Body: unknown }>(
     "/write-preflight",

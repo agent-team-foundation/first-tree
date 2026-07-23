@@ -36,6 +36,31 @@ describe("Context Tree forge adapters", () => {
     expect(run).toHaveBeenCalledWith("glab", ["auth", "status", "--hostname", "gitlab.example:8443"], "/task");
   });
 
+  it("maps SSH and scp-like GitLab repositories to the trusted non-default Web/API port", () => {
+    for (const repo of [
+      "git@gitlab.example:Group/Subgroup/Tree.git",
+      "ssh://git@gitlab.example:2222/Group/Subgroup/Tree.git",
+    ]) {
+      const coordinate = resolveContextTreeForgeCoordinate("gitlab", repo, "https://gitlab.example:8443");
+      expect(coordinate.host).toBe("gitlab.example:8443");
+      expect(coordinate.webUrl).toBe("https://gitlab.example:8443/group/subgroup/tree");
+    }
+    expect(() =>
+      resolveContextTreeForgeCoordinate(
+        "gitlab",
+        "git@gitlab.example:Group/Subgroup/Tree.git",
+        "https://gitlab.example:9443",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      resolveContextTreeForgeCoordinate(
+        "gitlab",
+        "git@other.example:Group/Subgroup/Tree.git",
+        "https://gitlab.example:8443",
+      ),
+    ).toThrow("must match the Team's current GitLab connection");
+  });
+
   it("creates GitLab without any GitHub App, approval, or ruleset command", () => {
     const coordinate = resolveContextTreeForgeCoordinate("gitlab", "https://gitlab.example/group/sub/tree.git");
     const run = vi.fn<ContextTreeForgeRunner>((command, args) => {

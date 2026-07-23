@@ -143,7 +143,7 @@ describe("agent context tree info route", () => {
       provider: null,
       repo: null,
       branch: null,
-      providerMatchesRepository: true,
+      providerMatchesRepository: false,
       gitlabConnection: null,
       contextReviewer: { enabled: true, agentUuid: sideAgent.uuid },
     });

@@ -3,7 +3,6 @@ import {
   type ContextTreeSeedPreflightErrorCode,
   type ContextTreeSeedPreflightRequest,
   type ContextTreeSeedPreflightState,
-  type ContextTreeSeedPreflightTarget,
   contextTreeSeedPreflightErrorCodeSchema,
   contextTreeSeedPreflightResponseSchema,
 } from "@first-tree/shared";
@@ -27,12 +26,12 @@ export type ContextTreeSeedAuthorityReader = {
 
 export type PreflightContextTreeSeedInput = {
   teamId: string;
-  target?: ContextTreeSeedPreflightTarget;
 };
 
 export type ContextTreeSeedPreflight = {
   teamId: string;
   state: ContextTreeSeedPreflightState;
+  gitlabConnection: { id: string; instanceOrigin: string } | null;
 };
 
 type ContextTreeSeedPreflightErrorOptions = {
@@ -69,9 +68,13 @@ export async function preflightContextTreeSeed(
 
   let rawAuthority: unknown;
   try {
-    rawAuthority = await reader.preflightMemberContextTreeSeed(teamId, input.target ? { target: input.target } : {}, {
-      retry: false,
-    });
+    rawAuthority = await reader.preflightMemberContextTreeSeed(
+      teamId,
+      {},
+      {
+        retry: false,
+      },
+    );
   } catch (error) {
     throw classifyAuthorityFailure(error);
   }
@@ -85,7 +88,7 @@ export async function preflightContextTreeSeed(
     );
   }
 
-  return { teamId, state: parsed.data.state };
+  return { teamId, state: parsed.data.state, gitlabConnection: parsed.data.gitlabConnection };
 }
 
 function validateTeamId(value: string): string {
@@ -134,11 +137,8 @@ function serverPreflightFailure(
       "Context Tree Seed needs an active Admin of the selected Team. Ask a Team Admin to continue with the same Team id.",
     CONTEXT_TREE_SEED_CONFIGURATION_INVALID:
       "The selected Team's Context Tree binding is invalid and must be repaired by an Admin before Seed can continue.",
-    CONTEXT_TREE_SEED_TARGET_UNAVAILABLE:
-      "The intended Context Tree repository is not compatible with the selected Team's current provider configuration.",
   };
-  const configurationFailure =
-    code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID" || code === "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE";
+  const configurationFailure = code === "CONTEXT_TREE_SEED_CONFIGURATION_INVALID";
   return new ContextTreeSeedPreflightCliError(code, messages[code], {
     stage: configurationFailure ? "configuration" : "authority",
     exitCode: configurationFailure ? 1 : 3,

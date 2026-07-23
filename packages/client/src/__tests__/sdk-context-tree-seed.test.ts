@@ -24,6 +24,7 @@ describe("FirstTreeHubSDK.preflightMemberContextTreeSeed", () => {
         status: "bound",
         binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       },
+      gitlabConnection: null,
     };
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(authority));
     vi.stubGlobal("fetch", fetchMock);

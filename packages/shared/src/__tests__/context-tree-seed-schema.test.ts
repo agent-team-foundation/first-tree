@@ -7,23 +7,9 @@ import {
 } from "../schemas/context-tree-seed.js";
 
 describe("Context Tree Seed preflight schemas", () => {
-  it("accepts only an optional intended repository target without caller-selected authority", () => {
+  it("accepts no caller-selected authority or repository target", () => {
     expect(contextTreeSeedPreflightRequestSchema.parse({})).toEqual({});
-    expect(
-      contextTreeSeedPreflightRequestSchema.parse({
-        target: {
-          provider: "gitlab",
-          repo: "ssh://git@gitlab.internal:2222/acme/context-tree.git",
-          branch: "main",
-        },
-      }),
-    ).toEqual({
-      target: {
-        provider: "gitlab",
-        repo: "ssh://git@gitlab.internal:2222/acme/context-tree.git",
-        branch: "main",
-      },
-    });
+    expect(contextTreeSeedPreflightRequestSchema.safeParse({ target: {} }).success).toBe(false);
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ role: "admin" }).success).toBe(false);
     expect(contextTreeSeedPreflightRequestSchema.safeParse({ binding: {} }).success).toBe(false);
   });
@@ -33,8 +19,13 @@ describe("Context Tree Seed preflight schemas", () => {
       contextTreeSeedPreflightResponseSchema.parse({
         organizationId: "team-a",
         state: { status: "unbound", branch: "main" },
+        gitlabConnection: null,
       }),
-    ).toEqual({ organizationId: "team-a", state: { status: "unbound", branch: "main" } });
+    ).toEqual({
+      organizationId: "team-a",
+      state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
+    });
 
     expect(
       contextTreeSeedPreflightResponseSchema.parse({
@@ -43,6 +34,7 @@ describe("Context Tree Seed preflight schemas", () => {
           status: "bound",
           binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
         },
+        gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
       }),
     ).toEqual({
       organizationId: "team-a",
@@ -50,6 +42,7 @@ describe("Context Tree Seed preflight schemas", () => {
         status: "bound",
         binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       },
+      gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
     });
   });
 
@@ -83,7 +76,6 @@ describe("Context Tree Seed preflight schemas", () => {
       "CONTEXT_TREE_SEED_AUTHORITY_FAILED",
       "CONTEXT_TREE_SEED_NEEDS_ADMIN",
       "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
-      "CONTEXT_TREE_SEED_TARGET_UNAVAILABLE",
     ]);
     for (const code of CONTEXT_TREE_SEED_PREFLIGHT_ERROR_CODES) {
       expect(contextTreeSeedPreflightErrorCodeSchema.parse(code)).toBe(code);

@@ -85,6 +85,16 @@ async function setupRoute() {
   const createRepoFileWithToken = vi.fn().mockResolvedValue({ content: { path: "NODE.md" } });
   const getOrgContextTreeBinding = vi.fn().mockResolvedValue(null);
   const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
+  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue({
+    bindingState: "unbound",
+    provider: null,
+    repo: null,
+    branch: "main",
+    providerSource: "unknown",
+    providerMatchesRepository: true,
+    gitlabConnection: null,
+    contextReviewer: { enabled: false, agentUuid: null },
+  });
   const putInitializedOrgContextTreeBinding = vi
     .fn()
     .mockResolvedValue({ provider: "github", repo: repo.cloneUrl, branch: "main" });
@@ -117,6 +127,7 @@ async function setupRoute() {
   vi.doMock("../services/org-settings.js", () => ({
     getOrgContextTreeBinding,
     getOrgContextTreeSettingState,
+    getOrgContextReviewRuntime,
     putInitializedOrgContextTreeBinding,
   }));
   vi.doMock("../services/organization.js", () => ({ getOrganization }));
@@ -163,6 +174,7 @@ async function setupRoute() {
       createRepoFileWithToken,
       getOrgContextTreeBinding,
       getOrgContextTreeSettingState,
+      getOrgContextReviewRuntime,
       putInitializedOrgContextTreeBinding,
       getOrganization,
       preflightContextTreeWriteAuthority,
@@ -247,18 +259,25 @@ describe("org context tree routes with mocked service edges", () => {
     expect(res.json()).toEqual({
       organizationId: ctx.scope.organizationId,
       state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
     });
     expect(ctx.mocks.requireOrgMembership).toHaveBeenCalledTimes(1);
-    expect(ctx.mocks.getOrgContextTreeSettingState).toHaveBeenCalledWith(ctx.app.db, ctx.scope.organizationId);
+    expect(ctx.mocks.getOrgContextReviewRuntime).toHaveBeenCalledWith(ctx.app.db, ctx.scope.organizationId);
     expect(ctx.mocks.ensureInstallationOwnedContextTreeRepo).not.toHaveBeenCalled();
     expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("returns Server current bound state for an Admin Seed retry", async () => {
     const ctx = await setupRoute();
-    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({
-      kind: "bound",
-      binding: { repo: ctx.repo.cloneUrl, branch: "release" },
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValueOnce({
+      bindingState: "bound",
+      provider: "github",
+      repo: ctx.repo.cloneUrl,
+      branch: "release",
+      providerSource: "declared",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
+      contextReviewer: { enabled: false, agentUuid: null },
     });
 
     const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
@@ -266,7 +285,11 @@ describe("org context tree routes with mocked service edges", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       organizationId: ctx.scope.organizationId,
-      state: { status: "bound", binding: { repo: ctx.repo.cloneUrl, branch: "release" } },
+      state: {
+        status: "bound",
+        binding: { provider: "github", repo: ctx.repo.cloneUrl, branch: "release" },
+      },
+      gitlabConnection: null,
     });
   });
 
@@ -281,12 +304,21 @@ describe("org context tree routes with mocked service edges", () => {
       error: "Context Tree Seed requires an active Team Admin.",
       code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
     });
-    expect(ctx.mocks.getOrgContextTreeSettingState).not.toHaveBeenCalled();
+    expect(ctx.mocks.getOrgContextReviewRuntime).not.toHaveBeenCalled();
   });
 
   it("fails closed on invalid historical Seed binding state", async () => {
     const ctx = await setupRoute();
-    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({ kind: "invalid", issues: [] });
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValueOnce({
+      bindingState: "invalid",
+      provider: null,
+      repo: null,
+      branch: null,
+      providerSource: "unknown",
+      providerMatchesRepository: false,
+      gitlabConnection: null,
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
 
     const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
 

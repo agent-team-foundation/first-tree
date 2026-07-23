@@ -18,11 +18,13 @@ describe("Context Tree Seed preflight core", () => {
     const { reader, preflight } = authorityReader({
       organizationId: "team-a",
       state: { status: "unbound", branch: "trunk" },
+      gitlabConnection: null,
     });
 
     await expect(preflightContextTreeSeed(reader, { teamId: "team-a" })).resolves.toEqual({
       teamId: "team-a",
       state: { status: "unbound", branch: "trunk" },
+      gitlabConnection: null,
     });
     expect(preflight).toHaveBeenCalledTimes(1);
     expect(preflight).toHaveBeenCalledWith("team-a", {}, { retry: false });
@@ -35,12 +37,14 @@ describe("Context Tree Seed preflight core", () => {
         status: "bound",
         binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       },
+      gitlabConnection: { id: "connection-1", instanceOrigin: "https://gitlab.internal:8443" },
     };
     const { reader } = authorityReader(response);
 
     await expect(preflightContextTreeSeed(reader, { teamId: "team-a" })).resolves.toEqual({
       teamId: "team-a",
       state: response.state,
+      gitlabConnection: response.gitlabConnection,
     });
   });
 

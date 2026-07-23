@@ -6,9 +6,11 @@ import type { ContextTreeReviewEvalCase, ReviewFixtureExpectation, ReviewFixture
 
 const expectation: ReviewFixtureExpectation = {
   baseOid: "base",
+  changeRef: "refs/pull/42/head",
   chatId: "review-chat",
   expectedFinalDraft: false,
   expectedFinalState: "OPEN",
+  forgeProvider: "github",
   forbiddenPaths: [],
   governedPaths: ["system/review-contract.md"],
   headOid: "head",

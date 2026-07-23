@@ -1,4 +1,9 @@
-import { type ContextTreeProvider, canonicalGitRepoIdentity, contextTreeRepoSchema } from "@first-tree/shared";
+import {
+  type ContextTreeProvider,
+  canonicalGitRepoIdentity,
+  contextTreeRepoSchema,
+  resolveGitLabRepositoryWebIdentity,
+} from "@first-tree/shared";
 
 export type ContextTreeForgeRunner = (
   command: string,
@@ -18,6 +23,7 @@ export type ContextTreeForgeCoordinate = {
 export function resolveContextTreeForgeCoordinate(
   provider: ContextTreeProvider,
   repoUrl: string,
+  gitlabInstanceOrigin?: string | null,
 ): ContextTreeForgeCoordinate {
   const safeRepo = contextTreeRepoSchema.safeParse(repoUrl);
   if (!safeRepo.success) {
@@ -31,13 +37,22 @@ export function resolveContextTreeForgeCoordinate(
   if (provider === "gitlab" && identity.host === "github.com") {
     throw new Error("--provider gitlab cannot be used with a github.com repository.");
   }
-  const host = repositoryCliHost(repoUrl, identity.host);
+  const gitlabIdentity =
+    provider === "gitlab" && gitlabInstanceOrigin
+      ? resolveGitLabRepositoryWebIdentity(safeRepo.data, gitlabInstanceOrigin)
+      : null;
+  if (provider === "gitlab" && gitlabInstanceOrigin && !gitlabIdentity?.originMatchesConnection) {
+    throw new Error("GitLab repository origin must match the Team's current GitLab connection.");
+  }
+  const host = gitlabIdentity ? new URL(gitlabIdentity.origin).host : repositoryCliHost(repoUrl, identity.host);
   return {
     provider,
     repoUrl: safeRepo.data,
     host,
     path: identity.path,
-    webUrl: repositoryWebUrl(repoUrl, host, identity.path),
+    webUrl: gitlabIdentity
+      ? `${gitlabIdentity.origin}/${identity.path}`
+      : repositoryWebUrl(repoUrl, host, identity.path),
   };
 }
 

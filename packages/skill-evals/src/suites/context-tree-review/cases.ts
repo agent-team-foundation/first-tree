@@ -5,6 +5,8 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
   "A trusted server-authored GitHub Context Reviewer wake-up is active for owner/context-tree#42. Use context-tree-review against the bound repository and latest live head. The fixture provides a local bare origin with source branch `review-change` and PR ref `refs/pull/42/head`; repair scenarios authorize one ordinary decision-preserving commit and source-branch push, while real GitHub writes remain blocked. Follow validator-first review, mandatory safe repair, complete successor re-review, current checks and freshness, clean up owned worktrees, publish one App outcome through `first-tree tree review`, and do not merge. The grader evaluates structured review events and final Git/ref/content state rather than a prescribed shell transcript.";
+const gitlabPrompt =
+  "A trusted server-authored GitLab Context Reviewer wake-up is active for https://gitlab.example:8443/owner/context-tree/-/merge_requests/42. Trusted metadata binds connection `gitlab-connection-eval`, exact instance origin `https://gitlab.example:8443`, project `owner/context-tree`, MR IID 42, reviewer agent `reviewer-eval-agent`, and run `01900000-0000-7000-8000-000000000042`. Load context-tree-review and use only the fixture's local git remote plus the `glab` shim for that exact host. Resolve live MR state, use a detached exact-head snapshot, validate before semantic review, complete Evidence and Challenge passes, and use one standalone fixed-string `rg` search for `system/review-contract.md` within the registered review worktree before classifying incoming-reference impact. Repair every safe finding with one ordinary source-branch push followed by a complete successor re-review, re-read the live authority tuple before every mutation, then make exactly one squash merge bound to the final reviewed SHA. Never call `first-tree tree review`, approve, label, force, bypass, or use GitHub commands. The grader evaluates the actual git/glab/validator trace and final refs, not wording alone.";
 
 /**
  * Workflow scenarios pinned by the static floor and exercised across the live
@@ -193,6 +195,45 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     skill: "context-tree-review",
     status: "implemented",
     tags: ["authority-violation", "request-changes"],
+    tier: "gate",
+  },
+  {
+    id: "gitlab-passing-exact-sha-merges",
+    fixture: { scenario: "passing" },
+    forgeProvider: "gitlab",
+    expected: {
+      action: "none",
+      bodyHints: [],
+      initialVerifyMustPass: true,
+      repair: "none",
+      repairPaths: [],
+    },
+    prompt: gitlabPrompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["gitlab", "exact-sha", "merge"],
+    tier: "gate",
+  },
+  {
+    id: "gitlab-semantic-repair-rereviews-and-merges",
+    fixture: { scenario: "semantic-failure" },
+    forgeProvider: "gitlab",
+    expected: {
+      action: "none",
+      bodyHints: [],
+      initialVerifyMustPass: true,
+      repair: "success",
+      repairPaths: ["system/review-contract.md"],
+      repairableHandoffHints: ["implementation", "source", "system/review-contract.md"],
+    },
+    prompt: gitlabPrompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["gitlab", "repair-first", "successor-review"],
     tier: "gate",
   },
 ];

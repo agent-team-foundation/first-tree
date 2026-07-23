@@ -48,6 +48,7 @@ function mergeRequestPayload(input: {
   projectPath?: string;
   title?: string;
   draft?: boolean;
+  oldrev?: string;
 }) {
   const projectPath = input.projectPath ?? "Acme/Reviews";
   return {
@@ -69,6 +70,7 @@ function mergeRequestPayload(input: {
       url: `https://gitlab.internal/${projectPath}/-/merge_requests/${input.iid ?? 17}`,
       state: "opened",
       ...(input.draft === undefined ? {} : { draft: input.draft }),
+      ...(input.oldrev === undefined ? {} : { oldrev: input.oldrev }),
     },
   };
 }
@@ -286,6 +288,33 @@ describe("GitLab Stage 3 personnel routing", () => {
       ]),
     );
 
+    const sourceUpdate = await postMr(
+      app,
+      connection.bearer,
+      mergeRequestPayload({
+        action: "update",
+        projectPath: "Acme/Reviews",
+        iid: 43,
+        draft: false,
+        oldrev: "0123456789abcdef0123456789abcdef01234567",
+      }),
+      "source-update-context-reviewer",
+    );
+    expect(sourceUpdate.statusCode).toBe(200);
+    const afterSourceUpdateMessages = reviewerChat
+      ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id))
+      : [];
+    expect(afterSourceUpdateMessages).toHaveLength(3);
+    expect(afterSourceUpdateMessages.filter((message) => message.metadata.action === "update")).toHaveLength(2);
+    expect(afterSourceUpdateMessages.map((message) => message.metadata)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "update",
+          triggerEvent: "merge_request.update",
+        }),
+      ]),
+    );
+
     const note = await app.inject({
       method: "POST",
       url: `/api/v1/webhooks/gitlab/${connection.bearer}`,
@@ -319,7 +348,7 @@ describe("GitLab Stage 3 personnel routing", () => {
     expect(note.statusCode).toBe(200);
     expect(
       reviewerChat ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id)) : [],
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it("fences the replaced connection bearer before Context Reviewer dispatch", async () => {

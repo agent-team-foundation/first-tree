@@ -1,3 +1,6 @@
+import { isRecord, isStringArray } from "../../core/events.js";
+import type { EvalMetrics, ReviewFixtureExpectation } from "./types.js";
+
 export type GitlabMergeFailureClass =
   | "head_mismatch"
   | "credential"
@@ -32,6 +35,106 @@ export type GitlabReviewBehaviorGrade = {
   pass: boolean;
   findings: string[];
 };
+
+/**
+ * Translate the real eval trace into provider behavior events. Semantic passes
+ * are admitted only when the generic trace grader observed all governed reads
+ * after the matching validator run; they are not inferred from prompt text.
+ */
+export function deriveGitlabReviewBehavior(
+  rawEvents: readonly unknown[],
+  metrics: EvalMetrics,
+  expectation: ReviewFixtureExpectation,
+): GitlabReviewBehaviorEvent[] {
+  const events: GitlabReviewBehaviorEvent[] = [];
+  for (const event of rawEvents) {
+    if (!isRecord(event)) continue;
+    if (
+      event.type === "gitlab_mr_viewed" &&
+      typeof event.headRefOid === "string" &&
+      typeof event.state === "string" &&
+      typeof event.isDraft === "boolean"
+    ) {
+      events.push({
+        kind: "live_read",
+        head: event.headRefOid,
+        state: event.state === "MERGED" ? "merged" : event.state === "CLOSED" ? "closed" : "open",
+        draft: event.isDraft,
+        fork: event.fork === true,
+        pipelineAcceptable: event.pipelineAcceptable === true,
+      });
+      continue;
+    }
+    if (event.type === "gitlab_detached_checkout" && typeof event.head === "string") {
+      events.push({ kind: "detached_checkout", head: event.head });
+      continue;
+    }
+    if (
+      event.type === "first_tree_result" &&
+      event.phase === "model" &&
+      isStringArray(event.argv) &&
+      event.argv[0] === "tree" &&
+      event.argv[1] === "verify" &&
+      event.verifyBindingValid === true &&
+      typeof event.actualHead === "string" &&
+      typeof event.exitCode === "number"
+    ) {
+      events.push({ kind: "verify", head: event.actualHead, ok: event.exitCode === 0 });
+      const completeInitial =
+        event.reviewVerifyKind === "initial-review" && event.exitCode === 0 && metrics.semanticReadAfterVerify;
+      const completeSuccessor =
+        event.reviewVerifyKind === "successor-review" &&
+        event.exitCode === 0 &&
+        metrics.successorSemanticReviewComplete;
+      if (completeInitial || completeSuccessor) {
+        events.push(
+          { kind: "semantic_pass", head: event.actualHead, pass: "evidence" },
+          { kind: "semantic_pass", head: event.actualHead, pass: "challenge" },
+        );
+      }
+      continue;
+    }
+    if (
+      event.type === "context_review_repair_pushed" &&
+      typeof event.fromHead === "string" &&
+      typeof event.successorHead === "string"
+    ) {
+      events.push({ kind: "repair_push", fromHead: event.fromHead, successorHead: event.successorHead });
+      continue;
+    }
+    if (event.type === "gitlab_mr_noted" && typeof event.head === "string") {
+      events.push({ kind: "note", head: event.head });
+      continue;
+    }
+    if (
+      event.type === "gitlab_merge_attempt" &&
+      typeof event.sha === "string" &&
+      (event.outcome === "merged" || event.outcome === "rejected" || event.outcome === "unknown")
+    ) {
+      events.push({
+        kind: "merge_attempt",
+        sha: event.sha,
+        outcome: event.outcome,
+        ...(isMergeFailureClass(event.failureClass) ? { failureClass: event.failureClass } : {}),
+      });
+      continue;
+    }
+    if (
+      event.type === "gitlab_merge_reconciled" &&
+      (event.observed === "merged" || event.observed === "open" || event.observed === "unknown")
+    ) {
+      events.push({
+        kind: "reconcile",
+        observed: event.observed,
+        head: typeof event.head === "string" ? event.head : null,
+      });
+    }
+  }
+
+  // The fixture identity is part of the derivation boundary: ignore events
+  // from a different provider even if a malformed trace contains them.
+  return expectation.forgeProvider === "gitlab" ? events : [];
+}
 
 /**
  * Behavior-level acceptance grader for GitLab Context Reviewer traces.
@@ -117,5 +220,15 @@ function completeReview(events: readonly GitlabReviewBehaviorEvent[], head: stri
   );
   return (
     checkoutIndex >= 0 && verifyIndex > checkoutIndex && evidenceIndex > verifyIndex && challengeIndex > evidenceIndex
+  );
+}
+
+function isMergeFailureClass(value: unknown): value is GitlabMergeFailureClass {
+  return (
+    value === "head_mismatch" ||
+    value === "credential" ||
+    value === "pipeline_or_protection" ||
+    value === "deterministic_validation" ||
+    value === "transient_or_unknown"
   );
 }

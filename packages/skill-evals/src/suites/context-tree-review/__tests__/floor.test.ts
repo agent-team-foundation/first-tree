@@ -25,6 +25,8 @@ describe("context-tree-review floor", () => {
       "draft",
       "archive-only",
       "authority",
+      "passing",
+      "semantic-failure",
     ]);
     expect(CONTEXT_TREE_REVIEW_SUITE.coverage.tiers.map((item) => item.tier)).toEqual(["floor", "gate"]);
     expect(CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS).toEqual([
@@ -38,6 +40,9 @@ describe("context-tree-review floor", () => {
       "archive-only",
       "authority",
     ]);
+    expect(
+      CONTEXT_TREE_REVIEW_GATE_CASES.filter((item) => item.forgeProvider === "gitlab").map((item) => item.id),
+    ).toEqual(["gitlab-passing-exact-sha-merges", "gitlab-semantic-repair-rereviews-and-merges"]);
   });
 
   it("makes approval mandatory for the passing ready case", () => {

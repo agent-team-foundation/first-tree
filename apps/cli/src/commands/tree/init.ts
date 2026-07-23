@@ -626,6 +626,20 @@ function providerBindingsMatch(
   );
 }
 
+function gitlabSeedConnectionMatches(
+  provider: ContextTreeProvider,
+  expected: ContextTreeSeedPreflight["gitlabConnection"],
+  current: ContextTreeSeedPreflight["gitlabConnection"],
+): boolean {
+  return (
+    provider !== "gitlab" ||
+    (expected !== null &&
+      current !== null &&
+      expected.id === current.id &&
+      expected.instanceOrigin === current.instanceOrigin)
+  );
+}
+
 function forgeActorLogin(provider: ContextTreeProvider, host: string): string {
   let login: string;
   if (provider === "github") {
@@ -679,12 +693,11 @@ function printProviderInitSummary(context: CommandContext, summary: ProviderInit
 
 async function runProviderInitCommand(context: CommandContext, options: TreeInitOptions): Promise<void> {
   const input = parseProviderInitOptions(options);
-  const coordinate = resolveContextTreeForgeCoordinate(input.provider, input.repo);
+  const requestedCoordinate = resolveContextTreeForgeCoordinate(input.provider, input.repo);
   const reader = createMemberSdk();
-  const seedTarget = { provider: input.provider, repo: coordinate.repoUrl, branch: input.branch };
-  const admission = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
+  const admission = await preflightContextTreeSeed(reader, { teamId: input.teamId });
   if (admission.state.status === "bound") {
-    if (!providerBindingsMatch(admission.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
+    if (!providerBindingsMatch(admission.state.binding, input.provider, requestedCoordinate.repoUrl, input.branch)) {
       throw new Error(
         `Team ${input.teamId} is already bound to ${admission.state.binding.repo}#${admission.state.binding.branch}; provider-aware Seed never replaces an existing binding.`,
       );
@@ -708,6 +721,16 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
       `Team ${input.teamId}'s current unbound branch is ${admission.state.branch}, not requested branch ${input.branch}. Update the Team setting first or use that exact branch.`,
     );
   }
+  if (input.provider === "gitlab" && !admission.gitlabConnection) {
+    throw new Error(
+      "GitLab Context Tree initialization requires the Team's current GitLab connection before any remote mutation.",
+    );
+  }
+  const coordinate = resolveContextTreeForgeCoordinate(
+    input.provider,
+    input.repo,
+    admission.gitlabConnection?.instanceOrigin,
+  );
 
   // Resolve all Server authority and local credential prerequisites before a
   // remote create. The Cloud never receives or uses the forge credentials.
@@ -760,7 +783,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     mkdirSync(treeRoot, { recursive: true });
   }
 
-  const beforeRemote = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
+  const beforeRemote = await preflightContextTreeSeed(reader, { teamId: input.teamId });
   if (beforeRemote.state.status === "bound") {
     if (providerBindingsMatch(beforeRemote.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
       printProviderInitSummary(context, {
@@ -786,6 +809,11 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
       `Team ${input.teamId}'s unbound branch changed from ${input.branch} to ${beforeRemote.state.branch} before repository ${input.mode}. No remote mutation was attempted.`,
     );
   }
+  if (!gitlabSeedConnectionMatches(input.provider, admission.gitlabConnection, beforeRemote.gitlabConnection)) {
+    throw new Error(
+      `Team ${input.teamId}'s GitLab connection changed before repository ${input.mode}. No remote mutation was attempted.`,
+    );
+  }
 
   try {
     if (input.mode === "create") {
@@ -801,9 +829,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     }
   } catch (error) {
     if (input.mode === "adopt") throw error;
-    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget }).catch(
-      () => null,
-    );
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
     const bindingTruth =
       current?.state.status === "bound"
         ? ` Team ${input.teamId} is now bound to ${current.state.binding.repo}#${current.state.binding.branch}.`
@@ -815,7 +841,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
     );
   }
 
-  const beforeFinalize = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget });
+  const beforeFinalize = await preflightContextTreeSeed(reader, { teamId: input.teamId });
   if (beforeFinalize.state.status === "bound") {
     if (!providerBindingsMatch(beforeFinalize.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
       throw new Error(
@@ -841,6 +867,11 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
       `${createdButNotBoundGuidance(coordinate.webUrl)} Team ${input.teamId}'s unbound branch changed from ${input.branch} to ${beforeFinalize.state.branch}.`,
     );
   }
+  if (!gitlabSeedConnectionMatches(input.provider, admission.gitlabConnection, beforeFinalize.gitlabConnection)) {
+    throw new Error(
+      `${createdButNotBoundGuidance(coordinate.webUrl)} Team ${input.teamId}'s GitLab connection changed after the remote mutation.`,
+    );
+  }
 
   let outcome: ProviderInitSummary["outcome"] = input.mode === "create" ? "created" : "adopted";
   try {
@@ -857,9 +888,7 @@ async function runProviderInitCommand(context: CommandContext, options: TreeInit
   } catch (error) {
     // A lost response has unknown mutation status. Reconcile once, read-only,
     // and converge only when the exact provider/repo/branch is now authoritative.
-    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId, target: seedTarget }).catch(
-      () => null,
-    );
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
     if (
       current?.state.status === "bound" &&
       providerBindingsMatch(current.state.binding, input.provider, coordinate.repoUrl, input.branch)
