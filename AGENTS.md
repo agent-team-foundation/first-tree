@@ -99,6 +99,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 
 - Route each check to its layer, in the same PR as the behavior: deterministic behavior -> product tests (Vitest per package; `pnpm test` before a PR); agent-skill regression -> `@first-tree/skill-evals`; judgment / live / cross-surface validation -> `@first-tree/qa` cases (`packages/qa/cases/`, prose prompts, not executable specs). If a check can be made stable, it belongs in product tests.
 - Before a PR, self-check QA risk. If the change touches a cross-surface, runtime, provider/auth, WS/inbox, or boot/health path: find or add a matching case under `packages/qa/cases/` and flag in the PR that formal QA is warranted. Formal QA is human-requested, not a CI gate or auto runner; load `skills/first-tree-qa/SKILL.md` and follow `packages/qa/AGENTS.md` when asked to run it.
+- For repo-local skill changes, keep scope and verification minimal: do not run the full skill-eval suite; run only no-model code checks such as `eval:floor`, never live-agent or LLM-backed gate, quality, or periodic cases. Do not add or rewrite eval cases unless the requested contract changes or a reproduced regression needs one minimal case. Review blocks only on in-scope requirement or constraint violations, regressions, safety risks, deterministic check failures, or contradictions; everything else is a non-blocking follow-up.
 
 ## Git Conventions
 
