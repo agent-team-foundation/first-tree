@@ -45,8 +45,10 @@ import {
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
 import {
+  getOrgContextReviewRuntime,
   getOrgContextTreeBinding,
   getOrgContextTreeSettingState,
+  isOrgContextReviewRuntimeCurrent,
   putInitializedOrgContextTreeBinding,
 } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
@@ -328,7 +330,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw err;
     }
 
-    const initializedBinding = contextTreeActiveBindingSchema.safeParse({ repo: repo.cloneUrl, branch: BRANCH });
+    const initializedBinding = contextTreeActiveBindingSchema.safeParse({
+      provider: "github",
+      repo: repo.cloneUrl,
+      branch: BRANCH,
+    });
     const initializedResponse = initializeContextTreeResponseSchema.safeParse({
       repo: repo.cloneUrl,
       htmlUrl: repo.htmlUrl,
@@ -447,6 +453,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       setting = await putInitializedOrgContextTreeBinding(app.db, finalScope.organizationId, initializedBinding.data, {
         expectedUnboundBranch: existing.branch,
         updatedBy: finalScope.userId,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       });
     } catch (error) {
       if (error instanceof ConflictError) {
@@ -496,10 +503,22 @@ async function resolveTreeSetupRecoveryMessage(
     const installation = await findInstallationByOrg(app.db, organizationId);
     mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
   }
-  const snapshot = await getContextTreeSnapshot({
-    ...binding,
-    ...(mintResult?.ok ? { githubToken: mintResult.token } : {}),
-  });
+  const reviewRuntime = await getOrgContextReviewRuntime(app.db, organizationId);
+  const snapshot = await getContextTreeSnapshot(
+    {
+      ...binding,
+      ...(mintResult?.ok ? { githubToken: mintResult.token } : {}),
+    },
+    undefined,
+    {
+      gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin,
+      gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+      gitlabExecutionGuard:
+        reviewRuntime.provider === "gitlab"
+          ? () => isOrgContextReviewRuntimeCurrent(app.db, organizationId, reviewRuntime)
+          : undefined,
+    },
+  );
   if (snapshot.snapshotStatus !== "unavailable") return null;
   const recoveryAction = mintResult ? await resolveContextTreeRecoveryAction(snapshot, binding, mintResult) : null;
   return treeSetupRecoveryMessage(

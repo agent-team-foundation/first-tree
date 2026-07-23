@@ -97,6 +97,7 @@ describe("org context-tree CLI", () => {
     expect(successEnvelope()).toEqual({
       ok: true,
       data: {
+        provider: "github",
         repo: "https://github.com/acme/context-tree.git",
         branch: "main",
         enabled: true,

@@ -146,7 +146,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(fetchSpy).toHaveBeenCalledTimes(7);
 
     const setting = await getOrgContextTreeBinding(app.db, admin.organizationId);
-    expect(setting).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(setting).toEqual({ provider: "github", repo: CLONE_URL, branch: "main" });
   });
 
   it("does not let initialize overwrite a binding committed after its absent precheck", async () => {
@@ -156,6 +156,7 @@ owners: [${ACCOUNT_LOGIN}]
     await renameOrg(app, admin.organizationId, "Acme Labs");
 
     const setterBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/setter-context-tree.git",
       branch: "setter-branch",
     };
@@ -338,6 +339,7 @@ owners: [${ACCOUNT_LOGIN}]
     const installationId = await seedInstallation(app, admin.organizationId);
     await renameOrg(app, admin.organizationId, "Acme Labs");
     const concurrentBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/manual-context-tree.git",
       branch: "manual",
     };
@@ -544,7 +546,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 409 repo_unavailable when GitHub refuses to create the tree repo for the installation", async () => {
@@ -629,7 +635,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 409 repo_unavailable when an existing deterministic repo is not readable by the installation", async () => {
@@ -686,7 +696,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(0);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(6);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("adopts an existing repo with an existing validation workflow without rewriting it", async () => {
@@ -720,7 +734,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(201);
     expect(fileWrites).toBe(0);
     expect(fetchSpy).toHaveBeenCalledTimes(5);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("returns 502 and does not persist context_tree when the validation workflow write fails", async () => {
@@ -847,7 +865,11 @@ owners: [${ACCOUNT_LOGIN}]
       expect(workflowReadCalls).toBe(2);
       expect(workflowCreateCalls).toBe(1);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
-      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
+        repo: CLONE_URL,
+        branch: "main",
+      });
     });
   }
 
@@ -897,7 +919,11 @@ owners: [${ACCOUNT_LOGIN}]
     expect(repoCreateCalls).toBe(2);
     expect(rootNodeWriteCalls).toBe(2);
     expect(workflowWriteCalls).toBe(1);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   it("can retry successfully when DB save failed after repo creation, root-node write, and workflow write", async () => {
@@ -948,7 +974,11 @@ owners: [${ACCOUNT_LOGIN}]
     const second = await initialize(app, admin);
     expect(second.statusCode).toBe(201);
     expect(repoCreateCalls).toBe(2);
-    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+      provider: "github",
+      repo: CLONE_URL,
+      branch: "main",
+    });
   });
 
   describe("personal GitHub account (User installation)", () => {
@@ -988,6 +1018,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(userReposCalls).toBe(0);
       expect(fetchSpy).toHaveBeenCalledTimes(6);
       expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });
@@ -1046,6 +1077,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(repoGetCalls).toBe(2);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
       expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
+        provider: "github",
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });

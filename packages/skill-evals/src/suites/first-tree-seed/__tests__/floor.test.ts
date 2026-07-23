@@ -37,11 +37,14 @@ describe("first-tree-seed floor invariants", () => {
     expect(parsed.get("description")).toContain("yet: either no tree exists");
   });
 
-  it("supports GitLab sources without inventing GitLab tree provisioning", () => {
+  it("supports explicit GitHub and GitLab tree provisioning", () => {
     expect(skillMarkdown).toContain("Use `gh` for GitHub and `glab` for GitLab");
     expect(skillMarkdown).toMatch(/Preserve the full GitLab\s+namespace/);
-    expect(skillMarkdown).toMatch(/current\s+`first-tree tree init` provisioning is GitHub-only/);
-    expect(skillMarkdown).toContain("do not substitute `glab` for this command");
+    expect(skillMarkdown).toContain('--provider "<github|gitlab>" --repo "<exact-repository-url>"');
+    expect(skillMarkdown).toContain("--create --dir");
+    expect(skillMarkdown).toContain("Use `--adopt` instead of `--create`");
+    expect(skillMarkdown).toContain("Never\ncreate or simulate an approval rule");
+    expect(skillMarkdown).toContain("exact-SHA merge");
     expect(skillMarkdown).toContain("Never substitute `/settings/github`");
   });
 
@@ -73,9 +76,9 @@ describe("first-tree-seed floor invariants", () => {
     expect(durableProgressMarkdown).toContain("binding change");
   });
 
-  it("publishes the portable Seed skill as version 0.4.1", () => {
-    expect(skillVersion).toBe("0.4.1");
-    expect(skillMarkdown).toContain("version: 0.4.1");
+  it("publishes the portable Seed skill as version 0.5.0", () => {
+    expect(skillVersion).toBe("0.5.0");
+    expect(skillMarkdown).toContain("version: 0.5.0");
     expect(skillMarkdown).toContain('first-tree: ">=0.5.16 <0.6.0"');
     expect(openAiMetadata).toContain("$first-tree-seed");
     expect(openAiMetadata).toContain("merged durable progress");

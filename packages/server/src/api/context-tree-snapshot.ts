@@ -17,7 +17,12 @@ import {
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../services/github-app-token.js";
-import { getOrgContextTreeBinding, resolveUserPrimaryOrgId } from "../services/org-settings.js";
+import {
+  getOrgContextReviewRuntime,
+  getOrgContextTreeBinding,
+  isOrgContextReviewRuntimeCurrent,
+  resolveUserPrimaryOrgId,
+} from "../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../services/session-event.js";
 
 const querySchema = z
@@ -43,9 +48,20 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       });
     }
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
+    const reviewRuntime = orgId
+      ? await timing.time("gitlab_runtime", () => getOrgContextReviewRuntime(app.db, orgId))
+      : null;
     const window = query.window ?? "7d";
     const snapshot = await timing.time("snapshot_build", () =>
-      getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
+      getContextTreeSnapshot({ ...binding, githubToken }, window, {
+        timing: timing.add,
+        gitlabInstanceOrigin: reviewRuntime?.gitlabConnection?.instanceOrigin,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+        gitlabExecutionGuard:
+          orgId && reviewRuntime?.provider === "gitlab"
+            ? () => isOrgContextReviewRuntimeCurrent(app.db, orgId, reviewRuntime)
+            : undefined,
+      }),
     );
     // Probe (only on the unavailable + GitHub-remote + minted path) whether the
     // App genuinely cannot read the repo. Keep the structured diagnosis for API

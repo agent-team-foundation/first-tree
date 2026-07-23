@@ -121,6 +121,7 @@ export type RegisterResult = {
 };
 
 export type ContextTreeConfig = {
+  provider?: "github" | "gitlab";
   repo: string | null;
   branch: string | null;
 };

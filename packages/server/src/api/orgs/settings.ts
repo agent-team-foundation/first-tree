@@ -48,10 +48,11 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       return orgSettingsService.putInitializedOrgContextTreeBinding(
         app.db,
         scope.organizationId,
-        { repo: input.repo, branch: input.branch },
+        { provider: input.provider, repo: input.repo, branch: input.branch },
         {
           updatedBy: scope.userId,
           expectedUnboundBranch: input.expectedUnboundBranch,
+          gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
         },
       );
     },
@@ -87,6 +88,7 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
         memberId: scope.memberId,
         updatedBy: scope.userId,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       });
     },
   );

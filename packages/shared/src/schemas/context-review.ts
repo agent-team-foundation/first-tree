@@ -73,23 +73,48 @@ export type ContextReviewSubmissionState = z.infer<typeof contextReviewSubmissio
  * Ordinary message writes cannot set the reserved `contextReview*` namespace,
  * so clients may use this complete shape as a synthetic GitHub sender signal.
  */
-export const contextReviewerRunMessageMetadataSchema = z
+const contextReviewerRunCommonSchema = {
+  contextTreeReviewer: z.literal(true),
+  contextReviewRunId: z.string().min(1),
+  contextReviewOrganizationId: z.string().min(1),
+  contextReviewReviewerAgentUuid: z.string().min(1),
+  contextReviewReviewerManagerHumanAgentId: z.string().min(1),
+};
+
+const githubContextReviewerRunMessageMetadataSchema = z
   .object({
     source: z.literal("github"),
-    contextTreeReviewer: z.literal(true),
-    contextReviewRunId: z.string().min(1),
+    ...contextReviewerRunCommonSchema,
     contextReviewRepository: z
       .string()
       .trim()
       .regex(/^[^\s/]+\/[^\s/]+$/),
     contextReviewPrNumber: z.number().int().positive(),
     contextReviewHeadSha: commitOidSchema.optional(),
-    contextReviewOrganizationId: z.string().min(1),
-    contextReviewReviewerAgentUuid: z.string().min(1),
-    contextReviewReviewerManagerHumanAgentId: z.string().min(1),
     contextReviewSubmission: contextReviewSubmissionStateSchema,
   })
   .passthrough();
+
+const gitlabContextReviewerRunMessageMetadataSchema = z
+  .object({
+    source: z.literal("gitlab"),
+    ...contextReviewerRunCommonSchema,
+    contextReviewRepository: z
+      .string()
+      .trim()
+      .regex(/^[^\s/]+\/[^\s]+$/),
+    contextReviewConnectionId: z.string().min(1),
+    contextReviewProjectId: z.number().int().positive(),
+    contextReviewMrIid: z.number().int().positive(),
+    contextReviewEntityUrl: z.string().url(),
+    contextReviewHeadSha: commitOidSchema.optional(),
+  })
+  .passthrough();
+
+export const contextReviewerRunMessageMetadataSchema = z.discriminatedUnion("source", [
+  githubContextReviewerRunMessageMetadataSchema,
+  gitlabContextReviewerRunMessageMetadataSchema,
+]);
 export type ContextReviewerRunMessageMetadata = z.infer<typeof contextReviewerRunMessageMetadataSchema>;
 
 export const contextReviewSubmitRequestSchema = z

@@ -17,6 +17,7 @@ describe("Context Review config", () => {
         "reviewer-1",
       ),
     ).toEqual({
+      provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
       enabled: true,
@@ -67,6 +68,7 @@ describe("Context Review config", () => {
 
   it("combines the two existing member-readable settings without requiring a local Agent", async () => {
     const getMemberContextTreeSetting = vi.fn(async () => ({
+      provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
     }));
@@ -81,6 +83,7 @@ describe("Context Review config", () => {
     await expect(
       readMemberContextReviewConfig({ getMemberContextTreeSetting, getMemberContextTreeFeatures }, "org-1"),
     ).resolves.toEqual({
+      provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
       enabled: true,

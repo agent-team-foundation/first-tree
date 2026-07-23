@@ -1,7 +1,9 @@
 import {
+  type ContextTreeProvider,
   orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
   orgContextTreeOutputSchema,
+  resolveContextTreeProvider,
 } from "@first-tree/shared";
 
 export type ContextReviewConfigReader = {
@@ -15,6 +17,7 @@ export type MemberContextReviewConfigReader = {
 };
 
 export type ContextReviewConfigResult = {
+  provider: ContextTreeProvider | null;
   repo: string | null;
   branch: string | null;
   enabled: boolean;
@@ -32,16 +35,23 @@ export function normalizeContextReviewConfig(
   const value = response as Record<string, unknown>;
   const repo = value.repo;
   const branch = value.branch;
+  const provider = value.provider;
   const features = orgContextTreeFeaturesStorageSchema.safeParse({ contextReviewer: value.contextReviewer });
   if (
     !features.success ||
+    (provider !== undefined && provider !== "github" && provider !== "gitlab") ||
     (repo !== null && typeof repo !== "string") ||
     (branch !== null && typeof branch !== "string")
   ) {
     throw new SyntaxError("The server returned an invalid Context Review configuration");
   }
   const config = features.data.contextReviewer;
+  const resolvedProvider = resolveContextTreeProvider({
+    repo: typeof repo === "string" ? repo : null,
+    declaredProvider: provider,
+  }).provider;
   return {
+    provider: resolvedProvider,
     repo,
     branch,
     enabled: config.enabled,
@@ -69,7 +79,12 @@ export async function readMemberContextReviewConfig(
     throw new SyntaxError("The server returned an invalid Context Review configuration");
   }
   const reviewer = features.data.contextReviewer;
+  const provider = resolveContextTreeProvider({
+    repo: binding.data.repo,
+    declaredProvider: binding.data.provider,
+  }).provider;
   return {
+    provider,
     repo: binding.data.repo ?? null,
     branch: binding.data.branch ?? null,
     enabled: reviewer.enabled,

@@ -40,6 +40,8 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     repo: "https://github.com/acme/context-tree.git",
     branch: "main",
   });
+  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue(null);
+  const isOrgContextReviewRuntimeCurrent = vi.fn().mockResolvedValue(true);
   const getContextTreeSnapshot = vi.fn().mockResolvedValue(snapshot);
   const isGithubRemoteBinding = vi.fn().mockReturnValue(input.githubRemote ?? false);
   const findInstallationByOrg = vi.fn().mockResolvedValue({ installationId: 123 });
@@ -71,7 +73,12 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../scope/require-user.js", () => ({
     requireUser: () => ({ userId: "user-1" }),
   }));
-  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTreeBinding, resolveUserPrimaryOrgId }));
+  vi.doMock("../services/org-settings.js", () => ({
+    getOrgContextReviewRuntime,
+    getOrgContextTreeBinding,
+    isOrgContextReviewRuntimeCurrent,
+    resolveUserPrimaryOrgId,
+  }));
   vi.doMock("../services/context-tree-snapshot.js", () => ({
     contextTreeSnapshotWindowDays: () => 7,
     getContextTreeSnapshot,
@@ -99,8 +106,10 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     mocks: {
       buildContextTreeIoSummary,
       findInstallationByOrg,
+      getOrgContextReviewRuntime,
       getContextTreeSnapshot,
       getOrgContextTreeBinding,
+      isOrgContextReviewRuntimeCurrent,
       isGithubRemoteBinding,
       mintContextTreeInstallationToken,
       resolveContextTreeRecoveryAction,

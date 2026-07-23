@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { contextTreeActiveBindingSchema } from "./org-settings.js";
+import { contextTreeActiveBindingSchema, contextTreeProviderSchema } from "./org-settings.js";
 
 export const CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES = [
   "CONTEXT_TREE_WRITE_AUTHORITY_FAILED",
@@ -10,6 +10,7 @@ export const CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES = [
   "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE",
   "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED",
   "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH",
+  "CONTEXT_TREE_WRITE_GITLAB_CONNECTION_MISMATCH",
 ] as const;
 
 export const contextTreeWritePreflightErrorCodeSchema = z.enum(CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES);
@@ -19,7 +20,7 @@ const githubLoginSchema = z.string().trim().min(1).max(255);
 
 export const contextTreeWritePreflightRequestSchema = z
   .object({
-    requesterGithubLogin: githubLoginSchema,
+    requesterGithubLogin: githubLoginSchema.optional(),
   })
   .strict();
 export type ContextTreeWritePreflightRequest = z.infer<typeof contextTreeWritePreflightRequestSchema>;
@@ -27,9 +28,27 @@ export type ContextTreeWritePreflightRequest = z.infer<typeof contextTreeWritePr
 export const contextTreeWritePreflightResponseSchema = z
   .object({
     organizationId: z.string().min(1),
+    provider: contextTreeProviderSchema,
     binding: contextTreeActiveBindingSchema,
+    gitlabInstanceOrigin: z.string().url().nullable(),
     reviewerAgentUuid: z.string().min(1),
-    requesterGithubLogin: githubLoginSchema,
+    requesterGithubLogin: githubLoginSchema.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.provider === "gitlab" && value.gitlabInstanceOrigin === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["gitlabInstanceOrigin"],
+        message: "GitLab Write preflight requires the current instance origin",
+      });
+    }
+    if (value.provider === "github" && value.gitlabInstanceOrigin !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["gitlabInstanceOrigin"],
+        message: "GitHub Write preflight must not include a GitLab instance origin",
+      });
+    }
+  });
 export type ContextTreeWritePreflightResponse = z.infer<typeof contextTreeWritePreflightResponseSchema>;

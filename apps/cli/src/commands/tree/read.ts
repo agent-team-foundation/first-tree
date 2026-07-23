@@ -39,6 +39,7 @@ export async function runTreeReadCommand(context: CommandContext): Promise<void>
     }
 
     print.status("Team", activation.teamId);
+    print.status("Provider", activation.binding.provider ?? "legacy/unresolved");
     print.status("Binding", `${activation.binding.repo}#${activation.binding.branch}`);
     print.status("Exact commit", activation.commit);
     print.status("Snapshot", activation.snapshotPath);

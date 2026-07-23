@@ -3,14 +3,23 @@ import { dirname, join, resolve } from "node:path";
 
 import {
   type ContextTreeActiveBinding,
+  type ContextTreeProvider,
   canonicalGitRepoUrl,
   classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
+  contextTreeBranchSchema,
   contextTreeInstallationInfoResponseSchema,
+  sameContextTreeRepository,
 } from "@first-tree/shared";
 import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
+import {
+  adoptContextTreeRemote,
+  createContextTreeRemote,
+  resolveContextTreeForgeCoordinate,
+  verifyContextTreeForgeAuth,
+} from "../../core/context-tree-forge/index.js";
 import {
   type ContextTreeSeedAuthorityReader,
   type ContextTreeSeedPreflight,
@@ -33,6 +42,11 @@ const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 const DEFAULT_BRANCH = "main";
 
 export type TreeInitOptions = {
+  provider?: ContextTreeProvider;
+  repo?: string;
+  branch?: string;
+  create: boolean;
+  adopt: boolean;
   owner?: string;
   name?: string;
   title?: string;
@@ -388,13 +402,24 @@ async function bindOrgToTree(args: {
   orgId: string;
   repoUrl: string;
   branch: string;
+  provider?: ContextTreeProvider;
+  expectedUnboundBranch: string;
   rebind: boolean;
 }): Promise<void> {
   const path = args.rebind ? "settings/context_tree" : "settings/context_tree/initialize";
   const endpoint = `${args.serverUrl}/api/v1/orgs/${encodeURIComponent(args.orgId)}/${path}`;
   const requestBody = args.rebind
-    ? { repo: args.repoUrl, branch: args.branch }
-    : { repo: args.repoUrl, branch: args.branch, expectedUnboundBranch: args.branch };
+    ? {
+        ...(args.provider ? { provider: args.provider } : {}),
+        repo: args.repoUrl,
+        branch: args.branch,
+      }
+    : {
+        ...(args.provider ? { provider: args.provider } : {}),
+        repo: args.repoUrl,
+        branch: args.branch,
+        expectedUnboundBranch: args.expectedUnboundBranch,
+      };
   const createdButNotBound = createdButNotBoundGuidance(args.repoUrl);
   let res: Response;
   try {
@@ -443,6 +468,7 @@ async function bindOrgToTree(args: {
   if (
     !hasExplicitBindingFields ||
     !binding.success ||
+    (args.provider !== undefined && binding.data.provider !== args.provider) ||
     binding.data.repo !== args.repoUrl ||
     binding.data.branch !== args.branch
   ) {
@@ -477,6 +503,11 @@ type ExistingTreeInitSummary = {
 
 function readOptions(command: Command): TreeInitOptions {
   const raw = command.opts() as {
+    provider?: ContextTreeProvider;
+    repo?: string;
+    branch?: string;
+    create?: boolean;
+    adopt?: boolean;
     owner?: string;
     name?: string;
     title?: string;
@@ -489,6 +520,11 @@ function readOptions(command: Command): TreeInitOptions {
     team?: string;
   };
   return {
+    provider: raw.provider,
+    repo: raw.repo,
+    branch: raw.branch,
+    create: raw.create === true,
+    adopt: raw.adopt === true,
     owner: raw.owner,
     name: raw.name,
     title: raw.title,
@@ -503,9 +539,344 @@ function readOptions(command: Command): TreeInitOptions {
   };
 }
 
+type ProviderInitSummary = {
+  outcome: "created" | "adopted" | "converged" | "existing";
+  provider: ContextTreeProvider;
+  mode: "create" | "adopt";
+  teamId: string;
+  repo: string;
+  branch: string;
+  treeRoot: string | null;
+  bound: true;
+  withWorkflow: boolean;
+  coverage: CoverageResult | null;
+};
+
+function usesProviderInitContract(options: TreeInitOptions): boolean {
+  return (
+    options.provider !== undefined ||
+    options.repo !== undefined ||
+    options.branch !== undefined ||
+    options.create ||
+    options.adopt
+  );
+}
+
+function parseProviderInitOptions(options: TreeInitOptions): {
+  provider: ContextTreeProvider;
+  repo: string;
+  branch: string;
+  mode: "create" | "adopt";
+  teamId: string;
+} {
+  if (options.provider !== "github" && options.provider !== "gitlab") {
+    throw new Error("--provider must be exactly github or gitlab.");
+  }
+  const repo = options.repo?.trim();
+  if (!repo || repo !== options.repo) {
+    throw new Error("--repo must be one exact repository URL without surrounding whitespace.");
+  }
+  const branch = contextTreeBranchSchema.safeParse(options.branch);
+  if (!branch.success) {
+    throw new Error("--branch must be an explicit valid branch name.");
+  }
+  const teamId = options.team?.trim();
+  if (!teamId || teamId !== options.team) {
+    throw new Error("--team is required by the provider-aware Seed contract.");
+  }
+  if (options.create === options.adopt) {
+    throw new Error("Pass exactly one repository mode: --create or --adopt.");
+  }
+  if (
+    !options.bind ||
+    options.rebind ||
+    options.org !== undefined ||
+    options.owner !== undefined ||
+    options.name !== undefined
+  ) {
+    throw new Error(
+      "The provider-aware Seed contract cannot be combined with --no-bind, --rebind, --org, --owner, or --name.",
+    );
+  }
+  if (options.adopt && (options.public || options.withWorkflow || options.title !== undefined)) {
+    throw new Error("--adopt cannot be combined with --public, --with-workflow, or --title.");
+  }
+  if (options.provider === "gitlab" && options.withWorkflow) {
+    throw new Error("GitLab Seed does not create a GitHub Actions workflow; omit --with-workflow.");
+  }
+  return {
+    provider: options.provider,
+    repo,
+    branch: branch.data,
+    mode: options.create ? "create" : "adopt",
+    teamId,
+  };
+}
+
+function providerBindingsMatch(
+  binding: ContextTreeActiveBinding,
+  provider: ContextTreeProvider,
+  repo: string,
+  branch: string,
+): boolean {
+  return (
+    binding.provider === provider &&
+    binding.branch === branch &&
+    sameContextTreeRepository({ left: binding.repo, right: repo, provider })
+  );
+}
+
+function forgeActorLogin(provider: ContextTreeProvider, host: string): string {
+  const output =
+    provider === "github"
+      ? runCommand("gh", ["api", "user", "--hostname", host, "--jq", ".login"], process.cwd())
+      : runCommand("glab", ["api", "user", "--hostname", host, "--jq", ".username"], process.cwd(), {
+          GITLAB_HOST: host,
+        });
+  const login = output.trim();
+  const hasControlCharacter = [...login].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (!login || hasControlCharacter) {
+    throw new Error(`Could not resolve the authenticated ${provider === "github" ? "GitHub" : "GitLab"} username.`);
+  }
+  return login;
+}
+
+function printProviderInitSummary(context: CommandContext, summary: ProviderInitSummary): void {
+  if (context.options.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+  console.log("Context Tree Init\n");
+  console.log(`  Team:         ${summary.teamId}`);
+  console.log(`  Provider:     ${summary.provider}`);
+  console.log(`  Repository:   ${summary.repo}`);
+  console.log(`  Branch:       ${summary.branch}`);
+  console.log(`  Mode:         ${summary.mode}`);
+  console.log(`  Local tree:   ${summary.treeRoot ?? "not created (binding already exists)"}`);
+  console.log(`  Bound:        yes`);
+  if (summary.coverage) {
+    console.log("\nGitHub App coverage:");
+    console.log(`  ! ${summary.coverage.note}`);
+  }
+  console.log(
+    summary.outcome === "existing"
+      ? "\nThe exact Context Tree binding already exists; no local or remote mutation was attempted."
+      : `\nContext Tree ${summary.outcome} and bound.`,
+  );
+}
+
+async function runProviderInitCommand(context: CommandContext, options: TreeInitOptions): Promise<void> {
+  const input = parseProviderInitOptions(options);
+  const coordinate = resolveContextTreeForgeCoordinate(input.provider, input.repo);
+  const reader = createMemberSdk();
+  const admission = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  if (admission.state.status === "bound") {
+    if (!providerBindingsMatch(admission.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
+      throw new Error(
+        `Team ${input.teamId} is already bound to ${admission.state.binding.repo}#${admission.state.binding.branch}; provider-aware Seed never replaces an existing binding.`,
+      );
+    }
+    printProviderInitSummary(context, {
+      outcome: "existing",
+      provider: input.provider,
+      mode: input.mode,
+      teamId: input.teamId,
+      repo: admission.state.binding.repo,
+      branch: admission.state.binding.branch,
+      treeRoot: null,
+      bound: true,
+      withWorkflow: input.provider === "github" && options.withWorkflow,
+      coverage: null,
+    });
+    return;
+  }
+  if (admission.state.branch !== input.branch) {
+    throw new Error(
+      `Team ${input.teamId}'s current unbound branch is ${admission.state.branch}, not requested branch ${input.branch}. Update the Team setting first or use that exact branch.`,
+    );
+  }
+
+  // Resolve all Server authority and local credential prerequisites before a
+  // remote create. The Cloud never receives or uses the forge credentials.
+  const serverUrl = resolveServerUrl();
+  const accessToken = await ensureFreshAccessToken();
+  ensureToolAvailable("git");
+  ensureToolAvailable(input.provider === "github" ? "gh" : "glab");
+  verifyContextTreeForgeAuth(coordinate, process.cwd(), runCommand);
+  const actorLogin = forgeActorLogin(input.provider, coordinate.host);
+
+  let coverage: CoverageResult | null = null;
+  if (input.provider === "github") {
+    const lookup = await fetchInstallation(serverUrl, accessToken, input.teamId);
+    if (lookup.kind === "error") {
+      throw new Error(
+        `Could not read the Team's GitHub App installation before repository initialization (server ${lookup.status || "unreachable"}).`,
+      );
+    }
+    coverage = buildCoverage(lookup, coordinate.path);
+  }
+
+  const repoName = coordinate.path.split("/").at(-1);
+  if (!repoName) throw new Error("The exact repository URL does not contain a repository name.");
+  const treeRoot = resolve(process.cwd(), options.dir?.trim() || repoName);
+  if (existsSync(treeRoot) && readdirSync(treeRoot).length > 0) {
+    throw new Error(`Target directory is not empty: ${treeRoot}. Pass --dir to choose another path.`);
+  }
+
+  if (input.mode === "create") {
+    mkdirSync(treeRoot, { recursive: true });
+    writeScaffold(
+      treeRoot,
+      buildScaffoldFiles({
+        title: options.title?.trim() || repoName,
+        ownerLogin: actorLogin,
+        withWorkflow: input.provider === "github" && options.withWorkflow,
+        branch: input.branch,
+      }),
+    );
+    runCommand("git", ["init", "-b", input.branch], treeRoot);
+    const verifySummary = verifyTreeRoot(treeRoot);
+    if (!verifySummary.ok) {
+      throw new Error(
+        `Scaffolded tree failed \`tree verify\`:\n  - ${collectVerifyErrors(verifySummary).join("\n  - ")}`,
+      );
+    }
+    runCommand("git", ["add", "-A"], treeRoot);
+    runCommand("git", ["commit", "-m", "chore: bootstrap context tree"], treeRoot);
+  } else {
+    mkdirSync(treeRoot, { recursive: true });
+  }
+
+  const beforeRemote = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  if (beforeRemote.state.status === "bound") {
+    if (providerBindingsMatch(beforeRemote.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
+      printProviderInitSummary(context, {
+        outcome: "converged",
+        provider: input.provider,
+        mode: input.mode,
+        teamId: input.teamId,
+        repo: beforeRemote.state.binding.repo,
+        branch: beforeRemote.state.binding.branch,
+        treeRoot,
+        bound: true,
+        withWorkflow: input.provider === "github" && options.withWorkflow,
+        coverage,
+      });
+      return;
+    }
+    throw new Error(
+      `Team ${input.teamId} became bound to ${beforeRemote.state.binding.repo}#${beforeRemote.state.binding.branch} before repository ${input.mode}. No remote mutation was attempted.`,
+    );
+  }
+  if (beforeRemote.state.branch !== input.branch) {
+    throw new Error(
+      `Team ${input.teamId}'s unbound branch changed from ${input.branch} to ${beforeRemote.state.branch} before repository ${input.mode}. No remote mutation was attempted.`,
+    );
+  }
+
+  try {
+    if (input.mode === "create") {
+      createContextTreeRemote({ coordinate, branch: input.branch, public: options.public, treeRoot }, runCommand);
+    } else {
+      adoptContextTreeRemote({ coordinate, branch: input.branch, treeRoot }, runCommand);
+      const verifySummary = verifyTreeRoot(treeRoot);
+      if (!verifySummary.ok) {
+        throw new Error(
+          `Adopted repository failed \`tree verify\`:\n  - ${collectVerifyErrors(verifySummary).join("\n  - ")}`,
+        );
+      }
+    }
+  } catch (error) {
+    if (input.mode === "adopt") throw error;
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
+    const bindingTruth =
+      current?.state.status === "bound"
+        ? ` Team ${input.teamId} is now bound to ${current.state.binding.repo}#${current.state.binding.branch}.`
+        : current?.state.status === "unbound"
+          ? ` Team ${input.teamId} remains unbound at branch ${current.state.branch}.`
+          : " The Team binding could not be reconciled.";
+    throw new Error(
+      `${input.provider === "github" ? "GitHub" : "GitLab"} create/push did not complete cleanly for ${coordinate.webUrl}; the remote repository may exist and no rollback is claimed.${bindingTruth} Inspect the exact remote and binding before retrying. Cause: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const beforeFinalize = await preflightContextTreeSeed(reader, { teamId: input.teamId });
+  if (beforeFinalize.state.status === "bound") {
+    if (!providerBindingsMatch(beforeFinalize.state.binding, input.provider, coordinate.repoUrl, input.branch)) {
+      throw new Error(
+        `${createdButNotBoundGuidance(coordinate.webUrl)} Team ${input.teamId} became bound to ${beforeFinalize.state.binding.repo}#${beforeFinalize.state.binding.branch}. That binding was preserved.`,
+      );
+    }
+    printProviderInitSummary(context, {
+      outcome: "converged",
+      provider: input.provider,
+      mode: input.mode,
+      teamId: input.teamId,
+      repo: beforeFinalize.state.binding.repo,
+      branch: beforeFinalize.state.binding.branch,
+      treeRoot,
+      bound: true,
+      withWorkflow: input.provider === "github" && options.withWorkflow,
+      coverage,
+    });
+    return;
+  }
+  if (beforeFinalize.state.branch !== input.branch) {
+    throw new Error(
+      `${createdButNotBoundGuidance(coordinate.webUrl)} Team ${input.teamId}'s unbound branch changed from ${input.branch} to ${beforeFinalize.state.branch}.`,
+    );
+  }
+
+  let outcome: ProviderInitSummary["outcome"] = input.mode === "create" ? "created" : "adopted";
+  try {
+    await bindOrgToTree({
+      serverUrl,
+      accessToken,
+      orgId: input.teamId,
+      repoUrl: coordinate.repoUrl,
+      branch: input.branch,
+      provider: input.provider,
+      expectedUnboundBranch: input.branch,
+      rebind: false,
+    });
+  } catch (error) {
+    // A lost response has unknown mutation status. Reconcile once, read-only,
+    // and converge only when the exact provider/repo/branch is now authoritative.
+    const current = await preflightContextTreeSeed(reader, { teamId: input.teamId }).catch(() => null);
+    if (
+      current?.state.status === "bound" &&
+      providerBindingsMatch(current.state.binding, input.provider, coordinate.repoUrl, input.branch)
+    ) {
+      outcome = "converged";
+    } else {
+      throw error;
+    }
+  }
+
+  printProviderInitSummary(context, {
+    outcome,
+    provider: input.provider,
+    mode: input.mode,
+    teamId: input.teamId,
+    repo: coordinate.repoUrl,
+    branch: input.branch,
+    treeRoot,
+    bound: true,
+    withWorkflow: input.provider === "github" && options.withWorkflow,
+    coverage,
+  });
+}
+
 async function runInitCommand(context: CommandContext): Promise<void> {
   try {
     const options = readOptions(context.command);
+    if (usesProviderInitContract(options)) {
+      await runProviderInitCommand(context, options);
+      return;
+    }
 
     const usesExplicitTeam = options.team !== undefined;
     if (usesExplicitTeam && options.org !== undefined) {
@@ -739,6 +1110,8 @@ async function runInitCommand(context: CommandContext): Promise<void> {
             orgId: bindContext.orgId,
             repoUrl: htmlUrl,
             branch: treeBranch,
+            provider: "github",
+            expectedUnboundBranch: treeBranch,
             rebind: options.rebind,
           });
         } catch (error) {
@@ -841,6 +1214,11 @@ function printExistingSummary(context: CommandContext, summary: ExistingTreeInit
 
 function configureInitCommand(command: Command): void {
   command
+    .option("--provider <provider>", "repository provider for the portable Seed contract: github or gitlab")
+    .option("--repo <url>", "exact Context Tree repository URL")
+    .option("--branch <branch>", "exact Context Tree branch")
+    .option("--create", "create the exact repository and push a verified scaffold")
+    .option("--adopt", "adopt an existing readable Context Tree repository without overwriting history")
     .option(
       "--owner <login>",
       "GitHub owner for the repo; in the bound path defaults to the team's App installation account (must match it), otherwise the authed gh user",
@@ -860,7 +1238,7 @@ export const initCommand: SubcommandModule = {
   name: "init",
   alias: "",
   summary: "",
-  description: "Create a new team Context Tree repo with local gh, seed it, push, and bind it.",
+  description: "Create or adopt a GitHub/GitLab Context Tree repo with local forge credentials and bind it.",
   action: runInitCommand,
   configure: configureInitCommand,
 };

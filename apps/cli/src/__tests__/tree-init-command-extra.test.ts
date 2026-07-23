@@ -71,7 +71,11 @@ function bindingResponse(init?: FetchInit): Response {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new Error("expected an object binding request body");
   }
-  return response({ repo: Reflect.get(body, "repo"), branch: Reflect.get(body, "branch") });
+  return response({
+    provider: Reflect.get(body, "provider"),
+    repo: Reflect.get(body, "repo"),
+    branch: Reflect.get(body, "branch"),
+  });
 }
 
 function mockGithubApi(): void {
@@ -220,6 +224,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({
+            provider: "github",
             repo: "https://github.com/acme-org/case-owner-context-tree",
             branch: "main",
             expectedUnboundBranch: "main",
@@ -352,6 +357,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({
+            provider: "github",
             repo: "https://github.com/acme-org/acme-context-tree",
             branch: "main",
             expectedUnboundBranch: "main",
@@ -408,6 +414,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({
+            provider: "github",
             repo: "https://github.com/octocat/branch-only-context-tree",
             branch: "trunk",
             expectedUnboundBranch: "trunk",
@@ -443,7 +450,11 @@ describe("tree init command action", () => {
       }
       if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
         expect(init.body).toBe(
-          JSON.stringify({ repo: "https://github.com/octocat/rebind-context-tree", branch: "trunk" }),
+          JSON.stringify({
+            provider: "github",
+            repo: "https://github.com/octocat/rebind-context-tree",
+            branch: "trunk",
+          }),
         );
         return bindingResponse(init);
       }
@@ -500,6 +511,7 @@ describe("tree init command action", () => {
     expect(legacyPutCall).toBeDefined();
     expect(new URL(String(legacyPutCall?.[0])).search).toBe("");
     expect(JSON.parse(String(legacyPutCall?.[1]?.body))).toEqual({
+      provider: "github",
       repo: "https://github.com/octocat/legacy-server-context-tree",
       branch: "legacy-release",
     });
@@ -532,6 +544,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
           expect(init.body).toBe(
             JSON.stringify({
+              provider: "github",
               repo: "https://github.com/octocat/literal-branch-context-tree",
               branch: "!release+candidate",
               expectedUnboundBranch: "!release+candidate",
@@ -579,7 +592,11 @@ describe("tree init command action", () => {
         }
         if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
           expect(init.body).toBe(
-            JSON.stringify({ repo: "https://github.com/octocat/rebound-tree-context-tree", branch: "release/next" }),
+            JSON.stringify({
+              provider: "github",
+              repo: "https://github.com/octocat/rebound-tree-context-tree",
+              branch: "release/next",
+            }),
           );
           return bindingResponse(init);
         }
@@ -1321,6 +1338,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({
+            provider: "github",
             repo: "https://github.com/octocat/conflict-context-tree",
             branch: "trunk",
             expectedUnboundBranch: "trunk",
@@ -1824,5 +1842,87 @@ describe("tree init command action", () => {
     expect(error).toContain("remote repository may exist");
     expect(error).toContain("no rollback is claimed");
     expect(error).toContain("remains unbound at branch main");
+  });
+
+  it("creates and binds a nested Self-Managed GitLab repository with only local glab/git credentials", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    treeSharedMocks.runCommand.mockImplementation((tool: string, args: string[]) => {
+      if (args[0] === "--version") return "";
+      if (tool === "glab" && args[0] === "auth" && args[1] === "status") return "";
+      if (tool === "glab" && args[0] === "api" && args[1] === "user") return "gitlab-admin";
+      if (tool === "glab" && args[0] === "repo" && args[1] === "view") {
+        throw new Error("404 project not found");
+      }
+      return "";
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_gitlab/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          return response({
+            organizationId: "team_gitlab",
+            state: { status: "unbound", branch: "main" },
+          });
+        }
+        if (url.endsWith("/api/v1/orgs/team_gitlab/settings/context_tree/initialize") && init?.method === "POST") {
+          expect(JSON.parse(String(init.body))).toEqual({
+            provider: "gitlab",
+            repo: "ssh://git@gitlab.example/acme/platform/context-tree.git",
+            branch: "main",
+            expectedUnboundBranch: "main",
+          });
+          return bindingResponse(init);
+        }
+        throw new Error(`unexpected GitLab Seed request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(
+        commandWithOptions({
+          team: "team_gitlab",
+          provider: "gitlab",
+          repo: "ssh://git@gitlab.example/acme/platform/context-tree.git",
+          branch: "main",
+          create: true,
+          bind: true,
+          dir: "gitlab-tree",
+        }),
+        true,
+      ),
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(seedReads).toBe(3);
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "glab",
+      ["auth", "status", "--hostname", "gitlab.example"],
+      base,
+    );
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "glab",
+      ["repo", "create", "acme/platform/context-tree", "--private", "--defaultBranch", "main"],
+      expect.any(String),
+      { GITLAB_HOST: "gitlab.example" },
+    );
+    expect(treeSharedMocks.runCommand.mock.calls.some(([tool]) => tool === "gh")).toBe(false);
+    const root = join(base, "gitlab-tree");
+    expect(readFileSync(join(root, "NODE.md"), "utf8")).toContain("gitlab-admin");
+    expect(existsSync(join(root, ".github"))).toBe(false);
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({
+      outcome: "created",
+      provider: "gitlab",
+      mode: "create",
+      teamId: "team_gitlab",
+      repo: "ssh://git@gitlab.example/acme/platform/context-tree.git",
+      branch: "main",
+      bound: true,
+    });
   });
 });

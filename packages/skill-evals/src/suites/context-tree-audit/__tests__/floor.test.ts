@@ -22,8 +22,9 @@ describe("context-tree-audit static contract", () => {
     expect(skill).toContain("tree tree --no-pull");
     expect(skill).toContain("focused tree PR/MR");
     expect(skill).toMatch(/A GitHub tree PR\s+continues through `context-tree-review`/u);
-    expect(skill).toContain("ordinary independent GitLab MR review");
-    expect(skill).toMatch(/never invoke\s+`context-tree-review` for it/u);
+    expect(skill).toContain("A GitLab tree MR also continues");
+    expect(skill).toContain("first-tree gitlab follow");
+    expect(skill).toContain("Audit never creates a Reviewer Chat");
     const openai = readFileSync(join(repoRoot, "skills", "context-tree-audit", "agents", "openai.yaml"), "utf8");
     expect(openai).toContain("provider-appropriate independent review path");
     const writeSkill = readFileSync(join(repoRoot, "skills", "first-tree-write", "SKILL.md"), "utf8");

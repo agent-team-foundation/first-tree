@@ -143,6 +143,7 @@ describe("FirstTreeHubSDK public surface", () => {
       jsonResponse([{ agentId: "agent-2", name: "peer", displayName: "Peer" }]),
       jsonResponse({ repo: null, branch: null, contextReviewer: { enabled: false, agentUuid: null } }),
       jsonResponse({
+        provider: "github",
         repo: "https://github.com/acme/context-tree.git",
         branch: "main",
         contextReviewer: { enabled: true, agentUuid: "agent-1" },
@@ -163,6 +164,7 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.addChatParticipant("chat-1", { agentName: "peer" })).resolves.toHaveLength(1);
     await expect(sdk.getAgentContextTreeConfig()).resolves.toEqual({ repo: null, branch: null });
     await expect(sdk.getAgentContextReviewConfig()).resolves.toEqual({
+      provider: "github",
       repo: "https://github.com/acme/context-tree.git",
       branch: "main",
       contextReviewer: { enabled: true, agentUuid: "agent-1" },

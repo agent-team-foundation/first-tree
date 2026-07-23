@@ -1,9 +1,15 @@
-import { deriveRepoLocalPath } from "@first-tree/shared";
+import {
+  type ContextTreeProvider,
+  deriveRepoLocalPath,
+  resolveContextTreeProvider,
+  resolveGitLabRepositoryWebIdentity,
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listAllAgents, type ManagedAgent } from "../api/agents.js";
+import { gitlabConnectionsQueryKey, listGitlabConnectionsAt } from "../api/gitlab-connections.js";
 import {
   getContextTreeFeaturesSetting,
   getContextTreeSetting,
@@ -55,6 +61,8 @@ export function ContextTreeSettingsPanel() {
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState(false);
   const hasBinding = !!settingQuery.data?.repo;
+  const provider =
+    settingQuery.data?.provider ?? resolveContextTreeProvider({ repo: settingQuery.data?.repo ?? null }).provider;
 
   useEffect(() => {
     if (!settingQuery.data) return;
@@ -103,6 +111,7 @@ export function ContextTreeSettingsPanel() {
             <BoundTree
               repo={settingQuery.data?.repo ?? ""}
               branch={settingQuery.data?.branch ?? "main"}
+              provider={provider}
               isAdmin={isAdmin}
               editing={editing}
               onToggleEdit={() => setEditing((v) => !v)}
@@ -116,6 +125,10 @@ export function ContextTreeSettingsPanel() {
               onGoToContext={() => navigate("/context")}
             />
           )}
+
+          {hasBinding && provider === "gitlab" ? (
+            <GitlabAutomationHealth repo={settingQuery.data?.repo ?? ""} organizationId={organizationId} />
+          ) : null}
 
           {/* Manual binding form — admin only, on demand. Edits an existing
               binding, or points at a tree repo the team already has elsewhere.
@@ -148,7 +161,7 @@ export function ContextTreeSettingsPanel() {
             </form>
           ) : null}
         </div>
-        <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} />
+        <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} provider={provider} />
       </div>
     </Section>
   );
@@ -159,6 +172,7 @@ export function ContextTreeSettingsPanel() {
 function BoundTree({
   repo,
   branch,
+  provider,
   isAdmin,
   editing,
   onToggleEdit,
@@ -166,6 +180,7 @@ function BoundTree({
 }: {
   repo: string;
   branch: string;
+  provider: ContextTreeProvider | null;
   isAdmin: boolean;
   editing: boolean;
   onToggleEdit: () => void;
@@ -183,6 +198,15 @@ function BoundTree({
             <span className="text-label shrink-0" style={{ color: "var(--fg-3)" }}>
               {branch} branch
             </span>
+            {provider ? (
+              <span className="text-label shrink-0" style={{ color: "var(--fg-3)", textTransform: "capitalize" }}>
+                {provider}
+              </span>
+            ) : (
+              <span className="text-label shrink-0" style={{ color: "var(--warning)" }}>
+                Provider unresolved
+              </span>
+            )}
           </div>
           <div
             className="text-caption"
@@ -209,6 +233,43 @@ function BoundTree({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organizationId: string | null }) {
+  const connections = useQuery({
+    queryKey: gitlabConnectionsQueryKey(organizationId),
+    queryFn: () => (organizationId ? listGitlabConnectionsAt(organizationId) : Promise.resolve([])),
+    enabled: !!organizationId,
+  });
+  if (connections.isLoading) {
+    return <div className="text-label text-muted-foreground mt-2">Loading GitLab Webhook health…</div>;
+  }
+  if (connections.error) {
+    return <div className="text-label text-destructive mt-2">GitLab Webhook health unavailable.</div>;
+  }
+  const connection = connections.data?.[0] ?? null;
+  const originMatches =
+    connection !== null &&
+    resolveGitLabRepositoryWebIdentity(repo, connection.instanceOrigin)?.originMatchesConnection === true;
+  const status = !connection
+    ? "Degraded · no GitLab Webhook connection"
+    : !originMatches
+      ? `Degraded · Webhook origin ${connection.instanceOrigin} does not match the repository origin`
+      : connection.endpointSeen
+        ? "Ready · inbound Webhook observed"
+        : "Waiting · configure the project Webhook";
+  return (
+    <div
+      className="text-label"
+      style={{
+        color: originMatches && connection?.endpointSeen ? "var(--success)" : "var(--fg-3)",
+        marginTop: "var(--sp-2)",
+      }}
+    >
+      Automatic MR review: {status}
+      {connection?.health.lastValidInboundAt ? ` · last valid inbound ${connection.health.lastValidInboundAt}` : ""}
     </div>
   );
 }
@@ -274,7 +335,15 @@ function NoTree({
  *  persists only once an agent is chosen. State is driven from the server query,
  *  not a local mirror, and every save passes an explicit payload so an instant
  *  handler never reads stale local state. */
-function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; isAdmin: boolean }) {
+function ContextReviewerSection({
+  hasBinding,
+  isAdmin,
+  provider,
+}: {
+  hasBinding: boolean;
+  isAdmin: boolean;
+  provider: ContextTreeProvider | null;
+}) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
   const { justSaved, markSaved } = useJustSaved();
@@ -333,6 +402,8 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
     },
   });
   const saving = featuresMutation.isPending;
+  const reviewLabel = provider === "gitlab" ? "Automatic MR review" : "Automatic PR review";
+  const reviewActionLabel = provider === "gitlab" ? "automatic MR review" : "automatic PR review";
 
   const handleToggle = (next: boolean) => {
     if (next) {
@@ -370,7 +441,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
             <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
               <div className="min-w-0">
                 <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                  {titleWithSemantics("Automatic PR review", justSaved)}
+                  {titleWithSemantics(reviewLabel, justSaved)}
                 </span>
                 {serverEnabled && selectedReviewer ? (
                   <button
@@ -393,6 +464,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
             </div>
           ) : (
             <ContextReviewerReadOnly
+              reviewLabel={reviewLabel}
               contextReviewer={
                 featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
               }
@@ -414,7 +486,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
                 </div>
               ) : (
                 <Select
-                  aria-label="Automatic PR review agent"
+                  aria-label={`${reviewLabel} agent`}
                   value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
                   onChange={handleSelectAgent}
                   disabled={saving}
@@ -432,13 +504,13 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
               )}
               {awaitingAgent ? (
                 <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                  Select an agent to enable automatic PR review.
+                  Select an agent to enable {reviewActionLabel}.
                 </div>
               ) : null}
               {reviewerMissing && reviewerCandidates.length > 0 ? (
                 <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                  Current reviewer is not an active organization agent. Choose another agent, or turn automatic PR
-                  review off.
+                  Current reviewer is not an active organization agent. Choose another agent, or turn{" "}
+                  {reviewActionLabel} off.
                 </div>
               ) : null}
               {managedAgentsQuery.error ? (
@@ -453,8 +525,9 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
 
           {serverEnabled ? (
             <div className="text-label" style={{ color: "var(--fg-3)" }}>
-              Changing the reviewer does not move open PRs immediately. Re-run the Context Tree write task for an
-              existing PR to hand it over in the same Chat.
+              Changing the reviewer does not move open {provider === "gitlab" ? "MRs" : "PRs"} immediately. Re-run the
+              Context Tree write task for an existing {provider === "gitlab" ? "MR" : "PR"} to hand it over in the same
+              Chat.
             </div>
           ) : null}
 
@@ -475,7 +548,9 @@ function agentLabel(agent: ManagedAgent): string {
 
 function ContextReviewerReadOnly({
   contextReviewer,
+  reviewLabel,
 }: {
+  reviewLabel: string;
   contextReviewer: {
     enabled: boolean;
     agentUuid: string | null;
@@ -492,7 +567,7 @@ function ContextReviewerReadOnly({
     <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
       <div className="min-w-0">
         <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          Automatic PR review
+          {reviewLabel}
         </span>
         {contextReviewer.enabled ? (
           <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>

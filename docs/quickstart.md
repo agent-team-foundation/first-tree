@@ -89,10 +89,11 @@ The final step launches your first conversation and lands you in the
 chat, not as more wizard steps. Your agent walks you through the key
 operations, one approved step at a time:
 
-- **Point it at your code** — share a local project folder path or a GitHub
-  repo URL, and the agent reads your project and gets a first task done. (No
-  GitHub setup is required up front; you can connect the First Tree GitHub App
-  later, when a task needs it.)
+- **Point it at your code** — share a local project folder path or a GitHub or
+  GitLab repo URL, and the agent reads your project and gets a first task done.
+  No forge setup is required up front. GitHub automation uses the First Tree
+  GitHub App; GitLab automation uses an admin-configured inbound project
+  Webhook while the agent keeps repository credentials on its own host.
 - **Build your team's Context Tree** — once it has shown real value from your
   code, your agent offers to build your team's shared memory: it proposes an
   initial structure and fills it in from your code, with you approving each

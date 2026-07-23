@@ -10,6 +10,12 @@ export async function agentContextTreeInfoRoutes(app: FastifyInstance): Promise<
    */
   app.get("/context-tree/info", async (request) => {
     const identity = requireAgent(request);
-    return getOrgContextReviewRuntime(app.db, identity.organizationId);
+    const runtime = await getOrgContextReviewRuntime(app.db, identity.organizationId);
+    return {
+      provider: runtime.provider,
+      repo: runtime.repo,
+      branch: runtime.branch,
+      contextReviewer: runtime.contextReviewer,
+    };
   });
 }

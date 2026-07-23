@@ -1,7 +1,7 @@
 ---
 name: first-tree-read
-version: 0.1.2
-description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports an explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content; `context-tree-review` owns its supported GitHub PR snapshots, GitLab MRs use ordinary review on a stable MR head, and `context-tree-audit` owns audit snapshots.
+version: 0.2.0
+description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports GitHub and GitLab explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content; `context-tree-review` owns trusted provider-scoped review snapshots and `context-tree-audit` owns audit snapshots.
 ---
 
 # First Tree Read
@@ -21,12 +21,9 @@ request to audit stored normal content on the default branch belongs to
 
 Do not use this skill for a Cloud Context Reviewer wake-up or an explicit
 request to review a Context Tree PR/MR. `context-tree-review` has exclusive
-precedence for its supported GitHub PR path and reads only from its detached,
+precedence for its supported GitHub PR or GitLab MR path and reads only from its detached,
 validated PR-head snapshot; running this workflow first would refresh and
-inspect the main tree checkout instead. For a GitLab MR, do not claim Context
-Review support or run this task-scoped main-tree workflow as a substitute. Use
-the ordinary GitLab review workflow on a stable MR head under the generated
-Context Tree Policy.
+inspect the main tree checkout instead.
 
 Do not use this skill for an explicit broad audit of the whole tree, a domain,
 or selected stored normal paths. `context-tree-audit` has exclusive precedence
@@ -71,7 +68,8 @@ first-tree --json tree read --team "<team-id>" --snapshot "$byo_read_root/contex
 ```
 
 The command performs the fixed sequence: selected-Team active-membership plus
-current-binding check through the Server, one strict Git fetch, exact commit
+provider-aware current-binding check through the Server, one strict Git fetch
+using only the Agent host's local git credential, exact commit
 resolution, then an atomic detached snapshot. Its success receipt reports the
 Team, binding repository and branch, exact commit, and absolute snapshot path.
 Treat that receipt as the task's read identity.
@@ -79,7 +77,9 @@ Treat that receipt as the task's read identity.
 Authority, binding, fetch, commit, or snapshot failure is fail-closed. Do not
 read another checkout, retry against cached content, use a mutable branch, or
 fall back to a managed workspace clone. Returned errors identify the failed
-stage without exposing credentials.
+stage without exposing credentials. A private GitLab tree remains readable
+here when the host identity has access; Cloud Web Context anonymous-read
+availability is unrelated and never supplies or stores a GitLab credential.
 
 Run hierarchy help from inside the activated snapshot before any selector:
 

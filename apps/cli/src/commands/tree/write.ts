@@ -14,7 +14,7 @@ function configureTreeWriteCommand(command: Command): void {
   command
     .option("--team <team-id>", "explicit First Tree Team id for this task")
     .option("--snapshot <directory>", "existing exact task snapshot created by tree read")
-    .option("--github-login <login>", "current local gh login for the PR author");
+    .option("--github-login <login>", "current local gh login for a GitHub PR author (not used for GitLab)");
 }
 
 export async function runTreeWriteCommand(context: CommandContext): Promise<void> {
@@ -32,7 +32,7 @@ export async function runTreeWriteCommand(context: CommandContext): Promise<void
       {
         teamId: options.team ?? "",
         snapshotPath: options.snapshot ?? "",
-        requesterGithubLogin: options.githubLogin ?? "",
+        ...(options.githubLogin ? { requesterGithubLogin: options.githubLogin } : {}),
       },
     );
 
@@ -42,11 +42,16 @@ export async function runTreeWriteCommand(context: CommandContext): Promise<void
     }
 
     print.status("Team", preflight.teamId);
+    print.status("Provider", preflight.provider);
     print.status("Binding", `${preflight.binding.repo}#${preflight.binding.branch}`);
     print.status("Exact base", preflight.baseCommit);
     print.status("Snapshot", preflight.snapshotPath);
     print.status("Current Reviewer", preflight.reviewerAgentUuid);
-    print.status("GitHub identity", preflight.requesterGithubLogin);
+    if (preflight.requesterGithubLogin) {
+      print.status("GitHub identity", preflight.requesterGithubLogin);
+    } else {
+      print.status("GitLab identity", "validated by local glab for the bound host");
+    }
   } catch (error) {
     if (error instanceof ContextTreeWritePreflightCliError) {
       print.fail(error.code, error.message, error.exitCode, { status: error.stage });

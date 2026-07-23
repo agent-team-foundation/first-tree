@@ -351,6 +351,7 @@ Body`);
       root: null,
       reason: "Context Tree is not configured.",
       staleReason: null,
+      contentAvailability: { status: "unavailable", accessMode: null, reason: "not_configured" },
     });
     await expect(
       contextTreeSnapshotTestInternals.resolveContextTreeRoot(null, `file://${join(testDir, "local-tree")}`, null),
@@ -358,6 +359,7 @@ Body`);
       root: join(testDir, "local-tree"),
       reason: "ok",
       staleReason: null,
+      contentAvailability: { status: "available", accessMode: "local" },
     });
 
     const missingLocal = join(testDir, "missing-local");
@@ -365,6 +367,7 @@ Body`);
       root: null,
       reason: `Context Tree checkout not found at ${missingLocal}.`,
       staleReason: null,
+      contentAvailability: { status: "unavailable", accessMode: "local", reason: "sync_failed" },
     });
 
     await expect(
@@ -373,6 +376,7 @@ Body`);
       root: join(testDir, "local-tree"),
       reason: "ok",
       staleReason: null,
+      contentAvailability: { status: "available", accessMode: "local" },
     });
 
     const missingRepoPath = join(process.cwd(), "not a repo url");
@@ -382,6 +386,7 @@ Body`);
       root: null,
       reason: `Context Tree checkout not found at ${missingRepoPath}.`,
       staleReason: null,
+      contentAvailability: { status: "unavailable", accessMode: "local", reason: "sync_failed" },
     });
   });
 
@@ -393,6 +398,7 @@ Body`);
         root: null,
         reason: `Configured Context Tree branch "${branch}" is invalid.`,
         staleReason: null,
+        contentAvailability: { status: "unavailable", accessMode: "anonymous", reason: "invalid_binding" },
       });
     }
 

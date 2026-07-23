@@ -137,6 +137,7 @@ export function registerOrgContextTreeCommand(org: Command): void {
 
       print.status("Context Review", config.enabled ? (config.assigned ? "Assigned" : "Not assigned") : "Off");
       print.status("Reviewer", config.agentUuid ?? "Not assigned");
+      print.status("Provider", config.provider ?? "Unknown");
       print.status("Repository", config.repo ?? "Unbound");
       print.status("Branch", config.branch ?? "Unbound");
       success(config);

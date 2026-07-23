@@ -63,6 +63,21 @@ afterEach(() => {
 });
 
 describe("buildApp — token-lifetime config validation", () => {
+  it("fails startup for an invalid or permanently blocked GitLab egress CIDR", async () => {
+    const cfg: Config = {
+      ...baseConfig,
+      gitlab: {
+        egressAllowlist: [
+          {
+            origin: "https://gitlab.internal",
+            addressPolicy: { kind: "cidrs", cidrs: ["127.0.0.0/8"] },
+          },
+        ],
+      },
+    };
+    await expect(buildApp(cfg)).rejects.toThrow(/permanently blocked range/u);
+  });
+
   it("rejects a malformed refresh token expiry", async () => {
     const cfg: Config = { ...baseConfig, auth: { ...baseConfig.auth, refreshTokenExpiry: "30x" } };
     let app: FastifyInstance | undefined;

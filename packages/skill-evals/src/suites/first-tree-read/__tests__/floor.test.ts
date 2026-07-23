@@ -33,15 +33,15 @@ describe("first-tree-read floor contract", () => {
     expect(skill).toContain("pull-before-selector behavior");
   });
 
-  it("routes PR/MR review without claiming GitLab Context Review support", () => {
+  it("routes provider-scoped PR/MR review to Context Review", () => {
     expect(skill).toContain("request to review a Context Tree PR/MR");
-    expect(skill).toContain("For a GitLab MR, do not claim Context\nReview support");
-    expect(skill).toContain("ordinary GitLab review workflow on a stable MR head");
+    expect(skill).toContain("supported GitHub PR or GitLab MR path");
+    expect(skill).toContain("Cloud Web Context anonymous-read\navailability is unrelated");
     expect(skill).toContain("PR/MR or issue titles");
   });
 
   it("keeps version metadata aligned", () => {
-    expect(skillVersion).toBe("0.1.2");
+    expect(skillVersion).toBe("0.2.0");
     expect(skill).toContain(`version: ${skillVersion}`);
   });
 });

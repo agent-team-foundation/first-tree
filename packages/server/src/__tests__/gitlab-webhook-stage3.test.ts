@@ -33,6 +33,7 @@ import { pollInbox } from "../services/inbox.js";
 import { getCallerEngagement, setChatEngagement } from "../services/me-chat.js";
 import { deleteMember } from "../services/member.js";
 import { deactivateMembership, MEMBER_STATUSES, reactivateMembership } from "../services/membership.js";
+import { putOrgSetting } from "../services/org-settings.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -111,6 +112,72 @@ describe("GitLab Stage 3 personnel routing", () => {
     });
     return { admin, delegate, connection, link };
   }
+
+  it("dispatches one reserved Context Reviewer run for an old-GitLab MR without personnel routing", async () => {
+    const app = getApp();
+    const { admin, delegate, connection } = await setupTarget(app);
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "git@gitlab.internal:Acme/Reviews.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [
+          { origin: "https://gitlab.internal", addressPolicy: { kind: "cidrs", cidrs: ["10.0.0.0/8"] } },
+        ],
+      },
+    );
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: delegate.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    const payload = mergeRequestPayload({ projectPath: "Acme/Reviews" });
+    const first = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/14.10.5");
+    expect(first.statusCode).toBe(200);
+
+    const reviewerChats = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
+    const reviewerChat = reviewerChats.find((chat) => chat.metadata.contextTreeReviewer === true);
+    expect(reviewerChat?.metadata).toMatchObject({
+      source: "gitlab",
+      entityType: "pull_request",
+      contextTreeReviewer: true,
+      reviewerAgentUuid: delegate.uuid,
+    });
+    expect(reviewerChat?.topic).toContain("Context Review MR !17");
+
+    const reviewerMessages = reviewerChat
+      ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id))
+      : [];
+    expect(reviewerMessages).toHaveLength(1);
+    expect(reviewerMessages[0]?.metadata).toMatchObject({
+      source: "gitlab",
+      contextTreeReviewer: true,
+      contextReviewConnectionId: connection.connectionId,
+      contextReviewProjectId: 801,
+      contextReviewMrIid: 17,
+      contextReviewReviewerAgentUuid: delegate.uuid,
+    });
+    expect(reviewerMessages[0]?.metadata).not.toHaveProperty("contextReviewSubmission");
+    expect(reviewerMessages[0]?.content).toContain("Never call `first-tree tree review`");
+    expect(reviewerMessages[0]?.content).toContain("exact-SHA squash merge");
+
+    const duplicate = await postMr(app, connection.bearer, payload, "context-review-old-gitlab", "GitLab/14.10.5");
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toMatchObject({ outcome: "duplicate" });
+    expect(
+      reviewerChat ? await app.db.select().from(messages).where(eq(messages.chatId, reviewerChat.id)) : [],
+    ).toHaveLength(1);
+  });
 
   it("normalizes capability-driven reviewer, legacy assignee, delta, and schema-anomaly semantics", () => {
     const normalize = (body: object) =>

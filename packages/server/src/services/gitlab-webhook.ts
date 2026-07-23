@@ -370,17 +370,19 @@ export function normalizeGitlabWebhook(input: {
     kind =
       action === "open"
         ? "opened"
-        : action === "update"
-          ? optionalString(attrs.oldrev)
-            ? "synchronized"
-            : descriptionChanged || titleChanged
-              ? "edited"
-              : becameReady || personnel.reviewerAdded.length > 0
-                ? "review_requested"
-                : personnel.assigneeAdded.length > 0
-                  ? "assigned"
-                  : null
-          : null;
+        : action === "reopen"
+          ? "reopened"
+          : action === "update"
+            ? optionalString(attrs.oldrev)
+              ? "synchronized"
+              : descriptionChanged || titleChanged
+                ? "edited"
+                : becameReady || personnel.reviewerAdded.length > 0
+                  ? "review_requested"
+                  : personnel.assigneeAdded.length > 0
+                    ? "assigned"
+                    : null
+            : null;
   } else if (expected === "issue") {
     attrs = object(payload.object_attributes, "object_attributes");
     entityType = "issue";

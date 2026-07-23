@@ -53,12 +53,14 @@ describe("tree write command action", () => {
     const sdk = { preflightMemberContextTreeWrite: vi.fn() };
     memberMocks.createMemberSdk.mockReturnValue(sdk);
     const preflight = {
+      provider: "github" as const,
       teamId: "team-a",
       binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       baseCommit: "a".repeat(40),
       snapshotPath: "/tmp/task-snapshot",
       reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
+      gitlabInstanceOrigin: null,
     };
     coreMocks.preflightContextTreeWrite.mockImplementationOnce(async (reader, input) => {
       await reader.preflightMemberContextTreeWrite(
@@ -91,12 +93,14 @@ describe("tree write command action", () => {
 
   it("prints the complete authority tuple for a human invocation", async () => {
     const preflight = {
+      provider: "github" as const,
       teamId: "team-a",
       binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       baseCommit: "b".repeat(40),
       snapshotPath: "/tmp/task-snapshot",
       reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
+      gitlabInstanceOrigin: null,
     };
     coreMocks.preflightContextTreeWrite.mockResolvedValueOnce(preflight);
     const { runTreeWriteCommand } = await import("../commands/tree/write.js");
@@ -108,6 +112,7 @@ describe("tree write command action", () => {
 
     expect(outputMocks.status.mock.calls).toEqual([
       ["Team", "team-a"],
+      ["Provider", "github"],
       ["Binding", "https://github.com/acme/context-tree.git#main"],
       ["Exact base", preflight.baseCommit],
       ["Snapshot", preflight.snapshotPath],

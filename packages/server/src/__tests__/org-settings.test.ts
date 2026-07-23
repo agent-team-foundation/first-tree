@@ -13,6 +13,7 @@ import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createGitlabConnection } from "../services/gitlab-connections.js";
 import * as orgSettingsService from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
@@ -151,7 +152,7 @@ describe("org-settings service", () => {
       { branch: null },
       { updatedBy: admin.userId },
     );
-    expect(after).toEqual({ repo: "https://github.com/example/tree", branch: "main" });
+    expect(after).toEqual({ provider: "github", repo: "https://github.com/example/tree", branch: "main" });
   });
 
   it("putOrgSetting replaces the repo without changing an existing branch", async () => {
@@ -173,7 +174,11 @@ describe("org-settings service", () => {
       { repo: "git@github.com:example/rebound.git" },
       { updatedBy: admin.userId },
     );
-    expect(rebound).toEqual({ repo: "git@github.com:example/rebound.git", branch: "release/2026-07" });
+    expect(rebound).toEqual({
+      provider: "github",
+      repo: "git@github.com:example/rebound.git",
+      branch: "release/2026-07",
+    });
   });
 
   it("putInitializedOrgContextTreeBinding initializes a branch-only row", async () => {
@@ -356,7 +361,11 @@ describe("org-settings service", () => {
       { repo: "https://github.com/example/repaired.git", branch: "main" },
       { updatedBy: admin.userId },
     );
-    expect(repaired).toEqual({ repo: "https://github.com/example/repaired.git", branch: "main" });
+    expect(repaired).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/repaired.git",
+      branch: "main",
+    });
     await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(repaired);
 
     const [row] = await app.db
@@ -369,7 +378,11 @@ describe("org-settings service", () => {
         ),
       );
     expect(row).toEqual({
-      value: { repo: "https://github.com/example/repaired.git", branch: "main" },
+      value: {
+        provider: "github",
+        repo: "https://github.com/example/repaired.git",
+        branch: "main",
+      },
       version: 2,
     });
   });
@@ -548,7 +561,11 @@ describe("org-settings service", () => {
           ),
         );
       expect(row).toEqual({
-        value: { repo: "https://github.com/example/concurrent.git", branch: "release/concurrent" },
+        value: {
+          provider: "github",
+          repo: "https://github.com/example/concurrent.git",
+          branch: "release/concurrent",
+        },
         version: expectedVersion,
       });
     } finally {
@@ -815,6 +832,48 @@ describe("org-settings service", () => {
         { updatedBy: admin.userId, memberId: admin.memberId },
       ),
     ).rejects.toThrow(/Pull requests: write permission/);
+  });
+
+  it("context_tree_features uses a matching GitLab Webhook connection instead of GitHub App permissions", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Private GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal", addressPolicy: { kind: "public" } }],
+      },
+    );
+
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      ),
+    ).resolves.toMatchObject({
+      contextReviewer: { enabled: true, agentUuid: reviewer.uuid },
+    });
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {
@@ -1094,7 +1153,11 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { repo: "https://github.com/example/api" },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ repo: "https://github.com/example/api", branch: "main" });
+    expect(put.json()).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/api",
+      branch: "main",
+    });
 
     const branched = await app.inject({
       method: "PUT",
@@ -1103,7 +1166,11 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { repo: "https://github.com/example/api", branch: "api" },
     });
     expect(branched.statusCode).toBe(200);
-    expect(branched.json()).toEqual({ repo: "https://github.com/example/api", branch: "api" });
+    expect(branched.json()).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/api",
+      branch: "api",
+    });
 
     const rebound = await app.inject({
       method: "PUT",
@@ -1112,7 +1179,11 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { repo: "git@github.com:example/rebound-api.git" },
     });
     expect(rebound.statusCode).toBe(200);
-    expect(rebound.json()).toEqual({ repo: "git@github.com:example/rebound-api.git", branch: "api" });
+    expect(rebound.json()).toEqual({
+      provider: "github",
+      repo: "git@github.com:example/rebound-api.git",
+      branch: "api",
+    });
 
     const del = await app.inject({
       method: "DELETE",
@@ -1146,6 +1217,7 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(unbound.json()).toEqual({ branch });
 
     const binding = {
+      provider: "github" as const,
       repo: "https://github.com/example/precondition-match.git",
       branch,
     };
@@ -1153,7 +1225,12 @@ describe("org-settings API (admin gating + masking)", () => {
       method: "POST",
       url: finalizeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: binding.repo, branch: binding.branch, expectedUnboundBranch: branch },
+      payload: {
+        provider: binding.provider,
+        repo: binding.repo,
+        branch: binding.branch,
+        expectedUnboundBranch: branch,
+      },
     });
 
     expect(bound.statusCode).toBe(200);
@@ -1208,6 +1285,7 @@ describe("org-settings API (admin gating + masking)", () => {
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
     const finalizeUrl = `${url}/initialize`;
     const winningBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/concurrent-winner.git",
       branch: "main",
     };
@@ -1225,6 +1303,7 @@ describe("org-settings API (admin gating + masking)", () => {
       url: finalizeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
+        provider: "github",
         repo: "https://github.com/example/stale-initializer.git",
         branch: "main",
         expectedUnboundBranch: "main",
@@ -1265,6 +1344,7 @@ describe("org-settings API (admin gating + masking)", () => {
       url: finalizeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
+        provider: "github",
         repo: "https://github.com/example/stale-branch-initializer.git",
         branch: "main",
         expectedUnboundBranch: "main",
@@ -1309,6 +1389,7 @@ describe("org-settings API (admin gating + masking)", () => {
       url: finalizeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
+        provider: "github",
         repo: "https://github.com/example/conditional-repair.git",
         branch: "main",
         expectedUnboundBranch: "main",
@@ -1334,8 +1415,8 @@ describe("org-settings API (admin gating + masking)", () => {
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
     const finalizeUrl = `${url}/initialize`;
     const candidates = [
-      { repo: "https://github.com/example/initializer-a.git", branch: "main" },
-      { repo: "https://github.com/example/initializer-b.git", branch: "main" },
+      { provider: "github" as const, repo: "https://github.com/example/initializer-a.git", branch: "main" },
+      { provider: "github" as const, repo: "https://github.com/example/initializer-b.git", branch: "main" },
     ] as const;
 
     const responses = await Promise.all(
@@ -1344,7 +1425,12 @@ describe("org-settings API (admin gating + masking)", () => {
           method: "POST",
           url: finalizeUrl,
           headers: { authorization: `Bearer ${admin.accessToken}` },
-          payload: { repo: payload.repo, branch: payload.branch, expectedUnboundBranch: "main" },
+          payload: {
+            provider: payload.provider,
+            repo: payload.repo,
+            branch: payload.branch,
+            expectedUnboundBranch: "main",
+          },
         }),
       ),
     );
@@ -1585,6 +1671,7 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(afterPartial).toEqual({ value: JSON.parse(rawJson), version: 1 });
 
     const repairedBinding = {
+      provider: "github" as const,
       repo: "https://github.com/example/repaired-context-tree.git",
       branch: "repair/storage",
     };
@@ -1756,6 +1843,7 @@ describe("org-settings API (admin gating + masking)", () => {
     });
     expect(repairedMemberRead.statusCode).toBe(200);
     expect(repairedMemberRead.json()).toEqual({
+      provider: "github",
       repo: "https://github.com/example/repaired-context-tree.git",
       branch: "release/2026-07",
     });
@@ -1765,7 +1853,11 @@ describe("org-settings API (admin gating + masking)", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const original = { repo: "https://github.com/example/original.git", branch: "release" };
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/original.git",
+      branch: "release",
+    };
 
     const initial = await app.inject({
       method: "PUT",
@@ -1915,7 +2007,11 @@ describe("org-settings API (admin gating + masking)", () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const original = { repo: "https://github.com/example/member-guard.git", branch: "main" };
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/member-guard.git",
+      branch: "main",
+    };
     await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
       updatedBy: admin.userId,
     });
@@ -1926,6 +2022,7 @@ describe("org-settings API (admin gating + masking)", () => {
         method: "POST",
         url: `${url}/initialize`,
         payload: {
+          provider: "github",
           repo: "https://github.com/example/member-finalize-guard.git",
           branch: "main",
           expectedUnboundBranch: "main",
@@ -1960,7 +2057,11 @@ describe("org-settings API (admin gating + masking)", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const original = { repo: "https://github.com/example/realtime-guard.git", branch: "main" };
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/realtime-guard.git",
+      branch: "main",
+    };
     await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
       updatedBy: admin.userId,
     });
@@ -1978,6 +2079,7 @@ describe("org-settings API (admin gating + masking)", () => {
       url: `${url}/initialize`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
+        provider: "github",
         repo: "https://github.com/example/forbidden-downgrade-finalize.git",
         branch: "main",
         expectedUnboundBranch: "main",
@@ -2001,6 +2103,7 @@ describe("org-settings API (admin gating + masking)", () => {
       url: `${url}/initialize`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
+        provider: "github",
         repo: "https://github.com/example/forbidden-departure-finalize.git",
         branch: "main",
         expectedUnboundBranch: "main",
@@ -2146,7 +2249,11 @@ describe("org-settings API (admin gating + masking)", () => {
     const { admin, member } = await adminAndMember(app);
     const otherTeamId = await attachOrg(app, admin.userId);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const binding = { repo: "https://github.com/example/byo-read-tree.git", branch: "main" };
+    const binding = {
+      provider: "github" as const,
+      repo: "https://github.com/example/byo-read-tree.git",
+      branch: "main",
+    };
     await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", binding, {
       updatedBy: admin.userId,
     });

@@ -85,10 +85,14 @@ async function setupRoute() {
   const createRepoFileWithToken = vi.fn().mockResolvedValue({ content: { path: "NODE.md" } });
   const getOrgContextTreeBinding = vi.fn().mockResolvedValue(null);
   const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
-  const putInitializedOrgContextTreeBinding = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
+  const putInitializedOrgContextTreeBinding = vi
+    .fn()
+    .mockResolvedValue({ provider: "github", repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
   const preflightContextTreeWriteAuthority = vi.fn().mockResolvedValue({
-    binding: { repo: repo.cloneUrl, branch: "main" },
+    provider: "github",
+    binding: { provider: "github", repo: repo.cloneUrl, branch: "main" },
+    gitlabInstanceOrigin: null,
     reviewerAgentUuid: "reviewer-current",
     requesterGithubLogin: "writer",
   });
@@ -203,7 +207,9 @@ describe("org context tree routes with mocked service edges", () => {
     });
     expect(res.json()).toEqual({
       organizationId: ctx.scope.organizationId,
-      binding: { repo: ctx.repo.cloneUrl, branch: "main" },
+      provider: "github",
+      binding: { provider: "github", repo: ctx.repo.cloneUrl, branch: "main" },
+      gitlabInstanceOrigin: null,
       reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
     });
@@ -534,6 +540,7 @@ describe("org context tree routes with mocked service edges", () => {
     });
     ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce(expectedRepo);
     ctx.mocks.putInitializedOrgContextTreeBinding.mockResolvedValueOnce({
+      provider: "github",
       repo: expectedRepo.cloneUrl,
       branch: "main",
     });
@@ -573,8 +580,8 @@ describe("org context tree routes with mocked service edges", () => {
     expect(ctx.mocks.putInitializedOrgContextTreeBinding).toHaveBeenCalledWith(
       ctx.app.db,
       ctx.scope.organizationId,
-      { repo: expectedRepo.cloneUrl, branch: "main" },
-      { expectedUnboundBranch: "main", updatedBy: ctx.scope.userId },
+      { provider: "github", repo: expectedRepo.cloneUrl, branch: "main" },
+      { expectedUnboundBranch: "main", updatedBy: ctx.scope.userId, gitlabEgressAllowlist: [] },
     );
   });
 });

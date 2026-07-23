@@ -82,6 +82,16 @@ export {
   validateContextTreeBindingInput,
 } from "./context-tree-binding-write.js";
 export type {
+  ContextTreeForgeCoordinate,
+  ContextTreeForgeRunner,
+} from "./context-tree-forge/index.js";
+export {
+  adoptContextTreeRemote,
+  createContextTreeRemote,
+  resolveContextTreeForgeCoordinate,
+  verifyContextTreeForgeAuth,
+} from "./context-tree-forge/index.js";
+export type {
   ActivateContextTreeReadInput,
   ContextTreeReadActivation,
   ContextTreeReadActivationErrorCode,

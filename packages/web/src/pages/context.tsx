@@ -640,15 +640,44 @@ function UnavailableState({
   isAdmin: boolean;
   canOpenChat: boolean;
 }) {
+  const gitlabContentAvailability =
+    snapshot.provider === "gitlab" && snapshot.contentAvailability?.status === "unavailable"
+      ? snapshot.contentAvailability
+      : null;
+  const unavailableGitlabContent = gitlabContentAvailability !== null;
+  const gitlabUnavailableReason = gitlabContentAvailability?.reason ?? null;
+  const privateGitlabContent = gitlabUnavailableReason === "gitlab_authentication_required";
   const title = snapshot.repo
-    ? "Context Tree sync unavailable"
+    ? unavailableGitlabContent
+      ? privateGitlabContent
+        ? "Private GitLab content is unavailable in Cloud"
+        : gitlabUnavailableReason === "gitlab_origin_not_authorized" ||
+            gitlabUnavailableReason === "gitlab_egress_denied"
+          ? "GitLab origin is not authorized for Web Context"
+          : gitlabUnavailableReason === "gitlab_redirect_forbidden"
+            ? "GitLab repository redirect is not allowed"
+            : gitlabUnavailableReason === "invalid_binding"
+              ? "GitLab Context Tree binding is invalid"
+              : "GitLab content is unavailable in Cloud"
+      : "Context Tree sync unavailable"
     : isAdmin
       ? "Your team doesn't have a Context Tree yet"
       : "Connect Context Tree";
   const detail = snapshot.repo
-    ? isAdmin
-      ? "Open a chat with your agent to inspect the tree and this sync issue."
-      : "Ask an admin to inspect this Context Tree sync issue."
+    ? unavailableGitlabContent
+      ? privateGitlabContent
+        ? "First Tree Cloud only reads GitLab repositories anonymously. Use an Agent on a host with local git/glab access to read this Context Tree; Webhook review automation can remain active."
+        : gitlabUnavailableReason === "gitlab_origin_not_authorized" ||
+            gitlabUnavailableReason === "gitlab_egress_denied"
+          ? "This First Tree deployment has not authorized the exact GitLab origin or its resolved address for Web Context. Use an Agent with local git/glab access; inbound Webhook review automation is independent."
+          : gitlabUnavailableReason === "gitlab_redirect_forbidden"
+            ? "Web Context never follows GitLab repository redirects. Bind the exact operator-authorized repository origin, or use an Agent with local git/glab access; inbound Webhook review automation is independent."
+            : gitlabUnavailableReason === "invalid_binding"
+              ? "The repository provider, origin, connection, or branch no longer forms one valid live binding. Repair Team Settings; inbound Webhook review automation remains a separate health state."
+              : "The anonymous GitLab repository refresh failed. Use an Agent with local git/glab access to inspect it; inbound Webhook review automation is independent."
+      : isAdmin
+        ? "Open a chat with your agent to inspect the tree and this sync issue."
+        : "Ask an admin to inspect this Context Tree sync issue."
     : isAdmin
       ? "Your agent can build it with you in a chat. Share a local project folder or GitHub repository URL there."
       : "Ask an admin to set up your team's Context Tree.";
