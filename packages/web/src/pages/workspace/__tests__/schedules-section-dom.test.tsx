@@ -597,7 +597,7 @@ describe("SchedulesSection time freshness", () => {
       expect(document.body.textContent).toContain("in 1 minute");
       const firstRun = renderedOccurrenceInstants();
       expect(firstRun).toHaveLength(5);
-      const oldFirst = firstRun[0]!;
+      const [oldFirst] = firstRun;
       expect(oldFirst).toBeGreaterThan(Date.now());
 
       // Cross the first occurrence without collapsing/reopening the row.
@@ -642,7 +642,7 @@ describe("SchedulesSection time freshness", () => {
       document.dispatchEvent(new Event("visibilitychange"));
       await flushFake(1);
       expect(cronApiMocks.previewChatCronJobs).toHaveBeenCalledTimes(2);
-      const visibleFirst = renderedOccurrenceInstants()[0]!;
+      const [visibleFirst] = renderedOccurrenceInstants();
       expect(visibleFirst).toBeGreaterThan(Date.now());
 
       // Collapsing the row removes the preview observer: no more refetches.
