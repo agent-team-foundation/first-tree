@@ -88,6 +88,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { registerSecurityHeaders } from "./security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -391,6 +392,12 @@ export async function buildApp(config: Config) {
   // and only fires on `statusCode >= 400`. Registered globally so any route
   // that flips the flag participates without extra wiring.
   app.addHook("onSend", bodyCaptureOnSendHook);
+
+  // App-wide browser security headers (CSP/HSTS/nosniff/Referrer-Policy/
+  // Permissions-Policy/frame protection). Root-level onSend hook registered
+  // before any route so API routes, static sends, the SPA fallback, and error
+  // responses are all covered. Throws at boot on an invalid CSP origin config.
+  registerSecurityHeaders(app, config);
 
   // Auth hooks
   const userAuth = userAuthHook(db, config.secrets.jwtSecret);
