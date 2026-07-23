@@ -128,22 +128,44 @@ const FIVE_FIELD_CRON_RE = /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/;
 
 /**
  * Reject non-portable / non-OR extensions without matching day/month aliases.
- * Checked per five-field token so `THU` / `JUL` / `MARCH` stay valid while
- * Quartz `L`/`W`/`#`/`?`, macros `@…`, Jenkins `H`, and Croner DOM/DOW AND
- * (`+MON`) are rejected at the request boundary.
+ *
+ * Field semantics (Croner 10):
+ * - DOM: any `L`/`W` is a calendar modifier (`1L`, `L`, `15W`, `LW`) — reject
+ * - DOW/month: English aliases stay valid; reject `L`/`W`/`#`/`?`/`+`/`H`/`@`
+ *   modifier tokens without treating `JUL`/`WED` as modifiers
  */
 export function hasNonPortableCronExtension(expression: string): boolean {
   const fields = normalizeCronExpression(expression).split(" ");
   if (fields.length !== 5) return true;
-  return fields.some((field) => {
+  const [, , dom, month, dow] = fields as [string, string, string, string, string];
+
+  for (const field of fields) {
     if (field.startsWith("+")) return true;
     if (/[?@#]/.test(field)) return true;
-    // Quartz last/weekday forms: L, LW, L-3, W, 15W — not letters inside JUL/WED/THU.
-    if (/(?:^|[,/-])(?:L(?:W|-\d+)?|W|\d+W)(?:$|[,/-])/i.test(field)) return true;
-    // Jenkins "H" hasher (standalone or H(1-7)).
     if (/(?:^|[,/-])H(?:\([^)]*\))?(?:$|[,/-])/i.test(field)) return true;
-    return false;
-  });
+  }
+
+  // Day-of-month never has letter aliases; any L/W is a Croner/Quartz modifier.
+  if (/[LlWw]/.test(dom)) return true;
+
+  // Month/DOW: inspect atoms so JUL/WED survive while 5L / W / LW do not.
+  for (const field of [month, dow]) {
+    for (const atom of field.split(/[,/-]/)) {
+      if (!atom || atom === "*") continue;
+      if (/^\d+$/.test(atom)) continue;
+      if (isCronMonthOrDowAlias(atom)) continue;
+      if (/[LlWw]/i.test(atom)) return true;
+    }
+  }
+
+  return false;
+}
+
+const CRON_MONTH_OR_DOW_ALIAS_RE =
+  /^(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?|SUN(?:DAY)?|MON(?:DAY)?|TUE(?:SDAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|FRI(?:DAY)?|SAT(?:URDAY)?)$/i;
+
+function isCronMonthOrDowAlias(atom: string): boolean {
+  return CRON_MONTH_OR_DOW_ALIAS_RE.test(atom);
 }
 
 export const cronExpressionSchema = z

@@ -1774,7 +1774,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }
                 const pausedReason =
                   msg && typeof msg === "object" && "pausedReason" in msg
-                    ? (msg as { pausedReason?: "auth_rejected" | "auth_refresh_failed" | null }).pausedReason ?? null
+                    ? ((msg as { pausedReason?: "auth_rejected" | "auth_refresh_failed" | null }).pausedReason ?? null)
                     : null;
                 const liveness = await runtimeLivenessService.recordClientHeartbeat(app.db, {
                   clientId,

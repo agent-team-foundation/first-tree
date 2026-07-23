@@ -155,11 +155,7 @@ export async function setChatEngagement(
 ): Promise<void> {
   if (status === "deleted") {
     await db.transaction(async (tx) => {
-      const [member] = await tx
-        .select({ id: members.id })
-        .from(members)
-        .where(eq(members.agentId, agentId))
-        .limit(1);
+      const [member] = await tx.select({ id: members.id }).from(members).where(eq(members.agentId, agentId)).limit(1);
       if (member) {
         await pauseActiveJobsForOwnerChatDelete(tx as unknown as Database, {
           controlChatId: chatId,

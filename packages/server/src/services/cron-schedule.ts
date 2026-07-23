@@ -121,7 +121,7 @@ function tokenMatches(token: string, value: number, aliases?: Record<string, num
   const resolve = (side: string): number | null => {
     if (side === "*") return null;
     const upper = side.toUpperCase();
-    if (aliases && upper in aliases) return aliases[upper]!;
+    if (aliases && upper in aliases) return aliases[upper] ?? null;
     const n = Number(side);
     return Number.isInteger(n) ? n : null;
   };
