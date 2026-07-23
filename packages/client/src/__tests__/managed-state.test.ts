@@ -3,12 +3,90 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  isValidManagedSkillName,
   MANAGED_STATE_REL,
   type ManagedState,
   readManagedState,
   updateManagedState,
   writeManagedState,
 } from "../runtime/managed-state.js";
+
+const OFFICIAL_MANAGED_SKILL_NAMES = [
+  "attention",
+  "context-tree-audit",
+  "context-tree-review",
+  "first-tree",
+  "first-tree-cloud",
+  "first-tree-context",
+  "first-tree-file-bug",
+  "first-tree-github",
+  "first-tree-github-scan",
+  "first-tree-gitlab",
+  "first-tree-guide",
+  "first-tree-hub-cli",
+  "first-tree-kickoff",
+  "first-tree-onboarding",
+  "first-tree-qa",
+  "first-tree-read",
+  "first-tree-seed",
+  "first-tree-sync",
+  "first-tree-welcome",
+  "first-tree-write",
+  "github-scan",
+] as const;
+
+const INVALID_MANAGED_SKILL_NAMES: ReadonlyArray<[label: string, value: string]> = [
+  ["empty", ""],
+  ["space", " "],
+  ["leading whitespace", " first-tree-read"],
+  ["trailing whitespace", "first-tree-read "],
+  ["current directory", "."],
+  ["parent directory", ".."],
+  ["traversal", "../outside"],
+  ["multi-level traversal", "../../outside"],
+  ["normalized traversal", "safe/../../outside"],
+  ["Windows traversal", "safe\\..\\..\\outside"],
+  ["forward slash", "nested/skill"],
+  ["backslash", "nested\\skill"],
+  ["POSIX absolute", "/tmp/managed-skill"],
+  ["Windows drive root", "C:"],
+  ["Windows drive-relative", "C:managed-skill"],
+  ["Windows drive absolute", "C:\\temp\\managed-skill"],
+  ["Windows slash absolute", "C:/temp/managed-skill"],
+  ["Windows root-relative", "\\temp\\managed-skill"],
+  ["UNC", "\\\\server\\share\\managed-skill"],
+  ["Windows device namespace", "\\\\?\\C:\\temp\\managed-skill"],
+  ["Windows device path", "\\\\.\\pipe\\managed-skill"],
+  ["NUL", "skill\0name"],
+  ["tab", "skill\tname"],
+  ["newline", "skill\nname"],
+  ["DEL", "skill\u007fname"],
+  ["non-ASCII", "技能"],
+  ["accented non-ASCII", "café"],
+  ["Unicode hyphen homoglyph", "first‐tree"],
+  ["uppercase", "First-Tree"],
+  ["underscore", "first_tree"],
+  ["leading hyphen", "-first-tree"],
+  ["trailing hyphen", "first-tree-"],
+  ["repeated hyphen", "first--tree"],
+  ["over 64 characters", "a".repeat(65)],
+];
+
+describe("isValidManagedSkillName", () => {
+  it.each([
+    ...OFFICIAL_MANAGED_SKILL_NAMES,
+    "a",
+    "1",
+    "skill-2",
+    "a".repeat(64),
+  ])("accepts the compatible managed slug %s", (name) => {
+    expect(isValidManagedSkillName(name)).toBe(true);
+  });
+
+  it.each(INVALID_MANAGED_SKILL_NAMES)("rejects %s", (_label, name) => {
+    expect(isValidManagedSkillName(name)).toBe(false);
+  });
+});
 
 describe("managed-state", () => {
   let workspace: string;
@@ -85,6 +163,33 @@ describe("managed-state", () => {
       "utf-8",
     );
     expect(readManagedState(workspace)?.skills).toEqual(["first-tree-write", "first-tree-read"]);
+  });
+
+  it("filters invalid skill names while preserving valid order and duplicates", () => {
+    writeFileSync(
+      join(workspace, MANAGED_STATE_REL),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: null,
+        updatedAt: "2026-06-08T16:00:00.000Z",
+        skills: [
+          "first-tree-write",
+          "../outside",
+          "first-tree-read",
+          "first-tree-write",
+          "C:outside",
+          "first-tree-read",
+        ],
+      }),
+      "utf-8",
+    );
+
+    expect(readManagedState(workspace)?.skills).toEqual([
+      "first-tree-write",
+      "first-tree-read",
+      "first-tree-write",
+      "first-tree-read",
+    ]);
   });
 
   it("coerces a non-array skills value to [] (defensive read)", () => {

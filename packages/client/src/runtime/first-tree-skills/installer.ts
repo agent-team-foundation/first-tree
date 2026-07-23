@@ -36,10 +36,10 @@ import {
   symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledCliVersion } from "../bootstrap.js";
-import { readManagedState, updateManagedState } from "../managed-state.js";
+import { isValidManagedSkillName, readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
@@ -394,7 +394,7 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSki
  * Reconcile the historical tree-skill ledger. Called by the agent bootstrap
  * when the agent has a Context Tree binding.
  *
- * Also reconciles `.agent/managed.json::skills`: any skill the workspace
+ * Also reconciles `.first-tree-workspace/managed.json::skills`: any skill the workspace
  * recorded as installed by a previous CLI version but that's no longer in
  * `TREE_SKILL_NAMES` gets its `.agents/skills/<name>/` payload and
  * `.claude/skills/<name>` symlink removed. The current set is then written
@@ -451,29 +451,63 @@ function reconcileTreeSkillState(workspacePath: string): void {
 }
 
 /**
- * Remove a previously-managed skill's on-disk payload AND its Claude Code
- * companion entry. Either step is best-effort and only operates on entries that
- * actually exist; anything the user added later (a custom skill payload
- * under `.agents/skills/<user-skill>/`) is never touched because we look
- * up by NAME, not by listing the directory.
+ * Resolve one exact child of a skills root for managed-skill removal.
+ *
+ * This is deliberately independent from the managed-state slug guard: even if
+ * that upstream contract is relaxed later, rooted, nested, normalized, and
+ * escaping targets still cannot reach filesystem removal. Both POSIX and
+ * Windows root syntax are rejected on every host.
+ *
+ * This is lexical containment. It assumes the workspace and skills-root
+ * topology is trusted and stable; resolving pre-existing or concurrently
+ * replaced ancestor symlinks/junctions/mounts requires a broader descriptor-
+ * relative/no-follow filesystem design.
+ *
+ * @internal Exported for direct containment tests; not public package API.
  */
-function removeManagedSkill(workspacePath: string, name: string): void {
-  const agentsFull = join(workspacePath, ".agents", "skills", name);
-  const claudeFull = join(workspacePath, ".claude", "skills", name);
-  try {
-    rmSync(agentsFull, { recursive: true, force: true });
-  } catch {
-    // Best-effort — the Claude companion cleanup below still runs.
+export function resolveManagedSkillRemovalTarget(skillsRoot: string, name: string): string | null {
+  if (posix.parse(name).root !== "" || win32.parse(name).root !== "" || name.includes("/") || name.includes("\\")) {
+    return null;
   }
+
+  const root = resolve(skillsRoot);
+  const target = resolve(root, name);
+  const relativeTarget = relative(root, target);
+  const escapesRoot = relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`);
+  if (relativeTarget === "" || relativeTarget !== name || escapesRoot || isAbsolute(relativeTarget)) {
+    return null;
+  }
+  return target;
+}
+
+function removeManagedSkillFromRoot(skillsRoot: string, name: string): void {
+  if (!isValidManagedSkillName(name)) return;
+  const target = resolveManagedSkillRemovalTarget(skillsRoot, name);
+  if (!target) return;
+
   try {
-    const claudeState = inspectPath(claudeFull);
-    if (claudeState.kind === "missing") return;
-    if (claudeState.kind === "directory") {
-      rmSync(claudeFull, { recursive: true, force: true });
+    const state = inspectPath(target);
+    if (state.kind === "missing") return;
+    if (state.kind === "directory") {
+      rmSync(target, { recursive: true, force: true });
     } else {
-      unlinkSync(claudeFull);
+      unlinkSync(target);
     }
   } catch {
-    // Either missing or remove failed — both acceptable here.
+    // Stale managed-skill cleanup is best-effort and never blocks bootstrap.
   }
+}
+
+/**
+ * Remove a previously-managed skill's on-disk payload AND its Claude Code
+ * companion entry. Each root is validated and removed independently so a
+ * rejection or filesystem failure on one side cannot suppress the other.
+ * Anything the user added later is never touched because reconciliation looks
+ * up recorded names rather than listing either root.
+ *
+ * @internal Exported for wired deletion-boundary tests; not public package API.
+ */
+export function removeManagedSkill(workspacePath: string, name: string): void {
+  removeManagedSkillFromRoot(resolve(workspacePath, ".agents", "skills"), name);
+  removeManagedSkillFromRoot(resolve(workspacePath, ".claude", "skills"), name);
 }
