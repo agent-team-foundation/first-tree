@@ -282,6 +282,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     }
   }
 
+  async function notifyStrict(inboxId: string, messageId: string) {
+    await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+  }
+
   return {
     subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler) {
       let map = subscriptions.get(inboxId);
@@ -302,13 +306,11 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
-    async notifyStrict(inboxId: string, messageId: string) {
-      await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
-    },
+    notifyStrict,
 
     async notify(inboxId: string, messageId: string) {
       try {
-        await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+        await notifyStrict(inboxId, messageId);
       } catch {
         // Fire-and-forget: durable inbox rows are repaired by bound WS backlog
         // drains if this volatile NOTIFY hint is missed.
