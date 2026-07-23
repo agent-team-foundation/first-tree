@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
 
 const loginMock = vi.hoisted(() => vi.fn());
 const onboardingCompletedMock = vi.hoisted(() => vi.fn());
+const purgeLocalUserDataMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const flagsMocks = vi.hoisted(() => ({
   clearOnboardingJoinPath: vi.fn(),
   clearOnboardingSessionFlags: vi.fn(),
@@ -45,6 +46,10 @@ vi.mock("../../api/onboarding-events.js", () => ({
 }));
 
 vi.mock("../../utils/onboarding-flags.js", () => flagsMocks);
+
+vi.mock("../../lib/purge-local-data.js", () => ({
+  purgeLocalUserData: purgeLocalUserDataMock,
+}));
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -300,6 +305,9 @@ describe("AuthProvider", () => {
     });
     expect(apiMocks.clearStoredTokens).toHaveBeenCalled();
     expect(flagsMocks.clearOnboardingSessionFlags).toHaveBeenCalled();
+    // SEC-042: logout must purge locally persisted user content (cached
+    // messages, read state, images, drafts) — not just tokens + query cache.
+    expect(purgeLocalUserDataMock).toHaveBeenCalled();
     expect(latestAuth?.isAuthenticated).toBe(false);
   });
 

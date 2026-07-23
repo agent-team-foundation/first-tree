@@ -144,6 +144,26 @@ export async function cacheMessages(chatId: string, messages: readonly MessageWi
 }
 
 /**
+ * Remove every cached message for every chat. Called on logout so a later
+ * account (or anyone else on the same browser profile) cannot read the
+ * previous user's conversation history out of IndexedDB (SEC-042). The
+ * cache is server-backed, so the next login re-hydrates it on demand.
+ * Resolves silently on IndexedDB unavailability or clear failure —
+ * logout must never be blocked by best-effort local cleanup.
+ */
+export async function clearAllChatCaches(): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
+/**
  * Remove every cached message for `chatId`. Intended for diagnostic /
  * debug use today (e.g. clearing a corrupt cache); not wired into the
  * UI. Resolves silently on IndexedDB unavailability.
