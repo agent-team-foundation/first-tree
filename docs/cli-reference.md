@@ -571,6 +571,37 @@ markdown files plus a `manifest.json` of metadata.
 
 ---
 
+## cron
+
+Scheduled jobs in the current chat. At due time the Server writes one
+ordinary addressed markdown message to wake this agent. Mutations require
+`FIRST_TREE_CHAT_ID` from the agent session; prompt bodies use `-F <file>`
+or `-F -` only.
+
+```
+first-tree cron
+├── preview --schedule <expr> --timezone <iana>
+├── create --name <name> --schedule <expr> --timezone <iana> -F <prompt.md|->
+├── list
+├── show <jobId>
+├── update <jobId> [--name ...] [--schedule ...] [--timezone ...] [-F <prompt.md|->]
+├── pause <jobId>
+├── resume <jobId>
+└── delete <jobId>
+```
+
+```bash
+first-tree cron preview --schedule "0 9 * * 1-5" --timezone America/New_York
+first-tree cron create --name daily-triage --schedule "0 9 * * 1-5" --timezone America/New_York -F ./prompt.md
+first-tree cron list
+first-tree cron show <jobId>
+first-tree cron pause <jobId>
+first-tree cron resume <jobId>
+first-tree cron delete <jobId>
+```
+
+---
+
 ## github
 
 GitHub entity attention for the current chat. `follow` wires an entity's

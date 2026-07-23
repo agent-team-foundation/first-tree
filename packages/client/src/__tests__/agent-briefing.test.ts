@@ -551,6 +551,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
   it("keeps GitHub posture and follow-after-create rules inline", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const orderedHeadings = [
+      "## Scheduled jobs",
       "## GitHub Working Posture",
       "## GitHub Entity Attention",
       "## GitLab Working Posture",
@@ -565,6 +566,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     }
 
     expect(briefing).toContain("try the host `gh` CLI first");
+    expect(briefing).toContain("cron preview");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
     expect(briefing).not.toContain("final provider `PATH`");
     expect(briefing).toContain("gh auth status");

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
+import { createCronScheduler } from "./cron-scheduler.js";
 import * as inboxService from "./inbox.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
@@ -17,16 +18,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  const cronScheduler = createCronScheduler(app);
 
   return {
     start() {
-      // Silent inbox row GC — runs every 60 seconds. Acked silent rows are
-      // deleted regardless of age (they've fulfilled their context-replay
-      // purpose); stale `pending` silent rows are deleted after the default
-      // 30-day window. The legacy 300s delivered-timeout reset that used to
-      // live here was removed once `agent:bind` became the sole recovery
-      // entrypoint for in-flight messages (see
-      // docs/inflight-message-recovery-design.md §4).
       inboxTimer = setInterval(async () => {
         try {
           const pruned = await inboxService.pruneStaleSilentEntries(app.db);
@@ -41,16 +36,12 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }
       }, 60_000);
 
-      // Server instance heartbeat — runs every 30 seconds
       heartbeatTimer = setInterval(async () => {
         try {
           await presenceService.heartbeatInstance(app.db, instanceId);
           const staleSeconds = app.config.runtime.presenceCleanupSeconds;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
           await clientService.cleanupStaleClients(app.db, staleSeconds);
-          // Per-agent heartbeat staleness detection. Message text is composed
-          // inside notifyAgentEvent so phrasing (computer hostname vs agent
-          // name) stays consistent across event sources.
           const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
           if (staleAgents.length > 0) {
             log.info({ count: staleAgents.length, agentIds: staleAgents }, "marked agents as stale");
@@ -63,10 +54,6 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }
       }, 30_000);
 
-      // Chat auto-archive sweeper — cadence comes from runtime config so
-      // ops can tune (or zero-disable) without touching code. See
-      // services/chat-archive.ts for the SCM-source archive policy and
-      // idle threshold (default: 1h).
       const archiveSweepSeconds = app.config.runtime.archiveSweepIntervalSeconds;
       if (archiveSweepSeconds > 0) {
         archiveSweepTimer = setInterval(async () => {
@@ -83,13 +70,15 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }, archiveSweepSeconds * 1000);
       }
 
-      // Initial heartbeat
+      cronScheduler.start();
+
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
       });
     },
 
     stop() {
+      cronScheduler.stop();
       if (inboxTimer) {
         clearInterval(inboxTimer);
         inboxTimer = null;

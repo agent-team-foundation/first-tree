@@ -48,6 +48,7 @@ import { resolveAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { createChat } from "./chat.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { pauseActiveJobsForOwnerChatDelete } from "./cron-job.js";
 import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "./participant-invite.js";
 import { extractSummary } from "./session.js";
 import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMembership } from "./watcher.js";
@@ -152,6 +153,35 @@ export async function setChatEngagement(
   agentId: string,
   status: ChatEngagementStatus,
 ): Promise<void> {
+  if (status === "deleted") {
+    await db.transaction(async (tx) => {
+      const [member] = await tx
+        .select({ id: members.id })
+        .from(members)
+        .where(eq(members.agentId, agentId))
+        .limit(1);
+      if (member) {
+        await pauseActiveJobsForOwnerChatDelete(tx as unknown as Database, {
+          controlChatId: chatId,
+          ownerMemberId: member.id,
+        });
+      }
+      await tx
+        .insert(chatUserState)
+        .values({
+          chatId,
+          agentId,
+          unreadMentionCount: 0,
+          engagementStatus: status,
+        })
+        .onConflictDoUpdate({
+          target: [chatUserState.chatId, chatUserState.agentId],
+          set: { engagementStatus: status },
+        });
+    });
+    return;
+  }
+
   await db
     .insert(chatUserState)
     .values({

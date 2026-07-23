@@ -21,6 +21,13 @@ import {
   type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
   type CreateTaskChat,
+  type CronJob,
+  type CronPreviewRequest,
+  type CronPreviewResponse,
+  type CreateCronJobRequest,
+  type DeleteCronJobResponse,
+  type ListCronJobsResponse,
+  type UpdateCronJobRequest,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
   contextTreeWritePreflightRequestSchema,
@@ -593,6 +600,52 @@ export class FirstTreeHubSDK {
     return this.requestJson<UnfollowChatGitlabEntityResponse>(
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
       { method: "DELETE" },
+    );
+  }
+
+  /** Preview a five-field cron schedule without side effects. */
+  async previewCronJob(chatId: string, body: CronPreviewRequest): Promise<CronPreviewResponse> {
+    return this.requestJson<CronPreviewResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs/preview`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async listCronJobs(chatId: string): Promise<ListCronJobsResponse> {
+    return this.requestJson<ListCronJobsResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs`);
+  }
+
+  async createCronJob(chatId: string, body: CreateCronJobRequest): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getCronJob(chatId: string, jobId: string): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async updateCronJob(
+    chatId: string,
+    jobId: string,
+    body: UpdateCronJobRequest,
+    revision: number,
+  ): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+      headers: { "If-Match": String(revision) },
+    });
+  }
+
+  async deleteCronJob(chatId: string, jobId: string, revision: number): Promise<DeleteCronJobResponse> {
+    return this.requestJson<DeleteCronJobResponse>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+        headers: { "If-Match": String(revision) },
+      },
     );
   }
 

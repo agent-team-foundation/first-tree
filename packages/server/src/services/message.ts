@@ -3,6 +3,7 @@ import {
   attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
+  CRON_TRIGGER_METADATA_KEY,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
@@ -53,6 +54,11 @@ function stripUntrustedMetadataKeys(
   if (contextReviewKey && !options.allowContextReviewRun) {
     throw new BadRequestError(
       `Metadata key "${contextReviewKey}" is reserved for server-authored Context Reviewer runs.`,
+    );
+  }
+  if (CRON_TRIGGER_METADATA_KEY in meta && !options.allowCronTrigger) {
+    throw new BadRequestError(
+      `Metadata key "${CRON_TRIGGER_METADATA_KEY}" is reserved for server-authored scheduled job triggers.`,
     );
   }
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
@@ -342,6 +348,12 @@ export type SendMessageOptions = {
    * Only the GitHub App Context Reviewer webhook dispatcher may set this option.
    */
   allowContextReviewRun?: boolean;
+  /**
+   * Trusted-internal capability for materializing a scheduled job trigger
+   * message. The `cronTrigger` metadata namespace is rejected at every
+   * ordinary message boundary.
+   */
+  allowCronTrigger?: boolean;
   /**
    * Trusted-internal escape hatch for a send performed inside an existing
    * outer database transaction. When enabled, session activation and the
