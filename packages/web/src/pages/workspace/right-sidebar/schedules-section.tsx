@@ -169,6 +169,25 @@ export function SchedulesSection({ chatId, participants }: { chatId: string; par
   const { items, isLoading, isError, retry } = useChatCronJobs(chatId);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const now = useNow();
+  const queryClient = useQueryClient();
+
+  // Immediate catch-up after a hidden/backgrounded tab returns. The 60s poll
+  // skips background tabs and global focus refetch is disabled, so without a
+  // local visibility listener an expanded preview could show occurrences from
+  // before the sleep until the next interval fires.
+  useEffect(() => {
+    const catchUp = () => {
+      if (document.visibilityState !== "visible") return;
+      void queryClient.invalidateQueries({ queryKey: cronJobsQueryKey(chatId) });
+      void queryClient.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-preview", chatId] });
+    };
+    document.addEventListener("visibilitychange", catchUp);
+    window.addEventListener("pageshow", catchUp);
+    return () => {
+      document.removeEventListener("visibilitychange", catchUp);
+      window.removeEventListener("pageshow", catchUp);
+    };
+  }, [queryClient, chatId]);
 
   // First load gets an identifiable lightweight row: rendering nothing could
   // read as "this chat has no schedules" while the answer is still unknown.

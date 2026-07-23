@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { CronJob } from "@first-tree/shared";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,19 @@ function activeJob(overrides: Partial<CronJob> = {}): CronJob {
 let root: Root | null = null;
 let queryClient: QueryClient;
 
+const CRON_KEY = ["chat-right-sidebar", "cron-jobs", "chat-1"] as const;
+
+/** Keeps the shared schedule cache ACTIVELY OBSERVED so an invalidation
+ *  triggers a real refetch, exactly like the mounted sidebar section. */
+function CronProbe() {
+  useQuery({ queryKey: CRON_KEY, queryFn: () => cronApiMocks.listChatCronJobs("chat-1") });
+  return null;
+}
+
+function probeJobs(): CronJob[] {
+  return queryClient.getQueryData<{ items: CronJob[] }>(CRON_KEY)?.items ?? [];
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -83,7 +96,7 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderMenu(status: "active" | "archived"): Promise<void> {
+async function renderMenu(status: "active" | "archived", opts?: { withProbe?: boolean }): Promise<void> {
   const { RowEngagementMenu } = await import("../row-engagement-menu.js");
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -95,6 +108,7 @@ async function renderMenu(status: "active" | "archived"): Promise<void> {
     root?.render(
       <QueryClientProvider client={queryClient}>
         <RowEngagementMenu chatId="chat-1" status={status} hasUnread={false} pinned={false} />
+        {opts?.withProbe ? <CronProbe /> : null}
       </QueryClientProvider>,
     );
   });
@@ -279,15 +293,49 @@ describe("RowEngagementMenu schedule warnings", () => {
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "archived");
   });
 
-  it("delete refreshes the chat's schedule projection — the server pause emits no chat:updated", async () => {
-    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [activeJob()] });
+  it("delete refreshes the shared schedule cache to the server truth: owned paused, others untouched", async () => {
+    const owned = activeJob();
+    const other = activeJob({ id: "job-2", ownerMemberId: "member-other" });
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [owned, other] });
+    await renderMenu("active", { withProbe: true });
+    // The actively-observed cache (as the sidebar sees it) starts with both
+    // owners' jobs active.
+    expect(probeJobs().map((j) => j.state)).toEqual(["active", "active"]);
+
+    await selectMenuItem("Delete");
+    // The Server applies the owner-scoped pause without emitting
+    // chat:updated; the next read after the delete returns the new truth.
+    const pausedOwned: CronJob = {
+      ...owned,
+      state: "paused",
+      stateReason: "owner_chat_deleted",
+      revision: 2,
+      nextRunAt: null,
+    };
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [pausedOwned, other] });
+    await click(buttonByText("Delete chat"));
+
+    expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
+    const jobs = probeJobs();
+    const after = jobs.find((j) => j.id === "job-1");
+    expect(after?.state).toBe("paused");
+    expect(after?.stateReason).toBe("owner_chat_deleted");
+    expect(after?.revision).toBe(2);
+    expect(jobs.find((j) => j.id === "job-2")?.state).toBe("active");
+  });
+
+  it("a failed delete leaves the shared schedule cache untouched", async () => {
+    const owned = activeJob();
+    cronApiMocks.listChatCronJobs.mockResolvedValue({ items: [owned] });
     const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
-    await renderMenu("active");
+    chatApiMocks.patchChatEngagement.mockRejectedValue(new Error("boom"));
+    await renderMenu("active", { withProbe: true });
     await selectMenuItem("Delete");
     await click(buttonByText("Delete chat"));
 
     expect(chatApiMocks.patchChatEngagement).toHaveBeenCalledWith("chat-1", "deleted");
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-right-sidebar", "cron-jobs", "chat-1"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: CRON_KEY });
+    expect(probeJobs().map((j) => j.state)).toEqual(["active"]);
   });
 
   it("archive does not touch the schedule projection (no server-side pause happens)", async () => {
