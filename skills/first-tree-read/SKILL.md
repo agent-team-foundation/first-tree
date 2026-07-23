@@ -277,25 +277,31 @@ For a BYO task, use the activation receipt's binding repository and commit. Its
 detached snapshot is already exact and remote-backed. For a managed workspace,
 after the last hierarchy selector and before reading a candidate passage:
 
-1. resolve the current branch's upstream remote-tracking ref and the fetch
-   remote that owns it;
-2. require that fetch remote's URL to be canonically equal to the binding
+1. read the binding repository and binding branch declared by the workspace
+   briefing; never infer the binding branch from the checkout's current branch
+   or its upstream;
+2. require the latest successful hierarchy refresh to have refreshed the
+   remote-tracking ref for that exact binding branch, then resolve the fetch
+   remote that owns the ref;
+3. require that fetch remote's URL to be canonically equal to the binding
    repository declared by the workspace briefing;
-3. record `git rev-parse HEAD`;
-4. read the candidate normal-content files;
-5. require HEAD to remain unchanged;
-6. require every cited path to exist in that commit and have no staged or
+4. record `git rev-parse HEAD`;
+5. read the candidate normal-content files;
+6. require HEAD to remain unchanged;
+7. require every cited path to exist in that commit and have no staged or
    unstaged difference; and
-7. require the commit to be reachable from that same upstream remote-tracking
-   ref produced by the refresh.
+8. require the commit to be reachable from that exact binding-branch
+   remote-tracking ref.
 
 If another pull or process moves HEAD during those steps, re-read from a new
-stable commit before attributing influence. If the branch has no unambiguous
-upstream, its owning fetch remote is missing, or the canonical repository
-identities do not match, do not attribute the briefing's `repoUrl`. If
-repository, commit, remote reachability, or path identity cannot be established
-safely, omit the evidence row and do not attach the receipt when no valid
-evidence remains.
+stable commit before attributing influence. If the briefing has no unambiguous
+binding branch, the latest hierarchy refresh cannot be shown to have refreshed
+the exact binding-branch remote-tracking ref, that ref or its owning fetch remote
+is missing or ambiguous, or the canonical repository identities do not match,
+do not attribute the briefing's `repoUrl`. The checkout's current branch or
+upstream is never a fallback authority. If repository, branch, commit, remote
+reachability, or path identity cannot be established safely, omit the evidence
+row and do not attach the receipt when no valid evidence remains.
 
 The receipt is the agent's durable, reviewable attribution. It is not
 server-verified proof of causality, and the final prose must not claim that it
