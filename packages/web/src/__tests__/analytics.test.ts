@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
 
@@ -12,9 +13,12 @@ describe("production gtag bootstrap", () => {
   });
 
   it("keeps every index script external for an enforced CSP", () => {
-    const scriptTags = indexHtml.match(/<script\b[^>]*>/g) ?? [];
-    expect(scriptTags).toHaveLength(2);
-    expect(scriptTags.every((tag) => /\bsrc=/.test(tag))).toBe(true);
+    const document = new Window().document;
+    document.write(indexHtml);
+
+    const scripts = [...document.scripts];
+    expect(scripts).toHaveLength(2);
+    expect(scripts.every((script) => script.hasAttribute("src"))).toBe(true);
     expect(indexHtml).toContain('src="/src/bootstrap.ts"');
   });
 
