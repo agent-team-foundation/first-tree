@@ -701,44 +701,71 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     }
   });
 
-  it("bounds preceding-context image fetches and prioritizes the newest refs", async () => {
+  it("bounds preceding request-image fetches without consuming the budget for non-request images", async () => {
     const home = mkdtempSync(join(tmpdir(), "session-manager-bounded-images-"));
     vi.stubEnv("FIRST_TREE_HOME", home);
     try {
       const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
       const sdk = mockSdk({ fetchAttachment });
-      const handler = createMockHandler();
+      let renderedContent = "";
+      const handler = createMockHandler({
+        start: vi.fn(async (message, ctx) => {
+          renderedContent = await ctx.formatInboundContent(message);
+          return "session-id-mock";
+        }),
+      });
       const sm = createSessionManager({ handler, sdk });
       const base = mockEntry({ id: 408, chatId: "chat-bounded-images", messageId: "msg-bounded-images" });
       const imageIds = Array.from(
         { length: 12 },
         (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
       );
+      const nonRequestImageId = "99999999-9999-4999-8999-999999999999";
       const entry: InboxEntryWithMessage = {
         ...base,
         message: {
           ...base.message,
           format: "text",
           content: "@agent-1 review the recent context",
-          precedingMessages: imageIds.map((attachmentId, index) => ({
-            id: `preceding-${index}`,
-            senderId: "agent-2",
-            format: "request",
-            content: `Decision ${index}`,
-            metadata: {
-              request: {},
-              attachments: [
-                {
-                  attachmentId,
-                  kind: "image",
-                  mimeType: "image/png",
-                  filename: `decision-${index}.png`,
-                  size: 11,
-                },
-              ],
+          precedingMessages: [
+            ...imageIds.map((attachmentId, index) => ({
+              id: `preceding-${index}`,
+              senderId: "agent-2",
+              format: "request" as const,
+              content: `Decision ${index}`,
+              metadata: {
+                request: {},
+                attachments: [
+                  {
+                    attachmentId,
+                    kind: "image",
+                    mimeType: "image/png",
+                    filename: `decision-${index}.png`,
+                    size: 11,
+                  },
+                ],
+              },
+              createdAt: new Date(Date.UTC(2026, 6, 24, 0, 0, index)).toISOString(),
+            })),
+            {
+              id: "newer-non-request-image",
+              senderId: "agent-2",
+              format: "text",
+              content: "An unrelated image",
+              metadata: {
+                attachments: [
+                  {
+                    attachmentId: nonRequestImageId,
+                    kind: "image",
+                    mimeType: "image/png",
+                    filename: "unrelated.png",
+                    size: 11,
+                  },
+                ],
+              },
+              createdAt: "2026-07-24T00:01:00.000Z",
             },
-            createdAt: new Date(Date.UTC(2026, 6, 24, 0, 0, index)).toISOString(),
-          })),
+          ],
         },
       };
 
@@ -747,6 +774,9 @@ describe("SessionManager additional delivery token and payload coverage", () => 
       expect(fetchAttachment).toHaveBeenCalledTimes(10);
       const fetchedIds = fetchAttachment.mock.calls.map(([arg]) => (arg as { id: string }).id);
       expect(fetchedIds).toEqual(imageIds.slice(2).reverse());
+      expect(fetchedIds).not.toContain(nonRequestImageId);
+      expect(renderedContent).toContain("An unrelated image");
+      expect(renderedContent).not.toContain("Filename: unrelated.png");
 
       await sm.shutdown();
     } finally {

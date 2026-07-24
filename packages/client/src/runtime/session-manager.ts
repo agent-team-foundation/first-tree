@@ -645,6 +645,7 @@ export class SessionManager {
     const seenImageIds = new Set(imageRefs.map((ref) => ref.imageId));
     let precedingFetches = 0;
     for (const source of (message.precedingMessages ?? []).slice().reverse()) {
+      if (source.format !== "request") continue;
       for (const ref of imageAttachmentRefsFromMetadata(source.metadata ?? undefined)) {
         if (seenImageIds.has(ref.attachmentId)) continue;
         seenImageIds.add(ref.attachmentId);

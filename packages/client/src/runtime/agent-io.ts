@@ -435,10 +435,13 @@ export async function formatInboundContent(message: SessionMessage, participants
     const lines: string[] = ["[Earlier in chat — context you missed]"];
     for (const p of preceding) {
       let text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
-      const imageNote = renderImageAttachmentsForLLM({
-        chatId: message.chatId,
-        metadata: p.metadata,
-      });
+      const imageNote =
+        p.format === "request"
+          ? renderImageAttachmentsForLLM({
+              chatId: message.chatId,
+              metadata: p.metadata,
+            })
+          : null;
       if (imageNote) text = `${text}\n\n${imageNote}`;
       lines.push(`${formatMessageFromHeaderLine(p, ps)} ${text}`);
     }
