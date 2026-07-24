@@ -407,6 +407,7 @@ function MobileActionCard({
             overflow: "hidden",
           }}
           data-mobile-card-preview
+          data-line-clamp={2}
         >
           {content.primary}
         </p>
@@ -496,12 +497,13 @@ function MobileWorkRow({
                 ? undefined
                 : {
                     display: "-webkit-box",
-                    WebkitLineClamp: 2,
+                    WebkitLineClamp: 3,
                     WebkitBoxOrient: "vertical",
                     overflow: "hidden",
                   }),
             }}
             data-mobile-card-preview
+            data-line-clamp={content.kind === "dynamic" ? 1 : 3}
           >
             {content.primary}
           </p>

@@ -188,17 +188,25 @@ describe("mobile density tiers", () => {
     expect(cards[2]?.textContent).toContain("Team roster polish");
   });
 
-  it("renders standard Work rows with a two-line content budget and no visible overflow actions", async () => {
+  it("gives ordinary summaries three lines while keeping dynamic and action evidence compact", async () => {
     renderWithClient(harness, <MobileWorkPage />, "/m/work");
     await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
 
-    const listCard = harness.container.querySelector<HTMLElement>('[data-mobile-card="work"]');
-    if (!listCard) throw new Error("Missing Work row");
-    expect(listCard.getAttribute("style")).toContain("min-height: calc(var(--sp-20) + var(--sp-8))");
-    expect(listCard.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
-    expect(listCard.querySelector("[data-mobile-card-preview]")?.className).toContain("truncate");
-    expect(listCard.querySelector("[data-mobile-card-dynamic]")?.textContent).toContain("Working");
-    expect(listCard.querySelector("[data-mobile-card-menu]")).toBeNull();
+    const cards = [...harness.container.querySelectorAll<HTMLElement>("[data-mobile-card]")];
+    const actionCard = cards.find((card) => card.textContent?.includes("Release readiness"));
+    const workingCard = cards.find((card) => card.textContent?.includes("Context docs"));
+    const ordinaryCard = cards.find((card) => card.textContent?.includes("Team roster polish"));
+    if (!actionCard || !workingCard || !ordinaryCard) throw new Error("Missing expected Work cards");
+
+    expect(actionCard.querySelector("[data-mobile-card-preview]")?.getAttribute("data-line-clamp")).toBe("2");
+    expect(workingCard.getAttribute("style")).toContain("min-height: calc(var(--sp-20) + var(--sp-8))");
+    expect(workingCard.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
+    expect(workingCard.querySelector("[data-mobile-card-preview]")?.className).toContain("truncate");
+    expect(workingCard.querySelector("[data-mobile-card-dynamic]")?.textContent).toContain("Working");
+    expect(workingCard.querySelector("[data-mobile-card-preview]")?.getAttribute("data-line-clamp")).toBe("1");
+    expect(ordinaryCard.querySelector("[data-mobile-card-preview]")?.getAttribute("data-line-clamp")).toBe("3");
+    expect(ordinaryCard.querySelector("[data-mobile-card-preview]")?.className).not.toContain("truncate");
+    expect(workingCard.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
   });
 
@@ -230,6 +238,10 @@ describe("mobile density tiers", () => {
     expect(chips.find((chip) => chip.textContent?.includes("Need you"))?.textContent).toContain("1");
     expect(chips.find((chip) => chip.textContent?.includes("Unread"))?.textContent).toContain("2");
     expect(chips.find((chip) => chip.textContent?.includes("Pinned"))?.textContent).toContain("2");
+    const pinnedCard = [...harness.container.querySelectorAll<HTMLElement>('[data-mobile-card="work"]')].find((card) =>
+      card.textContent?.includes("Pinned quiet work"),
+    );
+    expect(pinnedCard?.querySelector("[data-mobile-card-preview]")?.getAttribute("data-line-clamp")).toBe("3");
   });
 
   it("renders card previews with inline markdown peeled, not as literal markers", async () => {

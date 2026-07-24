@@ -142,7 +142,7 @@ describe("mobile chat projection", () => {
     expect(mobileChatSignal(explicitMention).attention).toBe(false);
   });
 
-  it("allocates the fixed two-line Work content budget by state", () => {
+  it("allocates Work content by state", () => {
     const summary = "**Current:** staging is green";
     expect(
       mobileCardContent(
