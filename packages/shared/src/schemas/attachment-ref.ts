@@ -1,12 +1,16 @@
 import { z } from "zod";
+import { SUPPORTED_IMAGE_MIMES, type SupportedImageMime } from "./image-payload.js";
+
+const SUPPORTED_IMAGE_MIME_SET = new Set<string>(SUPPORTED_IMAGE_MIMES);
 
 /**
  * Attachment kinds carried by an {@link AttachmentRef}. `kind` is derived from
  * the mime type at capture time and stored explicitly so render/delivery code
  * can branch without re-sniffing the mime on every read:
- *  - `image`    — a picture (rendered inline / lightbox). NOTE: images today
- *                 still travel as `imageRefContent` in `messages.content`; this
- *                 kind exists for the future convergence onto the generic ref.
+ *  - `image`    — a picture (rendered inline / lightbox). New tracked-request
+ *                 images use this generic ref; ordinary and historical image
+ *                 messages retain `imageRefContent` in `messages.content`
+ *                 until a separately scoped migration.
  *  - `document` — a text document previewed in the doc drawer (markdown today).
  *  - `file`     — any other blob; rendered as a download card.
  */
@@ -15,10 +19,10 @@ export const attachmentKindSchema = z.enum(ATTACHMENT_KINDS);
 export type AttachmentKind = z.infer<typeof attachmentKindSchema>;
 
 /**
- * Generic "this message references a stored blob" model — the single shape
- * every consumer (image / document / arbitrary file) hangs off, mounted at
- * `messages.metadata.attachments[]`. Mirrors the live image-ref convergence
- * onto the `attachments` blob substrate: the sender uploads bytes to
+ * Generic "this message references a stored blob" model, mounted at
+ * `messages.metadata.attachments[]`. Documents/files and new tracked-request
+ * images use it; legacy image-message content remains readable during the
+ * transition. The sender uploads bytes to
  * `POST /orgs/:orgId/attachments`, then sends a message carrying only this
  * reference. Every reader fetches the bytes on demand from
  * `GET /attachments/:attachmentId` — bytes never travel inside the message.
@@ -30,31 +34,45 @@ export type AttachmentKind = z.infer<typeof attachmentKindSchema>;
  * cross-navigation) and `sourcePath` is a forward hook for "show latest" that
  * is written but not consumed this phase.
  */
-export const attachmentRefSchema = z.object({
-  attachmentId: z.string().uuid(),
-  kind: attachmentKindSchema,
-  mimeType: z.string().min(1),
-  filename: z.string().min(1),
-  size: z.number().int().nonnegative(),
-  sha256: z
-    .string()
-    .regex(/^[0-9a-f]{64}$/, "sha256 must be 64 lowercase hex chars")
-    .optional(),
-  // SECURITY: `source.path` (and `sourcePath`) is UNTRUSTED, DISPLAY-ONLY
-  // metadata. A ref's bytes are self-supplied by the sender and downloads are
-  // capability-based (valid session + unguessable attachmentId), so a malicious
-  // runtime can fabricate bytes and pair them with an arbitrary `source.path`.
-  // The server cannot meaningfully validate a free-form display string, so it
-  // does not — this is display-spoofing only, NOT access escalation. NEVER use
-  // `source.path` for authorization, routing, or filesystem access.
-  source: z
-    .object({
-      path: z.string(),
-      sourcePath: z.string().optional(),
-    })
-    .optional(),
-});
+export const attachmentRefSchema = z
+  .object({
+    attachmentId: z.string().uuid(),
+    kind: attachmentKindSchema,
+    mimeType: z.string().min(1),
+    filename: z.string().min(1),
+    size: z.number().int().nonnegative(),
+    sha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/, "sha256 must be 64 lowercase hex chars")
+      .optional(),
+    // SECURITY: `source.path` (and `sourcePath`) is UNTRUSTED, DISPLAY-ONLY
+    // metadata. A ref's bytes are self-supplied by the sender and downloads are
+    // capability-based (valid session + unguessable attachmentId), so a malicious
+    // runtime can fabricate bytes and pair them with an arbitrary `source.path`.
+    // The server cannot meaningfully validate a free-form display string, so it
+    // does not — this is display-spoofing only, NOT access escalation. NEVER use
+    // `source.path` for authorization, routing, or filesystem access.
+    source: z
+      .object({
+        path: z.string(),
+        sourcePath: z.string().optional(),
+      })
+      .optional(),
+  })
+  .superRefine((ref, ctx) => {
+    if (ref.kind === "image" && !SUPPORTED_IMAGE_MIME_SET.has(ref.mimeType)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["mimeType"],
+        message: "image attachments must use a supported image MIME type",
+      });
+    }
+  });
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
+export type ImageAttachmentRef = AttachmentRef & {
+  kind: "image";
+  mimeType: SupportedImageMime;
+};
 
 /**
  * Hard cap on attachment refs a single message may carry. Bounds the
@@ -89,6 +107,7 @@ export function isAttachmentRef(value: unknown): value is AttachmentRef {
   if (typeof v.attachmentId !== "string" || !UUID_RE.test(v.attachmentId)) return false;
   if (typeof v.kind !== "string" || !ATTACHMENT_KINDS_SET.has(v.kind)) return false;
   if (typeof v.mimeType !== "string" || v.mimeType.length === 0) return false;
+  if (v.kind === "image" && !SUPPORTED_IMAGE_MIME_SET.has(v.mimeType)) return false;
   if (typeof v.filename !== "string" || v.filename.length === 0) return false;
   if (typeof v.size !== "number" || !Number.isInteger(v.size) || v.size < 0) return false;
   if (v.sha256 !== undefined && (typeof v.sha256 !== "string" || !SHA256_RE.test(v.sha256))) return false;
@@ -115,4 +134,15 @@ export function attachmentRefsFromMetadata(metadata: Record<string, unknown> | u
     if (isAttachmentRef(entry)) out.push(entry);
   }
   return out;
+}
+
+/**
+ * Read generic image attachments from message metadata. The generic ref schema
+ * and its hand-rolled reader both enforce the MIME set supported by renderers
+ * and the local image store.
+ */
+export function imageAttachmentRefsFromMetadata(metadata: Record<string, unknown> | undefined): ImageAttachmentRef[] {
+  return attachmentRefsFromMetadata(metadata).filter(
+    (ref): ref is ImageAttachmentRef => ref.kind === "image" && SUPPORTED_IMAGE_MIME_SET.has(ref.mimeType),
+  );
 }

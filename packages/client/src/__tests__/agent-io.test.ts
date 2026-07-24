@@ -436,7 +436,7 @@ describe("formatInboundContent", () => {
     expect(out).not.toContain('{"caption"');
   });
 
-  it("renders a tracked request image batch for the agent instead of a JSON dump", async () => {
+  it("renders generic request image attachments without changing the textual body", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -444,23 +444,25 @@ describe("formatInboundContent", () => {
       chatId: "chat-1",
       senderId: "agent-a",
       format: "request",
-      content: {
-        caption: "Which layout should ship?",
+      content: "Which layout should ship?",
+      metadata: {
+        request: {},
         attachments: [
           {
-            imageId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
+            attachmentId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
+            kind: "image",
             mimeType: "image/png",
             filename: "decision.png",
+            size: 42,
           },
         ],
       },
-      metadata: { request: {} },
     };
     const out = await formatInboundContent(msg, cache);
     expect(out).toContain("Which layout should ship?");
     expect(out).toContain("An image was shared");
     expect(out).toContain("decision.png");
-    expect(out).not.toContain('{"caption"');
+    expect(out).not.toContain('{"attachments"');
   });
 
   it("does not reinterpret a batch-shaped card as an image message", async () => {
@@ -601,7 +603,7 @@ describe("formatInboundContent", () => {
     expect(out).not.toContain("file was shared");
   });
 
-  it("does not render image metadata attachments as document files", async () => {
+  it("renders image metadata attachments through the image path, not as document files", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -625,8 +627,9 @@ describe("formatInboundContent", () => {
 
     const out = await formatInboundContent(msg, cache);
 
-    expect(out).toBe("[From: alice · type=agent]\n\nImage metadata only.");
-    expect(out).not.toContain("chart.png");
+    expect(out).toContain("[From: alice · type=agent]\n\nImage metadata only.");
+    expect(out).toContain("An image was shared in this chat");
+    expect(out).toContain('Image "chart.png" not available on this device');
     expect(out).not.toContain("file was shared");
   });
 

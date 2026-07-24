@@ -7,7 +7,6 @@ import {
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
-  isImageBatchRefContent,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
@@ -198,17 +197,10 @@ function validateMessageContent(
     return;
   }
   if (data.format === "request") {
-    if (typeof data.content === "string") {
-      validateTextBody(data.content, true);
-      return;
+    if (typeof data.content !== "string") {
+      throw new BadRequestError("Invalid request message content: expected a non-empty text question.");
     }
-    const parsed = imageBatchRefContentSchema.safeParse(data.content);
-    if (!parsed.success) {
-      throw new BadRequestError(
-        "Invalid request message content: expected a non-empty text body or an image batch with a non-empty caption.",
-      );
-    }
-    validateTextBody(parsed.data.caption ?? "", true);
+    validateTextBody(data.content, true);
     return;
   }
   // Non-string content (card / reference object shapes) is out of scope here;
@@ -573,14 +565,8 @@ export function preflightMessageSendIntent(input: {
   }
 
   let outboundContent = effectiveContent;
-  const outboundText =
-    typeof outboundContent === "string"
-      ? outboundContent
-      : data.format === "request" && isImageBatchRefContent(outboundContent)
-        ? extractCaption(outboundContent)
-        : null;
-  if (options.normalizeMentionsInContent && outboundText !== null) {
-    const present = new Set(scanMentionTokens(outboundText));
+  if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
+    const present = new Set(scanMentionTokens(outboundContent));
     const missingNames: string[] = [];
     for (const id of mergedMentions) {
       if (id === senderId) continue;
@@ -591,12 +577,7 @@ export function preflightMessageSendIntent(input: {
     }
     if (missingNames.length > 0) {
       const prefix = missingNames.map((n) => `@${n}`).join(" ");
-      const normalizedText = outboundText.length > 0 ? `${prefix} ${outboundText}` : prefix;
-      if (typeof outboundContent === "string") {
-        outboundContent = normalizedText;
-      } else if (isImageBatchRefContent(outboundContent)) {
-        outboundContent = { ...outboundContent, caption: normalizedText };
-      }
+      outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
     }
   }
 

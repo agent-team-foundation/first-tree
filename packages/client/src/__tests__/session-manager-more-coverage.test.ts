@@ -630,7 +630,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     await sm.shutdown();
   });
 
-  it("downloads request image batches before routing them to the agent", async () => {
+  it("downloads generic request image attachments before routing them to the agent", async () => {
     const home = mkdtempSync(join(tmpdir(), "session-manager-request-images-"));
     vi.stubEnv("FIRST_TREE_HOME", home);
     try {
@@ -651,18 +651,19 @@ describe("SessionManager additional delivery token and payload coverage", () => 
         message: {
           ...base.message,
           format: "request",
-          content: {
-            caption: "Which layout should ship?",
+          content: "Which layout should ship?",
+          metadata: {
+            request: {},
             attachments: [
               {
-                imageId,
+                attachmentId: imageId,
+                kind: "image",
                 mimeType: "image/png",
                 filename: "decision.png",
                 size: 11,
               },
             ],
           },
-          metadata: { request: {} },
         },
       };
 

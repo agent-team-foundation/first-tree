@@ -5,6 +5,7 @@ import {
   type ChatParticipantDetail,
   extractCaption,
   type ImageRefContent,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   resolveTrustedSystemSender,
@@ -320,26 +321,22 @@ export async function buildFromHeader(message: SessionMessage, participants: Par
  * read as user input. Most formats are already strings; non-string
  * payloads are stringified so the resumed turn still sees readable text.
  *
- * Image messages (single file ref, or the batch shape shared by file messages
- * and tracked requests) get a human-readable rendering — caption text plus the
- * on-disk path of each image so a shell-capable LLM (codex CLI, claude-code)
- * can read it, or a "[Image … not available on this device]" placeholder when
- * the bytes never arrived on this client. Without this, codex / future
- * handlers that delegate to `formatInboundContent` would see the raw
- * `{caption, attachments}` JSON.
+ * `format: "file"` image messages (single-ref or batched caption + N refs)
+ * get a human-readable rendering. Generic image attachments on a textual
+ * request are appended through the same path-based note without changing the
+ * request body shape.
  */
 function renderForLLM(message: SessionMessage): string {
   let base: string;
   if (typeof message.content === "string") {
     base = message.content;
-  } else if (
-    ((message.format === "file" || message.format === "request") && isImageBatchRefContent(message.content)) ||
-    message.format === "file"
-  ) {
-    base = renderImageMessageForLLM(message) ?? JSON.stringify(message.content);
+  } else if (message.format === "file") {
+    base = renderFileMessageForLLM(message) ?? JSON.stringify(message.content);
   } else {
     base = JSON.stringify(message.content);
   }
+  const imageNote = renderImageAttachmentsForLLM(message);
+  if (imageNote) base = base.length > 0 ? `${base}\n\n${imageNote}` : imageNote;
   // Document/file attachments ride metadata.attachments on any format — append
   // their on-disk paths so a shell-capable agent can open them.
   const docNote = renderDocumentAttachmentsForLLM(message);
@@ -351,8 +348,9 @@ function renderForLLM(message: SessionMessage): string {
 /**
  * A text note listing the on-disk paths of any document/file attachments on
  * this message (`metadata.attachments`, non-image), so a shell-capable agent
- * can open them. Returns null when there are none. Images are handled
- * separately — they ride `content`.
+ * can open them. Returns null when there are none. Generic image refs are
+ * handled separately by `renderImageAttachmentsForLLM`; legacy image messages
+ * remain content-backed.
  */
 export function renderDocumentAttachmentsForLLM(message: SessionMessage): string | null {
   const refs = attachmentRefsFromMetadata(message.metadata ?? undefined).filter((ref) => ref.kind !== "image");
@@ -371,9 +369,27 @@ export function renderDocumentAttachmentsForLLM(message: SessionMessage): string
   return lines.join("\n");
 }
 
+/** Render generic image attachments as local paths for the receiving agent. */
+export function renderImageAttachmentsForLLM(message: SessionMessage): string | null {
+  const refs = imageAttachmentRefsFromMetadata(message.metadata ?? undefined);
+  if (refs.length === 0) return null;
+  const lines: string[] = [
+    refs.length === 1
+      ? "An image was shared in this chat. Use the Read tool / shell to open it before responding."
+      : `${refs.length} images were shared in this chat. Use the Read tool / shell to open each before responding.`,
+  ];
+  for (const ref of refs) {
+    const path = findImagePath(message.chatId, ref.attachmentId, ref.mimeType);
+    lines.push(
+      path ? `\nFilename: ${ref.filename}\nPath: ${path}` : `\n[Image "${ref.filename}" not available on this device]`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** Return a text rendering for a file message's content, or null when the
  * shape isn't a known image variant — caller falls back to JSON. */
-function renderImageMessageForLLM(message: SessionMessage): string | null {
+function renderFileMessageForLLM(message: SessionMessage): string | null {
   const content = message.content;
 
   // Batch shape: caption + N image refs.

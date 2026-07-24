@@ -63,7 +63,7 @@ function ImageFromRef({
   );
 }
 
-type ReferencedImage = {
+export type ReferencedImage = {
   imageId: string;
   filename: string;
 };

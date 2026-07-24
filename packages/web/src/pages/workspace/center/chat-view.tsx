@@ -9,8 +9,8 @@ import {
   chatMetadataSchema,
   type DocSnapshotFailReason,
   documentContextSchema,
-  extractCaption,
   extractMentions,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   isLandingCampaignTrialChatLocked,
@@ -597,6 +597,14 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  const metadataImages = useMemo(
+    () =>
+      imageAttachmentRefsFromMetadata(msg.metadata).map((ref) => ({
+        imageId: ref.attachmentId,
+        filename: ref.filename,
+      })),
+    [msg.metadata],
+  );
   // Attachment refs to render as download chips: everything in
   // `metadata.attachments` that is NOT already surfaced as an inline
   // `[display](attachment:<id>)` link in the body (the agent doc-capture
@@ -612,7 +620,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         : isImageBatchRefContent(msg.content)
           ? (msg.content.caption ?? "")
           : "";
-    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+    return attachmentRefsFromMetadata(msg.metadata).filter(
+      (ref) => ref.kind !== "image" && !body.includes(`attachment:${ref.attachmentId}`),
+    );
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Resolve a visible label only when this token's persisted mention ID still
@@ -782,7 +792,7 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         marginTop: 2,
       }}
     >
-      {(msg.format === "file" || msg.format === "request") && isImageBatchRefContent(msg.content) ? (
+      {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
         <ImageBatchFromRef
           content={msg.content}
           markdownComponents={markdownComponents}
@@ -817,6 +827,10 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           {JSON.stringify(msg.content, null, 2)}
         </pre>
       )}
+      <ImageRefGallery
+        images={metadataImages}
+        hasLeadingContent={typeof msg.content === "string" && msg.content.trim().length > 0}
+      />
       {chipAttachmentRefs.length > 0 && (
         <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
           {chipAttachmentRefs.map((ref) => (
@@ -3529,10 +3543,11 @@ export function ChatView({
             <div style={{ position: "absolute", top: 52, left: 0, right: 0, bottom: 0, zIndex: 30 }}>
               <AskTakeover
                 key={dockRequest.id}
-                body={
-                  typeof dockRequest.content === "string" ? dockRequest.content : extractCaption(dockRequest.content)
-                }
-                images={isImageBatchRefContent(dockRequest.content) ? dockRequest.content.attachments : []}
+                body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
+                images={imageAttachmentRefsFromMetadata(dockRequest.metadata).map((ref) => ({
+                  imageId: ref.attachmentId,
+                  filename: ref.filename,
+                }))}
                 payload={dockPayload}
                 askerName={chatScopedAgentName(dockRequest.senderId)}
                 sending={askBusy}

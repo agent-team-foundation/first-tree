@@ -85,17 +85,7 @@ const request: Message = {
   chatId: row.chatId,
   senderId: "agent-1",
   format: "request",
-  content: {
-    caption: "## Release decision\n\nThe staging evidence is green. Which rollout should we use?",
-    attachments: [
-      {
-        imageId: "11111111-1111-4111-8111-111111111111",
-        mimeType: "image/png",
-        filename: "release-evidence.png",
-        size: 42,
-      },
-    ],
-  },
+  content: "## Release decision\n\nThe staging evidence is green. Which rollout should we use?",
   metadata: {
     mentions: ["human-agent-self"],
     request: {
@@ -105,6 +95,15 @@ const request: Message = {
         { label: "Hold", description: "Keep the release on staging." },
       ],
     },
+    attachments: [
+      {
+        attachmentId: "11111111-1111-4111-8111-111111111111",
+        kind: "image",
+        mimeType: "image/png",
+        filename: "release-evidence.png",
+        size: 42,
+      },
+    ],
   },
   inReplyTo: null,
   source: "web",

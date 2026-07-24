@@ -1896,17 +1896,7 @@ describe("ChatView", () => {
       id: "req-render",
       senderId: "agent-1",
       format: "request",
-      content: {
-        caption: "Lifecycle **body** stays memoized.",
-        attachments: [
-          {
-            imageId: "11111111-1111-4111-8111-111111111111",
-            mimeType: "image/png",
-            filename: "lifecycle.png",
-            size: 42,
-          },
-        ],
-      },
+      content: "Lifecycle **body** stays memoized.",
       metadata: {
         mentions: ["human-agent-self"],
         request: {
@@ -1915,6 +1905,22 @@ describe("ChatView", () => {
             { label: "Hold", description: "wait" },
           ],
         },
+        attachments: [
+          {
+            attachmentId: "11111111-1111-4111-8111-111111111111",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "lifecycle.png",
+            size: 42,
+          },
+          {
+            attachmentId: "11111111-1111-4111-8111-111111111112",
+            kind: "image",
+            mimeType: "image/jpeg",
+            filename: "lifecycle-alt.jpg",
+            size: 84,
+          },
+        ],
       },
       source: "api",
       createdAt: "2026-05-28T12:00:00.000Z",
@@ -1944,6 +1950,12 @@ describe("ChatView", () => {
       () => container.querySelector('button[aria-label="Open image lifecycle.png"]') !== null,
       "request image thumbnail did not render",
     );
+    const requestRow = container.querySelector('[data-message-id="req-render"]');
+    expect(
+      [...(requestRow?.querySelectorAll('button[aria-label^="Open image "]') ?? [])].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Open image lifecycle.png", "Open image lifecycle-alt.jpg"]);
     expect(container.textContent).not.toContain("RESOLVED");
     await flush();
     markdownMocks.render.mockClear();
@@ -2760,17 +2772,7 @@ describe("ChatView", () => {
       id: "req-gitlab-link",
       senderId: "agent-1",
       format: "request",
-      content: {
-        caption: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
-        attachments: [
-          {
-            imageId: "22222222-2222-4222-8222-222222222222",
-            mimeType: "image/png",
-            filename: "evidence.png",
-            size: 42,
-          },
-        ],
-      },
+      content: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
       metadata: {
         mentions: ["human-agent-self"],
         request: {
@@ -2779,6 +2781,15 @@ describe("ChatView", () => {
             { label: "Hold", description: "wait" },
           ],
         },
+        attachments: [
+          {
+            attachmentId: "22222222-2222-4222-8222-222222222222",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "evidence.png",
+            size: 42,
+          },
+        ],
       },
       source: "api",
       createdAt: "2026-05-28T11:59:00.000Z",

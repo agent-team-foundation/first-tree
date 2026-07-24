@@ -14,6 +14,7 @@ import {
   attachmentRefsFromMetadata,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   parseProviderRetryEventMessage,
@@ -622,20 +623,25 @@ export class SessionManager {
 
   /**
    * Resolve every inbound image reference to a file on local disk, fetching
-   * missing bytes from the `attachments` store. The batch shape is shared by
-   * regular file messages and tracked requests; the legacy single-ref shape
-   * remains file-only. Fetches run in parallel and never throw — the renderer
-   * degrades to a placeholder for any ref that didn't land.
+   * missing bytes from the attachment store. Legacy file-message refs and
+   * generic metadata refs share the same local image cache. Fetches run in
+   * parallel and never throw — the renderer degrades to a placeholder for any
+   * ref that did not land.
    */
   private async ensureImagesLocal(message: SessionMessage): Promise<void> {
-    // Images: refs in `content`. Written under the images dir and handed to the
-    // model as a path to Read.
-    const imageRefs =
-      (message.format === "file" || message.format === "request") && isImageBatchRefContent(message.content)
+    const legacyImageRefs =
+      message.format === "file" && isImageBatchRefContent(message.content)
         ? message.content.attachments
         : message.format === "file" && isImageRefContent(message.content)
           ? [message.content]
           : [];
+    const genericImageRefs = imageAttachmentRefsFromMetadata(message.metadata ?? undefined).map((ref) => ({
+      imageId: ref.attachmentId,
+      mimeType: ref.mimeType,
+      filename: ref.filename,
+      size: ref.size,
+    }));
+    const imageRefs = [...legacyImageRefs, ...genericImageRefs];
     await Promise.all(
       imageRefs.map(async (ref) => {
         if (findImagePath(message.chatId, ref.imageId, ref.mimeType)) return;

@@ -121,6 +121,38 @@ describe("validateMessageAttachmentRefs", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("accepts a supported generic image ref whose mime + size match the stored row", async () => {
+    await expect(
+      validateMessageAttachmentRefs(readerWith({ mimeType: "image/png", sizeBytes: 12 }), {
+        attachments: [
+          baseRef({
+            kind: "image",
+            mimeType: "image/png",
+            filename: "decision.png",
+            sha256: undefined,
+            source: undefined,
+          }),
+        ],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a generic image ref whose MIME is unsupported by image consumers", async () => {
+    await expect(
+      validateMessageAttachmentRefs(readerWith({ mimeType: "image/svg+xml", sizeBytes: 12 }), {
+        attachments: [
+          baseRef({
+            kind: "image",
+            mimeType: "image/svg+xml",
+            filename: "decision.svg",
+            sha256: undefined,
+            source: undefined,
+          }),
+        ],
+      }),
+    ).rejects.toThrow(BadRequestError);
+  });
+
   it("rejects a ref pointing at a non-existent attachment", async () => {
     await expect(validateMessageAttachmentRefs(readerWith(null), { attachments: [baseRef()] })).rejects.toThrow(
       BadRequestError,

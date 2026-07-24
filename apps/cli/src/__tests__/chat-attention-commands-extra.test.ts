@@ -280,18 +280,102 @@ describe("chat command behavior", () => {
 
     expect(imageCaptureMock.captureOutboundImages).toHaveBeenCalledWith(
       "Which layout should ship?\n\n![layout](output/decision.png)",
-      expect.objectContaining({ chatId: "chat-env" }),
+      expect.objectContaining({ chatId: "chat-env", maxAttachments: 10 }),
     );
     expect(sdk.sendMessage).toHaveBeenLastCalledWith(
       "chat-env",
       expect.objectContaining({
         format: "request",
-        content: {
-          caption: "Which layout should ship?",
-          attachments: [imageRef],
-        },
+        content: "Which layout should ship?",
+        metadata: expect.objectContaining({
+          attachments: [
+            {
+              attachmentId: imageRef.imageId,
+              kind: "image",
+              mimeType: "image/png",
+              filename: "decision.png",
+              size: 42,
+            },
+          ],
+        }),
       }),
     );
+  });
+
+  it("chat ask shares one attachment budget across caller refs, documents, and images", async () => {
+    const sdk = localAgentMocks.createSdk();
+    const existingRef = {
+      attachmentId: "21111111-1111-4111-8111-111111111111",
+      kind: "file",
+      mimeType: "text/plain",
+      filename: "existing.txt",
+      size: 8,
+    };
+    const documentRef = {
+      attachmentId: "31111111-1111-4111-8111-111111111111",
+      kind: "document",
+      mimeType: "text/markdown",
+      filename: "plan.md",
+      size: 16,
+    };
+    const imageRef = {
+      imageId: "41111111-1111-4111-8111-111111111111",
+      mimeType: "image/png",
+      filename: "decision.png",
+      size: 42,
+    };
+    const body = "Which layout should ship?\n\nsee plan.md\n\n![layout](decision.png)";
+    const docCapturedBody =
+      "Which layout should ship?\n\nsee [plan.md](attachment:31111111-1111-4111-8111-111111111111)\n\n![layout](decision.png)";
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: docCapturedBody,
+      attachments: [documentRef],
+    });
+    imageCaptureMock.captureOutboundImages.mockResolvedValueOnce({
+      caption: "Which layout should ship?",
+      imageRefs: [imageRef],
+    });
+
+    await runChat(["ask", "nova", body, "--metadata", JSON.stringify({ attachments: [existingRef] })]);
+
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith(
+      body,
+      expect.objectContaining({ chatId: "chat-env", maxAttachments: 9 }),
+    );
+    expect(imageCaptureMock.captureOutboundImages).toHaveBeenCalledWith(
+      docCapturedBody,
+      expect.objectContaining({ chatId: "chat-env", maxAttachments: 8 }),
+    );
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        format: "request",
+        content: "Which layout should ship?",
+        metadata: expect.objectContaining({
+          attachments: [
+            existingRef,
+            documentRef,
+            {
+              attachmentId: imageRef.imageId,
+              kind: "image",
+              mimeType: "image/png",
+              filename: "decision.png",
+              size: 42,
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("chat ask rejects malformed caller attachment metadata before capture", async () => {
+    await expect(
+      runChat(["ask", "nova", "Which layout?", "--metadata", JSON.stringify({ attachments: [{ bad: true }] })]),
+    ).rejects.toMatchObject({ code: "INVALID_METADATA", exitCode: 2 });
+
+    expect(docCaptureMock.captureOutboundDocs).not.toHaveBeenCalled();
+    expect(imageCaptureMock.captureOutboundImages).not.toHaveBeenCalled();
+    expect(localAgentMocks.createSdk).not.toHaveBeenCalled();
   });
 
   it("chat ask --multi-select records multiSelect alongside options", async () => {

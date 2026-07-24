@@ -410,39 +410,6 @@ describe("mention enforcement + content normalisation", () => {
       expect(result.message.content).toEqual(card);
     });
 
-    it("prepends missing target mentions to a request image-batch caption", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `mt-request-s-${uid}` });
-      const { agent: human } = await createTestAgent(app, { name: `mt-request-h-${uid}`, type: "human" });
-      const chat = await createChat(app.db, sender.agent.uuid, {
-        type: "group",
-        participantIds: [human.uuid],
-      });
-      const content = {
-        caption: "Choose a layout",
-        attachments: [
-          {
-            imageId: crypto.randomUUID(),
-            mimeType: "image/png",
-            filename: "decision.png",
-            size: 42,
-          },
-        ],
-      };
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "request", content, metadata: { mentions: [human.uuid], request: {} } },
-        { normalizeMentionsInContent: true },
-      );
-      expect(result.message.content).toEqual({
-        ...content,
-        caption: `@${human.name} Choose a layout`,
-      });
-    });
-
     it("does NOT mutate content when the flag is off", async () => {
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);

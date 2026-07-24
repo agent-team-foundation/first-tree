@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { FirstTreeHubSDK } from "@first-tree/client";
 import { type ImageRefContent, imageBatchRefContentSchema, isImageBatchRefContent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { captureOutboundImages, toOutboundImageMessage } from "../core/image-capture.js";
+import { captureOutboundImages, toGenericImageAttachmentRefs, toOutboundImageMessage } from "../core/image-capture.js";
 
 /**
  * `chat send` image capture: the picture sibling of doc capture. Driven by the
@@ -140,14 +140,26 @@ describe("toOutboundImageMessage (format/content conversion)", () => {
     expect(out.content).toMatchObject({ caption: "看图", attachments: [ref] });
   });
 
-  it("keeps a tracked request as request while attaching the captured image batch", () => {
+  it("does not put a captured image batch into request content", () => {
     const out = toOutboundImageMessage("request", "Choose the rollout?", {
       caption: "Choose the rollout?",
       imageRefs: [ref],
     });
     expect(out.format).toBe("request");
-    expect(out.content).toEqual({ caption: "Choose the rollout?", attachments: [ref] });
-    expect(isImageBatchRefContent(out.content)).toBe(true);
+    expect(out.content).toBe("Choose the rollout?");
+  });
+
+  it("adapts captured image refs into generic metadata attachments", () => {
+    expect(toGenericImageAttachmentRefs([ref])).toEqual([
+      {
+        attachmentId: ref.imageId,
+        kind: "image",
+        mimeType: "image/png",
+        filename: "shot.png",
+        size: 8,
+      },
+    ]);
+    expect(toGenericImageAttachmentRefs([{ ...ref, size: undefined }])).toEqual([]);
   });
 
   it("omits the caption key for an image-only send (empty caption)", () => {

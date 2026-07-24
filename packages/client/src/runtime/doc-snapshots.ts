@@ -115,6 +115,8 @@ type ResolvedOccurrence = DocPathOccurrence & {
 export type BuildDocAttachmentsOptions = {
   uploader: AttachmentUploader;
   orgId: string;
+  /** Caller-specific share of the per-message attachment budget. */
+  maxAttachments?: number;
 };
 
 export async function buildMessageDocumentSnapshots(
@@ -147,6 +149,11 @@ export async function buildMessageDocumentSnapshots(
   if (!roots) return { ...empty, skipped: occurrences.length };
 
   const workspacesRootReal = fence ? await safeRealpath(fence.workspacesRoot) : null;
+  const requestedLimit = opts.maxAttachments;
+  const attachmentLimit =
+    requestedLimit === undefined || !Number.isFinite(requestedLimit)
+      ? MAX_MESSAGE_ATTACHMENT_REFS
+      : Math.min(MAX_MESSAGE_ATTACHMENT_REFS, Math.max(0, Math.trunc(requestedLimit)));
 
   // Pass 1 — resolve every occurrence to a readable file + canonical source
   // path, or attach a failure reason. Same provenance fence as before.
@@ -185,7 +192,7 @@ export async function buildMessageDocumentSnapshots(
     if (attempted.has(sourcePath)) continue;
     attempted.add(sourcePath);
 
-    if (refsByPath.size + uploadTasks.length >= MAX_MESSAGE_ATTACHMENT_REFS) {
+    if (refsByPath.size + uploadTasks.length >= attachmentLimit) {
       occ.failReason = "budget-exceeded";
       skipped += 1;
       continue;
