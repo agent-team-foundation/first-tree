@@ -101,7 +101,10 @@ describe("MobileMePage", () => {
 
   beforeEach(() => {
     harness = createDomHarness();
-    authMock.value.logout = vi.fn();
+    // Async to match the real AuthContext contract — logout() now resolves
+    // after the local-data purge (SEC-042). The mobile button passes it
+    // straight to onClick, which tolerates the returned promise.
+    authMock.value.logout = vi.fn(async () => undefined);
   });
 
   it("renders account, team, preference, support, and sign-out controls without admin panels", async () => {

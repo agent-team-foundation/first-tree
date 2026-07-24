@@ -167,3 +167,15 @@ describe("parkFailedDraftIfSwitched", () => {
     expect(loadDraft(chatDraftScope("user-2", "chat-a"))).toBeNull();
   });
 });
+
+describe("scope key format", () => {
+  it("keeps the documented per-user scope shapes (contract the logout purge relies on)", () => {
+    // The logout purge (lib/purge-local-data.ts) deletes the whole drafts
+    // key, and the per-user database namespacing mirrors this `u:<userId>`
+    // prefix convention — lock the exact shapes so neither drifts silently.
+    expect(chatDraftScope("user-1", "chat-9")).toBe("u:user-1:chat:chat-9");
+    expect(chatDraftScope(null, "chat-9")).toBe("u:anon:chat:chat-9");
+    expect(newChatDraftScope("user-1", "org-1", ["agent-a", "agent-b"])).toBe("u:user-1:new:org-1:agent-a,agent-b");
+    expect(newChatDraftScope(null, null)).toBe("u:anon:new:no-org:");
+  });
+});
