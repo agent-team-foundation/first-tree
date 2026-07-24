@@ -616,7 +616,12 @@ describe("Kimi homeDir lifecycle", () => {
         return {
           createSession: async () => (factoryCalls === 1 ? firstSession : secondSession),
           resumeSession: async () => (factoryCalls === 2 ? secondSession : firstSession),
-          close: factoryCalls === 1 ? async () => { await closePromise; } : async () => {},
+          close:
+            factoryCalls === 1
+              ? async () => {
+                  await closePromise;
+                }
+              : async () => {},
         };
       },
     });
