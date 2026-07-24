@@ -90,7 +90,7 @@ export const userAgentMetadataSchema = z.record(z.string(), z.unknown()).superRe
 });
 
 /**
- * Agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
+ * New agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
  *   - Lowercase ASCII slug, hyphens + underscores allowed.
  *   - Must start with alphanumeric: `-` / `_` as first char collide with
  *     CLI flag parsing and markdown list syntax.
@@ -100,6 +100,25 @@ export const userAgentMetadataSchema = z.record(z.string(), z.unknown()).superRe
  */
 export const AGENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const AGENT_NAME_MAX_LENGTH = 64;
+
+export const newAgentNameSchema = z
+  .string()
+  .min(1)
+  .max(AGENT_NAME_MAX_LENGTH)
+  .regex(
+    AGENT_NAME_REGEX,
+    "Must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_). Max 64 chars.",
+  );
+
+/**
+ * Path-safe compatibility shape for persisted agent names. Existing rows may
+ * use the former 1–100 character limit or start with `-` / `_`; local state
+ * management must keep those names manageable without accepting path syntax.
+ * Reserved-name policy applies only when claiming a new name.
+ */
+export const persistedAgentNameSchema = z
+  .string()
+  .regex(/^[a-z0-9_-]{1,100}$/, "Must contain 1–100 lowercase ASCII letters, digits, hyphens (-), or underscores (_).");
 
 /**
  * Names users cannot claim in the portal. Prefix `__` is separately
@@ -125,14 +144,7 @@ export function isReservedAgentName(name: string): boolean {
 }
 
 export const createAgentSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(AGENT_NAME_MAX_LENGTH)
-    .regex(
-      AGENT_NAME_REGEX,
-      "Must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_). Max 64 chars.",
-    )
+  name: newAgentNameSchema
     .refine((n) => !isReservedAgentName(n), {
       message: "That agent name is reserved — pick a different one.",
     })

@@ -3,6 +3,11 @@ import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import {
+  formatLocalAliasName,
+  LocalAgentRemovalError,
+  UNKNOWN_LOCAL_AGENT_REMOVAL_MESSAGE,
+} from "../../core/agent-prune.js";
+import {
   CLI_USER_AGENT,
   ensureFreshAccessToken,
   findStaleAliases,
@@ -50,7 +55,8 @@ export function registerAgentPruneCommand(agent: Command): void {
         print.line(`\n  ${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"}:\n\n`);
         for (const s of stale) {
           const id = s.agentId ?? "—";
-          print.line(`    - ${s.name.padEnd(30)} ${id.padEnd(38)} ${formatStaleReason(s.reason)}\n`);
+          const displayName = formatLocalAliasName(s.name);
+          print.line(`    - ${displayName.padEnd(30)} ${id.padEnd(38)} ${formatStaleReason(s.reason)}\n`);
         }
         print.line("\n");
 
@@ -76,21 +82,22 @@ export function registerAgentPruneCommand(agent: Command): void {
         let removed = 0;
         let failed = 0;
         for (const s of stale) {
+          const displayName = formatLocalAliasName(s.name);
           try {
             removeLocalAgent(s.name);
-            print.line(`  ✓ removed ${s.name}\n`);
+            print.line(`  ✓ removed ${displayName}\n`);
             removed++;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            print.line(`  ✗ ${s.name} (${msg.slice(0, 80)})\n`);
+          } catch (error) {
+            const message =
+              error instanceof LocalAgentRemovalError ? error.message : UNKNOWN_LOCAL_AGENT_REMOVAL_MESSAGE;
+            print.line(`  ✗ ${displayName} (${message})\n`);
             failed++;
           }
         }
         print.line(`\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run to retry)` : ""}.\n\n`);
         if (failed > 0) process.exitCode = 1;
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("PRUNE_ERROR", msg);
+      } catch {
+        fail("PRUNE_ERROR", "Unable to prune local agent aliases safely.");
       }
     });
 }

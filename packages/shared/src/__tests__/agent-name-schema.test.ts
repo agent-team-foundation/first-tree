@@ -7,6 +7,8 @@ import {
   findReservedAgentMetadataKey,
   isReservedAgentName,
   listAgentsQuerySchema,
+  newAgentNameSchema,
+  persistedAgentNameSchema,
   RESERVED_AGENT_NAMES,
   updateAgentSchema,
   userAgentMetadataSchema,
@@ -48,6 +50,42 @@ describe("AGENT_NAME_REGEX", () => {
     const max = `a${"b".repeat(AGENT_NAME_MAX_LENGTH - 1)}`;
     expect(max.length).toBe(AGENT_NAME_MAX_LENGTH);
     expect(AGENT_NAME_REGEX.test(max)).toBe(true);
+  });
+});
+
+describe("newAgentNameSchema", () => {
+  it("accepts the current 1–64 character creation shape", () => {
+    expect(newAgentNameSchema.safeParse("alice").success).toBe(true);
+    expect(newAgentNameSchema.safeParse(`a${"b".repeat(63)}`).success).toBe(true);
+  });
+
+  it("rejects a 65-character name", () => {
+    expect(newAgentNameSchema.safeParse("a".repeat(65)).success).toBe(false);
+  });
+});
+
+describe("persistedAgentNameSchema", () => {
+  it("accepts grandfathered lengths, leading separators, and reserved names", () => {
+    expect(persistedAgentNameSchema.safeParse("a".repeat(65)).success).toBe(true);
+    expect(persistedAgentNameSchema.safeParse("a".repeat(100)).success).toBe(true);
+    expect(persistedAgentNameSchema.safeParse("-legacy").success).toBe(true);
+    expect(persistedAgentNameSchema.safeParse("_legacy").success).toBe(true);
+    expect(persistedAgentNameSchema.safeParse("admin").success).toBe(true);
+  });
+
+  it.each([
+    ["101 characters", "a".repeat(101)],
+    ["dot segment", ".."],
+    ["embedded dot", "agent.name"],
+    ["POSIX separator", "agents/alpha"],
+    ["Windows separator", "agents\\alpha"],
+    ["absolute path", "/tmp/alpha"],
+    ["Windows drive path", "c:\\agents\\alpha"],
+    ["UNC path", "\\\\server\\share\\alpha"],
+    ["uppercase", "Alpha"],
+    ["Unicode", "团队agent"],
+  ])("rejects %s", (_case, name) => {
+    expect(persistedAgentNameSchema.safeParse(name).success).toBe(false);
   });
 });
 
