@@ -26,6 +26,8 @@ const DEFAULT_FILTERS: MobileWorkFilters = {
 
 export function MobileWorkPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [quickView, setQuickView] = useState<MobileWorkQuickView>("all");
+  const [filters, setFilters] = useState<MobileWorkFilters>(DEFAULT_FILTERS);
   const selectedChatId = searchParams.get("c");
 
   const selectChat = useCallback(
@@ -59,17 +61,33 @@ export function MobileWorkPage() {
           />
         </div>
       ) : (
-        <MobileWorkList onSelectChat={selectChat} />
+        <MobileWorkList
+          onSelectChat={selectChat}
+          quickView={quickView}
+          onQuickViewChange={setQuickView}
+          filters={filters}
+          onFiltersChange={setFilters}
+        />
       )}
       <DocPreviewDrawer />
     </>
   );
 }
 
-function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => void }) {
+function MobileWorkList({
+  onSelectChat,
+  quickView,
+  onQuickViewChange,
+  filters,
+  onFiltersChange,
+}: {
+  onSelectChat: (chatId: string) => void;
+  quickView: MobileWorkQuickView;
+  onQuickViewChange: (quickView: MobileWorkQuickView) => void;
+  filters: MobileWorkFilters;
+  onFiltersChange: (filters: MobileWorkFilters) => void;
+}) {
   const { agentId, organizationId } = useAuth();
-  const [quickView, setQuickView] = useState<MobileWorkQuickView>("all");
-  const [filters, setFilters] = useState<MobileWorkFilters>(DEFAULT_FILTERS);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [answeringChatId, setAnsweringChatId] = useState<string | null>(null);
@@ -143,7 +161,7 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
   const narrowed = filters.engagement !== "active" || filters.watching;
 
   const toggleQuickView = (next: Exclude<MobileWorkQuickView, "all">): void => {
-    setQuickView((current) => (current === next ? "all" : next));
+    onQuickViewChange(quickView === next ? "all" : next);
   };
 
   return (
@@ -300,7 +318,7 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
       {answeringChatId ? <MobileAskSheet chatId={answeringChatId} onClose={() => setAnsweringChatId(null)} /> : null}
       {actionsRow ? <MobileChatActionsSheet row={actionsRow} onClose={() => setActionsRow(null)} /> : null}
       {filtersOpen ? (
-        <MobileWorkFiltersSheet value={filters} onChange={setFilters} onClose={() => setFiltersOpen(false)} />
+        <MobileWorkFiltersSheet value={filters} onChange={onFiltersChange} onClose={() => setFiltersOpen(false)} />
       ) : null}
     </>
   );
