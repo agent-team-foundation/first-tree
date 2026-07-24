@@ -345,7 +345,7 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("Release readiness");
     expect(text(rendered.container)).toContain("Needs your answer");
     expect(text(rendered.container)).toContain("Pinned");
-    expect(text(rendered.container)).toContain("Recent");
+    expect([...rendered.container.querySelectorAll("h2")]).toEqual([]);
     expect(rendered.container.querySelector("[data-mobile-work-list]")).not.toBeNull();
     expect(rendered.container.querySelector('[data-mobile-card="action"]')).not.toBeNull();
     expect(rendered.container.querySelector('[data-mobile-card="work"]')).not.toBeNull();

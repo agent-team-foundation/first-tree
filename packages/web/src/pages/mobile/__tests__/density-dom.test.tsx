@@ -170,13 +170,13 @@ describe("mobile density tiers", () => {
     meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
   });
 
-  it("renders the unified Work list in Attention then Pinned then Recency groups", async () => {
+  it("renders one continuous Work feed in Attention then Pinned then Recency order", async () => {
     renderWithClient(harness, <MobileWorkPage />, "/m/work");
     await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
     expect(harness.container.textContent).toContain("Work");
 
     const sectionHeadings = [...harness.container.querySelectorAll("h2")].map((heading) => heading.textContent);
-    expect(sectionHeadings).toEqual(["Needs you", "Recent"]);
+    expect(sectionHeadings).toEqual([]);
 
     const cards = [...harness.container.querySelectorAll<HTMLElement>("[data-mobile-card]")];
     expect(cards).toHaveLength(3);

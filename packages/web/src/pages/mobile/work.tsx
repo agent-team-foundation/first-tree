@@ -117,7 +117,7 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
     );
   }, [allRows, quickView, search]);
 
-  const groupedRows = useMemo(() => {
+  const orderedRows = useMemo(() => {
     const attention: MeChatRow[] = [];
     const pinned: MeChatRow[] = [];
     const recent: MeChatRow[] = [];
@@ -126,7 +126,7 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
       else if (row.pinnedAt !== null) pinned.push(row);
       else recent.push(row);
     }
-    return { attention, pinned, recent };
+    return [...attention, ...pinned, ...recent];
   }, [visibleRows]);
 
   const priorityRows = allChatsQuery.data?.pages[0]?.priorityRows;
@@ -255,31 +255,26 @@ function MobileWorkList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
             detail={search.trim() ? "Try another search." : "Change a quick view or filter to see more work."}
           />
         ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-5)" }} data-mobile-work-list>
-            <WorkGroup
-              title="Needs you"
-              rows={groupedRows.attention}
-              selfAgentId={agentId ?? ""}
-              onSelect={onSelectChat}
-              onAnswer={setAnsweringChatId}
-              onActions={setActionsRow}
-            />
-            <WorkGroup
-              title="Pinned"
-              rows={groupedRows.pinned}
-              selfAgentId={agentId ?? ""}
-              onSelect={onSelectChat}
-              onAnswer={setAnsweringChatId}
-              onActions={setActionsRow}
-            />
-            <WorkGroup
-              title={filters.engagement === "archived" ? "Archived" : "Recent"}
-              rows={groupedRows.recent}
-              selfAgentId={agentId ?? ""}
-              onSelect={onSelectChat}
-              onAnswer={setAnsweringChatId}
-              onActions={setActionsRow}
-            />
+          <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-work-list>
+            {orderedRows.map((row) =>
+              mobileChatSignal(row).attention ? (
+                <MobileActionCard
+                  key={row.chatId}
+                  row={row}
+                  onSelect={onSelectChat}
+                  onAnswer={setAnsweringChatId}
+                  onActions={setActionsRow}
+                />
+              ) : (
+                <MobileWorkRow
+                  key={row.chatId}
+                  row={row}
+                  selfAgentId={agentId ?? ""}
+                  onSelect={onSelectChat}
+                  onActions={setActionsRow}
+                />
+              ),
+            )}
           </div>
         )}
 
@@ -341,44 +336,6 @@ function QuickViewChip({
         {count > 99 ? "99+" : count}
       </span>
     </button>
-  );
-}
-
-function WorkGroup({
-  title,
-  rows,
-  selfAgentId,
-  onSelect,
-  onAnswer,
-  onActions,
-}: {
-  title: string;
-  rows: readonly MeChatRow[];
-  selfAgentId: string;
-  onSelect: (chatId: string) => void;
-  onAnswer: (chatId: string) => void;
-  onActions: (row: MeChatRow) => void;
-}) {
-  if (rows.length === 0) return null;
-  return (
-    <section className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <h2 className="text-eyebrow" style={{ color: "var(--fg-3)", margin: 0, textTransform: "uppercase" }}>
-        {title}
-      </h2>
-      {rows.map((row) =>
-        mobileChatSignal(row).attention ? (
-          <MobileActionCard key={row.chatId} row={row} onSelect={onSelect} onAnswer={onAnswer} onActions={onActions} />
-        ) : (
-          <MobileWorkRow
-            key={row.chatId}
-            row={row}
-            selfAgentId={selfAgentId}
-            onSelect={onSelect}
-            onActions={onActions}
-          />
-        ),
-      )}
-    </section>
   );
 }
 

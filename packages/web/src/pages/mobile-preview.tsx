@@ -151,35 +151,18 @@ function WorkPreview({ onOpen, onAnswer }: { onOpen: (chat: PreviewChat) => void
         </IconButton>
       </div>
 
-      <div className="flex flex-col" style={{ gap: "var(--sp-5)" }} data-mobile-work-list>
-        <PreviewGroup title="Needs you">
-          {needsYou.map((chat) => (
-            <ActionCard key={chat.id} chat={chat} onOpen={onOpen} onAnswer={onAnswer} />
-          ))}
-        </PreviewGroup>
-        <PreviewGroup title="Pinned">
-          {pinned.map((chat) => (
-            <WorkRow key={chat.id} chat={chat} onOpen={onOpen} />
-          ))}
-        </PreviewGroup>
-        <PreviewGroup title="Recent">
-          {recent.map((chat) => (
-            <WorkRow key={chat.id} chat={chat} onOpen={onOpen} />
-          ))}
-        </PreviewGroup>
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-work-list>
+        {needsYou.map((chat) => (
+          <ActionCard key={chat.id} chat={chat} onOpen={onOpen} onAnswer={onAnswer} />
+        ))}
+        {pinned.map((chat) => (
+          <WorkRow key={chat.id} chat={chat} onOpen={onOpen} />
+        ))}
+        {recent.map((chat) => (
+          <WorkRow key={chat.id} chat={chat} onOpen={onOpen} />
+        ))}
       </div>
     </MobilePage>
-  );
-}
-
-function PreviewGroup({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <h2 className="text-eyebrow uppercase" style={{ color: "var(--fg-3)", margin: 0 }}>
-        {title}
-      </h2>
-      {children}
-    </section>
   );
 }
 
