@@ -8,13 +8,6 @@ import { requireAgent } from "../middleware/require-identity.js";
 import * as chatService from "../services/chat.js";
 import { assertCronAgentRouteAccess, CronJobAppError } from "../services/cron-job.js";
 
-export function cronConfig(app: FastifyInstance) {
-  return {
-    enabled: app.config.cronJobs.enabled,
-    pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-  };
-}
-
 export function sendCronError(reply: { status: (code: number) => { send: (body: unknown) => unknown } }, err: unknown) {
   if (err instanceof CronJobAppError) {
     return reply.status(err.statusCode).send({ error: err.message, code: err.code });

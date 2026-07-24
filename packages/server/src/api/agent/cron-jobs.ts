@@ -13,7 +13,7 @@ import {
   previewCronSchedule,
   updateCronJob,
 } from "../../services/cron-job.js";
-import { cronConfig, notifyCronChatUpdated, requireCronAgentCaller, sendCronError } from "../cron-http.js";
+import { notifyCronChatUpdated, requireCronAgentCaller, sendCronError } from "../cron-http.js";
 
 /**
  * Class D — agent self surface for scheduled jobs under the current chat.
@@ -48,7 +48,6 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
         controlChatId: request.params.chatId,
         agentId,
         body,
-        config: cronConfig(app),
         callerMemberId: memberId,
         callerHumanAgentId: humanAgentId,
       });
@@ -80,7 +79,6 @@ export async function agentCronJobRoutes(app: FastifyInstance): Promise<void> {
         jobId: request.params.id,
         expectedRevision,
         body,
-        config: cronConfig(app),
         agentScope: { agentId, controlChatId: request.params.chatId },
         callerMemberId: memberId,
         callerHumanAgentId: humanAgentId,

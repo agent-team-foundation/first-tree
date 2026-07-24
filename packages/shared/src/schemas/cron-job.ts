@@ -37,6 +37,12 @@ export const CRON_TIMEZONE_MAX = 100;
 export const CRON_PROMPT_MAX_CHARS = 32_768;
 export const CRON_PREVIEW_OCCURRENCE_COUNT = 5;
 export const CRON_DISPATCH_GRACE_MS = 30_000;
+export const CRON_POLLING_INTERVAL_MIN_SECONDS = 1;
+/**
+ * Preserve at least three polling opportunities inside the dispatch grace
+ * window so a valid cadence cannot systematically skip minute-aligned jobs.
+ */
+export const CRON_POLLING_INTERVAL_MAX_SECONDS = 10;
 
 /**
  * Permanent auto-pause / fail-closed reasons stored in `state_reason` when
@@ -75,8 +81,6 @@ export type CronOccurrenceSkipReason = z.infer<typeof cronOccurrenceSkipReasonSc
  * message text.
  */
 export const CRON_JOB_ERROR_CODES = [
-  "CRON_JOBS_DISABLED",
-  "CRON_JOBS_UNAVAILABLE",
   "CRON_JOB_NOT_FOUND",
   "CRON_JOB_FORBIDDEN",
   "CRON_JOB_REVISION_MISMATCH",

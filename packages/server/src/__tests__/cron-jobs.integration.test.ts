@@ -70,7 +70,7 @@ async function seedDispatchRoute(app: ReturnType<ReturnType<typeof useTestApp>>,
 }
 
 describe("cron jobs integration", () => {
-  const getApp = useTestApp({ cronJobsEnabled: true });
+  const getApp = useTestApp();
 
   async function setupChatWithAgent() {
     const app = getApp();
@@ -497,22 +497,16 @@ describe("cron jobs integration", () => {
       timezone: "UTC",
       prompt: "same",
     };
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
     const [a, b] = await Promise.all([
       createCronJob(app.db, {
         controlChatId: chatId,
         agentId: runtime.agent.uuid,
         body,
-        config,
       }),
       createCronJob(app.db, {
         controlChatId: chatId,
         agentId: runtime.agent.uuid,
         body,
-        config,
       }),
     ]);
     expect(a.id).toBe(b.id);
@@ -534,11 +528,6 @@ describe("cron jobs integration", () => {
     });
     expect(createRes.statusCode).toBe(201);
     const job = createRes.json() as { id: string; revision: number };
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-
     // Class D caller fields exercise member→agent→speakers→advisory→engagement
     // recheck (not the legacy internal path that skipped auth locks).
     const raced = Promise.allSettled([
@@ -546,7 +535,6 @@ describe("cron jobs integration", () => {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { state: "active" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
@@ -580,10 +568,6 @@ describe("cron jobs integration", () => {
       .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, runtime.humanAgentUuid)));
     expect(existing).toHaveLength(0);
 
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
     const raced = Promise.allSettled([
       createCronJob(app.db, {
         controlChatId: chatId,
@@ -594,7 +578,6 @@ describe("cron jobs integration", () => {
           timezone: "UTC",
           prompt: "must not land after chat delete",
         },
-        config,
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
       }),
@@ -640,17 +623,11 @@ describe("cron jobs integration", () => {
       prompt: "tick",
     });
     const job = createRes.json() as { id: string; revision: number };
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-
     const raced = Promise.allSettled([
       updateCronJob(app.db, {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { state: "paused" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
@@ -685,17 +662,11 @@ describe("cron jobs integration", () => {
       prompt: "tick",
     });
     const job = createRes.json() as { id: string; revision: number };
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-
     const raced = Promise.allSettled([
       updateCronJob(app.db, {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { prompt: "rewritten" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
@@ -825,16 +796,11 @@ describe("cron jobs integration", () => {
     // Keep agent in original chat as speaker; only flip manager.
     await app.db.update(agents).set({ managerId: other.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
 
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
     await expect(
       createCronJob(app.db, {
         controlChatId: chatId,
         agentId: runtime.agent.uuid,
         body: { name: "after-reassign", schedule: "0 10 * * *", timezone: "UTC", prompt: "no" },
-        config,
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
       }),
@@ -845,7 +811,6 @@ describe("cron jobs integration", () => {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { prompt: "stolen" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
@@ -879,18 +844,12 @@ describe("cron jobs integration", () => {
     await ensureParticipant(app.db, chatId, newMgr.humanAgentUuid);
     await app.db.update(agents).set({ managerId: newMgr.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
 
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-
     // New manager passes current-manager+speaker auth but is not the schedule owner.
     await expect(
       updateCronJob(app.db, {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { prompt: "stolen by B" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: newMgr.memberId,
         callerHumanAgentId: newMgr.humanAgentUuid,
@@ -928,11 +887,6 @@ describe("cron jobs integration", () => {
     await ensureParticipant(app.db, chatId, newMgr.humanAgentUuid);
     await app.db.update(agents).set({ managerId: newMgr.memberId }).where(eq(agents.uuid, runtime.agent.uuid));
 
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-
     // B's mutate must fail on owner identity before taking (chat, A) advisory;
     // B's engagement delete uses (chat, B) and must not pause A's jobs.
     // Owner A's chat delete pauses the job under the correct advisory key.
@@ -941,7 +895,6 @@ describe("cron jobs integration", () => {
         jobId: job.id,
         expectedRevision: job.revision,
         body: { prompt: "B must not win" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: newMgr.memberId,
         callerHumanAgentId: newMgr.humanAgentUuid,
@@ -972,15 +925,10 @@ describe("cron jobs integration", () => {
 
   it("maps create racing a name-only rename to CRON_JOB_NAME_CONFLICT without 25P02", async () => {
     const { app, runtime, chatId } = await setupChatWithAgent();
-    const config = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
     const existing = await createCronJob(app.db, {
       controlChatId: chatId,
       agentId: runtime.agent.uuid,
       body: { name: "before-rename", schedule: "0 11 * * *", timezone: "UTC", prompt: "a" },
-      config,
       callerMemberId: runtime.memberId,
       callerHumanAgentId: runtime.humanAgentUuid,
     });
@@ -990,7 +938,6 @@ describe("cron jobs integration", () => {
         jobId: existing.id,
         expectedRevision: existing.revision,
         body: { name: "raced-name" },
-        config,
         agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
@@ -999,7 +946,6 @@ describe("cron jobs integration", () => {
         controlChatId: chatId,
         agentId: runtime.agent.uuid,
         body: { name: "raced-name", schedule: "0 12 * * *", timezone: "UTC", prompt: "b" },
-        config,
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,
       }),
@@ -1037,10 +983,6 @@ describe("cron jobs integration", () => {
       jobId: job.id,
       expectedRevision: job.revision,
       body: { schedule: job.schedule, timezone: job.timezone },
-      config: {
-        enabled: true,
-        pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-      },
       agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
       callerMemberId: runtime.memberId,
       callerHumanAgentId: runtime.humanAgentUuid,
@@ -1048,44 +990,6 @@ describe("cron jobs integration", () => {
 
     expect(patched.revision).toBe(job.revision);
     expect(patched.nextRunAt).toBe(dueAt.toISOString());
-  });
-
-  it("rejects create when kill switch is off but still allows pause", async () => {
-    const { app, runtime, chatId } = await setupChatWithAgent();
-    const enabledConfig = {
-      enabled: true,
-      pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-    };
-    const job = await createCronJob(app.db, {
-      controlChatId: chatId,
-      agentId: runtime.agent.uuid,
-      body: { name: "kill-switch", schedule: "0 13 * * *", timezone: "UTC", prompt: "x" },
-      config: enabledConfig,
-      callerMemberId: runtime.memberId,
-      callerHumanAgentId: runtime.humanAgentUuid,
-    });
-
-    await expect(
-      createCronJob(app.db, {
-        controlChatId: chatId,
-        agentId: runtime.agent.uuid,
-        body: { name: "disabled-create", schedule: "0 14 * * *", timezone: "UTC", prompt: "x" },
-        config: { enabled: false, pollingIntervalSeconds: 5 },
-        callerMemberId: runtime.memberId,
-        callerHumanAgentId: runtime.humanAgentUuid,
-      }),
-    ).rejects.toMatchObject({ code: "CRON_JOBS_DISABLED" });
-
-    const paused = await updateCronJob(app.db, {
-      jobId: job.id,
-      expectedRevision: job.revision,
-      body: { state: "paused" },
-      config: { enabled: false, pollingIntervalSeconds: 5 },
-      agentScope: { agentId: runtime.agent.uuid, controlChatId: chatId },
-      callerMemberId: runtime.memberId,
-      callerHumanAgentId: runtime.humanAgentUuid,
-    });
-    expect(paused.state).toBe("paused");
   });
 
   it("awaits an in-flight sweep before scheduler stop resolves", async () => {
@@ -1134,10 +1038,6 @@ describe("cron jobs integration", () => {
           schedule: "0 16 * * *",
           timezone: "UTC",
           prompt: "must not land under new manager",
-        },
-        config: {
-          enabled: true,
-          pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
         },
         callerMemberId: runtime.memberId,
         callerHumanAgentId: runtime.humanAgentUuid,

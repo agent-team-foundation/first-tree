@@ -26,12 +26,6 @@ export function handleCronSdkError(error: unknown): never {
     if (error.statusCode === 409 && error.code === "CRON_JOB_NAME_CONFLICT") {
       fail("CRON_JOB_NAME_CONFLICT", `${error.message} Run \`cron list\` or \`cron show\` before retrying create.`, 1);
     }
-    if (error.statusCode === 503 && error.code === "CRON_JOBS_DISABLED") {
-      fail("CRON_JOBS_DISABLED", error.message, 1);
-    }
-    if (error.statusCode === 503 && error.code === "CRON_JOBS_UNAVAILABLE") {
-      fail("CRON_JOBS_UNAVAILABLE", error.message, 1);
-    }
   }
   handleSdkError(error);
 }

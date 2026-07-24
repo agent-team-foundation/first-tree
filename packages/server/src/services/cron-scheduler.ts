@@ -14,13 +14,7 @@ import { clients } from "../db/schema/clients.js";
 import { type CronJobRow, cronJobs } from "../db/schema/cron-jobs.js";
 import { serverInstances } from "../db/schema/server-instances.js";
 import { createLogger } from "../observability/index.js";
-import {
-  type CronJobsRuntimeConfig,
-  databaseNow,
-  isCronWorkerRunnable,
-  loadOutstanding,
-  revalidateOwnerChatAgent,
-} from "./cron-job.js";
+import { databaseNow, loadOutstanding, revalidateOwnerChatAgent } from "./cron-job.js";
 import { firstOccurrenceStrictlyAfter, InvalidCronScheduleError } from "./cron-schedule.js";
 import {
   type DeferredSendMessagePostCommitEffects,
@@ -458,15 +452,9 @@ export function createCronScheduler(app: FastifyInstance): CronScheduler {
   let inFlight: Promise<void> | null = null;
   let stopping = false;
 
-  const config = (): CronJobsRuntimeConfig => ({
-    enabled: app.config.cronJobs.enabled,
-    pollingIntervalSeconds: app.config.runtime.pollingIntervalSeconds,
-  });
-
   const run = async () => {
     if (stopping) return;
     if (inFlight) return;
-    if (!isCronWorkerRunnable(config())) return;
     const work = (async () => {
       try {
         await sweepCronJobs(app.db, app.notifier, {
@@ -487,10 +475,6 @@ export function createCronScheduler(app: FastifyInstance): CronScheduler {
   return {
     start() {
       if (timer || stopping) return;
-      if (!isCronWorkerRunnable(config())) {
-        log.info({ enabled: app.config.cronJobs.enabled }, "cron worker not started");
-        return;
-      }
       const ms = app.config.runtime.pollingIntervalSeconds * 1000;
       timer = setInterval(() => {
         void run();

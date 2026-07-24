@@ -61,6 +61,17 @@ describe("server config", () => {
     expect(fieldSchema.parse(undefined)).toBeUndefined();
   });
 
+  it("keeps the cron polling cadence inside the dispatch-safe range", () => {
+    const fieldSchema = serverConfigSchema.runtime.pollingIntervalSeconds.schema;
+
+    expect(fieldSchema.parse(undefined)).toBe(5);
+    expect(fieldSchema.parse("1")).toBe(1);
+    expect(fieldSchema.parse("10")).toBe(10);
+    expect(() => fieldSchema.parse("0")).toThrow();
+    expect(() => fieldSchema.parse("11")).toThrow();
+    expect(() => fieldSchema.parse("60")).toThrow();
+  });
+
   it("loads Google OAuth only when both credentials are configured", async () => {
     const missingDir = makeTempConfigDir();
     stubRequiredProductionConfig();
