@@ -84,6 +84,48 @@ describe("sendMessage — empty / placeholder body is rejected fail-closed", () 
     );
   });
 
+  it("rejects a request image batch because the question body stays textual", async () => {
+    await expect(
+      sendMessage(
+        stubDb,
+        "chat-1",
+        "sender-1",
+        message("request", {
+          caption: "Which layout should ship?",
+          attachments: [
+            {
+              imageId: "11111111-1111-4111-8111-111111111111",
+              mimeType: "image/png",
+              filename: "decision.png",
+              size: 42,
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it("rejects request image batches regardless of caption shape", async () => {
+    const attachment = {
+      imageId: "11111111-1111-4111-8111-111111111111",
+      mimeType: "image/png",
+      filename: "decision.png",
+      size: 42,
+    };
+    await expect(
+      sendMessage(stubDb, "chat-1", "sender-1", message("request", { attachments: [attachment] })),
+    ).rejects.toThrow(BadRequestError);
+    await expect(
+      sendMessage(stubDb, "chat-1", "sender-1", message("request", { caption: "TODO", attachments: [attachment] })),
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it("accepts a textual request body with generic attachment metadata", async () => {
+    await expect(
+      sendMessage(stubDb, "chat-1", "sender-1", messageWithAttachment("request", "Which layout should ship?")),
+    ).rejects.not.toThrow(BadRequestError);
+  });
+
   it("does NOT reject a body that merely contains the word placeholder", async () => {
     // A real body that mentions the sentinel must pass the content guard (it
     // then proceeds past validation and fails on the stub DB, which is NOT a

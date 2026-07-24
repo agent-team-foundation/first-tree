@@ -1,8 +1,16 @@
-import { CLI_BODY_ORIGIN_METADATA_KEY, CLI_BODY_ORIGINS, type MessageFormat } from "@first-tree/shared";
+import {
+  type AttachmentRef,
+  attachmentRefSchema,
+  CLI_BODY_ORIGIN_METADATA_KEY,
+  CLI_BODY_ORIGINS,
+  MAX_MESSAGE_ATTACHMENT_REFS,
+  type MessageFormat,
+} from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
+import { captureOutboundImages, toGenericImageAttachmentRefs } from "../../core/image-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { guardInlineShellResidue, looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
@@ -15,6 +23,33 @@ interface AskOptions {
   options?: string;
   multiSelect?: boolean;
   messageFile?: string;
+}
+
+/**
+ * Write-side reader for caller-supplied attachment metadata. Render paths are
+ * intentionally tolerant of malformed history, but a new send must fail
+ * closed instead of silently dropping bad entries while merging captures.
+ */
+function readOutboundAttachmentRefs(metadata: Record<string, unknown> | undefined): AttachmentRef[] {
+  const raw = metadata?.attachments;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    fail("INVALID_METADATA", "metadata.attachments must be an array of attachment references.", 2);
+  }
+  if (raw.length > MAX_MESSAGE_ATTACHMENT_REFS) {
+    fail(
+      "INVALID_METADATA",
+      `metadata.attachments exceeds the per-message limit of ${MAX_MESSAGE_ATTACHMENT_REFS}.`,
+      2,
+    );
+  }
+  return raw.map((entry, index) => {
+    const parsed = attachmentRefSchema.safeParse(entry);
+    if (!parsed.success) {
+      fail("INVALID_METADATA", `metadata.attachments[${index}] is not a valid attachment reference.`, 2);
+    }
+    return parsed.data;
+  });
 }
 
 export function registerChatAskCommand(chat: Command): void {
@@ -137,10 +172,28 @@ export function registerChatAskCommand(chat: Command): void {
         }
         const format: MessageFormat = "request";
         metadata = buildRequestMetadata(metadata, options);
+        const existingAttachments = readOutboundAttachmentRefs(metadata);
 
         const sdk = createSdk(options.agent);
 
-        const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+        const captured = await captureOutboundDocs(content ?? "", {
+          sdk,
+          chatId,
+          maxAttachments: MAX_MESSAGE_ATTACHMENT_REFS - existingAttachments.length,
+        });
+        const documentAttachments = captured.attachments ?? [];
+        const imageCapacity = Math.max(
+          0,
+          MAX_MESSAGE_ATTACHMENT_REFS - existingAttachments.length - documentAttachments.length,
+        );
+        const capturedImages = await captureOutboundImages(captured.content, {
+          sdk,
+          chatId,
+          maxAttachments: imageCapacity,
+        });
+        const imageAttachments = toGenericImageAttachmentRefs(capturedImages.imageRefs);
+        const outboundAttachments = [...existingAttachments, ...documentAttachments, ...imageAttachments];
+        const outboundContent = imageAttachments.length > 0 ? capturedImages.caption : captured.content;
         const cliBodyOrigin =
           options.messageFile !== undefined
             ? CLI_BODY_ORIGINS.MESSAGE_FILE
@@ -152,10 +205,10 @@ export function registerChatAskCommand(chat: Command): void {
             ? { ...(metadata ?? {}), [CLI_BODY_ORIGIN_METADATA_KEY]: cliBodyOrigin }
             : metadata;
         const outboundMetadata =
-          captured.attachments || captured.documentContext
+          outboundAttachments.length > 0 || captured.documentContext
             ? {
                 ...(metadataWithBodyOrigin ?? {}),
-                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(outboundAttachments.length > 0 ? { attachments: outboundAttachments } : {}),
                 ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
               }
             : metadataWithBodyOrigin;
@@ -164,7 +217,7 @@ export function registerChatAskCommand(chat: Command): void {
         // under another message (no `inReplyTo`).
         const result = await sdk.sendMessage(chatId, {
           format,
-          content: captured.content,
+          content: outboundContent,
           metadata: outboundMetadata,
           source: "cli",
           ...(target ? { receiverNames: [target] } : {}),

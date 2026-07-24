@@ -210,6 +210,8 @@ export {
   attachmentKindSchema,
   attachmentRefSchema,
   attachmentRefsFromMetadata,
+  type ImageAttachmentRef,
+  imageAttachmentRefsFromMetadata,
   isAttachmentRef,
   MAX_MESSAGE_ATTACHMENT_REFS,
 } from "./schemas/attachment-ref.js";

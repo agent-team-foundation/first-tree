@@ -321,6 +321,18 @@ describe("buildMessageImageSnapshots — batch cap", () => {
     expect(res.strippedText).not.toContain("![");
   });
 
+  it("honors a smaller caller cap for generic message attachments", async () => {
+    const { uploader, uploads } = stubUploader();
+    const res = await buildMessageImageSnapshots("![a](p0.png) ![b](p1.png)", root, {
+      ...opts(uploader),
+      maxAttachments: 1,
+    });
+    expect(res.imageRefs.map((ref) => ref.filename)).toEqual(["p0.png"]);
+    expect(uploads).toHaveLength(1);
+    expect(res.skipped).toBe(1);
+    expect(res.strippedText).not.toContain("![");
+  });
+
   it("does not let unsupported targets consume the cap budget (cap is over supported images)", async () => {
     const { uploader } = stubUploader();
     const txts = Array.from({ length: 20 }, (_, i) => `![n${i}](notes${i}.txt)`).join(" ");

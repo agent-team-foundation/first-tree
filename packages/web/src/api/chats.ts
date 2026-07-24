@@ -176,10 +176,11 @@ export type ImageBatchRefContent = {
  *   the send. Without this, the message arrives with no addressees and is
  *   rejected before the text reaches anyone (issue 387).
  * - `attachments` carries generic {@link AttachmentRef}s (documents / files
- *   uploaded in the composer) in `message.metadata.attachments[]`. Images stay
- *   in `content` as `ImageRefContent`; a mixed send (images + documents) rides
- *   one `format: "file"` message carrying both. The server validates each ref
- *   against its stored blob (`validateMessageAttachmentRefs`).
+ *   uploaded in the composer) in `message.metadata.attachments[]`. Ordinary
+ *   composer image sends stay in `content` as `ImageRefContent`; tracked
+ *   requests may carry generic image refs in metadata while keeping their
+ *   question body textual. The server validates each generic ref against its
+ *   stored blob (`validateMessageAttachmentRefs`).
  */
 export type SendFileMessageMetadata = { mentions?: string[]; attachments?: AttachmentRef[] };
 

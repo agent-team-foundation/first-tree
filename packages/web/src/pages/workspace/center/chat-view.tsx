@@ -10,6 +10,7 @@ import {
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   isLandingCampaignTrialChatLocked,
@@ -104,6 +105,7 @@ import {
   isGitlabEventCardContent,
   isTrustedGitlabDispatcherMessage,
 } from "../../../components/chat/gitlab-event-card.js";
+import { ImageRefGallery } from "../../../components/chat/image-ref-gallery.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -151,7 +153,6 @@ import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-nam
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
-import { useImageSrc } from "../../../lib/use-image-src.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
@@ -596,6 +597,14 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  const metadataImages = useMemo(
+    () =>
+      imageAttachmentRefsFromMetadata(msg.metadata).map((ref) => ({
+        imageId: ref.attachmentId,
+        filename: ref.filename,
+      })),
+    [msg.metadata],
+  );
   // Attachment refs to render as download chips: everything in
   // `metadata.attachments` that is NOT already surfaced as an inline
   // `[display](attachment:<id>)` link in the body (the agent doc-capture
@@ -611,7 +620,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         : isImageBatchRefContent(msg.content)
           ? (msg.content.caption ?? "")
           : "";
-    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+    return attachmentRefsFromMetadata(msg.metadata).filter(
+      (ref) => ref.kind !== "image" && !body.includes(`attachment:${ref.attachmentId}`),
+    );
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Resolve a visible label only when this token's persisted mention ID still
@@ -816,6 +827,10 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           {JSON.stringify(msg.content, null, 2)}
         </pre>
       )}
+      <ImageRefGallery
+        images={metadataImages}
+        hasLeadingContent={typeof msg.content === "string" && msg.content.trim().length > 0}
+      />
       {chipAttachmentRefs.length > 0 && (
         <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
           {chipAttachmentRefs.map((ref) => (
@@ -1100,16 +1115,10 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
  *
  * - `standalone` (a single-image message): shown at its natural aspect within
  *   a width AND height cap, so a tall image no longer runs the full column.
- * - `gallery` (a multi-image batch): aligned to one common row height so mixed
- *   aspect ratios read as one tidy row — the fix for the old `flex` default
- *   `align-items: stretch`, which stretched every sibling to the tallest one.
- *
  * The width caps are `min(<desktop cap>, 100%)` so they never exceed the
  * (narrow, on mobile) message column — an inline `maxWidth` would otherwise
  * override the responsive `img { max-width: 100% }` preflight and overflow the
- * shared mobile chat surface. Neither variant upscales past the source; both
- * open the lightbox on click. The wrapping button carries `minWidth: 0` so a
- * gallery flex item can shrink below its intrinsic width on a narrow column.
+ * shared mobile chat surface.
  */
 const STANDALONE_IMG_STYLE = {
   maxWidth: "min(25rem, 100%)",
@@ -1118,81 +1127,8 @@ const STANDALONE_IMG_STYLE = {
   cursor: "zoom-in",
   display: "block",
 } satisfies CSSProperties;
-const GALLERY_IMG_STYLE = {
-  height: 172,
-  width: "auto",
-  maxWidth: "min(28.75rem, 100%)",
-  objectFit: "cover",
-  borderRadius: "var(--radius-panel)",
-  cursor: "zoom-in",
-  display: "block",
-} satisfies CSSProperties;
-
-/**
- * Clickable thumbnail for an image referenced by `{imageId}`. Bytes resolve
- * via {@link useImageSrc} (IndexedDB cache first, then the org attachment
- * store, warming the cache) — the sender's own sends and any already-rendered
- * thumbnail keep it warm, so the click-through to the lightbox is instant. A
- * failed fetch (deleted attachment / network) falls through to a placeholder.
- * The owning wrapper (standalone or batch) holds the lightbox and is notified
- * via `onOpen`.
- */
-function ImageFromRef({
-  content,
-  variant,
-  onOpen,
-}: {
-  content: ImageRefContent;
-  variant: "standalone" | "gallery";
-  onOpen: () => void;
-}) {
-  const state = useImageSrc(content.imageId);
-
-  if (state.kind === "hit") {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`Open image ${content.filename}`}
-        className="block border-none bg-transparent p-0"
-        // `minWidth: 0` lets a gallery flex item shrink below the image's
-        // intrinsic width on a narrow column instead of overflowing.
-        style={{ marginTop: variant === "standalone" ? 4 : 0, maxWidth: "100%", minWidth: 0 }}
-      >
-        <img
-          src={state.src}
-          alt={content.filename}
-          style={variant === "standalone" ? STANDALONE_IMG_STYLE : GALLERY_IMG_STYLE}
-        />
-      </button>
-    );
-  }
-  if (state.kind === "miss") {
-    return (
-      <span className="text-label" style={{ color: "var(--fg-3)", fontStyle: "italic" }}>
-        [Image "{content.filename}" failed to load]
-      </span>
-    );
-  }
-  return (
-    <span className="text-label" style={{ color: "var(--fg-4)" }}>
-      …
-    </span>
-  );
-}
-
-/**
- * A single-image `{imageId}` message: the thumbnail plus its own lightbox.
- */
 function StandaloneImageRef({ content }: { content: ImageRefContent }) {
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
-  const images: LightboxImage[] = [{ imageId: content.imageId, filename: content.filename }];
-  return (
-    <>
-      <ImageFromRef content={content} variant="standalone" onOpen={() => setOpenIndex(0)} />
-      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
-    </>
-  );
+  return <ImageRefGallery images={[content]} />;
 }
 
 /**
@@ -1236,14 +1172,6 @@ function ImageBatchFromRef({
   rehypePlugins: MarkdownProps["rehypePlugins"];
 }) {
   const caption = content.caption?.trim() ?? "";
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
-  const images: LightboxImage[] = content.attachments.map((att) => ({
-    imageId: att.imageId,
-    filename: att.filename,
-  }));
-  // A batch of one (the composer sends even a single image this way) reads as a
-  // single image, not a lone gallery tile: show it at the larger standalone size.
-  const only = content.attachments.length === 1 ? content.attachments[0] : undefined;
   return (
     <div className="flex flex-col" style={{ gap: 4 }}>
       {caption.length > 0 ? (
@@ -1251,16 +1179,7 @@ function ImageBatchFromRef({
           {caption}
         </Markdown>
       ) : null}
-      {only ? (
-        <ImageFromRef content={only} variant="standalone" onOpen={() => setOpenIndex(0)} />
-      ) : (
-        <div className="flex flex-wrap items-start" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
-          {content.attachments.map((att, i) => (
-            <ImageFromRef key={att.imageId} content={att} variant="gallery" onOpen={() => setOpenIndex(i)} />
-          ))}
-        </div>
-      )}
-      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+      <ImageRefGallery images={content.attachments} hasLeadingContent={caption.length > 0} />
     </div>
   );
 }
@@ -3625,6 +3544,10 @@ export function ChatView({
               <AskTakeover
                 key={dockRequest.id}
                 body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
+                images={imageAttachmentRefsFromMetadata(dockRequest.metadata).map((ref) => ({
+                  imageId: ref.attachmentId,
+                  filename: ref.filename,
+                }))}
                 payload={dockPayload}
                 askerName={chatScopedAgentName(dockRequest.senderId)}
                 sending={askBusy}

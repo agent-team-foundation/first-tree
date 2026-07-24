@@ -162,6 +162,21 @@ describe("buildMessageDocumentSnapshots — capture + attachment-link rewrite", 
     expect(failedMentions).toEqual([]);
   });
 
+  it("honors a smaller caller-specific share of the attachment budget", async () => {
+    const names = ["caller-budget-1.md", "caller-budget-2.md", "caller-budget-3.md"];
+    await Promise.all(names.map((name) => writeFile(join(root, name), `# ${name}\n`, "utf8")));
+
+    const { refs, skipped } = await buildMessageDocumentSnapshots(
+      names.map((name) => `[${name}](${name})`).join(" "),
+      root,
+      { ...opts(uploader), maxAttachments: 1 },
+    );
+
+    expect(refs).toHaveLength(1);
+    expect(skipped).toBe(2);
+    expect(uploads).toHaveLength(1);
+  });
+
   it("reports an existing .md directory as missing", async () => {
     await mkdir(join(root, "folder.md"), { recursive: true });
 

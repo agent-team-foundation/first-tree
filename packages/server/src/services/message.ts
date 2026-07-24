@@ -196,10 +196,17 @@ function validateMessageContent(
     validateFileContent(data.content);
     return;
   }
+  if (data.format === "request") {
+    if (typeof data.content !== "string") {
+      throw new BadRequestError("Invalid request message content: expected a non-empty text question.");
+    }
+    validateTextBody(data.content, true);
+    return;
+  }
   // Non-string content (card / reference object shapes) is out of scope here;
   // only string-bearing bodies are guarded against empty / placeholder sends.
   if (typeof data.content === "string") {
-    validateTextBody(data.content, data.format === "request", opts?.hasAttachmentRefs === true);
+    validateTextBody(data.content, false, opts?.hasAttachmentRefs === true);
   }
 }
 
@@ -414,9 +421,7 @@ export function preflightMessageSendIntent(input: {
   // placeholder body after `maybeUnwrapDoubleEncoded`. `effectiveContent` is
   // what gets normalized and persisted, so guard it here too — before mention
   // normalization can salvage an empty body into a bare "@name".
-  if (typeof effectiveContent === "string") {
-    validateTextBody(effectiveContent, data.format === "request", hasAttachmentRefs);
-  }
+  validateMessageContent({ format: data.format, content: effectiveContent }, { hasAttachmentRefs });
 
   const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
   validateDocumentContext(incomingMeta);

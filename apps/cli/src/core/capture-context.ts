@@ -31,3 +31,16 @@ export function resolveSelfFenceFromEnv(env: NodeJS.ProcessEnv): SelfFence | nul
   const legacyBase = env.FIRST_TREE_DOC_BASE;
   return legacyBase ? { agentHome: legacyBase } : null;
 }
+
+/**
+ * Image embeds are authored directly in an agent turn, so their relative paths
+ * are workspace-relative. Keep the document capture's optional repo base out
+ * of this fence: generated screenshots commonly live beside `source-repos/`,
+ * and an agent-managed source repository may be bare.
+ */
+export function resolveImageFenceFromEnv(env: NodeJS.ProcessEnv): SelfFence | null {
+  const agentHome = env.FIRST_TREE_DOC_AGENT_HOME;
+  if (agentHome) return { agentHome };
+  const legacyBase = env.FIRST_TREE_DOC_BASE;
+  return legacyBase ? { agentHome: legacyBase } : null;
+}

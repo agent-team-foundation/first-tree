@@ -27,7 +27,7 @@ import { resolveChatOrgId, resolveSelfFenceFromEnv } from "./capture-context.js"
  */
 export async function captureOutboundDocs(
   content: string,
-  ctx: { sdk: FirstTreeHubSDK; chatId?: string },
+  ctx: { sdk: FirstTreeHubSDK; chatId?: string; maxAttachments?: number },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ content: string; attachments?: AttachmentRef[]; documentContext?: unknown }> {
   const self = resolveSelfFenceFromEnv(env);
@@ -45,7 +45,11 @@ export async function captureOutboundDocs(
     const { refs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
       content,
       self,
-      { uploader: ctx.sdk, orgId },
+      {
+        uploader: ctx.sdk,
+        orgId,
+        ...(ctx.maxAttachments !== undefined ? { maxAttachments: ctx.maxAttachments } : {}),
+      },
       fence,
     );
     const result: { content: string; attachments?: AttachmentRef[]; documentContext?: unknown } = {

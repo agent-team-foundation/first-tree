@@ -14,8 +14,10 @@ import {
   attachmentRefsFromMetadata,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
+  MAX_MESSAGE_ATTACHMENT_REFS,
   parseProviderRetryEventMessage,
   runtimeProviderSchema,
   SOURCE_REPOS_DIRNAME,
@@ -364,6 +366,7 @@ type SessionManagerConfig = {
  */
 /** Maximum number of evicted session mappings to retain for resume recovery. */
 const MAX_EVICTED_MAPPINGS = 500;
+const MAX_EAGER_IMAGE_FETCHES_PER_DELIVERY = MAX_MESSAGE_ATTACHMENT_REFS;
 
 /**
  * Minimum spacing between lazy Context-Tree re-resolutions for a slot that is
@@ -576,11 +579,10 @@ export class SessionManager {
         // we assume server already decided we should handle it — this avoids a
         // double-guard that drifted between server / client in early M1.
 
-        // 4b. Pull any referenced image bytes to local disk before the handler
-        // renders. Bytes live in the server's `attachments` object store (uploaded
-        // by the sender); each client fetches once and caches under the chat's
-        // images dir. Best-effort — a failed fetch leaves the handler to surface a
-        // "not available on this device" placeholder for that ref.
+        // 4b. Preserve current-message image materialization, then pull only
+        // generic request images from silent preceding context. The added
+        // history work is best-effort and bounded; anything not fetched still
+        // renders with a filename and an unavailable placeholder.
         await this.ensureImagesLocal(message);
 
         // 4c. Lazily resolve a tree-LESS Context Tree binding before routing this
@@ -621,21 +623,44 @@ export class SessionManager {
   }
 
   /**
-   * Resolve every image reference on an inbound `format: "file"` message to a
-   * file on local disk, fetching missing bytes from the `attachments` store.
-   * Single-ref and batch-ref shapes are both handled; non-image file content
-   * is ignored. Fetches run in parallel and never throw — the renderer
-   * degrades to a placeholder for any ref that didn't land.
+   * Resolve current-message image refs exactly as before, then materialize only
+   * the generic request-image refs from silent preceding context. Historical
+   * refs are considered newest-first under a separate 10-fetch budget;
+   * duplicates and cached refs consume no budget.
    */
   private async ensureImagesLocal(message: SessionMessage): Promise<void> {
-    // Images: refs in `content` on a `format: "file"` message. Written under
-    // the images dir and handed to the model as a path to Read.
-    const imageRefs =
+    const legacyImageRefs =
       message.format === "file" && isImageBatchRefContent(message.content)
         ? message.content.attachments
         : message.format === "file" && isImageRefContent(message.content)
           ? [message.content]
           : [];
+    const genericImageRefs = imageAttachmentRefsFromMetadata(message.metadata ?? undefined).map((ref) => ({
+      imageId: ref.attachmentId,
+      mimeType: ref.mimeType,
+      filename: ref.filename,
+      size: ref.size,
+    }));
+    const imageRefs = [...legacyImageRefs, ...genericImageRefs];
+    const seenImageIds = new Set(imageRefs.map((ref) => ref.imageId));
+    let precedingFetches = 0;
+    for (const source of (message.precedingMessages ?? []).slice().reverse()) {
+      if (source.format !== "request") continue;
+      for (const ref of imageAttachmentRefsFromMetadata(source.metadata ?? undefined)) {
+        if (seenImageIds.has(ref.attachmentId)) continue;
+        seenImageIds.add(ref.attachmentId);
+        if (findImagePath(message.chatId, ref.attachmentId, ref.mimeType)) continue;
+        if (precedingFetches === MAX_EAGER_IMAGE_FETCHES_PER_DELIVERY) break;
+        imageRefs.push({
+          imageId: ref.attachmentId,
+          mimeType: ref.mimeType,
+          filename: ref.filename,
+          size: ref.size,
+        });
+        precedingFetches += 1;
+      }
+      if (precedingFetches === MAX_EAGER_IMAGE_FETCHES_PER_DELIVERY) break;
+    }
     await Promise.all(
       imageRefs.map(async (ref) => {
         if (findImagePath(message.chatId, ref.imageId, ref.mimeType)) return;

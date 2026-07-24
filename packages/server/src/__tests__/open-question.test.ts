@@ -786,6 +786,21 @@ describe("open-question (format=request) + open_request_count", () => {
     await expect(
       editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "PLACEHOLDER" }),
     ).rejects.toThrow(BadRequestError);
+    await expect(
+      editMessage(app.db, chat.id, question.id, asker.agent.uuid, {
+        content: {
+          caption: "ratio?",
+          attachments: [
+            {
+              imageId: "11111111-1111-4111-8111-111111111111",
+              mimeType: "image/png",
+              filename: "ratio.png",
+              size: 42,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow(BadRequestError);
   });
 });
 

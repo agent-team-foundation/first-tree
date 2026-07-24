@@ -1,3 +1,4 @@
+import { imageAttachmentRefsFromMetadata } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -79,6 +80,10 @@ export function MobileAskSheet({ chatId, onClose }: { chatId: string; onClose: (
         <AskTakeover
           key={request.id}
           body={typeof request.content === "string" ? request.content : ""}
+          images={imageAttachmentRefsFromMetadata(request.metadata).map((ref) => ({
+            imageId: ref.attachmentId,
+            filename: ref.filename,
+          }))}
           payload={payload}
           askerName={askerName}
           sending={sending}
