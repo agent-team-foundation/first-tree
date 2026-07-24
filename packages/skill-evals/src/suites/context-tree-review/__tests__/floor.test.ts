@@ -141,6 +141,11 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("Never use `--admin`");
     expect(skill).toContain("App-authored PR review is the only GitHub verdict");
     expect(skill).toContain("do not copy the\nGitHub verdict into a second canonical comment/status/receipt");
+    expect(skill).toMatch(/> Executed by \*\*First Tree Context Reviewer\*\* · head \*\*<short-head>\*\*/u);
+    expect(skill).toContain("name the repair commit and label the current host `gh` login");
+    expect(skill).toMatch(/do not present it as proof of the\s+commit author, push credential or merger/u);
+    expect(skill).toMatch(/do not expose an internal Agent name\s+or UUID/u);
+    expect(skill).toMatch(/Do not imply a local mutation when\s+none occurred or predeclare the later merge actor/u);
   });
 
   it("requires two-pass final-head review and full repair re-review without a ledger protocol", () => {

@@ -113,7 +113,13 @@ GitHub review and repository gate.
   base to equal that branch. Confirm the final PR freshness read happens after
   validation, the complete semantic/content review and current-head checks,
   and compares repository, base ref/OID and head repository/ref/OID. Changed or
-  unreadable authority must publish nothing.
+  unreadable authority must publish nothing. Confirm the App review visibly
+  identifies `First Tree Context Reviewer` as executor and the reviewed head
+  without exposing an internal Agent identity or private Chat. When repair was
+  pushed, confirm the repair summary names the repair commit and labels the
+  current host `gh` login only as the GitHub CLI login, not as proof of the
+  commit author, push credential or merger. A clean review must not imply a
+  local mutation or predeclare the later merge actor.
 - Simulate an uncertain GitHub review write. Confirm the existing
   pending/submitting/unknown/failed/submitted publication state and hidden run
   marker reconcile the same run without a duplicate POST.

@@ -1,6 +1,6 @@
 ---
 name: context-tree-review
-version: 0.4.0
+version: 0.4.1
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Review a GitHub pull request or GitLab merge request against the workspace-bound Context Tree when a trusted server-authored Context Reviewer run supplies provider-scoped authority. Repair every safely determined finding with the host git and forge CLI identity, then use GitHub App review plus exact-head merge or GitLab note plus exact-SHA merge. Do not use for code changes, ordinary tree reads or writes, or default-branch audits.
@@ -359,6 +359,18 @@ Keep the review body concise but evidence-based: identify the inspected head,
 verification result, material context checked, challenge result, any repair and
 every unresolved blocker. Do not paste an internal checklist or manufacture an
 empty ledger merely to signal completion.
+
+For GitHub, every review body must visibly identify the public executor and
+reviewed head in one concise line:
+`> Executed by **First Tree Context Reviewer** · head **<short-head>**`.
+Place it immediately after any required outcome heading above; otherwise it may
+lead the body. Use only this public role: do not expose an internal Agent name
+or UUID, manager relationship, runtime Client or private Chat. When a repair
+push succeeded, name the repair commit and label the current host `gh` login as
+the GitHub CLI login in the repair summary; do not present it as proof of the
+commit author, push credential or merger. Do not imply a local mutation when
+none occurred or predeclare the later merge actor; GitHub's native commit and
+merge events remain the authority for those completed actions.
 
 ### GitHub publication
 
