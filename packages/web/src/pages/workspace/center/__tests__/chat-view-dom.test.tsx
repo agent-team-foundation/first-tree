@@ -64,6 +64,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
+  createMeTaskChat: vi.fn(),
 }));
 
 const readStateMocks = vi.hoisted(() => ({
@@ -2619,6 +2620,77 @@ describe("ChatView", () => {
     });
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected Enter send on desktop");
     expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("mobile new-chat draft: 44-unit send, Enter does not create, chip × visible + [+] enlarged", async () => {
+    const { CenterPanel } = await import("../index.js");
+    const { DRAFT_CHAT_ID } = await import("../../conversations/index.js");
+    const { container, root } = await renderDom(
+      <CenterPanel
+        selectedChatId={DRAFT_CHAT_ID}
+        onSelectChat={() => {}}
+        onClearChat={() => {}}
+        narrow
+        onShowConversations={() => {}}
+        initialParticipantIds={["agent-1"]}
+        presentation="mobile"
+      />,
+      undefined,
+      "/",
+    );
+    await flush();
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    const addBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Add participant"]');
+    const chipRemove = container.querySelector<HTMLButtonElement>('button[aria-label^="Remove "]');
+    if (!send || !addBtn || !chipRemove) throw new Error("Mobile new-chat controls missing");
+    // Composer send clears the touch minimum (mobile prop reached the composer).
+    expect(Number.parseInt(send.style.width, 10)).toBe(44);
+    // The [+] add-participant button is a full 44x44 touch target.
+    expect(Number.parseInt(addBtn.style.minWidth, 10)).toBe(44);
+    expect(Number.parseInt(addBtn.style.minHeight, 10)).toBe(44);
+    // The seeded chip's remove × is always visible on mobile (no hover on touch)
+    // and is a full 44x44 hit area.
+    expect(chipRemove.className).not.toContain("opacity-0");
+    expect(Number.parseInt(chipRemove.style.width, 10)).toBe(44);
+    expect(Number.parseInt(chipRemove.style.height, 10)).toBe(44);
+
+    // Enter inserts a newline; it does not create the chat (button-only submit).
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("draft textarea missing");
+    await setValue(textarea, "do the thing @nova");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(meChatMocks.createMeTaskChat).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("desktop new-chat draft: compact send and hover-revealed chip ×", async () => {
+    const { CenterPanel } = await import("../index.js");
+    const { DRAFT_CHAT_ID } = await import("../../conversations/index.js");
+    const { container, root } = await renderDom(
+      <CenterPanel
+        selectedChatId={DRAFT_CHAT_ID}
+        onSelectChat={() => {}}
+        onClearChat={() => {}}
+        narrow={false}
+        onShowConversations={null}
+        initialParticipantIds={["agent-1"]}
+      />,
+      undefined,
+      "/",
+    );
+    await flush();
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    const chipRemove = container.querySelector<HTMLButtonElement>('button[aria-label^="Remove "]');
+    if (!send || !chipRemove) throw new Error("Desktop new-chat controls missing");
+    expect(Number.parseInt(send.style.width, 10)).toBe(28);
+    // Desktop keeps the compact hover-revealed × .
+    expect(chipRemove.className).toContain("opacity-0");
 
     await act(async () => root.unmount());
   });

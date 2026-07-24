@@ -650,6 +650,7 @@ export function NewChatDraft({
               pickerContainerRef={pickerContainerRef}
               onAdd={addChip}
               onRemove={removeChip}
+              mobile={mobile}
             />
             {/* Attachment preview row — between the chip row and the textarea. */}
             {pendingAttachments.length > 0 && (
@@ -964,6 +965,7 @@ function ParticipantChips({
   pickerContainerRef,
   onAdd,
   onRemove,
+  mobile,
 }: {
   chips: string[];
   candidates: MentionCandidate[];
@@ -980,6 +982,9 @@ function ParticipantChips({
   pickerContainerRef: React.RefObject<HTMLDivElement | null>;
   onAdd: (agentId: string) => void;
   onRemove: (agentId: string) => void;
+  /** Touch surface: enlarge the [+] add-participant button and keep each chip's
+   *  remove × visible + tappable (desktop keeps the compact hover affordances). */
+  mobile: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -1143,7 +1148,7 @@ function ParticipantChips({
           displayName: null,
           managedByMe: false,
         };
-        return <AgentToken key={id} candidate={cand} onRemove={() => onRemove(id)} />;
+        return <AgentToken key={id} candidate={cand} onRemove={() => onRemove(id)} mobile={mobile} />;
       })}
 
       <div ref={pickerContainerRef} style={{ position: "relative" }}>
@@ -1154,7 +1159,10 @@ function ParticipantChips({
           aria-label="Add participant"
           aria-haspopup="listbox"
           aria-expanded={pickerOpen}
-          className="inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]"
+          className={cn(
+            "inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]",
+            mobile && "justify-center",
+          )}
           style={{
             padding: "var(--sp-0_5) var(--sp-1)",
             borderRadius: "var(--radius-chip)",
@@ -1162,9 +1170,12 @@ function ParticipantChips({
             background: "transparent",
             color: "var(--fg-3)",
             cursor: "pointer",
+            // Mobile: a full 44 touch target matching the composer controls;
+            // desktop keeps the compact affordance.
+            ...(mobile ? { minWidth: 44, minHeight: 44 } : {}),
           }}
         >
-          <Plus className="h-3 w-3" />
+          <Plus className={mobile ? "h-4 w-4" : "h-3 w-3"} />
         </button>
         {pickerOpen &&
           createPortal(
