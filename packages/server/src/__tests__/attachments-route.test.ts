@@ -57,6 +57,9 @@ describe("attachments route — upload + capability download", () => {
     expect(download.headers["content-type"]).toBe("image/png");
     expect(download.headers["content-length"]).toBe(String(bytes.byteLength));
     expect(download.headers["x-content-type-options"]).toBe("nosniff");
+    // Stamped by the global security-headers onSend hook — proves the hook
+    // covers DB-backed API routes, not just static/SPA responses.
+    expect(download.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
     expect(download.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
     expect(download.headers.etag).toBe(`"${body.id}"`);
     expect(download.headers["content-disposition"]).toBe('inline; filename="kitten.png"');

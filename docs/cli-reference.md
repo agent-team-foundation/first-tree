@@ -1694,6 +1694,19 @@ The server applies this as one actor-aware global safety cap per minute. It
 keys by agent id, then user id, then request IP for unauthenticated traffic.
 Old per-route rate-limit env vars are no longer read.
 
+**Security headers:**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_SECURITY_CSP_MODE` | Content-Security-Policy mode for HTML responses: `report-only` sends the full policy as `Content-Security-Policy-Report-Only` plus a small enforced subset (`frame-ancestors` / `object-src` / `base-uri`); `enforce` sends the full policy enforced; `off` sends no CSP header. | `report-only` |
+| `FIRST_TREE_SECURITY_CSP_CONNECT_SRC_EXTRA` | Extra `connect-src` origins (space- or comma-separated) appended to the built-in CSP allowlist — e.g. a regional or self-hosted Sentry ingest domain. | — |
+| `FIRST_TREE_SECURITY_CSP_REPORT_URI` | CSP violation report endpoint (`report-uri` directive), e.g. a Sentry security endpoint. | — |
+| `FIRST_TREE_SECURITY_HSTS_ENABLED` | Send `Strict-Transport-Security: max-age=31536000` on HTTPS responses. Requires `FIRST_TREE_TRUST_PROXY=true` behind a TLS-terminating proxy so the server sees `X-Forwarded-Proto`. Set `false` to stop advertising HSTS. | `true` |
+
+The remaining security headers (`X-Content-Type-Options`, `Referrer-Policy`,
+`X-Frame-Options`, `Permissions-Policy`) are always sent on every response and
+have no toggles.
+
 **Inbox / WS / archive sweeper:**
 
 | Variable | Default |
