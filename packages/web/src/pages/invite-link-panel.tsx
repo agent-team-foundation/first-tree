@@ -88,14 +88,14 @@ export function InviteLinkPanel() {
               className="flex-1 rounded-[var(--radius-panel)] border bg-muted px-2 py-1 text-label font-mono"
               value={invite.inviteUrl}
             />
-            <Button size="sm" variant="outline" onClick={() => void copy(invite.inviteUrl)}>
-              {copied ? "Copied!" : "Copy"}
-            </Button>
             {isAdmin && (
-              <Button size="sm" onClick={rotate} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={rotate} disabled={busy}>
                 {busy ? "Rotating…" : "Rotate"}
               </Button>
             )}
+            <Button size="sm" onClick={() => void copy(invite.inviteUrl)}>
+              {copied ? "Copied!" : "Copy"}
+            </Button>
           </div>
           <p className="text-label text-muted-foreground">
             Created {new Date(invite.createdAt).toLocaleString()}

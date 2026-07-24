@@ -1585,6 +1585,10 @@ describe("web DOM interaction coverage", () => {
     expect(panel.container.querySelector<HTMLInputElement>("input")?.value).toBe(
       "https://first-tree.example/invite/token-1",
     );
+    const inviteActions = [...panel.container.querySelectorAll("button")];
+    expect(inviteActions.map((button) => button.textContent)).toEqual(["Rotate", "Copy"]);
+    expect(inviteActions[0]?.classList.contains("border")).toBe(true);
+    expect(inviteActions[1]?.classList.contains("bg-primary")).toBe(true);
     await click(
       [...panel.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Copy")) ?? null,
     );
