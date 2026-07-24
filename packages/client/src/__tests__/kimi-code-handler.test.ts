@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
   CreateSessionOptions,
   Event as KimiEvent,
+  KimiHarnessOptions,
   ResumeSessionInput,
   SessionUsage,
 } from "@botiverse/kimi-code-sdk";
@@ -454,8 +455,8 @@ describe("Kimi homeDir lifecycle", () => {
       runtimeProvider: "kimi-code",
       agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
       kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
-      kimiHarnessFactory: (options) => {
-        harnessOptions.push(options as Record<string, unknown>);
+      kimiHarnessFactory: (options: KimiHarnessOptions) => {
+        harnessOptions.push(options);
         return {
           createSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
           resumeSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
@@ -467,7 +468,7 @@ describe("Kimi homeDir lifecycle", () => {
     await handler.start(message("m1", "hi"), makeContext([]), makeToken());
 
     expect(harnessOptions).toHaveLength(1);
-    expect(harnessOptions[0].homeDir).toBe("/custom/kimi");
+    expect(harnessOptions.at(0)?.homeDir).toBe("/custom/kimi");
   });
 
   it.each(["", "   "])("omits homeDir when KIMI_CODE_HOME is %j", async (rawValue) => {
@@ -486,7 +487,7 @@ describe("Kimi homeDir lifecycle", () => {
       runtimeProvider: "kimi-code",
       agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
       kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
-      kimiHarnessFactory: (options) => {
+      kimiHarnessFactory: (options: KimiHarnessOptions) => {
         harnessOptions.push(options as Record<string, unknown>);
         return {
           createSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
@@ -610,7 +611,7 @@ describe("Kimi homeDir lifecycle", () => {
       runtimeProvider: "kimi-code",
       agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
       kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
-      kimiHarnessFactory: (options) => {
+      kimiHarnessFactory: (options: KimiHarnessOptions) => {
         factoryCalls++;
         homes.push(options.homeDir);
         return {

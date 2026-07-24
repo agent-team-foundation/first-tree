@@ -684,10 +684,8 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       const options: KimiHarnessOptions = {
         identity: { userAgentProduct: "first-tree", version: KIMI_IDENTITY_VERSION },
         uiMode: "first-tree",
+        ...(homeDir !== undefined ? { homeDir } : {}),
       };
-      if (homeDir !== undefined) {
-        options.homeDir = homeDir;
-      }
       harness = harnessFactory(options);
     }
     harnessEffectiveHome = effectiveHome;
