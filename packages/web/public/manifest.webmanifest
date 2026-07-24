@@ -3,7 +3,7 @@
   "short_name": "First Tree",
   "description": "First Tree mobile work surface for agent teams.",
   "id": "/m/now",
-  "start_url": "/m/now",
+  "start_url": "/m/work",
   "scope": "/",
   "display": "standalone",
   "background_color": "#040404",

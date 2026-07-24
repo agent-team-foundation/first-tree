@@ -1,14 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, useLocation, useSearchParams } from "react-router";
-import { listMeChats } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { MobileBottomTabs } from "./components.js";
-import { countAttentionRows, countUnreadRows, mobileRowsFromList } from "./data.js";
+import { mobileRowsFromList } from "./data.js";
 import { InstallGuideSheet } from "./install-guide-sheet.js";
 import { useInstallGuideAuto } from "./use-install-guide.js";
+import { mobileWorkListQueryOptions, mobileWorkSourceCountsQueryOptions } from "./work-queries.js";
 
 export function MobileShell() {
   const {
@@ -24,18 +24,33 @@ export function MobileShell() {
 
   useAdminWs();
 
-  const tabCountsQuery = useQuery({
-    // Nested under ["me", "chats"] so the shared realtime invalidation keeps
-    // the bottom-tab attention / unread badges live, not just poll-driven.
-    queryKey: ["me", "chats", "mobile", "tab-counts", organizationId],
-    queryFn: () => listMeChats({ limit: 50, engagement: "active" }),
+  const activeWorkScope = {
+    organizationId: organizationId ?? null,
+    engagement: "active" as const,
+    watching: false,
+  };
+  const tabCountsQuery = useInfiniteQuery({
+    ...mobileWorkListQueryOptions({ ...activeWorkScope, filter: "all" }),
     enabled: !!organizationId,
-    refetchInterval: 30_000,
+  });
+  const unreadCountsQuery = useQuery({
+    ...mobileWorkSourceCountsQueryOptions(activeWorkScope),
+    enabled: !!organizationId,
   });
 
   const selectedChatId = searchParams.get("c");
-  const immersiveChat = location.pathname === "/m/chat" && selectedChatId !== null;
-  const rows = mobileRowsFromList(tabCountsQuery.data);
+  const workRoute =
+    location.pathname === "/m/work" || location.pathname === "/m/now" || location.pathname === "/m/chat";
+  const immersiveChat = workRoute && selectedChatId !== null;
+  const firstWorkPage = tabCountsQuery.data?.pages[0];
+  const rows = mobileRowsFromList(firstWorkPage);
+  const attentionRows = firstWorkPage?.priorityRows.attention ?? [];
+  const attentionUnread = attentionRows.reduce((count, row) => count + (row.unreadMentionCount > 0 ? 1 : 0), 0);
+  const totalUnread = Object.values(unreadCountsQuery.data?.counts ?? {}).reduce(
+    (count, source) => count + source.unreadChatCount,
+    0,
+  );
+  const workCount = attentionRows.length + totalUnread - attentionUnread;
 
   // Kept above the onboarding early-return so hook order stays unconditional.
   const installGuide = useInstallGuideAuto({ hasContent: rows.length > 0, immersive: immersiveChat });
@@ -58,9 +73,7 @@ export function MobileShell() {
       <main className="flex-1 min-h-0 overflow-hidden">
         <Outlet />
       </main>
-      {immersiveChat ? null : (
-        <MobileBottomTabs attentionCount={countAttentionRows(rows)} unreadCount={countUnreadRows(rows)} />
-      )}
+      {immersiveChat ? null : <MobileBottomTabs workCount={workCount} />}
       {installGuide.open && installGuide.mode ? (
         <InstallGuideSheet mode={installGuide.mode} onInstall={installGuide.install} onClose={installGuide.dismiss} />
       ) : null}

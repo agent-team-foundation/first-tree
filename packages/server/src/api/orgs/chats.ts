@@ -106,7 +106,8 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    * GET /orgs/:orgId/chats/source-counts — per-source aggregate powering the
    * conversation-list tag bar (Manual / GitHub / Agent).
    * Returns counts only for sources the caller has chats in, plus an
-   * always-present `manual` entry. Same engagement view filter as the list.
+   * always-present `manual` entry. Same engagement and watcher filters as the
+   * list.
    */
   app.get<{ Params: { orgId: string } }>("/source-counts", async (request) => {
     const scope = await requireOrgMembership(request, app.db);

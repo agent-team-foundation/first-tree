@@ -11,6 +11,18 @@ export type MobileChatSignal = {
   attention: boolean;
 };
 
+export type MobileCardContent =
+  | {
+      kind: "action" | "summary";
+      primary: string;
+      secondary: null;
+    }
+  | {
+      kind: "dynamic";
+      primary: string;
+      secondary: string;
+    };
+
 export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   const attentionReason = rowAttentionReason(row);
   if (attentionReason === "failed") {
@@ -78,6 +90,62 @@ export function mobileChatPreview(row: MeChatRow): string {
   // `![](url)` image) strips to empty and must show the placeholder, not blank.
   const stripped = raw ? stripInlineMarkdown(raw) : "";
   return stripped || "No messages yet.";
+}
+
+/**
+ * Allocate the Work card's fixed two-line content budget.
+ *
+ * Normal / pinned work spends both lines on the running chat summary. Unread,
+ * mention, and working work split the budget into one current-state line and
+ * one live-evidence line. Attention cards deliberately replace the summary
+ * with the concrete request/failure evidence because that is what the viewer
+ * must act on now.
+ */
+export function mobileCardContent(row: MeChatRow): MobileCardContent {
+  const signal = mobileChatSignal(row);
+  const summary = cleanPreview(row.description);
+  const latest = cleanPreview(row.lastMessagePreview);
+  const fallback = summary || latest || "No messages yet.";
+
+  if (signal.attention) {
+    return {
+      kind: "action",
+      primary:
+        signal.tone === "error"
+          ? row.failedAgentIds.length === 1
+            ? "A managed agent run failed. Open to review the failure and recovery options."
+            : `${row.failedAgentIds.length} managed agent runs failed. Open to review the failures and recovery options.`
+          : row.openRequestCount === 1
+            ? "An open question is waiting for your response. Open to review the full request."
+            : `${row.openRequestCount} open questions are waiting for your response. Open to review them in order.`,
+      secondary: null,
+    };
+  }
+
+  if (signal.tone === "unread") {
+    const currentState = summary || latest || "No summary yet.";
+    const newEvidence = latest && latest !== currentState ? latest : signal.label;
+    return {
+      kind: "dynamic",
+      primary: currentState,
+      secondary: `New · ${newEvidence}`,
+    };
+  }
+
+  if (signal.tone === "working") {
+    const activity = cleanPreview(row.liveActivity?.detail) || row.liveActivity?.label || "Working now";
+    return {
+      kind: "dynamic",
+      primary: fallback,
+      secondary: `Working · ${activity}`,
+    };
+  }
+
+  return {
+    kind: "summary",
+    primary: fallback,
+    secondary: null,
+  };
 }
 
 const AGE_MINUTE_MS = 60_000;
@@ -170,6 +238,12 @@ export function countAttentionRows(rows: readonly MeChatRow[]): number {
 
 export function countUnreadRows(rows: readonly MeChatRow[]): number {
   return rows.reduce((total, row) => total + (row.unreadMentionCount > 0 ? 1 : 0), 0);
+}
+
+function cleanPreview(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "";
+  return stripInlineMarkdown(trimmed).replace(/\s+/g, " ").trim();
 }
 
 function timestampValue(iso: string | null): number {

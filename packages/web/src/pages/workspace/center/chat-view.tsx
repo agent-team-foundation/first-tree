@@ -161,6 +161,7 @@ import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
+import { MobileCurrentStateCard } from "../../mobile/current-state-card.js";
 import { applyPersistedChatRename } from "../chat-title-cache.js";
 import { GitHubSection } from "../right-sidebar/github-section.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
@@ -1271,6 +1272,7 @@ type TimelineItem =
 
 type ChatTimelineProps = {
   mobile: boolean;
+  currentState: ReactNode;
   itemCount: number;
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
@@ -1306,6 +1308,7 @@ type ChatTimelineProps = {
 
 const ChatTimeline = memo(function ChatTimeline({
   mobile,
+  currentState,
   itemCount,
   visibleItems,
   hiddenByBlock,
@@ -1349,6 +1352,7 @@ const ChatTimeline = memo(function ChatTimeline({
         style={{ padding: `var(--sp-2_5) ${mobile ? "var(--sp-4)" : "var(--sp-6)"}` }}
       >
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+          {currentState}
           {itemCount === 0 && (
             <div
               className="flex flex-col items-center text-body"
@@ -1540,7 +1544,7 @@ export function ChatView({
    *  rail with a participants sheet. */
   narrow?: boolean;
   /** Generic narrow Workspace keeps the full details rail, including GitHub
-   * state. `/m/chat` opts into the smaller mobile participants sheet. */
+   * state. `/m/work` opts into the smaller mobile participants sheet. */
   presentation?: "workspace" | "mobile";
   /** Non-null only in narrow mode. Invoking it summons the conversation-
    *  list overlay (which lives in `WorkspacePage`). */
@@ -3044,8 +3048,16 @@ export function ChatView({
   useLayoutEffect(() => {
     if (itemCount === 0) return;
     if (landedForChatRef.current === chatId) return;
+    // The Work detail's mobile entry context is the in-flow Current state
+    // card. Wait for the real detail instead of committing the list-cache
+    // stub's empty description, then land the single timeline scroller at the
+    // top when a summary exists so the card is genuinely visible on entry.
+    if (useMobileDetailsSheet && chatDetailFetching) return;
     landedForChatRef.current = chatId;
-    if (bottomVisibleResolution) {
+    if (useMobileDetailsSheet && (chatDetail?.description?.trim().length ?? 0) > 0) {
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = 0;
+    } else if (bottomVisibleResolution) {
       // Land the stored anchor at the viewport bottom. Any messages
       // newer than the anchor sit below the fold; the pill will
       // surface them.
@@ -3061,6 +3073,9 @@ export function ChatView({
   }, [
     chatId,
     itemCount,
+    useMobileDetailsSheet,
+    chatDetailFetching,
+    chatDetail?.description,
     bottomVisibleResolution,
     scrollToMessageImmediate,
     scrollToBottomImmediate,
@@ -3966,17 +3981,17 @@ export function ChatView({
             </div>
           </div>
 
-          <ChatSummary
-            chatId={chatId}
-            description={chatDetail?.description ?? null}
-            descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
-            lastReadAt={chatDetail?.lastReadAt ?? null}
-            freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
-            autoExpandUnread={!useMobileDetailsSheet}
-            restoreManualExpansion={!useMobileDetailsSheet}
-            scrollContainerRef={scrollContainerRef}
-            overlayContainerRef={overlayContainerRef}
-          />
+          {useMobileDetailsSheet ? null : (
+            <ChatSummary
+              chatId={chatId}
+              description={chatDetail?.description ?? null}
+              descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
+              lastReadAt={chatDetail?.lastReadAt ?? null}
+              freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+              scrollContainerRef={scrollContainerRef}
+              overlayContainerRef={overlayContainerRef}
+            />
+          )}
 
           {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
             <div
@@ -4027,6 +4042,15 @@ export function ChatView({
           phone surface and sp-6 elsewhere. */}
           <ChatTimeline
             mobile={presentation === "mobile"}
+            currentState={
+              useMobileDetailsSheet ? (
+                <MobileCurrentStateCard
+                  description={chatDetail?.description ?? null}
+                  descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
+                  lastReadAt={chatDetail?.lastReadAt ?? null}
+                />
+              ) : null
+            }
             itemCount={itemCount}
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}

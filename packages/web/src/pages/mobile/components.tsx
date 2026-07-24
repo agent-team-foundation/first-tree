@@ -1,4 +1,4 @@
-import { Activity, CircleUserRound, MessageSquareText, UsersRound } from "lucide-react";
+import { CircleUserRound, ListTodo, UsersRound } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { NavLink } from "react-router";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
@@ -251,10 +251,9 @@ export function MobileSegmentedControl<T extends string>({
   );
 }
 
-export function MobileBottomTabs({ attentionCount, unreadCount }: { attentionCount: number; unreadCount: number }) {
+export function MobileBottomTabs({ workCount }: { workCount: number }) {
   const tabs = [
-    { to: "/m/now", label: "Now", icon: Activity, badge: attentionCount },
-    { to: "/m/chat", label: "Chat", icon: MessageSquareText, badge: unreadCount },
+    { to: "/m/work", label: "Work", icon: ListTodo, badge: workCount },
     { to: "/m/team", label: "Team", icon: UsersRound, badge: 0 },
     { to: "/m/me", label: "Me", icon: CircleUserRound, badge: 0 },
   ] as const;
@@ -264,7 +263,7 @@ export function MobileBottomTabs({ attentionCount, unreadCount }: { attentionCou
       aria-label="Mobile"
       className="shrink-0 grid"
       style={{
-        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
         minHeight: "calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom))",
         padding: "var(--sp-1) var(--sp-2) env(safe-area-inset-bottom)",
         borderTop: "var(--hairline) solid var(--border)",

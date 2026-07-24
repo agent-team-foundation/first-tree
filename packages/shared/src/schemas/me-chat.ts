@@ -485,6 +485,17 @@ export type ChatSourceCount = z.infer<typeof chatSourceCountSchema>;
 
 export const listMeChatSourceCountsQuerySchema = z.object({
   engagement: chatEngagementViewSchema.default("active"),
+  /**
+   * Keep aggregate badges in the same membership projection as a
+   * `listMeChats({ watching: true })` result.
+   */
+  watching: z.preprocess((v) => {
+    if (typeof v === "string") {
+      if (v === "1" || v.toLowerCase() === "true") return true;
+      if (v === "0" || v.toLowerCase() === "false" || v === "") return false;
+    }
+    return v;
+  }, z.boolean().optional()),
 });
 export type ListMeChatSourceCountsQuery = z.infer<typeof listMeChatSourceCountsQuerySchema>;
 

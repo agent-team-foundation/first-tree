@@ -201,7 +201,7 @@ function MobileTeamRow({
   }
   return (
     <Link
-      to={`/m/chat?c=draft&with=${encodeURIComponent(chatTarget)}`}
+      to={`/m/work?c=draft&with=${encodeURIComponent(chatTarget)}`}
       aria-label={`Chat with ${title}`}
       className="flex items-center transition-colors hover:bg-[var(--bg-hover)]"
       style={{ ...cardStyle, color: "var(--fg)", textDecoration: "none" }}

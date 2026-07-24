@@ -7,8 +7,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../../components/ui/toast.js";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
-import { MobileChatPage } from "../chat.js";
-import { MobileNowPage } from "../now.js";
+import { MobileWorkPage } from "../work.js";
 
 const NOW = "2026-07-09T10:00:00.000Z";
 
@@ -50,6 +49,7 @@ const authMock = vi.hoisted(() => {
 
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
+  listMeChatSourceCounts: vi.fn(),
 }));
 
 vi.mock("../../../auth/auth-context.js", () => ({
@@ -90,8 +90,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -102,8 +102,7 @@ function renderWithClient(harness: DomHarness, element: ReactElement, path: stri
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
           <Routes>
-            <Route path="/m/now" element={element} />
-            <Route path="/m/chat" element={element} />
+            <Route path="/m/work" element={element} />
           </Routes>
         </ToastProvider>
       </QueryClientProvider>
@@ -168,54 +167,69 @@ describe("mobile density tiers", () => {
       priorityRows: { attention: [], pinned: [] },
       nextCursor: null,
     });
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
   });
 
-  it("renders Now work as one priority feed without section grouping", async () => {
-    renderWithClient(harness, <MobileNowPage />, "/m/now");
+  it("renders one continuous Work feed in Attention then Pinned then Recency order", async () => {
+    renderWithClient(harness, <MobileWorkPage />, "/m/work");
     await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
-    expect(harness.container.textContent).toContain("Now");
-    expect(harness.container.textContent).not.toContain("need attention");
+    expect(harness.container.textContent).toContain("Work");
 
     const sectionHeadings = [...harness.container.querySelectorAll("h2")].map((heading) => heading.textContent);
-    expect(sectionHeadings).not.toContain("Needs attention");
-    expect(sectionHeadings).not.toContain("In progress");
-    expect(sectionHeadings).not.toContain("Recent");
+    expect(sectionHeadings).toEqual([]);
 
-    const feed = harness.container.querySelector("[data-mobile-feed]");
-    if (!feed) throw new Error("Missing Now feed");
-    const feedCards = [...feed.querySelectorAll<HTMLElement>('[data-mobile-card="feed"]')];
-    // Now is signal-filtered: the `idle` "Recent update" row is dropped, leaving
-    // the question (priority) and working (feed) cards.
-    expect(feedCards).toHaveLength(2);
-    expect(feedCards[0]?.textContent).toContain("Release readiness");
-    expect(feedCards[0]?.getAttribute("style")).toContain("min-height: var(--sp-35)");
-    expect(feedCards[1]?.getAttribute("style")).toContain("min-height: var(--sp-20)");
-    expect(feedCards[0]?.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-title");
-    expect(feedCards[0]?.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
-    const labels = [...feed.querySelectorAll("[data-mobile-signal-label]")].map((label) => label.textContent);
-    expect(labels).toEqual(["Needs your answer", "Working now"]);
-    expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.className).toContain("truncate");
-    expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.parentElement?.className).toContain(
-      "text-mobile-label",
-    );
-    expect(feedCards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
-    expect(feedCards[1]?.querySelector("[data-mobile-primary-action]")).toBeNull();
-    expect(feed.querySelector('[data-mobile-card="list"]')).toBeNull();
-    expect(harness.container.textContent).not.toContain("Recent update");
+    const cards = [...harness.container.querySelectorAll<HTMLElement>("[data-mobile-card]")];
+    expect(cards).toHaveLength(3);
+    expect(cards[0]?.getAttribute("data-mobile-card")).toBe("action");
+    expect(cards[0]?.textContent).toContain("Release readiness");
+    expect(cards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
+    expect(cards[1]?.getAttribute("data-mobile-card")).toBe("work");
+    expect(cards[1]?.textContent).toContain("Context docs");
+    expect(cards[2]?.textContent).toContain("Team roster polish");
   });
 
-  it("renders Chat rows as medium list cards, not full feed cards", async () => {
-    renderWithClient(harness, <MobileChatPage />, "/m/chat");
+  it("renders standard Work rows with a two-line content budget and no visible overflow actions", async () => {
+    renderWithClient(harness, <MobileWorkPage />, "/m/work");
     await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
 
-    const listCard = harness.container.querySelector<HTMLElement>('[data-mobile-card="list"]');
-    if (!listCard) throw new Error("Missing Chat list card");
-    expect(listCard.getAttribute("style")).toContain("min-height: calc(var(--sp-16) + var(--sp-6))");
-    expect(listCard.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-subtitle");
-    expect(listCard.querySelector("[data-mobile-signal-label]")?.parentElement?.className).toContain("mono");
+    const listCard = harness.container.querySelector<HTMLElement>('[data-mobile-card="work"]');
+    if (!listCard) throw new Error("Missing Work row");
+    expect(listCard.getAttribute("style")).toContain("min-height: calc(var(--sp-20) + var(--sp-8))");
+    expect(listCard.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
+    expect(listCard.querySelector("[data-mobile-card-preview]")?.className).toContain("truncate");
+    expect(listCard.querySelector("[data-mobile-card-dynamic]")?.textContent).toContain("Working");
     expect(listCard.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
-    expect(harness.container.querySelector('[data-mobile-card="feed"]')).toBeNull();
+  });
+
+  it("counts pinned attention rows and unread rows from the same Work projection", async () => {
+    const pinnedAttention = chatRow({
+      chatId: "pinned-attention",
+      title: "Pinned urgent work",
+      openRequestCount: 1,
+      pinnedAt: "2026-07-09T11:00:00.000Z",
+    });
+    const pinnedQuiet = chatRow({
+      chatId: "pinned-quiet",
+      title: "Pinned quiet work",
+      pinnedAt: "2026-07-09T10:00:00.000Z",
+    });
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [pinnedAttention, pinnedQuiet],
+      priorityRows: { attention: [pinnedAttention], pinned: [pinnedQuiet] },
+      nextCursor: null,
+    });
+    meChatMocks.listMeChatSourceCounts.mockResolvedValue({
+      counts: { manual: { chatCount: 3, unreadChatCount: 2 } },
+    });
+
+    renderWithClient(harness, <MobileWorkPage />, "/m/work");
+    await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Pinned urgent work"));
+
+    const chips = [...harness.container.querySelectorAll<HTMLButtonElement>("[data-mobile-work-quick-views] button")];
+    expect(chips.find((chip) => chip.textContent?.includes("Need you"))?.textContent).toContain("1");
+    expect(chips.find((chip) => chip.textContent?.includes("Unread"))?.textContent).toContain("2");
+    expect(chips.find((chip) => chip.textContent?.includes("Pinned"))?.textContent).toContain("2");
   });
 
   it("renders card previews with inline markdown peeled, not as literal markers", async () => {
@@ -225,14 +239,14 @@ describe("mobile density tiers", () => {
         chatRow({
           chatId: "md",
           title: "Markdown preview",
-          openRequestCount: 1,
+          openRequestCount: 0,
           description: "**Task:** run the seed (`first-tree-seed`)",
         }),
       ],
       priorityRows: { attention: [], pinned: [] },
       nextCursor: null,
     });
-    renderWithClient(harness, <MobileNowPage />, "/m/now");
+    renderWithClient(harness, <MobileWorkPage />, "/m/work");
     await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Markdown preview"));
 
     const preview = harness.container.querySelector("[data-mobile-card-preview]");

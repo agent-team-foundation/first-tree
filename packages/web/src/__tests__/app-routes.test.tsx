@@ -78,8 +78,7 @@ vi.mock("../pages/mobile/shell.js", async () => {
     ),
   };
 });
-vi.mock("../pages/mobile/now.js", () => ({ MobileNowPage: () => <div>mobile now</div> }));
-vi.mock("../pages/mobile/chat.js", () => ({ MobileChatPage: () => <div>mobile chat</div> }));
+vi.mock("../pages/mobile/work.js", () => ({ MobileWorkPage: () => <div>mobile work</div> }));
 vi.mock("../pages/mobile/team.js", () => ({ MobileTeamPage: () => <div>mobile team</div> }));
 vi.mock("../pages/mobile/me.js", () => ({ MobileMePage: () => <div>mobile me</div> }));
 vi.mock("../pages/settings.js", async () => {
@@ -344,23 +343,23 @@ describe("App routes", () => {
 
   it("opens the mobile experience on prod", async () => {
     setViewportWidth(390);
-    expect(await renderAppAt("/")).toContain("mobile now");
+    expect(await renderAppAt("/")).toContain("mobile work");
     expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
     setViewportWidth(390);
-    expect(await renderAppAt("/m")).toContain("mobile now");
+    expect(await renderAppAt("/m")).toContain("mobile work");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
     setViewportWidth(390);
-    expect(await renderAppAt("/m/now")).toContain("mobile now");
+    expect(await renderAppAt("/m/now")).toContain("mobile work");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
     setViewportWidth(390);
-    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
+    expect(await renderAppAt("/m/chat")).toContain("mobile work");
   });
 
   it("waits for the server channel before choosing the mobile or desktop shell", async () => {
@@ -369,7 +368,7 @@ describe("App routes", () => {
     setViewportWidth(390);
 
     expect(await renderAppAt("/")).not.toContain("workspace page");
-    expect(document.body.textContent ?? "").not.toContain("mobile now");
+    expect(document.body.textContent ?? "").not.toContain("mobile work");
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
   });
 
@@ -395,18 +394,18 @@ describe("App routes", () => {
   it("opens mobile routes, phone root, and PWA metadata on staging", async () => {
     serverChannelStateMock.channel = "staging";
     setViewportWidth(390);
-    expect(await renderAppAt("/")).toContain("mobile now");
+    expect(await renderAppAt("/")).toContain("mobile work");
     expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
     setViewportWidth(390);
-    expect(await renderAppAt("/m")).toContain("mobile now");
+    expect(await renderAppAt("/m")).toContain("mobile work");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
     setViewportWidth(390);
-    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
+    expect(await renderAppAt("/m/chat")).toContain("mobile work");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
@@ -438,7 +437,7 @@ describe("App routes", () => {
     serverChannelStateMock.channel = "dev";
     setViewportWidth(390);
 
-    expect(await renderAppAt("/m/now")).toContain("mobile now");
+    expect(await renderAppAt("/m/now")).toContain("mobile work");
   });
 
   it("routes development preview pages and omits dev-only previews in production", async () => {

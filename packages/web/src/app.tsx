@@ -21,11 +21,10 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
-import { MobileChatPage } from "./pages/mobile/chat.js";
 import { MobileMePage } from "./pages/mobile/me.js";
-import { MobileNowPage } from "./pages/mobile/now.js";
 import { MobileShell } from "./pages/mobile/shell.js";
 import { MobileTeamPage } from "./pages/mobile/team.js";
+import { MobileWorkPage } from "./pages/mobile/work.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
@@ -410,12 +409,13 @@ export function App() {
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route element={<MobileExperienceGate />}>
-                  <Route path="m" element={<Navigate to="/m/now" replace />} />
-                  <Route path="m/now" element={<MobileNowPage />} />
-                  <Route path="m/chat" element={<MobileChatPage />} />
+                  <Route path="m" element={<Navigate to="/m/work" replace />} />
+                  <Route path="m/work" element={<MobileWorkPage />} />
+                  <Route path="m/now" element={<LegacyMobileWorkRedirect />} />
+                  <Route path="m/chat" element={<LegacyMobileWorkRedirect />} />
                   <Route path="m/team" element={<MobileTeamPage />} />
                   <Route path="m/me" element={<MobileMePage />} />
-                  <Route path="m/*" element={<Navigate to="/m/now" replace />} />
+                  <Route path="m/*" element={<Navigate to="/m/work" replace />} />
                 </Route>
                 <Route
                   element={
@@ -540,12 +540,17 @@ function LegacyUserSettingsRedirect() {
   return <Navigate to={{ pathname: "/settings/account", search: location.search, hash: location.hash }} replace />;
 }
 
+function LegacyMobileWorkRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/m/work", search: location.search, hash: location.hash }} replace />;
+}
+
 function WorkspaceEntry() {
   const location = useLocation();
   const mobileExperience = useMobileExperienceState();
   if (!mobileExperience.settled) return null;
   if (mobileExperience.enabled && shouldOpenMobileRoot(location)) {
-    return <Navigate to="/m/now" replace />;
+    return <Navigate to="/m/work" replace />;
   }
   return <WorkspacePage />;
 }

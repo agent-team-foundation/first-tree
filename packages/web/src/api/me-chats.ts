@@ -56,11 +56,15 @@ export async function listMeChats(
   return listMeChatsResponseSchema.parse(res);
 }
 
-export function listMeChatSourceCounts(params?: { engagement?: ChatEngagementView }): Promise<MeChatSourceCounts> {
+export function listMeChatSourceCounts(
+  params?: { engagement?: ChatEngagementView; watching?: boolean },
+  opts?: { signal?: AbortSignal },
+): Promise<MeChatSourceCounts> {
   const qs = new URLSearchParams();
   if (params?.engagement) qs.set("engagement", params.engagement);
+  if (params?.watching) qs.set("watching", "1");
   const query = qs.toString();
-  return api.get<MeChatSourceCounts>(withOrg(`/chats/source-counts${query ? `?${query}` : ""}`));
+  return api.get<MeChatSourceCounts>(withOrg(`/chats/source-counts${query ? `?${query}` : ""}`), opts);
 }
 
 export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
