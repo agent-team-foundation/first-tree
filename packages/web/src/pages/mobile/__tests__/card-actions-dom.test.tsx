@@ -31,6 +31,9 @@ vi.mock("../../../auth/auth-context.js", () => ({
 }));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
 vi.mock("../../../api/chats.js", () => chatMocks);
+vi.mock("../../../lib/use-image-src.js", () => ({
+  useImageSrc: () => ({ kind: "hit", src: "data:image/png;base64,aW1hZ2U=" }),
+}));
 vi.mock("../../../api/gitlab-connections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/gitlab-connections.js")>()),
   listGitlabConnectionsAt: gitlabMocks.listGitlabConnectionsAt,
@@ -82,7 +85,17 @@ const request: Message = {
   chatId: row.chatId,
   senderId: "agent-1",
   format: "request",
-  content: "## Release decision\n\nThe staging evidence is green. Which rollout should we use?",
+  content: {
+    caption: "## Release decision\n\nThe staging evidence is green. Which rollout should we use?",
+    attachments: [
+      {
+        imageId: "11111111-1111-4111-8111-111111111111",
+        mimeType: "image/png",
+        filename: "release-evidence.png",
+        size: 42,
+      },
+    ],
+  },
   metadata: {
     mentions: ["human-agent-self"],
     request: {
@@ -435,6 +448,14 @@ describe("mobile card behavior", () => {
     );
     expect(currentLocation).toBe("/m/work");
     expect(document.body.textContent).toContain("Which rollout should we use?");
+    const imageButton = document.body.querySelector('button[aria-label="Open image release-evidence.png"]');
+    expect(imageButton).not.toBeNull();
+
+    await click(imageButton);
+    const lightbox = document.body.querySelector('[role="dialog"][class*="z-[80]"]');
+    expect(lightbox?.querySelector('img[alt="release-evidence.png"]')).not.toBeNull();
+    await click(lightbox?.querySelector('button[aria-label="Close"]') ?? null);
+    await harness.waitFor(() => expect(document.body.querySelector('[role="dialog"][class*="z-[80]"]')).toBeNull());
 
     await click(
       [...document.body.querySelectorAll('button[role="radio"]')].find((item) =>

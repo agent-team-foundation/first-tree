@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FirstTreeHubSDK } from "@first-tree/client";
@@ -45,6 +45,9 @@ describe("captureOutboundImages (chat send image capture)", () => {
   beforeAll(async () => {
     base = await mkdtemp(join(tmpdir(), "cli-img-capture-"));
     await writeFile(join(base, "shot.png"), PNG);
+    const repoBase = join(base, "source-repos", "first-tree");
+    await mkdir(repoBase, { recursive: true });
+    await writeFile(join(repoBase, "shot.png"), Buffer.concat([PNG, Buffer.from("repo-copy")]));
   });
 
   afterAll(async () => {
@@ -80,6 +83,22 @@ describe("captureOutboundImages (chat send image capture)", () => {
     );
     expect(out.imageRefs).toHaveLength(1);
     expect(out.imageRefs[0]).toMatchObject({ mimeType: "image/png", filename: "shot.png" });
+    expect(out.caption).toBe("看图：");
+  });
+
+  it("resolves relative images from the agent workspace even when documents use a repo base", async () => {
+    const { sdk } = stubSdk();
+    const out = await captureOutboundImages(
+      "看图：\n\n![shot](shot.png)",
+      { sdk, chatId: CHAT_ID },
+      {
+        FIRST_TREE_DOC_AGENT_HOME: base,
+        FIRST_TREE_DOC_BASE: join(base, "source-repos", "first-tree"),
+        FIRST_TREE_DOC_REPO_LOCAL_PATH: "source-repos/first-tree",
+      },
+    );
+    expect(out.imageRefs).toHaveLength(1);
+    expect(out.imageRefs[0]).toMatchObject({ filename: "shot.png", size: PNG.byteLength });
     expect(out.caption).toBe("看图：");
   });
 
@@ -119,6 +138,16 @@ describe("toOutboundImageMessage (format/content conversion)", () => {
     expect(out.format).toBe("file");
     expect(isImageBatchRefContent(out.content)).toBe(true);
     expect(out.content).toMatchObject({ caption: "看图", attachments: [ref] });
+  });
+
+  it("keeps a tracked request as request while attaching the captured image batch", () => {
+    const out = toOutboundImageMessage("request", "Choose the rollout?", {
+      caption: "Choose the rollout?",
+      imageRefs: [ref],
+    });
+    expect(out.format).toBe("request");
+    expect(out.content).toEqual({ caption: "Choose the rollout?", attachments: [ref] });
+    expect(isImageBatchRefContent(out.content)).toBe(true);
   });
 
   it("omits the caption key for an image-only send (empty caption)", () => {

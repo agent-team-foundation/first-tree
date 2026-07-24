@@ -621,17 +621,17 @@ export class SessionManager {
   }
 
   /**
-   * Resolve every image reference on an inbound `format: "file"` message to a
-   * file on local disk, fetching missing bytes from the `attachments` store.
-   * Single-ref and batch-ref shapes are both handled; non-image file content
-   * is ignored. Fetches run in parallel and never throw — the renderer
+   * Resolve every inbound image reference to a file on local disk, fetching
+   * missing bytes from the `attachments` store. The batch shape is shared by
+   * regular file messages and tracked requests; the legacy single-ref shape
+   * remains file-only. Fetches run in parallel and never throw — the renderer
    * degrades to a placeholder for any ref that didn't land.
    */
   private async ensureImagesLocal(message: SessionMessage): Promise<void> {
-    // Images: refs in `content` on a `format: "file"` message. Written under
-    // the images dir and handed to the model as a path to Read.
+    // Images: refs in `content`. Written under the images dir and handed to the
+    // model as a path to Read.
     const imageRefs =
-      message.format === "file" && isImageBatchRefContent(message.content)
+      (message.format === "file" || message.format === "request") && isImageBatchRefContent(message.content)
         ? message.content.attachments
         : message.format === "file" && isImageRefContent(message.content)
           ? [message.content]

@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
+import { captureOutboundImages, toOutboundImageMessage } from "../../core/image-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { guardInlineShellResidue, looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
@@ -141,6 +142,8 @@ export function registerChatAskCommand(chat: Command): void {
         const sdk = createSdk(options.agent);
 
         const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+        const capturedImages = await captureOutboundImages(captured.content, { sdk, chatId });
+        const { content: outboundContent } = toOutboundImageMessage(format, captured.content, capturedImages);
         const cliBodyOrigin =
           options.messageFile !== undefined
             ? CLI_BODY_ORIGINS.MESSAGE_FILE
@@ -164,7 +167,7 @@ export function registerChatAskCommand(chat: Command): void {
         // under another message (no `inReplyTo`).
         const result = await sdk.sendMessage(chatId, {
           format,
-          content: captured.content,
+          content: outboundContent,
           metadata: outboundMetadata,
           source: "cli",
           ...(target ? { receiverNames: [target] } : {}),

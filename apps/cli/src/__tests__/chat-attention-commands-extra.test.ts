@@ -24,6 +24,10 @@ const docCaptureMock = vi.hoisted(() => ({
   captureOutboundDocs: vi.fn(),
 }));
 
+const imageCaptureMock = vi.hoisted(() => ({
+  captureOutboundImages: vi.fn(),
+}));
+
 const ioMocks = vi.hoisted(() => ({
   readStdin: vi.fn(),
 }));
@@ -46,6 +50,10 @@ vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAgentMock }));
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 vi.mock("../core/doc-capture.js", () => docCaptureMock);
+vi.mock("../core/image-capture.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../core/image-capture.js")>()),
+  captureOutboundImages: imageCaptureMock.captureOutboundImages,
+}));
 vi.mock("../commands/chat/_shared/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/chat/_shared/io.js")>()),
   readStdin: ioMocks.readStdin,
@@ -86,6 +94,10 @@ beforeEach(() => {
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova", displayName: "Nova" });
   docCaptureMock.captureOutboundDocs.mockImplementation(async (content: string) => ({ content }));
+  imageCaptureMock.captureOutboundImages.mockImplementation(async (content: string) => ({
+    caption: content,
+    imageRefs: [],
+  }));
   ioMocks.readStdin.mockResolvedValue("stdin message");
   localAgentMocks.createSdk.mockReturnValue({
     agentId: "agent-self",
@@ -247,6 +259,37 @@ describe("chat command behavior", () => {
         format: "request",
         content: "What's the rollback window?",
         metadata: expect.objectContaining({ request: {} }),
+      }),
+    );
+  });
+
+  it("chat ask preserves request semantics when image capture returns refs", async () => {
+    const sdk = localAgentMocks.createSdk();
+    const imageRef = {
+      imageId: "11111111-1111-4111-8111-111111111111",
+      mimeType: "image/png",
+      filename: "decision.png",
+      size: 42,
+    };
+    imageCaptureMock.captureOutboundImages.mockResolvedValueOnce({
+      caption: "Which layout should ship?",
+      imageRefs: [imageRef],
+    });
+
+    await runChat(["ask", "nova", "Which layout should ship?\n\n![layout](output/decision.png)"]);
+
+    expect(imageCaptureMock.captureOutboundImages).toHaveBeenCalledWith(
+      "Which layout should ship?\n\n![layout](output/decision.png)",
+      expect.objectContaining({ chatId: "chat-env" }),
+    );
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        format: "request",
+        content: {
+          caption: "Which layout should ship?",
+          attachments: [imageRef],
+        },
       }),
     );
   });

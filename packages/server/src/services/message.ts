@@ -7,6 +7,7 @@ import {
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
+  isImageBatchRefContent,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
@@ -196,10 +197,24 @@ function validateMessageContent(
     validateFileContent(data.content);
     return;
   }
+  if (data.format === "request") {
+    if (typeof data.content === "string") {
+      validateTextBody(data.content, true);
+      return;
+    }
+    const parsed = imageBatchRefContentSchema.safeParse(data.content);
+    if (!parsed.success) {
+      throw new BadRequestError(
+        "Invalid request message content: expected a non-empty text body or an image batch with a non-empty caption.",
+      );
+    }
+    validateTextBody(parsed.data.caption ?? "", true);
+    return;
+  }
   // Non-string content (card / reference object shapes) is out of scope here;
   // only string-bearing bodies are guarded against empty / placeholder sends.
   if (typeof data.content === "string") {
-    validateTextBody(data.content, data.format === "request", opts?.hasAttachmentRefs === true);
+    validateTextBody(data.content, false, opts?.hasAttachmentRefs === true);
   }
 }
 
@@ -414,9 +429,7 @@ export function preflightMessageSendIntent(input: {
   // placeholder body after `maybeUnwrapDoubleEncoded`. `effectiveContent` is
   // what gets normalized and persisted, so guard it here too — before mention
   // normalization can salvage an empty body into a bare "@name".
-  if (typeof effectiveContent === "string") {
-    validateTextBody(effectiveContent, data.format === "request", hasAttachmentRefs);
-  }
+  validateMessageContent({ format: data.format, content: effectiveContent }, { hasAttachmentRefs });
 
   const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
   validateDocumentContext(incomingMeta);
@@ -560,8 +573,14 @@ export function preflightMessageSendIntent(input: {
   }
 
   let outboundContent = effectiveContent;
-  if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
-    const present = new Set(scanMentionTokens(outboundContent));
+  const outboundText =
+    typeof outboundContent === "string"
+      ? outboundContent
+      : data.format === "request" && isImageBatchRefContent(outboundContent)
+        ? extractCaption(outboundContent)
+        : null;
+  if (options.normalizeMentionsInContent && outboundText !== null) {
+    const present = new Set(scanMentionTokens(outboundText));
     const missingNames: string[] = [];
     for (const id of mergedMentions) {
       if (id === senderId) continue;
@@ -572,7 +591,12 @@ export function preflightMessageSendIntent(input: {
     }
     if (missingNames.length > 0) {
       const prefix = missingNames.map((n) => `@${n}`).join(" ");
-      outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
+      const normalizedText = outboundText.length > 0 ? `${prefix} ${outboundText}` : prefix;
+      if (typeof outboundContent === "string") {
+        outboundContent = normalizedText;
+      } else if (isImageBatchRefContent(outboundContent)) {
+        outboundContent = { ...outboundContent, caption: normalizedText };
+      }
     }
   }
 

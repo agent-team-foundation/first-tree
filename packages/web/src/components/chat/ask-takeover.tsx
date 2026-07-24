@@ -31,7 +31,7 @@
  * the ONLY way to resolve a question: the target human answers here, in the web
  * UI; an agent can only ask, never answer or close.
  */
-import type { AskOption, AskRequest, AttachmentKind, MentionParticipant } from "@first-tree/shared";
+import type { AskOption, AskRequest, AttachmentKind, ImageRefContent, MentionParticipant } from "@first-tree/shared";
 import { COMPOSER_ACCEPT_ATTRIBUTE, extractMentions } from "@first-tree/shared";
 import { AtSign, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,6 +46,7 @@ import {
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { FileChip } from "../ui/file-chip.js";
 import { Markdown, type MarkdownProps } from "../ui/markdown.js";
+import { ImageRefGallery } from "./image-ref-gallery.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
 
 /**
@@ -108,6 +109,7 @@ function useKeyboardInset(): number {
 
 export function AskTakeover({
   body,
+  images = [],
   payload,
   askerName,
   sending = false,
@@ -129,6 +131,8 @@ export function AskTakeover({
   mobile?: boolean;
   /** The ask itself — the request message's markdown body. */
   body: string;
+  /** Images attached to the ask, shown beneath the body in the same scroller. */
+  images?: readonly ImageRefContent[];
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
@@ -634,6 +638,7 @@ export function AskTakeover({
             }}
           >
             <Markdown components={markdownComponents}>{body}</Markdown>
+            <ImageRefGallery images={images} hasLeadingContent={body.trim().length > 0} />
           </div>
 
           {/* Answer surface — options + Other (or a single free-text box),

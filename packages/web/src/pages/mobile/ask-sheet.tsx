@@ -1,3 +1,4 @@
+import { extractCaption, isImageBatchRefContent } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -78,7 +79,8 @@ export function MobileAskSheet({ chatId, onClose }: { chatId: string; onClose: (
       <div className="fixed inset-0" style={{ zIndex: 70 }} data-mobile-ask-sheet>
         <AskTakeover
           key={request.id}
-          body={typeof request.content === "string" ? request.content : ""}
+          body={typeof request.content === "string" ? request.content : extractCaption(request.content)}
+          images={isImageBatchRefContent(request.content) ? request.content.attachments : []}
           payload={payload}
           askerName={askerName}
           sending={sending}

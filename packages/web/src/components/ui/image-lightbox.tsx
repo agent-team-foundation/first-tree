@@ -73,7 +73,7 @@ export function ImageLightbox({ images, index, onIndexChange }: ImageLightboxPro
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && close()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-overlay-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[80] bg-overlay-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
           onKeyDown={(e) => {
@@ -81,7 +81,7 @@ export function ImageLightbox({ images, index, onIndexChange }: ImageLightboxPro
             if (e.key === "ArrowLeft") step(-1);
             if (e.key === "ArrowRight") step(1);
           }}
-          className="fixed inset-0 z-[60] flex items-center justify-center focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+          className="fixed inset-0 z-[80] flex items-center justify-center focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
           // Click on the empty backdrop (not the image or a control) closes.
           onClick={(e) => {
             if (e.target === e.currentTarget) close();

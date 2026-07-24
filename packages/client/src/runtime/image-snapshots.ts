@@ -18,14 +18,14 @@ import {
 /**
  * Outbound image capture — the picture sibling of `doc-snapshots.ts`.
  *
- * When an agent's `chat send` body contains a markdown image `![alt](path)` or
- * `![alt](<path>)` whose target is a local image file inside the sender's own
- * workspace fence, we upload the bytes to the org attachment store and hand
- * the caller an `ImageRefContent` (the exact shape a human image send
- * produces). The caller then converts the message to a `format: "file"` batch:
- * caption = the body with the captured image spans stripped, `attachments` =
- * these refs. Web then renders it identically to a human image send (caption on
- * top, thumbnails below) — zero web/server change.
+ * When an agent's `chat send` or `chat ask` body contains a markdown image
+ * `![alt](path)` or `![alt](<path>)` whose target is a local image file inside
+ * the sender's own workspace fence, we upload the bytes to the org attachment
+ * store and hand the caller an `ImageRefContent` (the exact shape a human image
+ * send produces). The caller carries these refs in the shared batch shape:
+ * ordinary sends use `format: "file"`; tracked asks retain `format: "request"`.
+ * In both cases the caption is the body with captured image spans stripped and
+ * `attachments` contains these refs.
  *
  * Scope (see the paired design note): we deliberately capture ONLY markdown
  * image syntax (an explicit "show this picture" intent, unlike a bare filename
@@ -65,8 +65,8 @@ export type BuildImageAttachmentsOptions = {
 };
 
 export type BuildMessageImageSnapshotsResult = {
-  /** Image refs to carry as the `format: "file"` batch `attachments` (empty ⇒
-   *  caller sends the message unchanged). Order follows first appearance. */
+  /** Image refs to carry as batch `attachments` (empty ⇒ caller sends the
+   *  message unchanged). Order follows first appearance. */
   imageRefs: ImageRefContent[];
   /** `text` with every captured image span removed and the leftover blank
    *  lines collapsed — becomes the batch `caption`. */

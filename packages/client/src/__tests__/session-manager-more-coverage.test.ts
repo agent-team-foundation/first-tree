@@ -21,6 +21,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "../runtime/handler.js";
+import { findImagePath } from "../runtime/image-store.js";
 import { InboxDeliveryCoordinator } from "../runtime/inbox-delivery-coordinator.js";
 import type { SubprocessProbe } from "../runtime/process-tree-probe.js";
 import { SessionManager, type SessionManagerShutdownOptions } from "../runtime/session-manager.js";
@@ -626,6 +627,87 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     expect(capturedMessage?.format).toBe("file");
     expect(capturedMessage?.content).toEqual({ attachments: [{ imageId: "image-without-mime-type" }] });
 
+    await sm.shutdown();
+  });
+
+  it("downloads request image batches before routing them to the agent", async () => {
+    const home = mkdtempSync(join(tmpdir(), "session-manager-request-images-"));
+    vi.stubEnv("FIRST_TREE_HOME", home);
+    try {
+      const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
+      const sdk = mockSdk({ fetchAttachment });
+      let capturedMessage: SessionMessage | undefined;
+      const handler = createMockHandler({
+        start: vi.fn(async (message) => {
+          capturedMessage = message;
+          return "session-id-mock";
+        }),
+      });
+      const sm = createSessionManager({ handler, sdk });
+      const imageId = "11111111-1111-4111-8111-111111111111";
+      const base = mockEntry({ id: 405, chatId: "chat-request-image", messageId: "msg-request-image" });
+      const requestEntry: InboxEntryWithMessage = {
+        ...base,
+        message: {
+          ...base.message,
+          format: "request",
+          content: {
+            caption: "Which layout should ship?",
+            attachments: [
+              {
+                imageId,
+                mimeType: "image/png",
+                filename: "decision.png",
+                size: 11,
+              },
+            ],
+          },
+          metadata: { request: {} },
+        },
+      };
+
+      await sm.dispatch(requestEntry);
+
+      expect(fetchAttachment).toHaveBeenCalledWith({ id: imageId });
+      expect(findImagePath("chat-request-image", imageId, "image/png")).not.toBeNull();
+      expect(capturedMessage?.format).toBe("request");
+      expect(capturedMessage?.content).toEqual(requestEntry.message.content);
+
+      await sm.shutdown();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not download batch-shaped content from non-image message formats", async () => {
+    const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
+    const sdk = mockSdk({ fetchAttachment });
+    const handler = createMockHandler();
+    const sm = createSessionManager({ handler, sdk });
+    const base = mockEntry({ id: 406, chatId: "chat-card-batch", messageId: "msg-card-batch" });
+    const cardEntry: InboxEntryWithMessage = {
+      ...base,
+      message: {
+        ...base.message,
+        format: "card",
+        content: {
+          caption: "card payload",
+          attachments: [
+            {
+              imageId: "11111111-1111-4111-8111-111111111111",
+              mimeType: "image/png",
+              filename: "not-an-image-message.png",
+            },
+          ],
+        },
+      },
+    };
+
+    await sm.dispatch(cardEntry);
+
+    expect(fetchAttachment).not.toHaveBeenCalled();
+    expect(handler.start).toHaveBeenCalledTimes(1);
     await sm.shutdown();
   });
 

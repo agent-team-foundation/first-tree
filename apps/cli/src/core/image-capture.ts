@@ -1,6 +1,6 @@
 import { buildMessageImageSnapshots, type FirstTreeHubSDK } from "@first-tree/client";
 import type { ImageRefContent, MessageFormat } from "@first-tree/shared";
-import { resolveChatOrgId, resolveSelfFenceFromEnv } from "./capture-context.js";
+import { resolveChatOrgId, resolveImageFenceFromEnv } from "./capture-context.js";
 
 /**
  * Capture the workspace images an outbound `chat send` body references, the
@@ -20,7 +20,7 @@ export async function captureOutboundImages(
   ctx: { sdk: FirstTreeHubSDK; chatId?: string },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ caption: string; imageRefs: ImageRefContent[] }> {
-  const self = resolveSelfFenceFromEnv(env);
+  const self = resolveImageFenceFromEnv(env);
   if (!self || !ctx.chatId) return { caption: content, imageRefs: [] };
 
   try {
@@ -35,22 +35,21 @@ export async function captureOutboundImages(
 
 /**
  * Decide the outbound `format` + `content` given the doc-captured body and the
- * image-capture result. When any image captured (and the base format is an
- * image-eligible text/markdown), the send becomes a human-identical
- * `imageBatchRefContent` file message: caption = the image-stripped body
- * (omitted when empty), attachments = the refs. `card`/`request`/`reference`
- * bodies and image-free sends pass through unchanged. Pure + synchronous so the
- * conversion is unit-tested without a live send.
+ * image-capture result. Text/markdown sends become a human-identical
+ * `imageBatchRefContent` file message. A tracked request keeps
+ * `format: "request"` while reusing that same image-batch content shape, so
+ * its open-question semantics survive. Card/reference bodies and image-free
+ * sends pass through unchanged.
  */
 export function toOutboundImageMessage(
   baseFormat: MessageFormat,
   docContent: string,
   captured: { caption: string; imageRefs: ImageRefContent[] },
 ): { format: MessageFormat; content: unknown } {
-  const eligible = baseFormat === "text" || baseFormat === "markdown";
+  const eligible = baseFormat === "text" || baseFormat === "markdown" || baseFormat === "request";
   if (!eligible || captured.imageRefs.length === 0) return { format: baseFormat, content: docContent };
   return {
-    format: "file",
+    format: baseFormat === "request" ? "request" : "file",
     content: {
       ...(captured.caption.trim() ? { caption: captured.caption } : {}),
       attachments: captured.imageRefs,

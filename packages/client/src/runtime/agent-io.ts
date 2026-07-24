@@ -320,20 +320,23 @@ export async function buildFromHeader(message: SessionMessage, participants: Par
  * read as user input. Most formats are already strings; non-string
  * payloads are stringified so the resumed turn still sees readable text.
  *
- * `format: "file"` image messages (single-ref or batched caption + N refs)
- * get a human-readable rendering — caption text plus the on-disk path of
- * each image so a shell-capable LLM (codex CLI, claude-code) can read it,
- * or a "[Image … not available on this device]" placeholder when the bytes
- * never arrived on this client. Without this, codex / future handlers that
- * delegate to `formatInboundContent` would see the raw `{caption,
- * attachments}` JSON.
+ * Image messages (single file ref, or the batch shape shared by file messages
+ * and tracked requests) get a human-readable rendering — caption text plus the
+ * on-disk path of each image so a shell-capable LLM (codex CLI, claude-code)
+ * can read it, or a "[Image … not available on this device]" placeholder when
+ * the bytes never arrived on this client. Without this, codex / future
+ * handlers that delegate to `formatInboundContent` would see the raw
+ * `{caption, attachments}` JSON.
  */
 function renderForLLM(message: SessionMessage): string {
   let base: string;
   if (typeof message.content === "string") {
     base = message.content;
-  } else if (message.format === "file") {
-    base = renderFileMessageForLLM(message) ?? JSON.stringify(message.content);
+  } else if (
+    ((message.format === "file" || message.format === "request") && isImageBatchRefContent(message.content)) ||
+    message.format === "file"
+  ) {
+    base = renderImageMessageForLLM(message) ?? JSON.stringify(message.content);
   } else {
     base = JSON.stringify(message.content);
   }
@@ -370,7 +373,7 @@ export function renderDocumentAttachmentsForLLM(message: SessionMessage): string
 
 /** Return a text rendering for a file message's content, or null when the
  * shape isn't a known image variant — caller falls back to JSON. */
-function renderFileMessageForLLM(message: SessionMessage): string | null {
+function renderImageMessageForLLM(message: SessionMessage): string | null {
   const content = message.content;
 
   // Batch shape: caption + N image refs.

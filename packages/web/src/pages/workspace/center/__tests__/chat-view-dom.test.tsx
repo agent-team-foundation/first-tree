@@ -1896,7 +1896,17 @@ describe("ChatView", () => {
       id: "req-render",
       senderId: "agent-1",
       format: "request",
-      content: "Lifecycle **body** stays memoized.",
+      content: {
+        caption: "Lifecycle **body** stays memoized.",
+        attachments: [
+          {
+            imageId: "11111111-1111-4111-8111-111111111111",
+            mimeType: "image/png",
+            filename: "lifecycle.png",
+            size: 42,
+          },
+        ],
+      },
       metadata: {
         mentions: ["human-agent-self"],
         request: {
@@ -1930,6 +1940,10 @@ describe("ChatView", () => {
     // `format="request"`. Viewer agent-1 is not the target, so there is no
     // answer overlay either.
     await waitForText(container, "Lifecycle");
+    await waitForCondition(
+      () => container.querySelector('button[aria-label="Open image lifecycle.png"]') !== null,
+      "request image thumbnail did not render",
+    );
     expect(container.textContent).not.toContain("RESOLVED");
     await flush();
     markdownMocks.render.mockClear();
@@ -2746,7 +2760,17 @@ describe("ChatView", () => {
       id: "req-gitlab-link",
       senderId: "agent-1",
       format: "request",
-      content: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
+      content: {
+        caption: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
+        attachments: [
+          {
+            imageId: "22222222-2222-4222-8222-222222222222",
+            mimeType: "image/png",
+            filename: "evidence.png",
+            size: 42,
+          },
+        ],
+      },
       metadata: {
         mentions: ["human-agent-self"],
         request: {
@@ -2778,6 +2802,7 @@ describe("ChatView", () => {
     expect(compact?.getAttribute("href")).toBe(canonical);
     expect(compact?.title).toBe(canonical);
     expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
+    expect(dialog?.querySelector('button[aria-label="Open image evidence.png"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });
