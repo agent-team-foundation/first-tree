@@ -696,10 +696,11 @@ export class FirstTreeHubSDK {
   }
 
   /**
-   * Add a human or non-human participant to a chat by uuid or by name. Names
-   * resolve within the chat's organization. The legacy wire fields remain
-   * `agentId` / `agentName` because human members use agent mirror rows.
-   * Re-adding an existing speaker returns a conflict.
+   * Add a participant to a chat by uuid or by name. Names resolve within the
+   * chat's organization. Idempotent: re-adding an existing speaker returns
+   * the chat's current participant list (the server treats it as a conflict
+   * the caller can safely ignore — see `chat invite` CLI for the
+   * UX wrapper that swallows that case).
    */
   async addChatParticipant(
     chatId: string,

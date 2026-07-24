@@ -231,11 +231,9 @@ export type UpdateChat = z.infer<typeof updateChatSchema>;
  * §3.2 / §6.
  */
 /**
- * Identify the human or non-human participant by uuid (`agentId`) or by name
- * (`agentName`). The field names are retained for wire compatibility because
- * human members use agent mirror rows. Names resolve server-side within the
- * chat's organization. Exactly one field must be supplied — both or neither
- * is a 400.
+ * Identify the target by uuid (`agentId`) or by name (`agentName`). Names are
+ * resolved server-side within the chat's organization. Exactly one field
+ * must be supplied — both or neither is a 400.
  */
 export const addParticipantSchema = z
   .object({

@@ -1141,7 +1141,7 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   const [targetAgent] = await db.select({ id: agents.uuid }).from(agents).where(targetSelector).limit(1);
   if (!targetAgent) {
     const ref = data.agentId ?? data.agentName ?? "(unknown)";
-    throw new NotFoundError(`Participant "${ref}" not found`);
+    throw new NotFoundError(`Agent "${ref}" not found`);
   }
 
   await inviteParticipantsToChat(db, {

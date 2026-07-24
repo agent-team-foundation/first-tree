@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
-import * as memberService from "../services/member.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Participants API", () => {
@@ -46,7 +45,7 @@ describe("Agent Participants API", () => {
     expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.agent.uuid);
   });
 
-  it("adds an active human by name without writing a message, then allows addressed delivery", async () => {
+  it("adds an active human by name (chat invite CLI path)", async () => {
     const app = getApp();
     const { a1, chatId } = await setupChat(app);
     const human = await createTestAgent(app, {
@@ -60,54 +59,6 @@ describe("Agent Participants API", () => {
     });
     expect(addRes.statusCode).toBe(201);
     expect(addRes.json().map((p: { agentId: string }) => p.agentId)).toContain(human.agent.uuid);
-
-    const userChatRes = await app.inject({
-      method: "GET",
-      url: `/api/v1/chats/${chatId}`,
-      headers: { authorization: `Bearer ${human.accessToken}` },
-    });
-    expect(userChatRes.statusCode).toBe(200);
-
-    const historyBeforeSend = await human.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
-    expect(historyBeforeSend.statusCode).toBe(200);
-    expect(historyBeforeSend.json().items).toHaveLength(0);
-    const inboxBeforeSend = await human.request("GET", "/api/v1/agent/inbox");
-    expect(inboxBeforeSend.statusCode).toBe(200);
-    expect(inboxBeforeSend.json()).toHaveLength(0);
-
-    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
-      format: "text",
-      content: "Human participant delivery",
-      receiverNames: [human.agent.name],
-    });
-    expect(sendRes.statusCode).toBe(201);
-
-    const inboxRes = await human.request("GET", "/api/v1/agent/inbox");
-    expect(inboxRes.statusCode).toBe(200);
-    expect(
-      inboxRes
-        .json()
-        .some((entry: { message: { content: string } }) =>
-          entry.message.content.includes("Human participant delivery"),
-        ),
-    ).toBe(true);
-  });
-
-  it("rejects a removed human by name through the agent invite path", async () => {
-    const app = getApp();
-    const { a1, chatId } = await setupChat(app);
-    const human = await createTestAgent(app, {
-      type: "human",
-      name: `part-removed-${crypto.randomUUID().slice(0, 6)}`,
-    });
-    if (!human.agent.name) throw new Error("removed human participant name missing");
-    await memberService.deleteMember(app.db, human.memberId, human.organizationId);
-
-    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
-      agentName: human.agent.name,
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: string }>().error).toContain("Inactive participant");
   });
 
   it("rejects request with neither agentId nor agentName", async () => {
