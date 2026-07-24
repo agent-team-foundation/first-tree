@@ -34,13 +34,15 @@ its package script.
 
 - API server: `http://127.0.0.1:8000`
 - Web workspace: `http://127.0.0.1:5173`
-- Liveness check: `http://127.0.0.1:8000/healthz`
-- Structured health check: `http://127.0.0.1:8000/api/v1/health`
+- Process liveness check: `http://127.0.0.1:8000/healthz` (does not query PostgreSQL)
+- Bootstrap + database readiness check: `http://127.0.0.1:8000/readyz`
+- Structured database diagnostic: `http://127.0.0.1:8000/api/v1/health`
 
 Useful smoke checks:
 
 ```bash
 curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/api/v1/health
 ```
 

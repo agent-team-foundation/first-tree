@@ -1,6 +1,7 @@
 import type { Database } from "./db/connection.js";
 import type { UserScope } from "./scope/types.js";
 import type { ConfigService } from "./services/config-service.js";
+import type { DatabaseReadinessProbe } from "./services/database-readiness.js";
 import type { Notifier } from "./services/notifier.js";
 import type { ResourcesService } from "./services/resources.js";
 
@@ -15,6 +16,7 @@ export type AgentIdentity = {
 declare module "fastify" {
   interface FastifyInstance {
     db: Database;
+    databaseReadinessProbe: DatabaseReadinessProbe;
     config: import("./config.js").Config;
     notifier: Notifier;
     configService: ConfigService;
