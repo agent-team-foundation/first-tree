@@ -577,13 +577,9 @@ markdown files plus a `manifest.json` of metadata.
 Scheduled jobs in the current chat. At due time the Server writes one
 ordinary addressed markdown message to wake this agent. Every cron command
 (including `preview`, `list`, and `show`) requires `FIRST_TREE_CHAT_ID` from
-the agent session; prompt bodies use `-F <file>` or `-F -` only. Create and
-resume (transitions to active) also require the server kill switch
-`FIRST_TREE_CRON_JOBS_ENABLED=true` and `FIRST_TREE_POLLING_INTERVAL_SECONDS`
-in `1..10` (worker run / activate gate). When the feature is off or outside
-that cadence, preview, list, show, pause, delete, and updates that do not
-activate the job remain usable so owners can still inspect and recover
-existing jobs.
+the agent session; prompt bodies use `-F <file>` or `-F -` only. The scheduler
+starts with the Server and uses `FIRST_TREE_POLLING_INTERVAL_SECONDS` as its
+polling cadence.
 
 ```
 first-tree cron
@@ -1715,8 +1711,7 @@ threshold.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIRST_TREE_CRON_JOBS_ENABLED` | Kill switch for scheduled jobs. When `false`, the worker does not run and create/resume (activate) are rejected; preview, list, show, pause, delete, and non-activating updates remain available. | `false` |
-| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker gate. Worker run / create / resume require the value in `1..10` when the kill switch is on. | `5` |
+| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker. | `5` |
 
 **Observability:**
 

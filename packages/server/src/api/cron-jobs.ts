@@ -16,7 +16,7 @@ import {
   projectCronJob,
   updateCronJob,
 } from "../services/cron-job.js";
-import { cronConfig, notifyCronChatUpdated, sendCronError } from "./cron-http.js";
+import { notifyCronChatUpdated, sendCronError } from "./cron-http.js";
 
 /**
  * Load a cron job by UUID and verify the caller can see its control Chat.
@@ -79,7 +79,6 @@ export async function cronJobRoutes(app: FastifyInstance): Promise<void> {
         jobId: request.params.id,
         expectedRevision,
         body,
-        config: cronConfig(app),
         ownerMemberId: scope.memberId,
       });
       notifyCronChatUpdated(app, job.controlChatId);

@@ -34,29 +34,6 @@ export class CronJobAppError extends AppError {
   }
 }
 
-export type CronJobsRuntimeConfig = {
-  enabled: boolean;
-  pollingIntervalSeconds: number;
-};
-
-function assertMutationsAvailable(config: CronJobsRuntimeConfig): void {
-  if (!config.enabled) {
-    throw new CronJobAppError(503, "CRON_JOBS_DISABLED", "Scheduled jobs are disabled on this deployment");
-  }
-  const interval = config.pollingIntervalSeconds;
-  if (interval < 1 || interval > 10) {
-    throw new CronJobAppError(
-      503,
-      "CRON_JOBS_UNAVAILABLE",
-      "Scheduled jobs require runtime.pollingIntervalSeconds in 1..10 when enabled",
-    );
-  }
-}
-
-export function isCronWorkerRunnable(config: CronJobsRuntimeConfig): boolean {
-  return config.enabled && config.pollingIntervalSeconds >= 1 && config.pollingIntervalSeconds <= 10;
-}
-
 export async function databaseNow(db: Database): Promise<Date> {
   const rows = (await db.execute(sql`SELECT clock_timestamp() AS now`)) as unknown as Array<{
     now: Date | string;
@@ -308,14 +285,11 @@ export async function createCronJob(
     controlChatId: string;
     agentId: string;
     body: CreateCronJobRequest;
-    config: CronJobsRuntimeConfig;
     /** Class D: authenticated managing member; revalidated inside the txn. */
     callerMemberId?: string;
     callerHumanAgentId?: string;
   },
 ): Promise<CronJob> {
-  assertMutationsAvailable(input.config);
-
   const now = await databaseNow(db);
   let scheduled: { schedule: string; timezone: string; nextRunAt: Date };
   try {
@@ -461,7 +435,6 @@ export async function updateCronJob(
     jobId: string;
     expectedRevision: number;
     body: UpdateCronJobRequest;
-    config: CronJobsRuntimeConfig;
     /** When set, require job.agentId === agentId and controlChatId match. */
     agentScope?: { agentId: string; controlChatId: string };
     /** When set, require job.ownerMemberId === memberId for mutations. */
@@ -519,12 +492,7 @@ export async function updateCronJob(
         callerHumanAgentId: input.callerHumanAgentId,
       });
     } else if (body.state === "active") {
-      assertMutationsAvailable(input.config);
       await lockOwnerChatCronBarrier(txDb, peek.controlChatId, peek.ownerMemberId);
-    }
-
-    if (body.state === "active") {
-      assertMutationsAvailable(input.config);
     }
 
     const job = await lockJob(txDb, input.jobId);

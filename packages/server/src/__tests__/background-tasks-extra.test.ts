@@ -10,6 +10,8 @@ const loggerMocks = {
 const serviceMocks = {
   cleanupStaleClients: vi.fn(),
   cleanupStalePresence: vi.fn(),
+  cronStart: vi.fn(),
+  cronStop: vi.fn(),
   heartbeatInstance: vi.fn(),
   markStaleAgents: vi.fn(),
   notifyAgentEvent: vi.fn(),
@@ -21,6 +23,7 @@ const mockedModules = [
   "../observability/index.js",
   "../services/chat-archive.js",
   "../services/client.js",
+  "../services/cron-scheduler.js",
   "../services/inbox.js",
   "../services/notification.js",
   "../services/presence.js",
@@ -35,6 +38,12 @@ function mockBackgroundTaskDependencies(): void {
   }));
   vi.doMock("../services/client.js", () => ({
     cleanupStaleClients: serviceMocks.cleanupStaleClients,
+  }));
+  vi.doMock("../services/cron-scheduler.js", () => ({
+    createCronScheduler: () => ({
+      start: serviceMocks.cronStart,
+      stop: serviceMocks.cronStop,
+    }),
   }));
   vi.doMock("../services/inbox.js", () => ({
     pruneStaleSilentEntries: serviceMocks.pruneStaleSilentEntries,
@@ -52,9 +61,6 @@ function mockBackgroundTaskDependencies(): void {
 function makeApp(archiveSweepIntervalSeconds = 30): FastifyInstance {
   return {
     config: {
-      cronJobs: {
-        enabled: false,
-      },
       runtime: {
         archiveMappedIdleSeconds: 3_600,
         archiveSweepIntervalSeconds,
@@ -73,6 +79,7 @@ beforeEach(() => {
   mockBackgroundTaskDependencies();
   serviceMocks.cleanupStaleClients.mockResolvedValue(undefined);
   serviceMocks.cleanupStalePresence.mockResolvedValue(undefined);
+  serviceMocks.cronStop.mockResolvedValue(undefined);
   serviceMocks.heartbeatInstance.mockResolvedValue(undefined);
   serviceMocks.markStaleAgents.mockResolvedValue([]);
   serviceMocks.notifyAgentEvent.mockResolvedValue(undefined);
@@ -102,6 +109,7 @@ describe("createBackgroundTasks", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(serviceMocks.heartbeatInstance).toHaveBeenCalledWith(app.db, "srv_1");
+    expect(serviceMocks.cronStart).toHaveBeenCalledOnce();
     expect(serviceMocks.cleanupStalePresence).toHaveBeenCalledWith(app.db, 60);
     expect(serviceMocks.cleanupStaleClients).toHaveBeenCalledWith(app.db, 60);
     expect(serviceMocks.pruneStaleSilentEntries).toHaveBeenCalledWith(app.db);
@@ -122,6 +130,7 @@ describe("createBackgroundTasks", () => {
     );
 
     await tasks.stop();
+    expect(serviceMocks.cronStop).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 

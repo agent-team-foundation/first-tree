@@ -26,8 +26,8 @@ multi-owner pause evidence on a real deployment.
 - Isolated run cell with candidate Server, PostgreSQL, Cron worker, bound
   Client/daemon, and candidate CLI. Prefer a combined Backend+Web tree when
   Web Schedules evidence is in scope.
-- Deployment has `FIRST_TREE_CRON_JOBS_ENABLED=true` and
-  `FIRST_TREE_POLLING_INTERVAL_SECONDS` in `1..10`.
+- Server background tasks are running; `FIRST_TREE_POLLING_INTERVAL_SECONDS`
+  may be shortened for a faster test cycle.
 - One human owner and one non-human agent in a flat control chat, both
   speakers; agent runtime connected with fresh heartbeats and a
   `one-turn-ready` provider when reply/ACK evidence is required.
@@ -105,8 +105,8 @@ chat delete pausing another owner's schedules, sticky-deleted view auto-restored
 by a cron trigger, or stable product error codes missing on the fail-closed
 branches above.
 
-`BLOCKED`: run cell cannot enable the kill switch / cadence gate, cannot bind a
-runtime, or (for reply/ACK extension) no provider is `one-turn-ready`.
+`BLOCKED`: run cell cannot start Server background tasks, cannot bind a runtime,
+or (for reply/ACK extension) no provider is `one-turn-ready`.
 
 `INCONCLUSIVE`: delivery or lifecycle evidence is partial, unstable, or not
 attributable to the target refs.

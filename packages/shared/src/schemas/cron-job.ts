@@ -75,8 +75,6 @@ export type CronOccurrenceSkipReason = z.infer<typeof cronOccurrenceSkipReasonSc
  * message text.
  */
 export const CRON_JOB_ERROR_CODES = [
-  "CRON_JOBS_DISABLED",
-  "CRON_JOBS_UNAVAILABLE",
   "CRON_JOB_NOT_FOUND",
   "CRON_JOB_FORBIDDEN",
   "CRON_JOB_REVISION_MISMATCH",
