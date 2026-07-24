@@ -77,6 +77,9 @@ vi.mock("../handlers/claude-code-tui/tmux-session.js", () => ({
 vi.mock("../handlers/claude-code-tui/transcript-tail.js", () => ({
   transcriptPathFor: vi.fn(() => "/tmp/fake-transcript.jsonl"),
   TranscriptTailer: class {
+    skipToEnd() {
+      // Metadata-only no-op, mirroring the real tailer's pre-turn flush.
+    }
     drainEntries() {
       const ordinal = state.lastPasteOrdinal;
       if (ordinal < 2 || state.emittedOrdinals.has(ordinal)) return [];

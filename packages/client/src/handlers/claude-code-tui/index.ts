@@ -379,8 +379,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
   async function drainAndConsume(sessionCtx: SessionContext, state: TurnState): Promise<void> {
     if (!transcriptTailer) return;
-    for (const entry of transcriptTailer.drainEntries()) {
-      consumeEntry(entry, sessionCtx, state);
+    // Batches are bounded (see TranscriptTailer), so loop until an empty one:
+    // every call site still consumes everything available right now, with an
+    // event-loop yield between batches instead of one unbounded read.
+    while (true) {
+      const entries = await transcriptTailer.drainEntries();
+      if (entries.length === 0) return;
+      for (const entry of entries) {
+        consumeEntry(entry, sessionCtx, state);
+      }
     }
   }
 
@@ -403,9 +410,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     let brokeOnIdle = false;
 
     try {
-      // Pre-flush whatever's already in the transcript (the prior turn's
-      // tail end) so it doesn't pollute this turn's text accumulation.
-      transcriptTailer.drainEntries();
+      // Skip whatever's already in the transcript — the prior turn's tail
+      // end, or the entire prior-session history on resume — so it doesn't
+      // pollute this turn's text accumulation. Metadata-only: nothing is
+      // read, so resuming against a huge transcript stays O(1).
+      await transcriptTailer.skipToEnd();
 
       await pasteText(tmuxSessionName, text);
       sessionCtx.recordProviderActivity();
