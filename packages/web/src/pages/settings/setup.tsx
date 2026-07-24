@@ -11,6 +11,8 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   CircleCheck,
   CircleHelp,
@@ -22,7 +24,6 @@ import {
   LoaderCircle,
   type LucideIcon,
   MessageCircle,
-  ShieldCheck,
   Webhook,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -77,18 +78,10 @@ export type SetupFacts = {
 };
 
 export type SetupRowModel = {
-  key:
-    | "work-access"
-    | "computer"
-    | "agent"
-    | "repositories"
-    | "repository-automation"
-    | "context-tree"
-    | "automatic-review";
+  key: "work-access" | "computer" | "agent" | "repositories" | "repository-automation" | "context-tree";
   title: string;
   description: string;
   icon: LucideIcon;
-  parentKey?: "context-tree";
   status: {
     label: string;
     detail?: string;
@@ -97,7 +90,7 @@ export type SetupRowModel = {
   action?: {
     label: string;
     to: string;
-    intent?: "resume-onboarding" | "open-context-tree-controls" | "open-reviewer-controls";
+    intent?: "resume-onboarding" | "open-context-tree-controls";
   };
 };
 
@@ -190,10 +183,10 @@ const ACTION_DESTINATIONS = {
   configure_gitlab_webhook: "/settings/integrations/gitlab",
   repair_tree_binding: "/settings/setup#context-tree",
   open_tree_setup_chat: "/context",
-  select_review_agent: "/settings/setup#automatic-review",
-  replace_review_agent: "/settings/setup#automatic-review",
+  select_review_agent: "/settings/setup#context-tree",
+  replace_review_agent: "/settings/setup#context-tree",
   open_agent_owner_flow: "/team",
-  manage_review_agent: "/settings/setup#automatic-review",
+  manage_review_agent: "/settings/setup#context-tree",
 } satisfies Record<SetupActionKind, string>;
 
 const ACTION_LABELS = {
@@ -387,24 +380,29 @@ function contextTreeAction(contextTree: Fact<ContextTreeFact>, isAdmin: boolean)
     : { label: "View", to: "/context" };
 }
 
+function reviewDiagnosticDetail(review: SetupAutomaticReview, isAdmin: boolean): string | undefined {
+  const healthDetail =
+    review.adoption === "disabled"
+      ? review.health === "pending_verification"
+        ? "Reviewer verification pending"
+        : review.health === "degraded"
+          ? "Reviewer degraded"
+          : review.health === "unavailable"
+            ? "Reviewer unavailable"
+            : null
+      : null;
+  const issues = blockerDetail(review.blockers, isAdmin);
+  return [healthDetail, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
+}
+
 function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["status"] {
   if (review.adoption === "unavailable") {
     return { label: "Available after Context Tree", kind: "optional" };
   }
   if (review.adoption === "disabled") {
     const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
-    const healthDetail =
-      review.health === "pending_verification"
-        ? "Reviewer verification pending"
-        : review.health === "degraded"
-          ? "Reviewer degraded"
-          : review.health === "unavailable"
-            ? "Reviewer unavailable"
-            : null;
-    const issues = blockerDetail(review.blockers, isAdmin);
-    const detail = [reviewer, healthDetail, issues, "Optional"]
-      .filter((item): item is string => Boolean(item))
-      .join(" · ");
+    const diagnostic = reviewDiagnosticDetail(review, isAdmin);
+    const detail = [reviewer, diagnostic, "Optional"].filter((item): item is string => Boolean(item)).join(" · ");
     return { label: "Off", detail, kind: "optional" };
   }
 
@@ -431,14 +429,43 @@ function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowM
   return { label: "Status unknown", detail, kind: "unknown" };
 }
 
-function reviewAction(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["action"] | undefined {
-  if (review.adoption === "unavailable") return undefined;
-  if (!isAdmin) return undefined;
+function combineContextTreeAndReviewStatus(
+  contextStatus: SetupRowModel["status"],
+  automaticReviewStatus: SetupRowModel["status"],
+  automaticReviewDiagnostic: string | undefined,
+): SetupRowModel["status"] {
+  if (
+    !["ready", "pending"].includes(contextStatus.kind) ||
+    automaticReviewStatus.label === "Available after Context Tree"
+  ) {
+    return contextStatus;
+  }
+
+  const repository = contextStatus.detail?.split(" · ")[0];
+  const reviewSummary =
+    automaticReviewStatus.label === "On"
+      ? "Review on"
+      : automaticReviewStatus.label === "Off"
+        ? "Review off"
+        : `Review ${automaticReviewStatus.label.toLowerCase()}`;
+
+  if (!["On", "Off"].includes(automaticReviewStatus.label)) {
+    return {
+      label: reviewSummary,
+      detail: [automaticReviewDiagnostic, repository, `Context Tree ${contextStatus.label.toLowerCase()}`]
+        .filter((item): item is string => Boolean(item))
+        .join(" · "),
+      kind: automaticReviewStatus.kind,
+    };
+  }
 
   return {
-    label: review.adoption === "disabled" && !review.reviewerAgent ? "Set up" : "Manage",
-    to: "/settings/setup#automatic-review",
-    intent: "open-reviewer-controls",
+    ...contextStatus,
+    detail: automaticReviewDiagnostic
+      ? [reviewSummary, automaticReviewDiagnostic, repository]
+          .filter((item): item is string => Boolean(item))
+          .join(" · ")
+      : [repository, reviewSummary].filter((item): item is string => Boolean(item)).join(" · "),
   };
 }
 
@@ -586,17 +613,12 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       title: "Context Tree",
       description: "Shared decisions and constraints available to agents.",
       icon: GitFork,
-      status: contextTreeStatus(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
+      status: combineContextTreeAndReviewStatus(
+        contextTreeStatus(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
+        automaticReviewStatus,
+        capabilities ? reviewDiagnosticDetail(capabilities.contextTree.automaticReview, isAdmin) : undefined,
+      ),
       action: contextTreeAction(contextTree, isAdmin),
-    },
-    {
-      key: "automatic-review",
-      title: "Automatic review",
-      description: "A managed agent reviews Context Tree pull requests or merge requests.",
-      icon: ShieldCheck,
-      parentKey: "context-tree",
-      status: automaticReviewStatus,
-      action: capabilities ? reviewAction(capabilities.contextTree.automaticReview, isAdmin) : undefined,
     },
   ];
 }
@@ -714,12 +736,7 @@ export function SettingsSetupPage() {
   }, [organizationId]);
 
   useEffect(() => {
-    const key =
-      location.hash === "#context-tree"
-        ? "context-tree"
-        : location.hash === "#automatic-review"
-          ? "automatic-review"
-          : null;
+    const key = location.hash === "#context-tree" || location.hash === "#automatic-review" ? "context-tree" : null;
     if (!key || !organizationId || facts.capabilities.state !== "ready") return;
 
     const hashKey = `${organizationId}:${location.hash}`;
@@ -729,12 +746,7 @@ export function SettingsSetupPage() {
   }, [facts.capabilities.state, location.hash, organizationId, role]);
 
   useEffect(() => {
-    const key =
-      location.hash === "#context-tree"
-        ? "context-tree"
-        : location.hash === "#automatic-review"
-          ? "automatic-review"
-          : null;
+    const key = location.hash === "#context-tree" || location.hash === "#automatic-review" ? "context-tree" : null;
     if (!key || facts.capabilities.state !== "ready") return;
     if (role === "admin" && expandedOwnerControlKey !== key) return;
 
@@ -754,17 +766,15 @@ export function SettingsSetupPage() {
                     key={`context-tree-${organizationId}`}
                     binding={contextTree.value.binding}
                     availability={contextTree.value.availability}
-                  />
-                ),
-              }
-            : {}),
-          ...(expandedOwnerControlKey === "automatic-review"
-            ? {
-                "automatic-review": (
-                  <SetupReviewerControls
-                    key={`automatic-review-${organizationId}`}
-                    review={facts.capabilities.value.contextTree.automaticReview}
-                  />
+                  >
+                    {facts.capabilities.value.contextTree.automaticReview.adoption !== "unavailable" ? (
+                      <SetupReviewerControls
+                        key={`automatic-review-${organizationId}`}
+                        review={facts.capabilities.value.contextTree.automaticReview}
+                        embedded
+                      />
+                    ) : null}
+                  </SetupContextTreeControls>
                 ),
               }
             : {}),
@@ -872,17 +882,12 @@ function SetupRow({
       tabIndex={-1}
       aria-labelledby={`setup-${row.key}`}
       data-setup-row={row.key}
-      data-setup-parent={row.parentKey}
       style={{
         display: "grid",
         gridTemplateColumns: narrow ? "minmax(0, 1fr)" : "minmax(0, 1fr) var(--sp-60) var(--sp-35)",
         alignItems: narrow ? "start" : "center",
         gap: narrow ? "var(--sp-3)" : "var(--sp-5)",
-        padding: row.parentKey
-          ? narrow
-            ? "var(--sp-4) 0 var(--sp-4) var(--sp-4)"
-            : "var(--sp-4) 0 var(--sp-4) var(--sp-6)"
-          : "var(--sp-4) 0",
+        padding: "var(--sp-4) 0",
         borderBottom: "var(--hairline) solid var(--border)",
       }}
     >
@@ -932,8 +937,7 @@ function SetupRow({
         className={cn("flex", !narrow && "justify-end")}
         style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}
       >
-        {(row.action?.intent === "open-context-tree-controls" || row.action?.intent === "open-reviewer-controls") &&
-        onToggleOwnerControl ? (
+        {row.action?.intent === "open-context-tree-controls" && onToggleOwnerControl ? (
           <button
             type="button"
             aria-expanded={Boolean(ownerControl)}
@@ -944,9 +948,14 @@ function SetupRow({
               "rounded-[var(--radius-input)] hover:bg-bg-hover hover:text-foreground",
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
             )}
-            style={{ minHeight: "var(--sp-8)", padding: "0 var(--sp-2)" }}
+            style={{ minHeight: "var(--sp-8)", gap: "var(--sp-1)", padding: "0 var(--sp-2)" }}
           >
             {row.action.label}
+            {ownerControl ? (
+              <ChevronUp className="h-4 w-4" aria-hidden />
+            ) : (
+              <ChevronDown className="h-4 w-4" aria-hidden />
+            )}
           </button>
         ) : row.action ? (
           <Link
@@ -979,7 +988,7 @@ function SetupRow({
           id={`setup-${row.key}-owner-controls`}
           style={{
             gridColumn: "1 / -1",
-            paddingLeft: narrow || row.parentKey ? "var(--sp-4)" : "var(--sp-11)",
+            paddingLeft: narrow ? "var(--sp-4)" : "var(--sp-11)",
           }}
         >
           {ownerControl}

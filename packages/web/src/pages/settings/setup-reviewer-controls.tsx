@@ -19,12 +19,14 @@ import { Switch } from "../../components/ui/switch.js";
 
 export function SetupReviewerControls({
   review,
+  embedded = false,
   loadCandidates = getContextReviewerCandidates,
   assignReviewer = putContextReviewerAssignment,
   setReviewerEnabled = putContextReviewerEnablement,
   refreshFacts,
 }: {
   review: SetupAutomaticReview;
+  embedded?: boolean;
   loadCandidates?: (organizationId: string) => Promise<ContextReviewerCandidatesOutput>;
   assignReviewer?: (organizationId: string, agentUuid: string | null) => Promise<OrgContextTreeFeaturesOutput>;
   setReviewerEnabled?: (organizationId: string, enabled: boolean) => Promise<OrgContextTreeFeaturesOutput>;
@@ -112,13 +114,17 @@ export function SetupReviewerControls({
     <div
       data-setup-owner-controls="automatic-review"
       className="flex flex-col"
-      style={{
-        gap: "var(--sp-3)",
-        padding: "var(--sp-4)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        background: "var(--bg-sunken)",
-      }}
+      style={
+        embedded
+          ? { gap: "var(--sp-3)" }
+          : {
+              gap: "var(--sp-3)",
+              padding: "var(--sp-4)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-panel)",
+              background: "var(--bg-sunken)",
+            }
+      }
     >
       <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
         <div className="min-w-0">
@@ -126,9 +132,13 @@ export function SetupReviewerControls({
             Automatic review
           </span>
           <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
-            {selectedLabel
+            {selectedLabel && !selectedCandidate
               ? `Reviewer · ${selectedLabel}${enabled ? "" : " · selection retained while off"}`
-              : "Choose an existing eligible Team Agent. Setup never creates one."}
+              : selectedLabel
+                ? enabled
+                  ? "Reviews Context Tree pull requests and merge requests."
+                  : "Reviewer selection retained while Automatic review is off."
+                : "Choose an existing eligible Team Agent. Setup never creates one."}
           </div>
         </div>
         <Switch
