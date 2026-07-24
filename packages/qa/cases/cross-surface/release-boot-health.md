@@ -43,7 +43,8 @@ If the build tooling or Compose flags differ for the target ref, record the exac
 - `observe container-state`: `docker compose ps` shows server and postgres `Up (healthy)` (the image `HEALTHCHECK`
   probes `/healthz`).
 - `observe http-api`: `/healthz` returns a 200 liveness body (`{"status":"ok"}`).
-- `observe http-api`: `/readyz` returns 200 with `ready: true` and boot stages (including `runMigrations`) marked `done`.
+- `observe http-api`: `/readyz` returns 200 with `ready: true`, boot stages (including `runMigrations`) marked `done`,
+  and the database gate reporting reachable (`db.ok: true`).
 - `observe http-api`: `/api/v1/health` returns 200 with database connectivity (`{"status":"ok","db":"connected"}`). Note
   the real DB-health route lives under the `/api/v1` prefix; bare `/health` correctly falls through to the web SPA.
 - `observe http-api`: `GET /` returns the web SPA `index.html`, confirming the server image serves the built web dist.

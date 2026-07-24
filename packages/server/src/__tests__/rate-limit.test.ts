@@ -154,6 +154,26 @@ describe("Rate limit", () => {
     }
   });
 
+  it("keeps /healthz and /readyz exempt from the global limiter but not /api/v1/health", async () => {
+    const app = await createTestApp({ rateLimit: { max: 2 } });
+    try {
+      // Exempt probes: far past `max` without a 429. `/readyz` may be 503
+      // depending on bootstrap state shared across the worker, so only the
+      // exemption (never 429) is asserted for it.
+      for (let i = 0; i < 5; i++) {
+        expect((await app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+        expect((await app.inject({ method: "GET", url: "/readyz" })).statusCode).not.toBe(429);
+      }
+
+      // Not exempt: `/api/v1/health` stays behind the global limiter.
+      expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(429);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("does not apply the removed 6/min route cap to context snapshots", async () => {
     const app = await createTestApp({ rateLimit: { max: 10 } });
     try {

@@ -34,15 +34,36 @@ its package script.
 
 - API server: `http://127.0.0.1:8000`
 - Web workspace: `http://127.0.0.1:5173`
-- Liveness check: `http://127.0.0.1:8000/healthz`
+- Liveness check (process only, no DB): `http://127.0.0.1:8000/healthz`
+- Readiness check (boot stages + DB, cached probe): `http://127.0.0.1:8000/readyz`
 - Structured health check: `http://127.0.0.1:8000/api/v1/health`
 
 Useful smoke checks:
 
 ```bash
 curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/api/v1/health
 ```
+
+### Probe endpoints and cadence
+
+`/healthz` is pure process liveness — it never touches the database, so a
+database outage does not make an orchestrator restart a healthy process.
+Point liveness/restart probes (Docker HEALTHCHECK, K8s `livenessProbe`) here.
+
+`/readyz` is readiness: 200 only when every bootstrap stage is done AND the
+database answers a shared cached probe (5s TTL, single-flight, 2s timeout —
+at most one `SELECT 1` per TTL window per process regardless of traffic).
+Point traffic-gating probes (K8s `readinessProbe`, load-balancer checks)
+here. If an external platform (Railway, Fly.io, K8s) previously used
+`/healthz` for readiness/traffic gating, switch it to `/readyz`; leave
+liveness/restart probes on `/healthz`.
+
+Suggested probe cadence: `period >= 10s`, `timeout <= 5s`,
+`failureThreshold >= 3` — consistent with the 5s result cache and the 2s
+probe timeout, so a transient DB blip is absorbed before a replica is pulled
+out of rotation.
 
 ## Minimal `.env`
 
