@@ -71,7 +71,12 @@ vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
 }));
-vi.mock("../core/index.js", () => coreMocks);
+vi.mock("../core/index.js", async () => {
+  // Real name validation so `agent remove <invalid>` exercises the actual
+  // whitelist; everything else stays mocked.
+  const prune = await vi.importActual<typeof import("../core/agent-prune.js")>("../core/agent-prune.js");
+  return { ...coreMocks, assertRemovableAgentName: prune.assertRemovableAgentName };
+});
 vi.mock("@first-tree/client", () => clientMocks);
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 
@@ -431,6 +436,12 @@ describe("agent admin and local commands", () => {
     await runAgent(["remove", "nova"]);
     expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("nova");
     await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
+
+    coreMocks.removeLocalAgent.mockClear();
+    await expect(runAgent(["remove", "../../x"])).rejects.toMatchObject({ code: 1 });
+    await expect(runAgent(["remove", ""])).rejects.toMatchObject({ code: 1 });
+    expect(coreMocks.removeLocalAgent).not.toHaveBeenCalled();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Invalid agent name");
 
     localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
     await runAgent(["debug", "register", "--agent", "nova"]);
