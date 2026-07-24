@@ -401,6 +401,9 @@ describe("buildAgentBriefing — Working in First Tree hard rules", () => {
     expect(briefing).toContain("-F -");
     expect(briefing).toContain("--description -");
     expect(briefing).toContain("never `JSON.stringify`");
+    expect(briefing).toContain("first-tree chat invite <participant>");
+    expect(briefing).toContain("eligible active same-organization human or agent");
+    expect(briefing).toContain("adds them silently");
   });
 
   it("interpolates the working directory and worktree paths", () => {

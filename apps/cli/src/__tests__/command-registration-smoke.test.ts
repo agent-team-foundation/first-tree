@@ -191,6 +191,19 @@ describe("CLI command registration", () => {
     expect(help).toContain("--pattern <pattern>");
   });
 
+  it("documents chat invite as a silent human-or-agent participant change", () => {
+    const root = new Command();
+    registerChatCommands(root);
+
+    const invite = command(command(root, "chat"), "invite");
+    const help = invite.helpInformation();
+
+    expect(invite.registeredArguments.map((argument) => argument.name())).toEqual(["participantName"]);
+    expect(help).toContain("human or agent");
+    expect(help).toMatch(/does\s+not\s+send a message or wake the participant/);
+    expect(help).toMatch(/chat send\s+<participantName>/);
+  });
+
   it("exposes read-only help for strict task-scoped Read activation", () => {
     const root = new Command();
     registerTreeCommands(root);

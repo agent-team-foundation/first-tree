@@ -83,7 +83,7 @@ describe("inviteParticipantsToChat", () => {
         targetAgentIds: ["00000000-0000-0000-0000-000000000000"],
         errorOnAlreadySpeaker: true,
       }),
-    ).rejects.toThrow(/Agents not found/);
+    ).rejects.toThrow(/Participants not found/);
   });
 
   it("rejects removed human mirrors as explicit invite targets", async () => {

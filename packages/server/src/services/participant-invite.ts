@@ -230,7 +230,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   if (targetRows.length !== distinctTargets.length) {
     const foundSet = new Set(targetRows.map((r) => r.uuid));
     const missing = distinctTargets.filter((id) => !foundSet.has(id));
-    throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
+    throw new BadRequestError(`Participants not found: ${missing.join(", ")}`);
   }
   const crossOrg = targetRows.filter((t) => t.organizationId !== chat.organizationId);
   if (crossOrg.length > 0) {
@@ -286,7 +286,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   if (errorOnAlreadySpeaker) {
     const firstDup = distinctTargets.find((id) => existingSpeakerSet.has(id));
     if (firstDup !== undefined) {
-      throw new ConflictError(`Agent "${firstDup}" is already a participant`);
+      throw new ConflictError(`Participant "${firstDup}" is already a participant`);
     }
   }
   const toWrite = distinctTargets.filter((id) => !existingSpeakerSet.has(id));

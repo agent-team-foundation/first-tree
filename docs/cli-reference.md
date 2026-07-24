@@ -345,7 +345,7 @@ first-tree chat
 │     --multi-select                                 #   allow picking more than one option (requires --options)
 │     # always a fresh top-level question — no threading, and no resolve flag
 │     # (the human answers in the web UI; an agent can only ASK)
-├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
+├── invite <participantName>                         # silently add an eligible active human or agent
 ├── list
 ├── history <chatId>
 ├── update                                           # update topic and/or description (each independently)
@@ -462,10 +462,12 @@ first-tree chat ask alice --message-file ask-body.md
 # question is simply left open (the human works open questions oldest-first), and
 # re-asking opens a NEW, independent question.
 
-# Pull a non-member into the current chat first, then send normally. Use this
-# for same-task stage / role handoffs.
-first-tree chat invite code-agent
-first-tree chat send code-agent "now we can talk"
+# Add an eligible active same-organization human or agent to the current chat,
+# subject to existing visibility and ownership rules, then send
+# when they should be woken. The invite itself changes membership only: it does
+# not write a message or wake the participant.
+first-tree chat invite alice
+first-tree chat send alice "now we can talk"
 
 # Browse
 first-tree chat list
@@ -505,14 +507,18 @@ first-tree chat open code-agent
 `chat send` / `chat invite` operate on the chat identified by
 `FIRST_TREE_CHAT_ID`, which the runtime injects into the agent's session
 environment. The recipient must be a participant of that chat; if not,
-`invite` first.
+`invite` first. `chat invite` accepts an eligible active same-organization
+human or non-human agent, subject to existing visibility and ownership rules,
+and adds them silently; use an addressed `chat send` afterward when attention
+is required.
 
 `chat create` is different: it creates a new task chat and writes the first
 message in one command. Use it to split genuinely new work into a fresh chat.
 Use `chat send` for replies/status in the current chat, and `chat invite` when
 you want to add a non-member to the current chat before sending there. A
 same-task handoff, such as architect to developer or developer to reviewer,
-stays in the current chat; invite the next agent and send the handoff there.
+stays in the current chat; invite the next participant and send the handoff
+there.
 
 Ordinary task creation is intentionally not idempotent. There is no operation
 id, and the CLI does not automatically retry it. If an ordinary create reports

@@ -458,7 +458,7 @@ describe("chat service edge coverage", () => {
       addParticipant(app.db, chat.id, seed.humanAgentUuid, { agentName: newcomer.name ?? "" }),
     ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ agentId: newcomer.uuid })]));
     await expect(addParticipant(app.db, chat.id, seed.humanAgentUuid, {} as never)).rejects.toThrow(
-      'Agent "(unknown)" not found',
+      'Participant "(unknown)" not found',
     );
   });
 
