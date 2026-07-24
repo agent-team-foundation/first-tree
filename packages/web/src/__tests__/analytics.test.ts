@@ -3,11 +3,24 @@ import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
 
 const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+const bootstrapSource = readFileSync(new URL("../bootstrap.ts", import.meta.url), "utf8");
 
 describe("production gtag bootstrap", () => {
   it("queues the official Arguments object so gtag.js processes commands", () => {
-    expect(indexHtml).toContain("window.dataLayer.push(arguments)");
-    expect(indexHtml).not.toContain("window.dataLayer.push(args)");
+    expect(bootstrapSource).toContain("analyticsWindow.dataLayer?.push(arguments)");
+    expect(bootstrapSource).not.toContain("analyticsWindow.dataLayer?.push(args)");
+  });
+
+  it("keeps every index script external for an enforced CSP", () => {
+    const scriptTags = indexHtml.match(/<script\b[^>]*>/g) ?? [];
+    expect(scriptTags).toHaveLength(2);
+    expect(scriptTags.every((tag) => /\bsrc=/.test(tag))).toBe(true);
+    expect(indexHtml).toContain('src="/src/bootstrap.ts"');
+  });
+
+  it("disables Zod runtime code generation before the application entry", () => {
+    expect(bootstrapSource).toContain("configureZod({ jitless: true })");
+    expect(indexHtml.indexOf('src="/src/bootstrap.ts"')).toBeLessThan(indexHtml.indexOf('src="/src/main.tsx"'));
   });
 });
 

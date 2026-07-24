@@ -13,6 +13,45 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
 
+const cspOriginListSchema = z
+  .preprocess(
+    (value) =>
+      typeof value === "string"
+        ? value
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : value,
+    z.array(
+      z.string().transform((raw, ctx) => {
+        try {
+          const url = new URL(raw);
+          if (
+            (url.protocol !== "https:" && url.protocol !== "http:") ||
+            url.username ||
+            url.password ||
+            url.pathname !== "/" ||
+            url.search ||
+            url.hash ||
+            url.hostname.includes("*")
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              message: "CSP sources must be exact credential-free HTTP(S) origins without wildcards",
+            });
+            return z.NEVER;
+          }
+          return url.origin;
+        } catch {
+          ctx.addIssue({ code: "custom", message: "CSP sources must be valid HTTP(S) origins" });
+          return z.NEVER;
+        }
+      }),
+    ),
+  )
+  .transform((origins) => [...new Set(origins)])
+  .optional();
+
 const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
   .refine((provider) => provider === "codex" || provider === "claude-code", {
     message: "Landing campaign runtime provider must be codex or claude-code",
@@ -343,6 +382,16 @@ export const serverConfigSchema = defineConfig({
   }),
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),
+  }),
+  security: optional({
+    csp: {
+      /** Exact external origins allowed to serve executable browser scripts. */
+      scriptOrigins: field(cspOriginListSchema, { env: "FIRST_TREE_CSP_SCRIPT_ORIGINS" }),
+      /** Exact external origins allowed for fetch, beacon, EventSource, or WebSocket connections. */
+      connectOrigins: field(cspOriginListSchema, { env: "FIRST_TREE_CSP_CONNECT_ORIGINS" }),
+      /** Exact external origins allowed to serve avatars and other images. */
+      imageOrigins: field(cspOriginListSchema, { env: "FIRST_TREE_CSP_IMAGE_ORIGINS" }),
+    },
   }),
   /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required

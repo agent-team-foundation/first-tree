@@ -82,6 +82,9 @@ export type CreateTestAppOptions = {
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
   gitlabEgressAllowlist?: NonNullable<Config["gitlab"]>["egressAllowlist"];
+  publicUrl?: string;
+  security?: Config["security"];
+  webDistPath?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
    * `/github-app-installation/install-url` 503 test — the slug is the
@@ -141,7 +144,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     server: {
       port: 0,
       host: "127.0.0.1",
-      publicUrl: undefined,
+      publicUrl: opts.publicUrl,
     },
     workspace: {
       root: "/tmp/first-tree-test-workspaces",
@@ -173,6 +176,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
           addressPolicy: { kind: "public" as const },
         })),
     },
+    ...(opts.security !== undefined ? { security: opts.security } : {}),
     ...(opts.allowedOrganizationId !== undefined
       ? { access: { allowedOrganizationId: opts.allowedOrganizationId.trim() || undefined } }
       : {}),
@@ -238,6 +242,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       registryUrl: "https://localhost.invalid",
     },
     instanceId: "test-instance",
+    ...(opts.webDistPath !== undefined ? { webDistPath: opts.webDistPath } : {}),
   };
   if (opts.githubOAuth === false && config.oauth) Reflect.deleteProperty(config.oauth, "githubApp");
   // Pin the singleton so service-layer helpers that go through

@@ -1,9 +1,12 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router";
+import { PROD_HOST } from "./analytics-config.js";
+
+export { PROD_HOST } from "./analytics-config.js";
 
 /**
- * GA4 analytics for the cloud SPA. The gtag snippet + config live in
- * index.html (property G-BHG918MZ02, cross-domain linker, send_page_view off).
+ * GA4 analytics for the cloud SPA. The gtag bootstrap + config live in
+ * bootstrap.ts (property G-BHG918MZ02, cross-domain linker, send_page_view off).
  * This module reports SPA navigations and exposes a typed event helper.
  *
  * Why manual page_view: gtag fires page_view once on initial load. A
@@ -20,8 +23,6 @@ import { useLocation } from "react-router";
  *     /invite/:token. We strip the hash and search, and template sensitive
  *     paths, before anything is sent.
  */
-
-export const PROD_HOST = "cloud.first-tree.ai";
 
 /** Only the production cloud host reports to the shared GA property. */
 export function analyticsEnabled(): boolean {
@@ -53,7 +54,7 @@ type GtagArgs =
 function gtag(...args: GtagArgs): void {
   if (!analyticsEnabled()) return;
   const w = window as unknown as { gtag?: (...a: GtagArgs) => void };
-  // gtag is defined inline in index.html; guard in case the snippet is absent
+  // gtag is defined by bootstrap.ts; guard in case the script is absent
   // (e.g. an ad-blocker removed it) so analytics never breaks the app.
   w.gtag?.(...args);
 }
