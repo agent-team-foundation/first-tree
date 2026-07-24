@@ -1,7 +1,7 @@
 import type { OrgContextTreeInput, OrgContextTreeOutput, SetupContextTreeBinding } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getRawContextTreeSetting, putContextTreeSetting } from "../../api/org-settings.js";
 import { setupCapabilitiesQueryKey } from "../../api/setup-capabilities.js";
@@ -18,12 +18,14 @@ export function SetupContextTreeControls({
   loadSetting = getRawContextTreeSetting,
   saveSetting = putContextTreeSetting,
   refreshFacts,
+  children,
 }: {
   binding: SetupContextTreeBinding;
   availability: ContextTreeAvailability;
   loadSetting?: (organizationId: string) => Promise<OrgContextTreeOutput>;
   saveSetting?: (organizationId: string, input: OrgContextTreeInput) => Promise<OrgContextTreeOutput>;
   refreshFacts?: (organizationId: string) => Promise<void>;
+  children?: ReactNode;
 }) {
   const { organizationId, role } = useAuth();
   const isAdmin = role === "admin";
@@ -175,6 +177,17 @@ export function SetupContextTreeControls({
             ) : null}
           </form>
         )
+      ) : null}
+
+      {children ? (
+        <div
+          style={{
+            paddingTop: "var(--sp-4)",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          {children}
+        </div>
       ) : null}
     </div>
   );

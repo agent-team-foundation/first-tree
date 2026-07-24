@@ -263,20 +263,18 @@ export function SetupPreviewPage() {
                     loadSetting={previewLoadTreeSetting}
                     saveSetting={previewSaveTreeSetting}
                     refreshFacts={previewRefresh}
-                  />
-                ),
-              }
-            : {}),
-          ...(expandedOwnerControl === "automatic-review"
-            ? {
-                "automatic-review": (
-                  <SetupReviewerControls
-                    review={capabilities.contextTree.automaticReview}
-                    loadCandidates={async () => PREVIEW_REVIEWER_CANDIDATES}
-                    assignReviewer={previewAssignReviewer}
-                    setReviewerEnabled={previewSetReviewerEnabled}
-                    refreshFacts={previewRefresh}
-                  />
+                  >
+                    {capabilities.contextTree.automaticReview.adoption !== "unavailable" ? (
+                      <SetupReviewerControls
+                        review={capabilities.contextTree.automaticReview}
+                        embedded
+                        loadCandidates={async () => PREVIEW_REVIEWER_CANDIDATES}
+                        assignReviewer={previewAssignReviewer}
+                        setReviewerEnabled={previewSetReviewerEnabled}
+                        refreshFacts={previewRefresh}
+                      />
+                    ) : null}
+                  </SetupContextTreeControls>
                 ),
               }
             : {}),
