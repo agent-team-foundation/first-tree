@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { CapabilityEntry } from "@first-tree/shared";
@@ -13,6 +14,11 @@ import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias 
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { blank, print } from "./output.js";
+import {
+  LEGACY_GITHUB_SCAN_LABEL_PREFIX,
+  legacyGithubScanLaunchdDir,
+  scanLegacyGithubScanPlists,
+} from "./retire-github-scan-launchd.js";
 import { getClientServiceStatus } from "./service-install.js";
 
 export type CheckResult = {
@@ -273,6 +279,63 @@ export function checkBackgroundService(): CheckResult {
     ok: false,
     detail: `not installed — re-run \`${channelConfig.binName} login <code>\` to install`,
   };
+}
+
+/**
+ * Read-only residue scan for the retired legacy `github-scan` launchd runner.
+ * Complements the automatic startup sweep in two ways the sweep deliberately
+ * leaves out: a `launchctl list` prefix scan catches session zombies whose
+ * plist was hand-deleted or lives under a custom `$GITHUB_SCAN_HOME` /
+ * `$GITHUB_SCAN_DIR` directory the disk sweep never enumerates, and foreign
+ * plists the sweep skipped are surfaced instead of staying silent. Detection
+ * only — cleanup belongs to the automatic sweep or the printed manual command.
+ */
+export function checkLegacyGithubScanRunner(): CheckResult {
+  const label = "Legacy github-scan";
+  if (process.platform !== "darwin") {
+    return { label, ok: true, detail: `not applicable on ${process.platform}` };
+  }
+
+  const { legacyLabels, foreignPlists } = scanLegacyGithubScanPlists();
+
+  let loadedLabels: string[] | null = null;
+  try {
+    const result = spawnSync("launchctl", ["list"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (result.status === 0 && typeof result.stdout === "string") {
+      // `launchctl list` rows are "PID\tStatus\tLabel"; the header row and
+      // non-matching labels fall out of the prefix filter.
+      loadedLabels = result.stdout
+        .split("\n")
+        .map((line) => line.split("\t").at(-1)?.trim() ?? "")
+        .filter((entry) => entry.startsWith(LEGACY_GITHUB_SCAN_LABEL_PREFIX));
+    }
+  } catch {
+    // launchctl unavailable — the disk verdict below still stands.
+  }
+
+  const stranded = [...new Set([...legacyLabels, ...(loadedLabels ?? [])])];
+  if (stranded.length > 0) {
+    const sample = stranded.slice(0, 2).join(", ");
+    const suffix = stranded.length > 2 ? ` +${stranded.length - 2} more` : "";
+    return {
+      label,
+      ok: false,
+      detail:
+        `stranded legacy runner (${sample}${suffix}) — any CLI command retries the automatic cleanup ` +
+        "after its cooldown, or run `launchctl bootout gui/$(id -u)/<label>` now",
+    };
+  }
+
+  const notes = ["no stranded runner"];
+  if (foreignPlists.length > 0) {
+    notes.push(`${foreignPlists.length} unrelated plist(s) under ${legacyGithubScanLaunchdDir()} left untouched`);
+  }
+  if (loadedLabels === null) notes.push("launchctl scan unavailable");
+  return { label, ok: true, detail: notes.join("; ") };
 }
 
 export async function checkWebSocket(): Promise<CheckResult> {

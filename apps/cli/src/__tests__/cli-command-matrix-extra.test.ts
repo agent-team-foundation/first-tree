@@ -163,6 +163,7 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   setPlatform(originalPlatform);
   delete process.env.FIRST_TREE_CHAT_ID;
+  delete process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY;
 });
 
 describe("config commands", () => {
@@ -281,6 +282,14 @@ describe("daemon utility commands", () => {
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runDaemon(["ensure-service"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("not supported");
+
+    coreMocks.isServiceSupported.mockClear();
+    coreMocks.loadCredentials.mockClear();
+    process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY = "1";
+    await runDaemon(["ensure-service"]);
+    delete process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY;
+    expect(coreMocks.isServiceSupported).not.toHaveBeenCalled();
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
 
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.loadCredentials.mockReturnValueOnce(null);

@@ -23,6 +23,11 @@ export function registerDaemonEnsureServiceCommand(daemon: Command): void {
     .command("ensure-service", { hidden: true })
     .description("Ensure the background service is installed and running when credentials already exist")
     .action(() => {
+      // npm postinstall launches this hidden command from the freshly
+      // installed package purely so the root preAction migration runs inside
+      // the new CLI. In that mode, stop before any credential or service work.
+      if (process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY === "1") return;
+
       const binName = channelConfig.binName;
       if (!isServiceSupported()) {
         print.line(`  ensure-service: service control is not supported on ${process.platform}; skipping.\n`);
