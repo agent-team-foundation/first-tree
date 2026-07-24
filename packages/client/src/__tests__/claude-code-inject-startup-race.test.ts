@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatInboundContent } from "../runtime/agent-io.js";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
@@ -206,9 +207,14 @@ describe("claude-code handler startup inject queue", () => {
   it("materializes legacy inline images and describes unavailable image batches", async () => {
     const completedCounts: Array<number | undefined> = [];
     const handler = createClaudeCodeHandler({ workspaceRoot });
-    const ctx = makeContext((count) => {
-      completedCounts.push(count);
-    });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => formatInboundContent(message, { get: async () => [] }),
+      },
+    );
     state.resolveChatContext?.({
       chatId: "chat-claude-startup-race",
       title: "startup race",
@@ -230,34 +236,55 @@ describe("claude-code handler startup inject queue", () => {
       ctx,
     );
 
-    handler.inject(
-      makeFileMessage("batch-images", {
-        caption: "Compare these screenshots",
-        attachments: [
-          {
-            imageId: "00000000-0000-4000-8000-000000000001",
-            mimeType: "image/png",
-            filename: "one.png",
-            size: 12,
-          },
-          {
-            imageId: "00000000-0000-4000-8000-000000000002",
-            mimeType: "image/jpeg",
-            filename: "two.jpg",
-            size: 34,
-          },
-        ],
-      }),
-    );
+    const batchMessage = makeFileMessage("batch-images", {
+      caption: "Compare these screenshots",
+      attachments: [
+        {
+          imageId: "00000000-0000-4000-8000-000000000001",
+          mimeType: "image/png",
+          filename: "one.png",
+          size: 12,
+        },
+        {
+          imageId: "00000000-0000-4000-8000-000000000002",
+          mimeType: "image/jpeg",
+          filename: "two.jpg",
+          size: 34,
+        },
+      ],
+    });
+    batchMessage.precedingMessages = [
+      {
+        id: "earlier-request",
+        senderId: "agent-2",
+        format: "request",
+        content: "Which earlier layout should ship?",
+        metadata: {
+          request: {},
+          attachments: [
+            {
+              attachmentId: "00000000-0000-4000-8000-000000000003",
+              kind: "image",
+              mimeType: "image/png",
+              filename: "decision.png",
+              size: 56,
+            },
+          ],
+        },
+        createdAt: "2026-07-24T00:00:00.000Z",
+      },
+    ];
+    handler.inject(batchMessage);
 
     await waitFor(() => state.observedInputs.length === 2);
     expect(state.observedInputs[0]).toContain("Filename: legacy.png");
     expect(state.observedInputs[0]).toContain(join("first-tree", "images", "unknown"));
     expect(state.observedInputs[0]).toContain(".png");
     expect(state.observedInputs[1]).toContain("Compare these screenshots");
-    expect(state.observedInputs[1]).toContain(
-      "2 images were shared in this chat. Please use the Read tool to read each one",
-    );
+    expect(state.observedInputs[1]).toContain("[Earlier in chat — context you missed]");
+    expect(state.observedInputs[1]).toContain("Which earlier layout should ship?");
+    expect(state.observedInputs[1]).toContain('[Image "decision.png" not available on this device]');
+    expect(state.observedInputs[1]).toContain("2 images were shared in this chat");
     expect(state.observedInputs[1]).toContain('[Image "one.png" not available on this device]');
     expect(state.observedInputs[1]).toContain('[Image "two.jpg" not available on this device]');
     expect(completedCounts).toEqual([undefined, undefined]);

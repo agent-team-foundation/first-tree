@@ -1003,29 +1003,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     sessionId: string,
   ): Promise<SDKUserMessage> {
-    // Image messages — two supported shapes:
-    //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
-    //      live on local disk, fetched from the `attachments` store on delivery
-    //      (see SessionManager.ensureImagesLocal).
-    //   2. legacy inline: `{data, mimeType, filename, size}` — pre-refactor
-    //      messages still pending at rollout time. Decode once and drop the
-    //      temp path into the prompt.
-    //
-    // Either way we direct the model at a real file path because Claude Code's
-    // native Read tool loads images as multimodal content blocks — the SDK
-    // does not reliably forward `{ type: "image" }` blocks to the underlying
-    // model.
     if (message.format === "file") {
-      // Build the full attribution header (name · type · sent) once up front so
-      // both branches emit the same `[From: …]` header as the default text path.
-      const header = await sessionCtx.formatFromHeader(message);
-      const prefix = header ? `${header}\n\n` : "";
+      // Preserve the specialized current-image prompt while routing it through
+      // the shared formatter, which is responsible for the supported generic
+      // request images in precedingMessages. Clear current metadata because
+      // batch documents are appended explicitly below.
+      const formatFileText = async (text: string): Promise<string> =>
+        sessionCtx.formatInboundContent({
+          ...message,
+          format: "text",
+          content: text,
+          metadata: null,
+        });
 
-      // Batched send (caption + N images in one message). Resolve every
-      // imageId to a local path the Read tool can open; missing-byte cases
-      // surface a per-attachment "not available on this device" placeholder
-      // so the session keeps moving and a partial-delivery doesn't strand
-      // the whole turn.
       if (isImageBatchRefContent(message.content)) {
         const caption = message.content.caption?.trim() ?? "";
         const lines: string[] = [];
@@ -1037,20 +1027,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         );
         for (const att of message.content.attachments) {
           const imagePath = findImagePath(message.chatId, att.imageId, att.mimeType);
-          if (imagePath) {
-            lines.push(`\nFilename: ${att.filename}\nPath: ${imagePath}`);
-          } else {
-            lines.push(`\n[Image "${att.filename}" not available on this device]`);
-          }
+          lines.push(
+            imagePath
+              ? `\nFilename: ${att.filename}\nPath: ${imagePath}`
+              : `\n[Image "${att.filename}" not available on this device]`,
+          );
         }
-        // A mixed send (images + documents) also carries document/file refs in
-        // metadata.attachments — append their on-disk paths so the agent sees
-        // both. Null when the message has no documents (the common image case).
         const docNote = renderDocumentAttachmentsForLLM(message);
         if (docNote) lines.push(`\n${docNote}`);
         return {
           type: "user",
-          message: { role: "user", content: `${prefix}${lines.join("\n")}` },
+          message: { role: "user", content: await formatFileText(lines.join("\n")) },
           parent_tool_use_id: null,
           session_id: sessionId,
         };
@@ -1059,28 +1046,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
         const imagePath = findImagePath(message.chatId, imageId, mimeType);
-        if (imagePath) {
-          const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
-          return {
-            type: "user",
-            message: { role: "user", content: text },
-            parent_tool_use_id: null,
-            session_id: sessionId,
-          };
-        }
-        // Bytes never reached this client (the attachments fetch failed or
-        // the ref points at a deleted/expired attachment). Treat as the
-        // "not available on this device" case so the session keeps moving.
-        const fallbackText = `[Image "${filename}" not available on this device]`;
+        const text = imagePath
+          ? `An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`
+          : `[Image "${filename}" not available on this device]`;
         return {
           type: "user",
-          message: { role: "user", content: `${prefix}${fallbackText}` },
+          message: { role: "user", content: await formatFileText(text) },
           parent_tool_use_id: null,
           session_id: sessionId,
         };
       }
 
       if (isLegacyImageFileContent(message.content)) {
+        // Preserve the pre-refactor inline-image path unchanged; historical
+        // inline payload behavior is explicitly outside this PR's scope.
+        const header = await sessionCtx.formatFromHeader(message);
+        const prefix = header ? `${header}\n\n` : "";
         const { filename } = message.content;
         try {
           const imagePath = await writeLegacyImageToTempFile(message.content, message.chatId);

@@ -630,16 +630,21 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     await sm.shutdown();
   });
 
-  it("downloads generic request image attachments before routing them to the agent", async () => {
+  it("downloads and renders request images from production-reachable preceding context", async () => {
     const home = mkdtempSync(join(tmpdir(), "session-manager-request-images-"));
     vi.stubEnv("FIRST_TREE_HOME", home);
     try {
       const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
-      const sdk = mockSdk({ fetchAttachment });
+      const sdk = mockSdk({
+        fetchAttachment,
+        listChatParticipants: vi.fn().mockResolvedValue([]),
+      });
       let capturedMessage: SessionMessage | undefined;
+      let renderedContent = "";
       const handler = createMockHandler({
-        start: vi.fn(async (message) => {
+        start: vi.fn(async (message, ctx) => {
           capturedMessage = message;
+          renderedContent = await ctx.formatInboundContent(message);
           return "session-id-mock";
         }),
       });
@@ -650,29 +655,98 @@ describe("SessionManager additional delivery token and payload coverage", () => 
         ...base,
         message: {
           ...base.message,
-          format: "request",
-          content: "Which layout should ship?",
-          metadata: {
-            request: {},
-            attachments: [
-              {
-                attachmentId: imageId,
-                kind: "image",
-                mimeType: "image/png",
-                filename: "decision.png",
-                size: 11,
+          format: "text",
+          content: "@agent-1 please review the earlier decision",
+          metadata: {},
+          precedingMessages: [
+            {
+              id: "request-for-human",
+              senderId: "agent-2",
+              format: "request",
+              content: "Which layout should ship?",
+              metadata: {
+                request: {},
+                attachments: [
+                  {
+                    attachmentId: imageId,
+                    kind: "image",
+                    mimeType: "image/png",
+                    filename: "decision.png",
+                    size: 11,
+                  },
+                ],
               },
-            ],
-          },
+              createdAt: "2026-07-24T00:00:00.000Z",
+            },
+          ],
         },
       };
 
       await sm.dispatch(requestEntry);
 
       expect(fetchAttachment).toHaveBeenCalledWith({ id: imageId });
-      expect(findImagePath("chat-request-image", imageId, "image/png")).not.toBeNull();
-      expect(capturedMessage?.format).toBe("request");
+      const path = findImagePath("chat-request-image", imageId, "image/png");
+      expect(path).not.toBeNull();
+      expect(capturedMessage?.format).toBe("text");
       expect(capturedMessage?.content).toEqual(requestEntry.message.content);
+      expect(renderedContent).toContain("[Earlier in chat — context you missed]");
+      expect(renderedContent).toContain("Which layout should ship?");
+      expect(renderedContent).toContain("Filename: decision.png");
+      expect(renderedContent).toContain(`Path: ${path}`);
+
+      await sm.shutdown();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds preceding-context image fetches and prioritizes the newest refs", async () => {
+    const home = mkdtempSync(join(tmpdir(), "session-manager-bounded-images-"));
+    vi.stubEnv("FIRST_TREE_HOME", home);
+    try {
+      const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
+      const sdk = mockSdk({ fetchAttachment });
+      const handler = createMockHandler();
+      const sm = createSessionManager({ handler, sdk });
+      const base = mockEntry({ id: 408, chatId: "chat-bounded-images", messageId: "msg-bounded-images" });
+      const imageIds = Array.from(
+        { length: 12 },
+        (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      );
+      const entry: InboxEntryWithMessage = {
+        ...base,
+        message: {
+          ...base.message,
+          format: "text",
+          content: "@agent-1 review the recent context",
+          precedingMessages: imageIds.map((attachmentId, index) => ({
+            id: `preceding-${index}`,
+            senderId: "agent-2",
+            format: "request",
+            content: `Decision ${index}`,
+            metadata: {
+              request: {},
+              attachments: [
+                {
+                  attachmentId,
+                  kind: "image",
+                  mimeType: "image/png",
+                  filename: `decision-${index}.png`,
+                  size: 11,
+                },
+              ],
+            },
+            createdAt: new Date(Date.UTC(2026, 6, 24, 0, 0, index)).toISOString(),
+          })),
+        },
+      };
+
+      await sm.dispatch(entry);
+
+      expect(fetchAttachment).toHaveBeenCalledTimes(10);
+      const fetchedIds = fetchAttachment.mock.calls.map(([arg]) => (arg as { id: string }).id);
+      expect(fetchedIds).toEqual(imageIds.slice(2).reverse());
 
       await sm.shutdown();
     } finally {
@@ -686,7 +760,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     const sdk = mockSdk({ fetchAttachment });
     const handler = createMockHandler();
     const sm = createSessionManager({ handler, sdk });
-    const base = mockEntry({ id: 406, chatId: "chat-card-batch", messageId: "msg-card-batch" });
+    const base = mockEntry({ id: 409, chatId: "chat-card-batch", messageId: "msg-card-batch" });
     const cardEntry: InboxEntryWithMessage = {
       ...base,
       message: {

@@ -370,7 +370,7 @@ export function renderDocumentAttachmentsForLLM(message: SessionMessage): string
 }
 
 /** Render generic image attachments as local paths for the receiving agent. */
-export function renderImageAttachmentsForLLM(message: SessionMessage): string | null {
+export function renderImageAttachmentsForLLM(message: Pick<SessionMessage, "chatId" | "metadata">): string | null {
   const refs = imageAttachmentRefsFromMetadata(message.metadata ?? undefined);
   if (refs.length === 0) return null;
   const lines: string[] = [
@@ -434,7 +434,12 @@ export async function formatInboundContent(message: SessionMessage, participants
     const ps = await participants.get();
     const lines: string[] = ["[Earlier in chat — context you missed]"];
     for (const p of preceding) {
-      const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
+      let text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
+      const imageNote = renderImageAttachmentsForLLM({
+        chatId: message.chatId,
+        metadata: p.metadata,
+      });
+      if (imageNote) text = `${text}\n\n${imageNote}`;
       lines.push(`${formatMessageFromHeaderLine(p, ps)} ${text}`);
     }
     lines.push("", "[Now — message that woke you]");
