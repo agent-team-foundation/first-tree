@@ -440,7 +440,7 @@ describe("Kimi Code handler", () => {
 
 describe("Kimi homeDir lifecycle", () => {
   it("normalizes trimmed KIMI_CODE_HOME and forwards it as harness homeDir", async () => {
-    const harnessOptions: Array<Record<string, unknown>> = [];
+    const harnessOptions: KimiHarnessOptions[] = [];
     const payload = {
       kind: "kimi-code" as const,
       prompt: { append: "" },
@@ -472,7 +472,7 @@ describe("Kimi homeDir lifecycle", () => {
   });
 
   it.each(["", "   "])("omits homeDir when KIMI_CODE_HOME is %j", async (rawValue) => {
-    const harnessOptions: Array<Record<string, unknown>> = [];
+    const harnessOptions: KimiHarnessOptions[] = [];
     const payload = {
       kind: "kimi-code" as const,
       prompt: { append: "" },
@@ -488,7 +488,7 @@ describe("Kimi homeDir lifecycle", () => {
       agentConfigCache: { refresh: async () => ({ payload }), get: () => ({ payload }) },
       kimiKaosFactory: async () => ({ withCwd: vi.fn().mockReturnThis(), withEnv: vi.fn().mockReturnThis() }),
       kimiHarnessFactory: (options: KimiHarnessOptions) => {
-        harnessOptions.push(options as Record<string, unknown>);
+        harnessOptions.push(options);
         return {
           createSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
           resumeSession: async () => new FakeSession("s1", [successfulTurn("s1")]),
