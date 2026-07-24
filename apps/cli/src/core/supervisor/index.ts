@@ -16,6 +16,9 @@ import {
 import type { ServiceInfo, ServiceOpResult, ServiceState, SupervisorBackend } from "./types.js";
 import { unsupportedBackend } from "./unsupported.js";
 
+export { launchdPlistPath, launchdWrapperPath } from "./launchd.js";
+export { systemdUnitPath } from "./systemd.js";
+
 function currentBackend(): SupervisorBackend {
   if (process.platform === "darwin") return launchdBackend;
   if (process.platform === "linux") return systemdBackend;

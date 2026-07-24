@@ -34,7 +34,7 @@ const LAUNCHD_LABEL = channelConfig.launchdLabel;
 // problem (the unit carries a `Description=`), so this is launchd-only.
 const LAUNCHD_DISPLAY_NAME = channelConfig.displayName;
 
-function launchdPlistPath(): string {
+export function launchdPlistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 }
 
@@ -42,7 +42,7 @@ function launchdPlistPath(): string {
 // shows in the background-items list, so it is the channel display name.
 // Lives under the channel home so it is stable across reinstalls and
 // isolated per channel (parallel installs don't collide).
-function launchdWrapperPath(): string {
+export function launchdWrapperPath(): string {
   return join(defaultHome(), "service", LAUNCHD_DISPLAY_NAME);
 }
 

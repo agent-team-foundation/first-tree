@@ -8,6 +8,7 @@ import {
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
+  checkServiceLaunchPath,
   checkWebSocket,
   ensureFreshAccessToken,
   reconcileAgentConfigs,
@@ -70,6 +71,7 @@ export async function runDaemonChecks(): Promise<CheckResult[]> {
     agentCheck,
     await checkWebSocket(),
     checkBackgroundService(),
+    checkServiceLaunchPath(),
     ...(await checkRuntimeProviders()),
   ];
 }

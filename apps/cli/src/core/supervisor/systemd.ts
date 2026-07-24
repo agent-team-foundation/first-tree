@@ -49,7 +49,7 @@ function rootSystemdUserUnitPath(): string {
   return join(rootHome, ".config", "systemd", "user", SYSTEMD_UNIT);
 }
 
-function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
+export function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
   if (scope === "system") {
     return join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "/etc/systemd/system", SYSTEMD_UNIT);
   }

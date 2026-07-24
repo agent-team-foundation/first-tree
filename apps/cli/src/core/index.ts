@@ -134,6 +134,7 @@ export {
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
+  checkServiceLaunchPath,
   checkWebSocket,
   printResults,
   reconcileAgentConfigs,

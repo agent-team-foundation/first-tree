@@ -12,6 +12,7 @@ const doctorCoreMocks = vi.hoisted(() => ({
   checkClientConfig: vi.fn(),
   checkNodeVersion: vi.fn(),
   checkServerReachable: vi.fn(),
+  checkServiceLaunchPath: vi.fn(),
   checkWebSocket: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   reconcileAgentConfigs: vi.fn(),
@@ -76,6 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   doctorCoreMocks.checkAgentConfigs.mockReturnValue({ label: "Agents", ok: true, detail: "local" });
   doctorCoreMocks.checkBackgroundService.mockReturnValue({ label: "Service", ok: true, detail: "running" });
+  doctorCoreMocks.checkServiceLaunchPath.mockReturnValue({ label: "Service launch path", ok: true, detail: "ok" });
   doctorCoreMocks.checkClientConfig.mockReturnValue({ label: "Config", ok: true, detail: "ok" });
   doctorCoreMocks.checkNodeVersion.mockReturnValue({ label: "Node", ok: true, detail: "v24" });
   doctorCoreMocks.checkServerReachable.mockResolvedValue({ label: "Server", ok: true, detail: "ok" });
@@ -155,6 +157,7 @@ describe("doctor checks and agent resolver", () => {
       { label: "Agents", ok: true, detail: "reconciled" },
       { label: "WebSocket", ok: true, detail: "ok" },
       { label: "Service", ok: true, detail: "running" },
+      { label: "Service launch path", ok: true, detail: "ok" },
       { label: "codex", ok: true, detail: "ok — bundled" },
     ]);
     expect(configMocks.resetConfig).toHaveBeenCalled();
