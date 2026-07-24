@@ -731,7 +731,7 @@ describe("Settings Setup overview", () => {
       }),
       "Review degraded",
       "attention",
-      "acme/context-tree · Context Tree available",
+      "Recent GitLab webhook processing failed. · acme/context-tree · Context Tree available",
     ],
     [
       "pending verification",
@@ -744,7 +744,21 @@ describe("Settings Setup overview", () => {
       }),
       "Review verification pending",
       "pending",
-      "acme/context-tree · Context Tree available",
+      "First Tree could not verify provider readiness. · acme/context-tree · Context Tree available",
+    ],
+    [
+      "disabled with an actionless Reviewer diagnostic",
+      capabilityFixture({
+        review: {
+          adoption: "disabled",
+          health: "degraded",
+          reviewerAgent: { uuid: "reviewer-1", displayName: "Context Reviewer" },
+          blockers: [{ code: "provider_probe_failed", resolutionOwner: "operator", actionKind: null }],
+        },
+      }),
+      "Available",
+      "ready",
+      "Review off · Reviewer degraded · First Tree could not verify provider readiness. · acme/context-tree",
     ],
   ] as const)("summarizes Automatic review %s in the Context Tree row", (_name, capabilities, label, kind, detail) => {
     const input = facts({ capabilities: { state: "ready", value: capabilities } });
@@ -774,9 +788,11 @@ describe("Settings Setup overview", () => {
     const member = rowFor("context-tree", facts({ role: "member", capabilities: { state: "ready", value: shared } }));
 
     expect(admin.status).toMatchObject({ label: "Review needs attention", kind: "attention" });
+    expect(admin.status.detail).toContain("The configured reviewer is missing.");
     expect(admin.status.detail).toContain("Context Tree available");
     expect(admin.action?.label).toBe("Manage");
     expect(member.status).toMatchObject({ label: "Review service unavailable", kind: "blocked" });
+    expect(member.status.detail).toContain("Ask an admin to resolve this: The configured reviewer is missing.");
     expect(member.status.detail).toContain("Context Tree available");
     expect(member.action).toEqual({ label: "View", to: "/context" });
   });

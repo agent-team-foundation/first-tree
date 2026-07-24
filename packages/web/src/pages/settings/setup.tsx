@@ -380,24 +380,29 @@ function contextTreeAction(contextTree: Fact<ContextTreeFact>, isAdmin: boolean)
     : { label: "View", to: "/context" };
 }
 
+function reviewDiagnosticDetail(review: SetupAutomaticReview, isAdmin: boolean): string | undefined {
+  const healthDetail =
+    review.adoption === "disabled"
+      ? review.health === "pending_verification"
+        ? "Reviewer verification pending"
+        : review.health === "degraded"
+          ? "Reviewer degraded"
+          : review.health === "unavailable"
+            ? "Reviewer unavailable"
+            : null
+      : null;
+  const issues = blockerDetail(review.blockers, isAdmin);
+  return [healthDetail, issues].filter((item): item is string => Boolean(item)).join(" · ") || undefined;
+}
+
 function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowModel["status"] {
   if (review.adoption === "unavailable") {
     return { label: "Available after Context Tree", kind: "optional" };
   }
   if (review.adoption === "disabled") {
     const reviewer = review.reviewerAgent ? `Reviewer · ${review.reviewerAgent.displayName}` : null;
-    const healthDetail =
-      review.health === "pending_verification"
-        ? "Reviewer verification pending"
-        : review.health === "degraded"
-          ? "Reviewer degraded"
-          : review.health === "unavailable"
-            ? "Reviewer unavailable"
-            : null;
-    const issues = blockerDetail(review.blockers, isAdmin);
-    const detail = [reviewer, healthDetail, issues, "Optional"]
-      .filter((item): item is string => Boolean(item))
-      .join(" · ");
+    const diagnostic = reviewDiagnosticDetail(review, isAdmin);
+    const detail = [reviewer, diagnostic, "Optional"].filter((item): item is string => Boolean(item)).join(" · ");
     return { label: "Off", detail, kind: "optional" };
   }
 
@@ -427,6 +432,7 @@ function reviewStatus(review: SetupAutomaticReview, isAdmin: boolean): SetupRowM
 function combineContextTreeAndReviewStatus(
   contextStatus: SetupRowModel["status"],
   automaticReviewStatus: SetupRowModel["status"],
+  automaticReviewDiagnostic: string | undefined,
 ): SetupRowModel["status"] {
   if (
     !["ready", "pending"].includes(contextStatus.kind) ||
@@ -446,7 +452,7 @@ function combineContextTreeAndReviewStatus(
   if (!["On", "Off"].includes(automaticReviewStatus.label)) {
     return {
       label: reviewSummary,
-      detail: [repository, `Context Tree ${contextStatus.label.toLowerCase()}`]
+      detail: [automaticReviewDiagnostic, repository, `Context Tree ${contextStatus.label.toLowerCase()}`]
         .filter((item): item is string => Boolean(item))
         .join(" · "),
       kind: automaticReviewStatus.kind,
@@ -455,7 +461,11 @@ function combineContextTreeAndReviewStatus(
 
   return {
     ...contextStatus,
-    detail: [repository, reviewSummary].filter((item): item is string => Boolean(item)).join(" · "),
+    detail: automaticReviewDiagnostic
+      ? [reviewSummary, automaticReviewDiagnostic, repository]
+          .filter((item): item is string => Boolean(item))
+          .join(" · ")
+      : [repository, reviewSummary].filter((item): item is string => Boolean(item)).join(" · "),
   };
 }
 
@@ -606,6 +616,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       status: combineContextTreeAndReviewStatus(
         contextTreeStatus(contextTree, capabilities?.contextTree.blockers ?? [], isAdmin),
         automaticReviewStatus,
+        capabilities ? reviewDiagnosticDetail(capabilities.contextTree.automaticReview, isAdmin) : undefined,
       ),
       action: contextTreeAction(contextTree, isAdmin),
     },
