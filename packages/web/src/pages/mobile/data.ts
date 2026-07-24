@@ -93,11 +93,11 @@ export function mobileChatPreview(row: MeChatRow): string {
 }
 
 /**
- * Allocate the Work card's fixed two-line content budget.
+ * Allocate Work card content by state.
  *
- * Normal / pinned work spends both lines on the running chat summary. Unread,
- * mention, and working work split the budget into one current-state line and
- * one live-evidence line. Attention cards deliberately replace the summary
+ * Normal / pinned work shows the running chat summary. Unread, mention, and
+ * working work split the compact dynamic budget into one current-state line
+ * and one live-evidence line. Attention cards deliberately replace the summary
  * with the concrete request/failure evidence because that is what the viewer
  * must act on now.
  */

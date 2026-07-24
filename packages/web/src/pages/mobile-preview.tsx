@@ -209,6 +209,7 @@ function ActionCard({
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
+          data-line-clamp={2}
         >
           {chat.evidence}
         </p>
@@ -260,11 +261,12 @@ function WorkRow({ chat, onOpen }: { chat: PreviewChat; onOpen: (chat: PreviewCh
                 ? undefined
                 : {
                     display: "-webkit-box",
-                    WebkitLineClamp: 2,
+                    WebkitLineClamp: 3,
                     WebkitBoxOrient: "vertical",
                     overflow: "hidden",
                   }),
             }}
+            data-line-clamp={dynamic ? 1 : 3}
           >
             {chat.summary}
           </p>
