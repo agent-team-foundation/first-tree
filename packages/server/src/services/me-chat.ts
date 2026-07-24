@@ -618,7 +618,10 @@ async function enrichMeChatRows(
       }
       // failed — speaker-filtered AND narrowed to "mine" (R1): a peer's broken
       // agent in a shared chat no longer pins my row to "Needs attention".
-      if (isSpeaker && s.main === "failed" && isMine) failed.push(s.agentId);
+      // Use the errored axis rather than composite `main`: reachability makes an
+      // errored agent display as offline, but recovery attention must remain
+      // until the per-chat error itself clears.
+      if (isSpeaker && s.errored && isMine) failed.push(s.agentId);
       // busy — speakers with composite `working` (the D-axis truth from
       // `agent_chat_sessions.runtime_state`). NOT narrowed to mine — "someone
       // is working" is informational, not an attention signal.

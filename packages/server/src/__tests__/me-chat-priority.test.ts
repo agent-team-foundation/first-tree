@@ -193,6 +193,31 @@ describe("listMeChats — server priority projection (PR3)", () => {
     expect(res.priorityRows.attention.find((r) => r.chatId === chatId)?.failedAgentIds).toContain(peer.uuid);
   });
 
+  it("keeps an errored chat in attention while its managed speaker is offline", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await managedAgent(app, owner, "offline-failed-peer");
+
+    const chatId = await chatWith(app, owner, peer.uuid);
+    await markFailed(app, peer.uuid, peer.clientId, chatId);
+    await app.db.update(agentPresence).set({ clientId: null }).where(eq(agentPresence.agentId, peer.uuid));
+
+    const offline = await list(app, owner);
+    expect(groupOf(offline, chatId)).toBe("attention");
+    expect(offline.priorityRows.attention.find((r) => r.chatId === chatId)?.failedAgentIds).toContain(peer.uuid);
+
+    await app.db.update(agentPresence).set({ clientId: peer.clientId }).where(eq(agentPresence.agentId, peer.uuid));
+    await app.db.execute(sql`
+      UPDATE agent_chat_sessions
+      SET state = 'active', runtime_state = 'idle', runtime_state_at = NOW(), updated_at = NOW()
+      WHERE agent_id = ${peer.uuid} AND chat_id = ${chatId}
+    `);
+
+    const recovered = await list(app, owner);
+    expect(groupOf(recovered, chatId)).toBe("rows");
+    expect(recovered.rows.find((r) => r.chatId === chatId)?.failedAgentIds).toEqual([]);
+  });
+
   it("a healthy managed speaker (no request, no failure) stays in ordinary rows", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
