@@ -1571,6 +1571,9 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_PUBLIC_URL` | Public-facing server origin. Used to stamp the issuer on short connect codes and to build invite-link URLs plus Google and GitHub OAuth callbacks. **Required in production.** | — |
 | `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
+| `FIRST_TREE_CSP_SCRIPT_ORIGINS` | Comma-separated exact HTTP(S) origins allowed by `script-src`. Setting it replaces the production Cloud defaults; paths, credentials, and wildcards are rejected. | Production analytics origins on `cloud.first-tree.ai`; otherwise none |
+| `FIRST_TREE_CSP_CONNECT_ORIGINS` | Comma-separated exact HTTP(S) origins allowed by `connect-src`, in addition to self and the WebSocket origin derived from `FIRST_TREE_PUBLIC_URL`. Setting it replaces the production Cloud defaults. | Production analytics/monitoring origins on `cloud.first-tree.ai`; otherwise none |
+| `FIRST_TREE_CSP_IMAGE_ORIGINS` | Comma-separated exact HTTP(S) origins allowed by `img-src`, in addition to self, `data:`, and `blob:`. Setting it replaces the production Cloud defaults. | Production avatar/analytics origins on `cloud.first-tree.ai`; otherwise none |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
 

@@ -144,6 +144,35 @@ describe("server config", () => {
     ).rejects.toThrow(/gitlab|array/iu);
   });
 
+  it("loads exact CSP origins from comma-separated deployment config", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv(
+      "FIRST_TREE_CSP_SCRIPT_ORIGINS",
+      " https://www.googletagmanager.com,https://www.clarity.ms,https://www.clarity.ms ",
+    );
+    vi.stubEnv("FIRST_TREE_CSP_CONNECT_ORIGINS", "https://www.google-analytics.com,https://c.clarity.ms");
+    vi.stubEnv("FIRST_TREE_CSP_IMAGE_ORIGINS", "https://AVATARS.GITHUBUSERCONTENT.COM");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.security?.csp).toEqual({
+      scriptOrigins: ["https://www.googletagmanager.com", "https://www.clarity.ms"],
+      connectOrigins: ["https://www.google-analytics.com", "https://c.clarity.ms"],
+      imageOrigins: ["https://avatars.githubusercontent.com"],
+    });
+  });
+
+  it("rejects wildcard and path-based CSP sources", () => {
+    const schema = serverConfigSchema.security.shape.csp.scriptOrigins.schema;
+    expect(() => schema.parse("https://*.clarity.ms")).toThrow(/exact credential-free HTTP\(S\) origins/);
+    expect(() => schema.parse("https://cdn.example.com/assets")).toThrow(/exact credential-free HTTP\(S\) origins/);
+  });
+
   it("rejects partial Google OAuth configuration", async () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();

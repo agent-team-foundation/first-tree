@@ -92,6 +92,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { registerSecurityHeaders } from "./security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -195,6 +196,10 @@ export async function buildApp(config: Config) {
     // upstream proxy chain.
     trustProxy: config.trustProxy,
   });
+
+  // Browser security policy is app-owned and applies uniformly to API, SPA,
+  // static asset, error, and not-found responses in every environment.
+  await registerSecurityHeaders(app, config);
 
   // Loud security reminder: trustProxy=true makes Fastify trust ANY upstream's
   // x-forwarded-for header. Safe iff the First Tree container only receives traffic
