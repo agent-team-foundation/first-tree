@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { CRON_POLLING_INTERVAL_MAX_SECONDS, CRON_POLLING_INTERVAL_MIN_SECONDS } from "../schemas/cron-job.js";
 import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
@@ -514,9 +515,12 @@ export const serverConfigSchema = defineConfig({
     runtimeSwitchFaultInjection: field(z.boolean().default(false), {
       env: "FIRST_TREE_RUNTIME_SWITCH_FAULT_INJECTION",
     }),
-    pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
-      env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
-    }),
+    pollingIntervalSeconds: field(
+      z.coerce.number().int().min(CRON_POLLING_INTERVAL_MIN_SECONDS).max(CRON_POLLING_INTERVAL_MAX_SECONDS).default(5),
+      {
+        env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
+      },
+    ),
     presenceCleanupSeconds: field(z.coerce.number().int().positive().default(60), {
       env: "FIRST_TREE_PRESENCE_CLEANUP_SECONDS",
     }),

@@ -27,7 +27,8 @@ multi-owner pause evidence on a real deployment.
   Client/daemon, and candidate CLI. Prefer a combined Backend+Web tree when
   Web Schedules evidence is in scope.
 - Server background tasks are running; `FIRST_TREE_POLLING_INTERVAL_SECONDS`
-  may be shortened for a faster test cycle.
+  is inside the startup-validated `1..10` second dispatch-safe range and may
+  be shortened for a faster test cycle.
 - One human owner and one non-human agent in a flat control chat, both
   speakers; agent runtime connected with fresh heartbeats and a
   `one-turn-ready` provider when reply/ACK evidence is required.

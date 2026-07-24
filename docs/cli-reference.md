@@ -579,7 +579,8 @@ ordinary addressed markdown message to wake this agent. Every cron command
 (including `preview`, `list`, and `show`) requires `FIRST_TREE_CHAT_ID` from
 the agent session; prompt bodies use `-F <file>` or `-F -` only. The scheduler
 starts with the Server and uses `FIRST_TREE_POLLING_INTERVAL_SECONDS` as its
-polling cadence.
+polling cadence. The Server validates that cadence at startup in the `1..10`
+second dispatch-safe range.
 
 ```
 first-tree cron
@@ -1711,7 +1712,7 @@ threshold.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker. | `5` |
+| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker; must be `1..10` so due occurrences remain inside the dispatch grace window. | `5` |
 
 **Observability:**
 
