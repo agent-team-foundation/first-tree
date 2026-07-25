@@ -975,6 +975,35 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("lands on the stored bottom-visible anchor on mobile open even when the chat has a summary", async () => {
+    // Regression guard for the #1997 mobile Work surface: a summarized
+    // chat must still land on the stored bottom-visible anchor (newer
+    // messages surface via the pill) instead of jumping to the timeline
+    // top to show the in-flow Current state card.
+    const { ChatView } = await import("../chat-view.js");
+    const summarized = chatDetail({ description: "Status: shipping the mobile Work surface soon." });
+    chatMocks.getChat.mockResolvedValue(summarized);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        seedChat(queryClient, summarized);
+      },
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+    const scrollIntoViewMock = HTMLElement.prototype.scrollIntoView as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await waitForCondition(
+      () =>
+        scrollIntoViewMock.mock.calls.some((args) => (args[0] as ScrollIntoViewOptions | undefined)?.block === "end"),
+      "Expected mobile open to land on the stored bottom-visible anchor",
+    );
+
+    await act(async () => root.unmount());
+  });
+
   it("renders restore and read-only join states", async () => {
     const { ChatView } = await import("../chat-view.js");
     const deleted = chatDetail({ engagementStatus: "deleted", title: "Deleted launch" });

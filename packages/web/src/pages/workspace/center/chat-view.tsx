@@ -3044,20 +3044,19 @@ export function ChatView({
   //    at the last message's bottom, leaving in-progress tool_call
   //    workgroups (events that arrived after messages) below the
   //    fold. Added the stable follow-up scroll.
+  //  - yuezengwu manual report → #1997's mobile Work surface landed
+  //    summarized chats at the timeline top (scrollTop = 0) so the
+  //    in-flow Current state card was visible on entry. Agent-owned
+  //    chats almost always carry a summary, so mobile opens were
+  //    stuck at the top of every chat. Reverted to the anchor/bottom
+  //    model on all presentations; the card stays reachable by
+  //    scrolling up, and its "Updated" badge flags fresh summaries.
   const landedForChatRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (itemCount === 0) return;
     if (landedForChatRef.current === chatId) return;
-    // The Work detail's mobile entry context is the in-flow Current state
-    // card. Wait for the real detail instead of committing the list-cache
-    // stub's empty description, then land the single timeline scroller at the
-    // top when a summary exists so the card is genuinely visible on entry.
-    if (useMobileDetailsSheet && chatDetailFetching) return;
     landedForChatRef.current = chatId;
-    if (useMobileDetailsSheet && (chatDetail?.description?.trim().length ?? 0) > 0) {
-      const container = scrollContainerRef.current;
-      if (container) container.scrollTop = 0;
-    } else if (bottomVisibleResolution) {
+    if (bottomVisibleResolution) {
       // Land the stored anchor at the viewport bottom. Any messages
       // newer than the anchor sit below the fold; the pill will
       // surface them.
@@ -3073,9 +3072,6 @@ export function ChatView({
   }, [
     chatId,
     itemCount,
-    useMobileDetailsSheet,
-    chatDetailFetching,
-    chatDetail?.description,
     bottomVisibleResolution,
     scrollToMessageImmediate,
     scrollToBottomImmediate,
