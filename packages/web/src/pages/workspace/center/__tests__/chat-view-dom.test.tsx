@@ -976,7 +976,7 @@ describe("ChatView", () => {
   });
 
   it("lands on the stored bottom-visible anchor on mobile open even when the chat has a summary", async () => {
-    // Regression guard for the #1997 mobile Work surface: a summarized
+    // Regression guard for the PR 1997 mobile Work surface: a summarized
     // chat must still land on the stored bottom-visible anchor (newer
     // messages surface via the pill) instead of jumping to the timeline
     // top to show the in-flow Current state card.
@@ -999,6 +999,112 @@ describe("ChatView", () => {
       () =>
         scrollIntoViewMock.mock.calls.some((args) => (args[0] as ScrollIntoViewOptions | undefined)?.block === "end"),
       "Expected mobile open to land on the stored bottom-visible anchor",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("waits for the persisted read state before committing the chat-open landing", async () => {
+    // PR 2017 review: with cached messages rendering first and the IDB
+    // read-state lookup still in flight, the one-shot landing must NOT
+    // commit the bottom fallback — otherwise a cold open permanently
+    // misses the stored anchor.
+    const { ChatView } = await import("../chat-view.js");
+    let resolveReadState: (
+      value: {
+        chatId: string;
+        bottomVisibleMessageId: string | null;
+        latestKnownMessageId: string | null;
+        updatedAt: number;
+      } | null,
+    ) => void = () => {
+      throw new Error("getReadState was not called");
+    };
+    readStateMocks.getReadState.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveReadState = resolve;
+        }),
+    );
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        // Messages stay cached (they render immediately); the read-state
+        // cache is dropped so the query hits the still-pending mock.
+        queryClient.removeQueries({ queryKey: ["chat-read-state", "chat-1"] });
+      },
+      "/",
+    );
+
+    // Messages render while the read state is still pending: no landing
+    // may fire yet (neither the anchor scroll nor the bottom fallback).
+    await waitForText(container, "I found one rollout risk");
+    const scrollIntoViewMock = HTMLElement.prototype.scrollIntoView as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const scrollToMock = HTMLElement.prototype.scrollTo as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await flush();
+    await flush();
+    expect(scrollIntoViewMock.mock.calls.length).toBe(0);
+    expect(scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto")).toBe(
+      false,
+    );
+
+    // Once the persisted row resolves, the landing commits to its anchor.
+    await act(async () => {
+      resolveReadState({
+        chatId: "chat-1",
+        bottomVisibleMessageId: "msg-1",
+        latestKnownMessageId: "msg-1",
+        updatedAt: Date.now(),
+      });
+    });
+    await waitForCondition(
+      () =>
+        scrollIntoViewMock.mock.calls.some((args) => (args[0] as ScrollIntoViewOptions | undefined)?.block === "end"),
+      "Expected the landing to fire once the persisted read state resolved",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("falls back to the timeline bottom when the persisted read state has no row", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    let resolveReadState: (value: null) => void = () => {
+      throw new Error("getReadState was not called");
+    };
+    readStateMocks.getReadState.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          resolveReadState = resolve;
+        }),
+    );
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        queryClient.removeQueries({ queryKey: ["chat-read-state", "chat-1"] });
+      },
+      "/",
+    );
+
+    await waitForText(container, "I found one rollout risk");
+    const scrollToMock = HTMLElement.prototype.scrollTo as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await flush();
+    expect(scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto")).toBe(
+      false,
+    );
+
+    // A resolved-but-empty row (first-time visit) still lands at the bottom.
+    await act(async () => {
+      resolveReadState(null);
+    });
+    await waitForCondition(
+      () => scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto"),
+      "Expected the bottom fallback once the empty read state resolved",
     );
 
     await act(async () => root.unmount());
