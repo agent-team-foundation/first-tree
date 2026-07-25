@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
 
 const loginMock = vi.hoisted(() => vi.fn());
 const onboardingCompletedMock = vi.hoisted(() => vi.fn());
+const purgeMock = vi.hoisted(() => vi.fn());
 const flagsMocks = vi.hoisted(() => ({
   clearOnboardingJoinPath: vi.fn(),
   clearOnboardingSessionFlags: vi.fn(),
@@ -45,6 +46,10 @@ vi.mock("../../api/onboarding-events.js", () => ({
 }));
 
 vi.mock("../../utils/onboarding-flags.js", () => flagsMocks);
+
+vi.mock("../../lib/purge-local-data.js", () => ({
+  purgeLocalUserData: purgeMock,
+}));
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -149,6 +154,8 @@ beforeEach(() => {
   root = null;
   container = null;
   vi.clearAllMocks();
+  purgeMock.mockReset();
+  purgeMock.mockResolvedValue(undefined);
   apiMocks.getStoredTokens.mockReturnValue(null);
   apiMocks.apiGet.mockResolvedValue({
     user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
@@ -397,5 +404,153 @@ describe("AuthProvider", () => {
     });
     expect(latestAuth?.isAuthenticated).toBe(true);
     expect(latestAuth?.meLoaded).toBe(true);
+  });
+});
+
+describe("AuthProvider / logout purge (SEC-042)", () => {
+  it("purges the departing account's local data and resolves only after the purge settles", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    await renderAuth();
+
+    let resolvePurge: (() => void) | null = null;
+    purgeMock.mockReset();
+    purgeMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePurge = resolve;
+        }),
+    );
+
+    let settled = false;
+    let logoutPromise: Promise<void> | undefined;
+    await act(async () => {
+      logoutPromise = latestAuth?.logout().then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+    });
+
+    // The purge receives the id snapshotted BEFORE tokens were cleared, the
+    // synchronous auth teardown has already happened, and logout() is still
+    // awaiting the purge.
+    expect(purgeMock).toHaveBeenCalledWith("user-1");
+    expect(apiMocks.clearStoredTokens).toHaveBeenCalled();
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      resolvePurge?.();
+      await logoutPromise;
+    });
+    expect(settled).toBe(true);
+  });
+
+  it("falls back to the last known user id when tokens were already cleared (401 auto-logout)", async () => {
+    // Mount with user-1's token so the module-level last-known sub is seeded
+    // by the provider's own first-paint decode.
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    await renderAuth();
+
+    // The real 401 sequence: api/client.ts clears tokens BEFORE dispatching
+    // auth:logout, so by the time logout() runs there is no token to decode.
+    apiMocks.getStoredTokens.mockReturnValue(null);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+    });
+    await flush();
+
+    expect(purgeMock).toHaveBeenCalledWith("user-1");
+    expect(latestAuth?.isAuthenticated).toBe(false);
+  });
+
+  it("still resets auth state when the purge rejects", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    purgeMock.mockRejectedValue(new Error("purge exploded"));
+    await renderAuth();
+
+    await act(async () => {
+      await latestAuth?.logout();
+    });
+
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(latestAuth?.meLoaded).toBe(false);
+    expect(apiMocks.clearStoredTokens).toHaveBeenCalled();
+  });
+
+  it("purges the previous account when adoptTokens switches subjects", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    // Make the stored-token mocks behave like real storage so the provider
+    // observes the subject change the moment setStoredTokens lands.
+    apiMocks.setStoredTokens.mockImplementation((tokens: { accessToken: string; refreshToken: string }) => {
+      apiMocks.getStoredTokens.mockReturnValue(tokens);
+    });
+    await renderAuth();
+
+    await act(async () => {
+      await latestAuth?.adoptTokens({
+        accessToken: tokenWithPayload({ sub: "user-2" }),
+        refreshToken: "refresh-2",
+      });
+    });
+    await flush();
+
+    expect(purgeMock).toHaveBeenCalledTimes(1);
+    expect(purgeMock).toHaveBeenCalledWith("user-1");
+  });
+
+  it("does not purge when adoptTokens re-adopts the same subject", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    apiMocks.setStoredTokens.mockImplementation((tokens: { accessToken: string; refreshToken: string }) => {
+      apiMocks.getStoredTokens.mockReturnValue(tokens);
+    });
+    await renderAuth();
+
+    await act(async () => {
+      await latestAuth?.adoptTokens({
+        accessToken: tokenWithPayload({ sub: "user-1" }),
+        refreshToken: "refresh-2",
+      });
+    });
+    await flush();
+
+    expect(purgeMock).not.toHaveBeenCalled();
+  });
+
+  it("purges the previous account when login switches subjects", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    apiMocks.setStoredTokens.mockImplementation((tokens: { accessToken: string; refreshToken: string }) => {
+      apiMocks.getStoredTokens.mockReturnValue(tokens);
+    });
+    loginMock.mockResolvedValue({
+      accessToken: tokenWithPayload({ sub: "user-2" }),
+      refreshToken: "refresh-2",
+    });
+    await renderAuth();
+
+    await act(async () => {
+      await latestAuth?.login("other", "secret");
+    });
+    await flush();
+
+    expect(purgeMock).toHaveBeenCalledTimes(1);
+    expect(purgeMock).toHaveBeenCalledWith("user-1");
   });
 });

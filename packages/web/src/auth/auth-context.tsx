@@ -11,6 +11,8 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
+import { currentUserIdFromToken, lastKnownUserId } from "../lib/current-user-id.js";
+import { purgeLocalUserData } from "../lib/purge-local-data.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -157,7 +159,15 @@ type AuthContextValue = {
   switchingOrg: OrgBrief | null;
   setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
-  logout: () => void;
+  /**
+   * Clear the session AND purge the departing account's browser-local data
+   * (IndexedDB caches, composer drafts, swept metadata keys — SEC-042).
+   * Resolves once the purge has settled; the purge itself never rejects and
+   * is internally time-boxed, so awaiting cannot hang the caller. Callers
+   * that navigate away with a full page load (user-menu) must await before
+   * navigating so the purge is not cut short.
+   */
+  logout: () => Promise<void>;
 };
 
 // Exported so DEV-only preview pages (e.g. /preview/resources) can render real
@@ -171,23 +181,9 @@ const SELECTED_ORG_KEY = "first-tree:selectedOrganizationId";
 // — so a shared browser never lets one account inherit another's last-used team
 // (two accounts can be members of the same org, so validating "is an active
 // membership" is not enough). The userId comes from the access token's `sub`
-// claim (a plain JWT, no decode lib needed) so the first-paint pre-seed can read
-// the right key before /me resolves.
-function userIdFromToken(): string | null {
-  try {
-    const payload = getStoredTokens()?.accessToken?.split(".")[1];
-    if (!payload) return null;
-    const decoded: unknown = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
-    if (typeof decoded === "object" && decoded !== null && "sub" in decoded) {
-      const sub = decoded.sub;
-      return typeof sub === "string" ? sub : null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
+// claim via the shared `currentUserIdFromToken` helper (`lib/current-user-id.ts`,
+// a plain synchronous JWT decode) so the first-paint pre-seed can read the
+// right key before /me resolves.
 function orgStorageKey(userId: string): string {
   return `${SELECTED_ORG_KEY}:${userId}`;
 }
@@ -218,7 +214,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [memberships, setMemberships] = useState<MeMembership[]>([]);
   const [docsEnabled, setDocsEnabled] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(() => {
-    const init = readSelectedOrgId(userIdFromToken());
+    const init = readSelectedOrgId(currentUserIdFromToken());
     // Sync the API client's module-level override on first paint so the
     // first wave of requests (made before fetchMe resolves) already carries
     // the correct `?organizationId=` query (codex P1 #2 fix).
@@ -238,7 +234,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Snapshot the departing identity BEFORE clearing tokens — the id is
+    // decoded from the stored access token, so it is unreachable afterwards.
+    // The 401 auto-logout path (api/client.ts) clears tokens before it even
+    // dispatches `auth:logout`, so fall back to the module-level last-known
+    // sub for that sequence.
+    const departingUserId = currentUserIdFromToken() ?? lastKnownUserId();
     clearStoredTokens();
     // Keep the persisted last-used org (no writeSelectedOrgId(null) here) so a
     // returning sign-in lands back in the org this user left rather than their
@@ -263,6 +265,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDocsEnabled(false);
     setMeLoaded(false);
     setSwitchingOrg(null);
+    // Purge the departing account's local data (SEC-042): IndexedDB caches,
+    // composer drafts, and swept metadata keys. The purge never rejects and
+    // is internally time-boxed, so this await cannot hang logout; the extra
+    // catch keeps auth teardown resilient even against a contract regression.
+    await purgeLocalUserData(departingUserId).catch(() => undefined);
   }, [queryClient]);
 
   const fetchMe = useCallback(async () => {
@@ -318,7 +325,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (username: string, password: string) => {
       const tokens = await loginApi(username, password);
+      // An account switch can happen without a logout in between (sign in
+      // as B while A's storage is still warm). Snapshot the old subject
+      // before the new tokens land, then purge the departing account's
+      // local data once the subject provably changed (SEC-042).
+      const previousUserId = currentUserIdFromToken();
       setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+      if (previousUserId !== null && previousUserId !== currentUserIdFromToken()) {
+        // Fire-and-forget: this path stays inside the SPA (no full-page
+        // navigation), so the purge completes in the background.
+        void purgeLocalUserData(previousUserId);
+      }
       setIsAuthenticated(true);
       await fetchMe();
     },
@@ -327,7 +344,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const adoptTokens = useCallback(
     async (tokens: { accessToken: string; refreshToken: string }) => {
+      // Same bypass-logout account-switch guard as `login` — this is the
+      // OAuth-completion path, where user B's tokens can replace user A's
+      // without any logout in between.
+      const previousUserId = currentUserIdFromToken();
       setStoredTokens(tokens);
+      if (previousUserId !== null && previousUserId !== currentUserIdFromToken()) {
+        void purgeLocalUserData(previousUserId);
+      }
       setIsAuthenticated(true);
       await fetchMe();
     },
@@ -341,7 +365,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // unauthorized selection just yields a clean 403 from the next call.
       // Persist under the current user's key (token `sub`) so the selection
       // is restored only for this account.
-      writeSelectedOrgId(userIdFromToken(), organizationId);
+      writeSelectedOrgId(currentUserIdFromToken(), organizationId);
       setApiSelectedOrganizationId(organizationId);
       // The org-scoped admin WebSocket is not re-opened by React state changes;
       // signal it to reconnect against the newly selected org so realtime frames
@@ -478,9 +502,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [isAuthenticated, user, fetchMe]);
 
-  // Listen for auth failure dispatched by the API client
+  // Listen for auth failure dispatched by the API client. Fire-and-forget:
+  // this path stays inside the SPA, so the purge inside logout() completes
+  // without racing a page unload.
   useEffect(() => {
-    const handler = () => logout();
+    const handler = () => {
+      void logout();
+    };
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
   }, [logout]);

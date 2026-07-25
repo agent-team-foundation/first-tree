@@ -101,9 +101,13 @@ export function UserMenu() {
             <button
               type="button"
               role="menuitem"
-              onClick={() => {
+              onClick={async () => {
                 setOpen(false);
-                logout();
+                // Await the logout — including its local-data purge — before
+                // the full-page navigation below, which would otherwise cut
+                // the in-flight IndexedDB deletes short. logout() is
+                // internally time-boxed, so this cannot hang the click.
+                await logout();
                 // Leave the app on the marketing site rather than an app
                 // route — `logout()` clears local auth state, so staying in
                 // the SPA would just redirect to the login page.

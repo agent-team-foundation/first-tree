@@ -3,6 +3,22 @@ import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageWithDelivery } from "../chats.js";
 
+// The store namespaces its database per account (SEC-042). Tests control the
+// identity through this mock rather than seeding real tokens, because this
+// suite runs in the node environment where localStorage is process-global
+// and would leak identity across tests. The real token → sub decode chain is
+// covered by the purge-local-data and auth-context-provider suites.
+const identityMock = vi.hoisted(() => ({ userId: "user-1" as string | null }));
+
+vi.mock("../../lib/current-user-id.js", () => ({
+  currentUserIdFromToken: () => identityMock.userId,
+  lastKnownUserId: () => identityMock.userId,
+}));
+
+beforeEach(() => {
+  identityMock.userId = "user-1";
+});
+
 function msg(id: string, createdAt: string, overrides: Partial<MessageWithDelivery> = {}): MessageWithDelivery {
   return {
     id,
@@ -114,5 +130,130 @@ describe("message-store / clearChatCache", () => {
     const { clearChatCache, getCachedMessages } = await loadStore();
     await clearChatCache("chat-1");
     expect(await getCachedMessages("chat-1")).toEqual([]);
+  });
+});
+
+async function listDatabaseNames(): Promise<string[]> {
+  const dbs = await indexedDB.databases();
+  return dbs
+    .map((d) => d.name)
+    .filter((n): n is string => typeof n === "string")
+    .sort();
+}
+
+/** Create (and close) a database so it exists on disk without any open
+ *  connection — used to fake a pre-namespacing legacy database. */
+function seedDb(name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(name, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore("rows");
+    };
+    req.onsuccess = () => {
+      req.result.close();
+      resolve();
+    };
+    req.onerror = () => reject(req.error ?? new Error("seed open failed"));
+  });
+}
+
+/** Delete a database, reporting whether the delete had to wait on a blocked
+ *  phase before completing. */
+function deleteDb(name: string): Promise<"success" | "blocked-then-success"> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name);
+    let blocked = false;
+    req.onblocked = () => {
+      blocked = true;
+    };
+    req.onsuccess = () => resolve(blocked ? "blocked-then-success" : "success");
+    req.onerror = () => reject(req.error ?? new Error("delete failed"));
+  });
+}
+
+describe("message-store / per-account namespacing (SEC-042)", () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory();
+  });
+
+  it("stores rows in a database named for the current account", async () => {
+    const { cacheMessages } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+    expect(await listDatabaseNames()).toEqual(["first-tree-chat-cache:u:user-1"]);
+  });
+
+  it("isolates accounts — after an in-page identity switch the other account's rows are invisible", async () => {
+    const { cacheMessages, getCachedMessages } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+
+    identityMock.userId = "user-2";
+    expect(await getCachedMessages("chat-1")).toEqual([]);
+
+    identityMock.userId = "user-1";
+    expect((await getCachedMessages("chat-1")).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("does not create any database when signed out — writes no-op, reads return empty", async () => {
+    const { cacheMessages, getCachedMessages } = await loadStore();
+    identityMock.userId = null;
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+    expect(await getCachedMessages("chat-1")).toEqual([]);
+    expect(await listDatabaseNames()).toEqual([]);
+  });
+
+  it("requests deletion of the legacy database once per session on first namespaced open", async () => {
+    const { cacheMessages } = await loadStore();
+    await seedDb("first-tree-chat-cache");
+    const spy = vi.spyOn(indexedDB, "deleteDatabase");
+
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+    expect(spy.mock.calls.filter(([name]) => name === "first-tree-chat-cache")).toHaveLength(1);
+
+    // Second write in the same session must not request it again.
+    await cacheMessages("chat-1", [msg("b", T(2))]);
+    expect(spy.mock.calls.filter(([name]) => name === "first-tree-chat-cache")).toHaveLength(1);
+
+    // The fire-and-forget delete eventually lands: only the namespaced
+    // database remains.
+    for (let i = 0; i < 20 && (await listDatabaseNames()).includes("first-tree-chat-cache"); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(await listDatabaseNames()).toEqual(["first-tree-chat-cache:u:user-1"]);
+  });
+
+  it("closeDbForPurge closes the connection so a later deleteDatabase completes unblocked", async () => {
+    const { cacheMessages, closeDbForPurge } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+
+    closeDbForPurge();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(deleteDb("first-tree-chat-cache:u:user-1")).resolves.toBe("success");
+  });
+
+  it("closes automatically on versionchange when another context deletes the database", async () => {
+    const { cacheMessages } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+
+    // No closeDbForPurge: the module still holds its connection, so the
+    // delete below can only complete because the versionchange handler
+    // closes it (the multi-tab purge path).
+    await expect(deleteDb("first-tree-chat-cache:u:user-1")).resolves.toBe("success");
+  });
+
+  it("does not recreate any database when a pending poll write lands after logout", async () => {
+    const { cacheMessages, closeDbForPurge } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1))]);
+
+    // Simulate logout + purge: tokens cleared (identity now null),
+    // connections closed, databases deleted.
+    identityMock.userId = null;
+    closeDbForPurge();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await deleteDb("first-tree-chat-cache:u:user-1");
+
+    // The 5-second poll's write-through resolves late, after the purge.
+    await cacheMessages("chat-1", [msg("b", T(2))]);
+    expect(await listDatabaseNames()).toEqual([]);
   });
 });
