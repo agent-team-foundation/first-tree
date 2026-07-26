@@ -38,11 +38,22 @@ export function formatKimiBinaryMissingMessage(input: unknown): string {
   );
 }
 
+/**
+ * Official installer's default binary directory (`$HOME/.kimi-code/bin` /
+ * `%USERPROFILE%\.kimi-code\bin`). The macOS/Linux `install.sh` and Windows
+ * `install.ps1` scripts place `kimi` here and append the dir to the user's
+ * shell PATH — which a long-lived daemon service PATH does not see until
+ * restart, and which Windows never recovers via login-shell PATH probing.
+ */
+export function kimiOfficialBinDirs(home: string): string[] {
+  return [join(home, ".kimi-code", "bin")];
+}
+
 /** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
 export type FindKimiExecutableDeps = {
   /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
   loginShellPathDirs?: () => string[];
-  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  /** Returns the curated well-known bin dirs; defaults to official + shared host list. */
   wellKnownDirs?: () => string[];
   platform?: NodeJS.Platform;
   pathDelimiter?: string;
@@ -50,13 +61,14 @@ export type FindKimiExecutableDeps = {
 
 /**
  * Resolve the official `kimi` CLI on this host. Existence-only — never launches
- * the binary and never reads `~/.kimi-code`.
+ * the binary and never reads credential files under `~/.kimi-code`.
  *
- * Directory order mirrors the other external providers — daemon PATH → curated
- * well-known install dirs (npm global / Homebrew / volta / …) → login-shell
- * PATH (may spawn a shell, so consulted last). This covers the common case
- * where launchd/systemd freezes a PATH that omits the operator's interactive
- * install location.
+ * Directory order: daemon PATH → curated well-known install dirs (official
+ * `$HOME/.kimi-code/bin` first, then npm global / Homebrew / volta / …) →
+ * login-shell PATH (may spawn a shell, so consulted last; always empty on
+ * Windows). This covers the common case where launchd/systemd freezes a PATH
+ * that omits the operator's interactive install location, including a fresh
+ * official-script install that has not yet restarted the daemon.
  */
 export function findKimiExecutableOnPath(
   env: Record<string, string | undefined> = process.env,
@@ -65,8 +77,8 @@ export function findKimiExecutableOnPath(
   const platform = deps.platform ?? process.platform;
   const pathDelimiter = deps.pathDelimiter ?? (platform === "win32" ? ";" : delimiter);
   const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
-  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
-  const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
+  const home = resolveHome(env, platform);
+  const wellKnownDirs = deps.wellKnownDirs ?? (() => [...kimiOfficialBinDirs(home), ...wellKnownBinDirs(home)]);
   const names = kimiExecutableNames(platform);
   const seen = new Set<string>();
 
@@ -90,6 +102,12 @@ export function findKimiExecutableOnPath(
   const fromWellKnown = search(wellKnownDirs());
   if (fromWellKnown) return fromWellKnown;
   return search(loginShellPathDirs());
+}
+
+function resolveHome(env: Record<string, string | undefined>, platform: NodeJS.Platform): string {
+  if (env.HOME && env.HOME.length > 0) return env.HOME;
+  if (platform === "win32" && env.USERPROFILE && env.USERPROFILE.length > 0) return env.USERPROFILE;
+  return homedir();
 }
 
 function kimiExecutableNames(platform: NodeJS.Platform): string[] {

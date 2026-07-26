@@ -7,6 +7,7 @@ import {
   formatKimiBinaryMissingMessage,
   isKimiBinaryMissingError,
   KIMI_CLI_PACKAGE,
+  kimiOfficialBinDirs,
 } from "../runtime/kimi-binary.js";
 
 const tempDirs: string[] = [];
@@ -82,6 +83,41 @@ describe("findKimiExecutableOnPath", () => {
         { wellKnownDirs: () => [], loginShellPathDirs: () => [] },
       ),
     ).toBeNull();
+  });
+
+  it("finds kimi in the official installer dir with empty daemon PATH and empty login-shell PATH", () => {
+    const home = makeTempDir("kimi-bin-official-");
+    const officialBin = join(home, ".kimi-code", "bin");
+    mkdirSync(officialBin, { recursive: true });
+    makeExecutable(join(officialBin, "kimi"));
+    expect(kimiOfficialBinDirs(home)).toEqual([officialBin]);
+    expect(
+      findKimiExecutableOnPath(
+        { HOME: home, PATH: "" },
+        // Default wellKnownDirs includes the official installer dir; login-shell
+        // stays empty to model a frozen daemon PATH that never saw the install.
+        { loginShellPathDirs: () => [] },
+      ),
+    ).toBe(join(officialBin, "kimi"));
+  });
+
+  it("finds kimi.exe under %USERPROFILE%\\.kimi-code\\bin on Windows with empty Path", () => {
+    const home = makeTempDir("kimi-bin-win-official-");
+    const officialBin = join(home, ".kimi-code", "bin");
+    mkdirSync(officialBin, { recursive: true });
+    // Windows existence checks use F_OK (not X_OK); a regular file is enough.
+    writeFileSync(join(officialBin, "kimi.exe"), "fake-kimi-exe\n");
+    expect(
+      findKimiExecutableOnPath(
+        { USERPROFILE: home, Path: "" },
+        {
+          platform: "win32",
+          pathDelimiter: ";",
+          // Windows has no login-shell PATH fallback in production either.
+          loginShellPathDirs: () => [],
+        },
+      ),
+    ).toBe(join(officialBin, "kimi.exe"));
   });
 });
 
