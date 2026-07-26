@@ -39,7 +39,8 @@ describe("Kimi Code provider surfaces", () => {
     expect(providerSupportsInProductAuth("kimi-code")).toBe(false);
     expect(buildInstallCommand("kimi-code")).toContain("@moonshot-ai/kimi-code");
     expect(buildInstallCommand("kimi-code")).toContain("/login");
-    expect(providerInstallHint("kimi-code", "darwin")).toContain("bundled with First Tree");
+    expect(providerInstallHint("kimi-code", "darwin")).toContain("official Kimi CLI");
+    expect(providerInstallHint("kimi-code", "darwin")).toContain("bundled Kimi SDK");
   });
 
   it("exposes DEFAULT + Custom with a local-Kimi default hint on the custom entry", async () => {

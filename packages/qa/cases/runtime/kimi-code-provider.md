@@ -28,9 +28,10 @@ classification, or Context Tree Kimi-tool derivation changes.
 
 ## Checklist
 
-- Capability: the connected client advertises `kimi-code` as `ok`, `runtimeSource: bundled`, version
-  `0.26.0-botiverse.2`, and no runtime path. Re-probing must not launch a Kimi turn, check auth, or make a provider
-  request.
+- Capability: with the official `kimi` CLI installed on the host, the connected client advertises `kimi-code` as `ok`,
+  `runtimeSource: bundled`, version `0.26.0-botiverse.2`, and no runtime path. Without that CLI the capability must be
+  `missing` even though the bundled SDK is present. Re-probing must not launch a Kimi turn, check auth, or make a
+  provider request.
 - Provider selection: Web and CLI can create a Kimi Code agent only on a client advertising the capability. The agent
   config defaults to an empty model and has no reasoning-effort field.
 - Auth boundary: with the host logged out, a real turn classifies `auth.login_required` or `provider.auth_error` as a

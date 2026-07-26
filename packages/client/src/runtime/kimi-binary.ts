@@ -1,0 +1,128 @@
+import { accessSync, constants, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { wellKnownBinDirs } from "./install-locations.js";
+import { getLoginShellPathDirs } from "./login-shell-path.js";
+
+/**
+ * Official Kimi Code CLI binary resolution for Computer capability detection.
+ *
+ * First Tree executes Kimi through the bundled `@botiverse/kimi-code-sdk`; the
+ * official `kimi` CLI is the required local setup/recovery artifact so the
+ * operator can run `/login` on this host. Discovery is existence-only — never
+ * launches the binary and never reads credentials.
+ */
+
+/** Package name surfaced in missing-binary copy and setup UI. */
+export const KIMI_CLI_PACKAGE = "@moonshot-ai/kimi-code";
+
+const KIMI_BINARY_MISSING_PATTERNS: readonly RegExp[] = [
+  /kimi (?:code )?cli is missing/i,
+  /official `?kimi`? cli/i,
+  /kimi.*not (?:found|installed)/i,
+];
+
+export function isKimiBinaryMissingError(input: unknown): boolean {
+  const text = errorSearchText(input);
+  return KIMI_BINARY_MISSING_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+export function formatKimiBinaryMissingMessage(input: unknown): string {
+  const original = errorText(input).trim();
+  const suffix = original ? ` Original error: ${original}` : "";
+  return (
+    "Official Kimi CLI is missing on this machine. " +
+    "First Tree runs Kimi through its bundled SDK, but Computer availability requires the official `kimi` CLI so you can complete provider-owned login and recovery locally. " +
+    `Install it with \`npm install -g ${KIMI_CLI_PACKAGE}\`, then run \`kimi\` and enter \`/login\`.` +
+    suffix
+  );
+}
+
+/** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
+export type FindKimiExecutableDeps = {
+  /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
+  loginShellPathDirs?: () => string[];
+  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  wellKnownDirs?: () => string[];
+  platform?: NodeJS.Platform;
+  pathDelimiter?: string;
+};
+
+/**
+ * Resolve the official `kimi` CLI on this host. Existence-only — never launches
+ * the binary and never reads `~/.kimi-code`.
+ *
+ * Directory order mirrors the other external providers — daemon PATH → curated
+ * well-known install dirs (npm global / Homebrew / volta / …) → login-shell
+ * PATH (may spawn a shell, so consulted last). This covers the common case
+ * where launchd/systemd freezes a PATH that omits the operator's interactive
+ * install location.
+ */
+export function findKimiExecutableOnPath(
+  env: Record<string, string | undefined> = process.env,
+  deps: FindKimiExecutableDeps = {},
+): string | null {
+  const platform = deps.platform ?? process.platform;
+  const pathDelimiter = deps.pathDelimiter ?? (platform === "win32" ? ";" : delimiter);
+  const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
+  const names = kimiExecutableNames(platform);
+  const seen = new Set<string>();
+
+  const search = (dirs: readonly string[]): string | null => {
+    for (const dir of dirs) {
+      if (!dir) continue;
+      const base = isAbsolute(dir) ? dir : resolve(dir);
+      if (seen.has(base)) continue;
+      seen.add(base);
+      for (const name of names) {
+        const candidate = join(base, name);
+        if (isExecutableFile(candidate, platform)) return candidate;
+      }
+    }
+    return null;
+  };
+
+  const pathValue = readPathValue(env, platform);
+  const fromDaemon = search(pathValue ? pathValue.split(pathDelimiter) : []);
+  if (fromDaemon) return fromDaemon;
+  const fromWellKnown = search(wellKnownDirs());
+  if (fromWellKnown) return fromWellKnown;
+  return search(loginShellPathDirs());
+}
+
+function kimiExecutableNames(platform: NodeJS.Platform): string[] {
+  return platform === "win32" ? ["kimi.exe", "kimi.cmd", "kimi"] : ["kimi"];
+}
+
+function readPathValue(env: Record<string, string | undefined>, platform = process.platform): string | undefined {
+  if (platform !== "win32") return env.PATH;
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === "path");
+  return key ? env[key] : undefined;
+}
+
+function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!statSync(filePath).isFile()) return false;
+    accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function errorText(input: unknown): string {
+  if (input instanceof Error) return input.message;
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const maybe = input as { message?: unknown };
+    if (typeof maybe.message === "string") return maybe.message;
+  }
+  return String(input);
+}
+
+function errorSearchText(input: unknown): string {
+  if (input instanceof Error) return `${input.name} ${input.message}`;
+  return errorText(input);
+}

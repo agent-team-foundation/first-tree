@@ -215,7 +215,7 @@ export function providerInstallHint(
     return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;
   }
   if (provider === "kimi-code") {
-    return `Kimi's engine is bundled with First Tree. For login recovery, install \`@moonshot-ai/kimi-code\` on this ${device}, run \`kimi\`, then \`/login\`.`;
+    return `Install the official Kimi CLI with \`npm install -g @moonshot-ai/kimi-code\` on this ${device}, run \`kimi\`, then \`/login\`. First Tree still executes through its bundled Kimi SDK.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }
