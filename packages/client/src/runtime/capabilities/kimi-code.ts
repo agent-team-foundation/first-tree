@@ -1,8 +1,5 @@
 import type { CapabilityEntry } from "@first-tree/shared";
-import {
-  findKimiExecutableOnPath,
-  formatKimiBinaryMissingMessage,
-} from "../kimi-binary.js";
+import { findKimiExecutableOnPath, formatKimiBinaryMissingMessage } from "../kimi-binary.js";
 import { type DetectOutcome, runDetect } from "./detect.js";
 
 /** Exact SDK build bundled with the client and used by the runtime handler. */
