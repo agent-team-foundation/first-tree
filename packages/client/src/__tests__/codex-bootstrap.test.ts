@@ -124,11 +124,12 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       "/var/lib/context-trees/codex",
     );
 
-    // Section names follow the AGENTS.md restructure: `# Identity`,
-    // `## Agent-Specific Prompt`, `# Working in First Tree`, etc.
+    // Section names follow the AGENTS.md restructure: `# Identity`, the
+    // provenance-labelled legacy prompt fallback, `# Working in First Tree`.
     expect(briefing).toContain("# Identity");
     expect(briefing).toContain("Codex Developer");
-    expect(briefing).toContain("## Agent-Specific Prompt");
+    expect(briefing).toContain("# Agent Prompt (legacy merged — may include team-shared content)");
+    expect(briefing).not.toContain("## Agent-Specific Prompt");
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).not.toContain("## Current Chat Context");
     expect(briefing).not.toContain("Chat ID: chat-1");

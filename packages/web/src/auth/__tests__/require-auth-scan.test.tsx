@@ -15,14 +15,19 @@ const authMock = vi.hoisted(() => ({
 vi.mock("../auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../pages/landing/index.js", () => ({ LandingPage: () => <div>Landing content</div> }));
 
-const SCAN_URL = "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend";
+const SCAN_ATTEMPT_ID = "123e4567-e89b-42d3-a456-426614174000";
+const SCAN_URL =
+  "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend" +
+  `&attempt=${SCAN_ATTEMPT_ID}&variant=control`;
 
 describe("scanCampaignOAuthNext", () => {
   it("returns the quickstart URL for a known campaign handoff", () => {
     expect(
       scanCampaignOAuthNext({
         pathname: "/quickstart",
-        search: "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+        search:
+          "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend" +
+          `&attempt=${SCAN_ATTEMPT_ID}&variant=control`,
       }),
     ).toBe(SCAN_URL);
   });
@@ -46,6 +51,7 @@ describe("RequireAuth — scan funnel login handoff", () => {
 
   beforeEach(() => {
     authMock.value = { isAuthenticated: false, meLoaded: false };
+    window.sessionStorage.clear();
     replaceSpy = vi.spyOn(window.location, "replace").mockImplementation(() => undefined);
   });
 
@@ -83,6 +89,14 @@ describe("RequireAuth — scan funnel login handoff", () => {
     const container = await renderRoute(SCAN_URL);
     expect(replaceSpy).toHaveBeenCalledWith(`/api/v1/auth/github/start?next=${encodeURIComponent(SCAN_URL)}`);
     expect(container.textContent).not.toContain("Login page");
+    const stored = window.sessionStorage.getItem("first-tree:auth-attempt") ?? "";
+    expect(JSON.parse(stored)).toMatchObject({
+      provider: "github",
+      entryPoint: "campaign",
+      scanAttemptId: SCAN_ATTEMPT_ID,
+      variant: "control",
+    });
+    expect(stored).not.toContain("repo");
   });
 
   it("keeps a normal unauthenticated deep link on the /login interstitial", async () => {

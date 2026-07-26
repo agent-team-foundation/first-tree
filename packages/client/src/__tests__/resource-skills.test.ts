@@ -5,6 +5,7 @@ import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionContext } from "../runtime/handler.js";
 import {
+  buildResourceSkillBriefingRows,
   buildResourceSkillsBriefing,
   materializeResourceSkills,
   resourceSkillPath,
@@ -92,5 +93,67 @@ describe("resource skill materialization", () => {
     const body = await readFile(resourceSkillPath(workspace, "res-skill-quote"), "utf-8");
     expect(body).toContain('name: "review:ops"');
     expect(body).toContain('description: "Line one\\n---\\nline two"');
+  });
+});
+
+describe("resource skill briefing", () => {
+  const workspace = join("workspace-root", "agent-home");
+  const briefingPayload: AgentRuntimeConfigPayload = {
+    ...payload,
+    resourceSkills: [
+      {
+        resourceId: "res-skill-1",
+        name: "review",
+        description: "Review code risks first.",
+        body: "# Review",
+        metadata: {},
+      },
+      {
+        resourceId: "res-skill-2",
+        name: "deploy",
+        description: "",
+        body: "# Deploy",
+        metadata: {},
+      },
+    ],
+  };
+
+  it("builds ordered rows and preserves the compatibility wrapper output", () => {
+    const reviewPath = join(workspace, ".first-tree", "resources", "skills", "res-skill-1", "SKILL.md");
+    const deployPath = join(workspace, ".first-tree", "resources", "skills", "res-skill-2", "SKILL.md");
+
+    expect(buildResourceSkillBriefingRows(workspace, briefingPayload)).toEqual([
+      {
+        name: "review",
+        description: "Review code risks first.",
+        path: reviewPath,
+      },
+      {
+        name: "deploy",
+        description: "No description",
+        path: deployPath,
+      },
+    ]);
+    expect(buildResourceSkillsBriefing(workspace, briefingPayload)).toBe(
+      [
+        "## Team Skills",
+        "",
+        "- review: Review code risks first.",
+        `  Path: ${reviewPath}`,
+        "- deploy: No description",
+        `  Path: ${deployPath}`,
+      ].join("\n"),
+    );
+  });
+
+  it("returns no rows or briefing for absent and empty skill payloads", () => {
+    const emptyPayload: AgentRuntimeConfigPayload = { ...payload, resourceSkills: [] };
+
+    expect(buildResourceSkillBriefingRows(workspace, null)).toEqual([]);
+    expect(buildResourceSkillBriefingRows(workspace, undefined)).toEqual([]);
+    expect(buildResourceSkillBriefingRows(workspace, emptyPayload)).toEqual([]);
+    expect(buildResourceSkillsBriefing(workspace, null)).toBe("");
+    expect(buildResourceSkillsBriefing(workspace, undefined)).toBe("");
+    expect(buildResourceSkillsBriefing(workspace, emptyPayload)).toBe("");
   });
 });

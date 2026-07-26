@@ -2,6 +2,7 @@ import {
   activeRuntimeChatIdsResponseSchema,
   addParticipantSchema,
   createTaskChatSchema,
+  followChatGitlabEntityRequestSchema,
   followGithubEntityRequestSchema,
   legacyCreateChatSchema,
   paginationQuerySchema,
@@ -20,8 +21,14 @@ import {
   listChatGithubEntities,
   removeEntityFollow,
 } from "../../services/github-entity-follow.js";
+import {
+  declareCurrentGitlabEntityFollow,
+  listCurrentChatGitlabEntities,
+  removeCurrentGitlabEntityFollow,
+} from "../../services/gitlab-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { resolveAgentScmBindingPair } from "../../services/scm-attention-line.js";
 import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -39,6 +46,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
+      if ("campaignAction" in rawBody || "scanFixRepoSlug" in rawBody) {
+        throw new BadRequestError("Landing campaign actions can only be started by the signed-in web user.");
+      }
       const body = createTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [
         ...body.initialRecipientAgentIds,
@@ -236,7 +246,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   // an agent that wants the entity's events in this chat declares it here,
   // immediately after creation. The human side of the binding pair is the
   // chat's representative human (see `resolveBindingPair`); the caller is
-  // the delegate side.
+  // the wake side.
 
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
     const identity = requireAgent(request);
@@ -255,8 +265,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       const pair = await resolveBindingPair(app.db, request.params.chatId, identity.uuid);
       if (!pair) {
         throw new BadRequestError(
-          "No eligible (human, delegate) binding pair: following from an agent session needs at least one " +
-            "active human member in the chat (and a non-human caller). Humans follow via the web UI instead.",
+          "No eligible (human, wake-agent) binding pair: the caller must be an active same-Team agent speaker, " +
+            "the chat needs an active same-Team human member, and no more than one human may link the caller " +
+            "as delegate. Humans follow via the web UI instead.",
         );
       }
 
@@ -287,6 +298,64 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
       }
       return removeEntityFollow(app.db, { chatId: request.params.chatId, entity });
+    },
+  );
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    return listCurrentChatGitlabEntities(app.db, request.params.chatId);
+  });
+
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/gitlab-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const body = followChatGitlabEntityRequestSchema.parse(request.body);
+      const pair = await resolveAgentScmBindingPair(app.db, request.params.chatId, identity.uuid);
+      if (!pair) {
+        throw new BadRequestError(
+          "No eligible (human, wake-agent) attention pair: the caller must be an active same-Team agent speaker, " +
+            "the chat needs an active same-Team human member, and no more than one human may link the caller " +
+            "as delegate.",
+        );
+      }
+      const result = await declareCurrentGitlabEntityFollow(app.db, {
+        organizationId: pair.organizationId,
+        chatId: request.params.chatId,
+        declaredByAgentId: identity.uuid,
+        humanAgentId: pair.humanAgentId,
+        delegateAgentId: pair.wakeAgentId,
+        entityUrl: body.entityUrl,
+        rebind: body.rebind,
+      });
+      if (result.outcome === "conflict") {
+        return reply.status(409).send({
+          error: "ENTITY_FOLLOWED_ELSEWHERE",
+          message:
+            `This GitLab attention line already lives in chat ${result.conflict.chatId}. ` +
+            "Work there, or re-issue with rebind to move it into this chat.",
+          conflict: result.conflict,
+        });
+      }
+      return reply.status(result.response.status === "already_following" ? 200 : 201).send(result.response);
+    },
+  );
+
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string } }>(
+    "/:chatId/gitlab-entities",
+    async (request) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const entityUrl = request.query.entity;
+      if (!entityUrl) throw new BadRequestError("Pass ?entity=<full GitLab issue or merge request URL> to unfollow.");
+      return removeCurrentGitlabEntityFollow(app.db, {
+        organizationId: identity.organizationId,
+        chatId: request.params.chatId,
+        entityUrl,
+      });
     },
   );
 }

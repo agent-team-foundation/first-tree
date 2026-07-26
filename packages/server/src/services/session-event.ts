@@ -6,7 +6,7 @@ import type {
   SessionEventKind,
 } from "@first-tree/shared";
 import { sessionEventSchema } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -36,6 +36,12 @@ export type SessionEventRow = {
   kind: SessionEventKind;
   payload: SessionEvent["payload"];
   createdAt: string;
+};
+
+export type ChatSessionEventFeed = {
+  agentId: string;
+  items: SessionEventRow[];
+  nextCursor: number | null;
 };
 
 const NUL_CHAR = "\u0000";
@@ -182,6 +188,86 @@ export async function listEvents(
   const nextCursor = hasMore && last ? last.seq : null;
 
   return { items, nextCursor };
+}
+
+/**
+ * List the newest event window for every non-human speaker in one chat.
+ *
+ * The caller-facing route gates the viewer with `requireChatAccess`; this
+ * query independently constrains event owners to current speaker membership.
+ * That makes chat membership the disclosure boundary without broadening the
+ * agent's org-level discoverability. A window function applies `limit` per
+ * agent, so one noisy speaker cannot crowd every sibling out of the response.
+ */
+export async function listChatSpeakerEvents(
+  db: Database,
+  chatId: string,
+  options?: { limit?: number; direction?: "asc" | "desc" },
+): Promise<{ feeds: ChatSessionEventFeed[] }> {
+  const limit = Math.min(Math.max(options?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const direction = options?.direction ?? "asc";
+  const orderFragment = direction === "desc" ? sql`DESC` : sql`ASC`;
+
+  const ranked = db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      seq: sessionEvents.seq,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      createdAt: sessionEvents.createdAt,
+      rank: sql<number>`row_number() over (
+        partition by ${sessionEvents.agentId}
+        order by ${sessionEvents.seq} ${orderFragment}
+      )`.as("event_rank"),
+    })
+    .from(sessionEvents)
+    .innerJoin(
+      chatMembership,
+      and(eq(chatMembership.chatId, sessionEvents.chatId), eq(chatMembership.agentId, sessionEvents.agentId)),
+    )
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .innerJoin(chats, eq(chats.id, sessionEvents.chatId))
+    .where(
+      and(
+        eq(sessionEvents.chatId, chatId),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.type, "agent"),
+        eq(agents.organizationId, chats.organizationId),
+      ),
+    )
+    .as("ranked_chat_session_events");
+
+  const rows = await db
+    .select({
+      id: ranked.id,
+      agentId: ranked.agentId,
+      chatId: ranked.chatId,
+      seq: ranked.seq,
+      kind: ranked.kind,
+      payload: ranked.payload,
+      createdAt: ranked.createdAt,
+    })
+    .from(ranked)
+    .where(lte(ranked.rank, limit + 1))
+    .orderBy(asc(ranked.agentId), direction === "desc" ? desc(ranked.seq) : asc(ranked.seq));
+
+  const rowsByAgent = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const feedRows = rowsByAgent.get(row.agentId);
+    if (feedRows) feedRows.push(row);
+    else rowsByAgent.set(row.agentId, [row]);
+  }
+
+  return {
+    feeds: [...rowsByAgent].map(([agentId, feedRows]) => {
+      const hasMore = feedRows.length > limit;
+      const items = (hasMore ? feedRows.slice(0, limit) : feedRows).map(rowToEvent);
+      const last = items[items.length - 1];
+      return { agentId, items, nextCursor: hasMore && last ? last.seq : null };
+    }),
+  };
 }
 
 /** Delete all events for a session — called on eviction / termination. */

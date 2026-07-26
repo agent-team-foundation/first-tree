@@ -1,31 +1,24 @@
 import { type AgentChatStatus, type ChatParticipantDetail, compareMainStatus } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause, Play } from "lucide-react";
-import { useContext } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { resumeSession, suspendSession } from "../../api/sessions.js";
-import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
-import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { AgentHovercard } from "./agent-hovercard.js";
-import { LiveTurnAgentsContext } from "./live-turn-context.js";
-import { TimelineJumpButton } from "./timeline-jump-button.js";
-import { WorkingChip } from "./working-chip.js";
 
 /**
- * AgentStatusPanel — the per-agent composite-status board, shared by the
- * chat right sidebar (always-on) and the compose status bar's expanded view
- * (step 7). One `GET /chats/:chatId/agent-status` call drives every row;
+ * AgentStatusPanel — the chat right sidebar's per-agent composite-status
+ * board. One `GET /chats/:chatId/agent-status` call drives every row;
  * freshness rides the admin WS invalidation of `["chat-agent-status", id]`
  * (see use-admin-ws) — no per-agent poll.
  *
  * Each row reads its main status through the shared `viewOf` vocabulary:
- * a status-point (StatusGlyph) on the avatar + a second line for every state
- * (working → the live activity, failed → a tinted attention pill,
- * idle / paused / offline → the state word in its own colour), so all rows
- * stay uniform / equal-height. The dot carries the shape + colour distinction.
+ * a status-point (StatusGlyph) on the avatar plus one static text label. The
+ * center timeline owns activity/tool detail and error navigation; the sidebar
+ * stays a calm identity + status + lightweight-control surface.
  */
 export function AgentStatusPanel({
   chatId,
@@ -51,11 +44,6 @@ export function AgentStatusPanel({
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000, // safety net; the WS invalidation is the live path
   });
-  // Agents with a live timeline turn (a mounted WorkingTurn), from ChatView via
-  // context. `reconcileLiveTurn` uses it to upgrade a stale `ready` row to
-  // `working` so the roster can't show Idle while the turn is visibly running.
-  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
-  const mounted = useMountedAnchors();
   // Per the per-chat-runtime authority refactor: working is per-chat
   // freshness stamp the server self-heals from; no local stale-clear ticker
   // needed. The admin-WS delta pushes the recomputed status down.
@@ -79,9 +67,7 @@ export function AgentStatusPanel({
           chatId={chatId}
           agent={agent}
           status={byAgent.get(agent.agentId) ?? null}
-          hasLiveTurn={liveTurnAgentIds.has(agent.agentId)}
           canManage={canManage(agent.agentId)}
-          mounted={mounted}
           compact={compact}
         />
       ))}
@@ -108,17 +94,13 @@ function AgentStatusRow({
   chatId,
   agent,
   status,
-  hasLiveTurn,
   canManage,
-  mounted,
   compact,
 }: {
   chatId: string;
   agent: ChatParticipantDetail;
   status: AgentChatStatus | null;
-  hasLiveTurn: boolean;
   canManage: boolean;
-  mounted: ReadonlySet<string>;
   compact: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -139,16 +121,9 @@ function AgentStatusRow({
     },
   });
 
-  // Reconcile a lapsed runtime heartbeat against the timeline's live-turn
-  // signal: a mounted WorkingTurn upgrades `ready → working` so the row can't
-  // read Idle while the conversation shows the agent working. Everything
-  // downstream (glyph, second line, Pause eligibility) reads this reconciled
-  // status so they stay internally consistent.
-  const displayStatus = status ? reconcileLiveTurn(status, hasLiveTurn) : null;
-
-  const view = displayStatus ? viewOf(displayStatus.main) : null;
-  const showPause = canManage && canPauseStatus(displayStatus);
-  const showResume = canManage && canResumeStatus(displayStatus);
+  const view = status ? viewOf(status.main) : null;
+  const showPause = canManage && canPauseStatus(status);
+  const showResume = canManage && canResumeStatus(status);
 
   return (
     <div
@@ -205,7 +180,7 @@ function AgentStatusRow({
         >
           {agent.displayName}
         </AgentHovercard>
-        <SecondLine status={displayStatus} mounted={mounted} />
+        <SecondLine status={status} />
       </div>
 
       {showPause ? <PauseButton onClick={() => suspendMut.mutate()} isPending={suspendMut.isPending} /> : null}
@@ -215,15 +190,11 @@ function AgentStatusRow({
 }
 
 /**
- * The row's second line — present for every state so all rows stay uniform.
- * Status words are sans (natural language); only technical info (tool name,
- * timer) is mono. The two *attention* states get a subtle tinted pill so they
- * jump out; the quiet states stay dot + plain coloured text:
- *   working            → "Working" (sans, blue) · "Bash · 0s" (mono, live)
- *   failed             → "Failed" pill (red)
- *   idle/paused/offline → the state word in its own colour (sans)
+ * The row's static second line — present for every state so all rows stay
+ * uniform. Working/tool activity and error navigation belong to the center
+ * timeline; this roster intentionally renders status only.
  */
-function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mounted: ReadonlySet<string> }) {
+function SecondLine({ status }: { status: AgentChatStatus | null }) {
   if (!status) {
     return (
       <div className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -231,43 +202,15 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
       </div>
     );
   }
-  if (status.main === "working" && status.activity) {
-    // "Working" (sans word) · "Bash · 0s" (mono tool + live timer). No leading
-    // pulse dot — the avatar already carries the breathing status dot. The
-    // whole chip is clickable → jumps to this agent's WorkingTurn.
-    return (
-      <TimelineJumpButton
-        agentId={status.agentId}
-        main="working"
-        anchored={isJumpable(mounted, "working", status.agentId)}
-        ariaLabel="Jump to this agent's activity in the timeline"
-        className="text-caption"
-        style={{ color: "var(--state-working)" }}
-      >
-        <span>Working</span>
-        <span aria-hidden="true">·</span>
-        <WorkingChip activity={status.activity} showDot={false} monochrome />
-      </TimelineJumpButton>
-    );
-  }
   if (status.main === "failed") {
-    // Pill is clickable → jumps to this agent's error in the timeline.
     return (
       <div className="flex">
-        <TimelineJumpButton
-          agentId={status.agentId}
-          main="failed"
-          anchored={isJumpable(mounted, "failed", status.agentId)}
-          ariaLabel="Jump to this agent's error in the timeline"
-        >
-          <StatePill tone="error" label="Failed" />
-        </TimelineJumpButton>
+        <StatePill tone="error" label="Failed" />
       </div>
     );
   }
-  // idle / paused / offline → the state word in its own colour, sans. No pill:
-  // these are the quiet, lowest-attention states — a tinted pill would
-  // over-weight them. The dot still carries the shape + colour.
+  // working / idle / paused / offline → the state word in its own colour,
+  // sans. Failed alone keeps the attention pill above.
   const view = viewOf(status.main);
   return (
     <div className="text-caption" style={{ color: view.colorVar }}>

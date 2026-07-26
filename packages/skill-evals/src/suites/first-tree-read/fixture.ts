@@ -7,12 +7,19 @@ import { runFixtureVerify } from "../../core/fixture-verify.js";
 import type { EvalReporter } from "../../core/reporter.js";
 import { installRepoSkill, parseSkillDescription } from "../../core/skills/install.js";
 import type { CommandResult, RunPaths } from "../../core/types.js";
-import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
+import type { FirstTreeReadEvalCase, FixtureValidation, WorkspaceKind } from "./types.js";
 
 const DOMAIN_NODE_TARGET_COUNT = 100;
 const NAVIGATION_NODE_MARKER = "evalNodeKind: navigation";
 const SKILL_NAME = "first-tree-read";
-const RUNTIME_SKILL_NAMES = ["first-tree-welcome", "first-tree-read", "first-tree-seed", "first-tree-write"] as const;
+const RUNTIME_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-read",
+  "first-tree-seed",
+  "first-tree-write",
+  "first-tree-file-bug",
+  "first-tree-qa",
+] as const;
 
 type DomainNode = {
   facts: readonly string[];
@@ -159,13 +166,16 @@ Your fixed working directory is \`${workspacePath}\`. The runtime marker
 
 - \`${sourceRepoPath}\` (fixture source repo)
 
-# Required Reading (First Tree Managed)
-
-Before changing a Context Tree, load \`.agents/skills/first-tree-write/SKILL.md\`.
-
 # Context Tree (First Tree Managed)
 
 The current Context Tree checkout is \`${contextTreePath}\`.
+
+## Context Tree Policy
+
+The tree records durable decisions, constraints, ownership, and cross-domain
+relationships; source repos record implementation detail. Default to normal
+tree content as current truth. Treat archive/supporting and member content as
+non-normal classes with narrower authority.
 
 Read task-scoped tree context before acting on software project questions:
 
@@ -181,10 +191,9 @@ Read task-scoped tree context before acting on software project questions:
 |---|---|
 ${skillRows}
 
-\`first-tree-welcome\` is the core onboarding skill. Tree-bound workspaces
-additionally install \`first-tree-read\`, \`first-tree-seed\`, and
-\`first-tree-write\`. Runtime metadata can activate skills, but visible
-instructions still define when the agent should load them.
+All First Tree skills are installed in every workspace. Runtime metadata can
+activate skills, but visible instructions still define when the agent should
+load them.
 `;
 }
 
@@ -383,16 +392,21 @@ function navigationParentPaths(nodes: readonly DomainNode[]): readonly string[] 
   return [...paths].sort();
 }
 
-function writeContextTreeFixture(paths: RunPaths): string {
-  const contextTreePath = join(paths.workspacePath, "context-tree");
+function writeContextTreeFixture(paths: RunPaths, workspaceKind: WorkspaceKind): string {
+  const managedWorkspace = workspaceKind === "context-tree";
+  const contextTreePath = managedWorkspace
+    ? join(paths.workspacePath, "context-tree")
+    : join(paths.runRoot, "byo-context-tree-source");
   const sourceRepoPath = join(paths.workspacePath, "source-repo");
   mkdirSync(contextTreePath, { recursive: true });
   mkdirSync(sourceRepoPath, { recursive: true });
 
-  writeText(
-    join(paths.workspacePath, ".first-tree", "workspace.json"),
-    `${JSON.stringify({ sources: ["source-repo"], tree: "context-tree" }, null, 2)}\n`,
-  );
+  if (managedWorkspace) {
+    writeText(
+      join(paths.workspacePath, ".first-tree", "workspace.json"),
+      `${JSON.stringify({ sources: ["source-repo"], tree: "context-tree" }, null, 2)}\n`,
+    );
+  }
   writeText(join(sourceRepoPath, "README.md"), "# Source Repo\n\nSoftware source fixture for first-tree-read evals.\n");
 
   writeText(join(contextTreePath, ".first-tree", "VERSION"), "0.7.0\n");
@@ -452,7 +466,8 @@ export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths, r
   });
   reporter.fixtureSetupStarted(evalCase.workspaceKind);
 
-  const contextTreePath = evalCase.workspaceKind === "context-tree" ? writeContextTreeFixture(paths) : null;
+  const contextTreePath =
+    evalCase.workspaceKind === "blank" ? null : writeContextTreeFixture(paths, evalCase.workspaceKind);
   if (evalCase.briefingMode === "runtime-generated") {
     if (contextTreePath === null) {
       throw new Error("runtime-generated first-tree-read fixture requires a context-tree workspace.");

@@ -1,14 +1,21 @@
 export type {
   BoundAgent,
   ClientConnectionConfig,
+  ProviderModelsListCommand,
   RuntimeAuthCommand,
   ServerWelcome,
   SessionCommand,
 } from "./client-connection.js";
-export { ClientConnection, ClientOrgMismatchError, ClientUserMismatchError } from "./client-connection.js";
+export {
+  ClientConnection,
+  ClientOrgMismatchError,
+  ClientRetiredError,
+  ClientUserMismatchError,
+} from "./client-connection.js";
 // Handlers
 export { detectStreamApiError, StreamApiTransientError } from "./handlers/claude-code.js";
 export { registerBuiltinHandlers } from "./handlers/index.js";
+export { createKimiCodeHandler, formatKimiCodeError, kimiToolIsReadOnly } from "./handlers/kimi-code.js";
 export {
   applyClientLoggerConfig,
   captureClientException,
@@ -35,6 +42,13 @@ export {
   probeCodexCapability,
   resolveCodexRuntimeBinary,
 } from "./runtime/capabilities/codex.js";
+export { probeCursorCapability } from "./runtime/capabilities/cursor.js";
+export {
+  type DiscoverModelsDeps,
+  discoverProviderModels,
+  parseCursorModelsOutput,
+  parseKimiConfigModels,
+} from "./runtime/capabilities/discover-models.js";
 export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
@@ -47,6 +61,7 @@ export {
   revalidateCapabilities,
   shouldFullReprobe,
 } from "./runtime/capabilities/index.js";
+
 export type {
   AdoptOptions,
   ChildCategory,
@@ -67,8 +82,16 @@ export { setCliBinding } from "./runtime/cli-binding.js";
 export { type CodexBrowserLoginOptions, runCodexBrowserLogin } from "./runtime/codex-login.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
+export {
+  CURSOR_INSTALL_COMMAND,
+  type CursorRuntimeBinaryResolution,
+  findCursorExecutableOnPath,
+  formatCursorBinaryMissingMessage,
+  resolveCursorRuntimeBinary,
+} from "./runtime/cursor-binary.js";
+export { type CursorBrowserLoginOptions, runCursorBrowserLogin } from "./runtime/cursor-login.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
-export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
+export type { AttachmentUploader, SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
 export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
 export { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
@@ -81,6 +104,8 @@ export type {
   SessionMessage,
 } from "./runtime/handler.js";
 export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
+export type { BuildImageAttachmentsOptions, BuildMessageImageSnapshotsResult } from "./runtime/image-snapshots.js";
+export { buildMessageImageSnapshots } from "./runtime/image-snapshots.js";
 export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
@@ -112,5 +137,13 @@ export {
   INIT_COMPLETE_SENTINEL_REL,
   markWorkspaceInitComplete,
 } from "./runtime/workspace.js";
-export type { AccessTokenProvider, PaginatedResult, RegisterResult, SdkConfig } from "./sdk.js";
+export type {
+  AccessTokenProvider,
+  ContextReviewRuntimeConfig,
+  ContextTreeConfig,
+  MemberProfile,
+  PaginatedResult,
+  RegisterResult,
+  SdkConfig,
+} from "./sdk.js";
 export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "./sdk.js";

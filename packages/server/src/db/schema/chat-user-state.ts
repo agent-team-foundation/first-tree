@@ -20,8 +20,10 @@ import { index, integer, pgTable, primaryKey, text, timestamp } from "drizzle-or
  *     state (active / archived / deleted). Auto-revives archived →
  *     active on new message; deleted is sticky (only the user can
  *     restore from the chat detail page).
+ *   - `pinned_at` — per-user pin (nullable timestamp). NULL = not
+ *     pinned; the timestamp doubles as the within-group sort key.
  *
- * Future fields slated for this table: pinned, mute_until, draft,
+ * Future fields slated for this table: mute_until, draft,
  * custom_title, last_seen_at — each as a separate change.
  *
  * Rows are lazy-upserted on first user write (markRead / mention
@@ -60,6 +62,13 @@ export const chatUserState = pgTable(
      * matches what `COALESCE(..., 'active')` returns for missing rows.
      */
     engagementStatus: text("engagement_status").notNull().default("active"),
+    /**
+     * Per-(chat, user) pin. A nullable timestamp (not a boolean) so it doubles
+     * as pin state (`IS NOT NULL` = pinned), an audit anchor, and a stable
+     * within-group sort key (`pinned_at DESC`). Pin is private per-user state —
+     * one user pinning a chat never affects another. NULL = not pinned.
+     */
+    pinnedAt: timestamp("pinned_at", { withTimezone: true }),
   },
   (table) => [
     primaryKey({ columns: [table.chatId, table.agentId] }),
@@ -76,5 +85,11 @@ export const chatUserState = pgTable(
      * bounded by the (small) set of rows with an unanswered question.
      */
     index("idx_user_state_open_req").on(table.agentId).where(sql`open_request_count > 0`),
+    /**
+     * Partial index for the pinned-lookup — bounded by the (small) set of a
+     * user's pinned chats. Enables a cheap cross-page "which of my chats are
+     * pinned" projection.
+     */
+    index("idx_user_state_pinned").on(table.agentId).where(sql`pinned_at IS NOT NULL`),
   ],
 );

@@ -14,23 +14,33 @@ human-friendly index over them.
 
 ## Install
 
+Production:
+
 ```bash
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree --version
+~/.local/bin/first-tree login <connect-code>
 ```
 
-The default public install path is portable and bundles Node.js. The binary
-lives at `first-tree`; the short alias `ft` is also installed.
-
-The npm global install path remains supported for operators and fallback
-installs:
+Staging:
 
 ```bash
-npm install -g first-tree
-first-tree --version
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
 ```
 
-npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
+The public shell installers support macOS and Linux and bundle Node.js. They
+install channel-specific binaries under `~/.local/bin`: `first-tree` / `ft`
+for production and `first-tree-staging` / `fts` for staging. The full path in
+the login command works immediately, before the current shell reloads `PATH`.
+The two lines are intentionally independent and do not provide shell-level
+transaction protection: when pasted together, an install-line failure does not
+automatically prevent the login line from running, and POSIX `sh` does not
+guarantee that `curl | sh` preserves a `curl` failure status.
+
+For self-hosted deployments, use the two-line command returned by the web
+console. It includes the server and portable download-base overrides when
+needed. Development builds continue to use `scripts/dev-install.sh` and
+`first-tree-dev login <connect-code>`.
 
 ## Global flags
 
@@ -54,10 +64,13 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── doc ...                  Org document library (publish, comments, reply, resolve, status)
+├── cron ...                 Scheduled jobs in the current chat (preview, create, list, show, update, pause, resume, delete)
+├── github ...               GitHub entity attention
+├── gitlab ...               GitLab Issue/MR entity attention
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
-└── tree ...                 Validate and browse Context Trees
+└── tree ...                 Read, write, review, validate, and browse Context Trees
 ```
 
 ---
@@ -164,8 +177,8 @@ the new bits, then restart the client service. If no server URL is configured
 yet, `upgrade` falls back to the current channel's latest release data directly
 so the update path still works before login/config. Portable installs download
 the channel manifest and verified tarball, including the bundled Node.js
-runtime. npm installs run `npm install -g` against the channel package and keep
-using the system Node.js runtime.
+runtime. Existing npm-mode installs retain their package-manager update path
+and continue using the system Node.js runtime.
 
 | Flag | Effect |
 |---|---|
@@ -173,15 +186,15 @@ using the system Node.js runtime.
 | `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`
-ancestor) is intentional — keeps a dev build from accidentally
-`npm i -g`-overwriting a prod global. For local development use
+ancestor) is intentional — it keeps a dev build from accidentally overwriting
+a hosted-channel installation. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
 
-In npm mode, `upgrade` checks the target package's `engines.node` metadata
-before install when npm can provide it. If the target requires a newer Node.js
-than the current process is running, the command fails before install with a
-system-Node upgrade hint and a portable-install migration hint. npm-mode
-updates do not replace Node.js themselves.
+For an existing npm-mode installation, `upgrade` checks the target package's
+`engines.node` metadata before install when npm can provide it. If the target
+requires a newer Node.js than the current process is running, the command fails
+before install with a system-Node upgrade hint and a shell-installer migration
+hint. npm-mode updates do not replace Node.js themselves.
 
 ---
 
@@ -216,7 +229,7 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|codex]
+first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code]
 ```
 
 Creates the agent row on the server and binds it to the given client
@@ -262,6 +275,7 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
+├── set-reasoning-effort <agent> <level>
 ├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
 ├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
 │                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
@@ -274,6 +288,12 @@ first-tree agent config
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]
 └── dry-run <agent> -f <patch.json>                 # validate + diff, no persist
 ```
+
+Reasoning effort values are provider-specific. Claude Code and Claude Code
+TUI accept `""` (inherit the operator's local setting), `low`, `medium`,
+`high`, or `max`. Codex accepts `low`, `medium`, `high`, `xhigh`, `max`, or
+`ultra`; availability of the higher levels is model-dependent and rejected
+combinations are reported by the provider.
 
 ### agent bind
 
@@ -309,7 +329,7 @@ Day-to-day messaging.
 ```
 first-tree chat
 ├── create [message]                               # create a separate task chat and write its first message
-│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
@@ -393,6 +413,25 @@ EOF
 # Stdin bodies are never checked — piping is also the escape hatch for
 # intentionally sending literal `\n` text.
 
+# Embed a workspace image — a markdown image `![alt](path)` in a `chat send`
+# body whose target is an image (png/jpeg/gif/webp) inside the agent's own
+# workspace is uploaded at send time and delivered as a real inline chat image
+# (the same shape a human composer upload uses), so recipients see the picture
+# instead of a broken local path. Only explicit `![...](...)` embeds are
+# captured (a bare filename is left as text), only the sender's own workspace,
+# and an image shown inside a block code sample the renderer recognizes (a
+# fenced block at any container depth, or an indented code block) is left as a
+# literal sample (an image written inside inline `code` is treated as a live
+# embed). Capture is best-effort and never blocks the send, and is skipped
+# entirely for a body longer than ~1 million characters (then sent verbatim). An image
+# that is too large (>10 MB), unreadable, or beyond the 20-per-message cap is
+# skipped: if no image in the message captured, the body is sent unchanged (the
+# skipped embed stays as text); if at least one sibling image did capture — so
+# the message becomes an image send — every workspace-image embed is removed
+# from the caption, so a skipped one is dropped rather than left as a path that
+# would render broken.
+echo 'Latest run: ![chart](reports/latency.png)' | first-tree chat send code-agent -f markdown
+
 # Ask a human a tracked question (red-dot + blocks the chat for them until they
 # answer). `chat ask` targets a single human; the message body IS the ask and
 # must be decision-self-sufficient for a reader who remembers nothing of the
@@ -475,10 +514,9 @@ you want to add a non-member to the current chat before sending there. A
 same-task handoff, such as architect to developer or developer to reviewer,
 stays in the current chat; invite the next agent and send the handoff there.
 
-Task creation is intentionally not idempotent. There is no operation id, and
-the CLI does not automatically retry a create request. If the command reports
-an unknown result after a network/server failure, check `chat list` or the Web
-UI before running it again; the chat may already exist.
+Ordinary task creation is intentionally not idempotent. There is no operation
+id, and the CLI does not automatically retry it. If an ordinary create reports
+an unknown result, check `chat list` or the Web UI before running it again.
 
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
@@ -534,6 +572,40 @@ markdown files plus a `manifest.json` of metadata.
 
 ---
 
+## cron
+
+Scheduled jobs in the current chat. At due time the Server writes one
+ordinary addressed markdown message to wake this agent. Every cron command
+(including `preview`, `list`, and `show`) requires `FIRST_TREE_CHAT_ID` from
+the agent session; prompt bodies use `-F <file>` or `-F -` only. The scheduler
+starts with the Server and uses `FIRST_TREE_POLLING_INTERVAL_SECONDS` as its
+polling cadence. The Server validates that cadence at startup in the `1..10`
+second dispatch-safe range.
+
+```
+first-tree cron
+├── preview --schedule <expr> --timezone <iana>
+├── create --name <name> --schedule <expr> --timezone <iana> -F <prompt.md|->
+├── list
+├── show <jobId>
+├── update <jobId> [--name ...] [--schedule ...] [--timezone ...] [-F <prompt.md|->]
+├── pause <jobId>
+├── resume <jobId>
+└── delete <jobId>
+```
+
+```bash
+first-tree cron preview --schedule "0 9 * * 1-5" --timezone America/New_York
+first-tree cron create --name daily-triage --schedule "0 9 * * 1-5" --timezone America/New_York -F ./prompt.md
+first-tree cron list
+first-tree cron show <jobId>
+first-tree cron pause <jobId>
+first-tree cron resume <jobId>
+first-tree cron delete <jobId>
+```
+
+---
+
 ## github
 
 GitHub entity attention for the current chat. `follow` wires an entity's
@@ -569,17 +641,274 @@ GitHub App installation to cover the repo (`422` otherwise).
 
 ---
 
+## gitlab
+
+GitLab Issue and Merge Request attention for the current chat. The commands
+operate entirely on First Tree's local webhook projection: they never call the
+GitLab API, validate an entity live, or use the current `glab` account.
+
+```
+first-tree gitlab
+├── follow <issue-or-mr-url> [--chat <chatId>] [--agent <name>] [--rebind]
+├── following [--chat <chatId>] [--agent <name>]
+└── unfollow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
+```
+
+```bash
+# Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
+first-tree gitlab follow https://gitlab.example/acme/api/issues/42
+first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42 --rebind
+first-tree gitlab following
+first-tree gitlab unfollow https://gitlab.example/acme/api/issues/42
+```
+
+`follow` accepts only a full Issue or Merge Request URL from the Team's one
+configured GitLab instance. Both GitLab route shapes—with or without the `/-/`
+segment—are accepted, and the submitted URL is preserved for user-facing
+links. Repeating a follow for the same entity in the same chat refreshes that
+link to the latest submitted URL while remaining idempotent. The command
+records a pending declaration without provider egress; the next matching valid
+webhook supplies numeric project identity and activates the declaration. The
+same human/delegate pair cannot follow the entity from a second chat: the
+command reports the existing room, and `--rebind` atomically moves that line
+when the task context intentionally changes. Different pairs remain
+independent. A pending
+declaration reports `state: null` because First Tree has not verified provider
+state. There is no GitLab `context-review` command.
+
+`following` returns every active binding in the chat as a stable public
+projection, including automatic reviewer / assignee / mention routing and
+explicit `agent_declared` / `human_declared` rows. Pending declarations and
+active webhook-observed bindings report their corresponding status. Internal
+connection, organization, mapping, actor, identity, and normalized-path
+identifiers are not returned.
+
+`unfollow` is URL-based and idempotent: `removed: 0` is terminal success. It
+removes every automatic or manual binding for that entity in the current chat.
+A later explicit reviewer, assignee, or mention event may create a new route.
+After a project rename, use the current URL returned by `following`; the
+inbound-only service cannot resolve an arbitrary old path back to a numeric
+project identity.
+
+These commands control First Tree chat attention. Native GitLab
+subscribe/unsubscribe operations control only the authenticated GitLab
+account's personal notifications and are not a replacement for chat follow.
+
+---
+
 ## org
 
 ```
 first-tree org
-└── bind-tree <url>                                  # record this org's Context Tree repo URL
+├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
+└── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
+    ├── review-config [--agent <name>]                # read live binding + Reviewer assignment for a local Agent
+    │     --as-member [--org <orgId>]                 # logged-in member; no running Client Runtime, local Agent, or active Computer connection required
+    └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
 `bind-tree` records the team's Context Tree URL in
 `organization_settings(context_tree)`. Used by the onboarding flow's
 "create new tree" path, where the agent calls back into the server
-after scaffolding the tree.
+after scaffolding the tree. It is retained for compatibility with existing
+scripts: without `--org`, it resolves the caller's default organization through
+`GET /api/v1/me`; with `--org`, it targets the explicitly supplied organization
+ID. `--branch` is optional and sends an explicit branch when a recovery path must
+reproduce an exact repo/branch binding; when omitted, the server preserves the
+existing branch or defaults to `main`. It is not agent-scoped and is separate
+from `context-tree set` below.
+
+The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
+returns the same runtime-safe binding representation for admins and members. If
+a row has no repo and a valid retained branch, this safe read returns the
+unbound branch-only representation. If a loose historical repo or branch is not
+valid under the active binding contract, the safe read fails without returning
+the raw value. Loose historical rows that are visible for repair are exposed
+only through the admin-only raw read
+`GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
+
+### org context-tree
+
+```bash
+first-tree org context-tree [--agent <name>]
+```
+
+`context-tree` is a read-only view of the Cloud `context_tree` setting for the
+selected agent's organization. It does not accept `--org`: the CLI sends the
+selected agent as `X-Agent-Id`, and the server derives that agent's
+organization. The command reads only `GET /api/v1/agent/context-tree/info`.
+It never falls back to the user's default organization from `/me`, the legacy
+`/api/v1/context-tree/info` endpoint, the web app's current organization, or a
+local workspace manifest or checkout.
+
+The selected agent is resolved in this order:
+
+1. `--agent <name>` selects that named local agent.
+2. `FIRST_TREE_AGENT_ID` selects the local agent whose configured UUID matches
+   the environment value.
+3. When exactly one local agent is configured, that agent is selected.
+
+Selection fails before any network request with exit code `2` when there is no
+local agent (`MISSING_AGENT`), more than one candidate (`AMBIGUOUS_AGENT`), an
+environment UUID that is not local (`ENV_AGENT_NOT_LOCAL`), or an unknown
+explicit name (`UNKNOWN_AGENT`). An explicit `--agent` takes precedence over
+`FIRST_TREE_AGENT_ID`.
+
+Human output reports one of three states. `Bound` includes the resolved or
+persisted provider, repository, and branch. `Unbound` advises the user to ask
+an administrator for that agent's
+organization to bind an existing tree or initialize a new one. `Unreadable`
+means the agent-scoped request failed or its response could not be validated; a
+failed read is never reported as `Unbound`. A loose invalid historical setting
+is projected as inactive by the agent/runtime endpoint, while the safe settings
+GET returns a non-secret conflict and the admin raw endpoint preserves the
+value for repair.
+
+With `--json` or `FIRST_TREE_JSON=1`, successful output is exactly one of:
+
+```json
+{"ok":true,"data":{"status":"bound","provider":"github","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+{"ok":true,"data":{"status":"unbound","repo":null,"branch":null}}
+```
+
+`repo` alone determines binding state. An unbound response is normalized to
+`branch: null` even if the server supplies its default branch. A bound response
+with a null branch is normalized to `"main"`.
+
+Authentication, connection, timeout, remote, response-validation, and
+unexpected read failures use the following JSON error shape and a non-zero exit
+code:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UNREADABLE","message":"...","status":"unreadable"}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+other remote or invalid-response failures exit `1`. Agent-selection failures
+retain exit code `2` and their existing error envelopes.
+
+### org context-tree review-config
+
+```bash
+first-tree org context-tree review-config [--agent <name>]
+first-tree org context-tree review-config --as-member [--org <orgId>]
+```
+
+Without `--as-member`, `review-config` reads the bound repository/branch and
+Context Reviewer assignment from the same agent-scoped server response. It
+reports `Off`, `Assigned`, or `Not assigned` for the selected runtime Agent.
+
+With `--as-member`, it uses the existing member-readable `context_tree` and
+`context_tree_features` settings and `/me` Team selection. An explicit `--org`
+must be one of the caller's active memberships; otherwise the current default,
+then sole-membership fallback, is used, and ambiguous multi-Team state fails
+closed. This is the Write preflight path after standard CLI login: member
+credentials and `client.yaml` remain present, but no running Client Runtime or
+daemon, local First Tree Agent, or active Computer connection is required.
+`--as-member` conflicts with `--agent`; `--org` requires `--as-member`.
+
+The result includes the live provider. The command contains no review mode,
+generation, governance, or merge-method setting: Context Review uses the
+currently assigned Reviewer and current-state configuration semantics.
+
+### org context-tree set
+
+```bash
+first-tree org context-tree set <repo> [--branch <branch>] [--agent <name>]
+```
+
+`context-tree set` directly sets or replaces the Cloud `context_tree` binding
+for the selected local agent's organization. It does not accept `--org` or
+`--rebind`, and it provides no unset/clear operation. Agent selection uses the
+same precedence and exit-code-`2` failures as the read command above:
+explicit `--agent`, then `FIRST_TREE_AGENT_ID`, then the only configured local
+agent. Selection failures retain their existing `MISSING_AGENT`,
+`AMBIGUOUS_AGENT`, `ENV_AGENT_NOT_LOCAL`, or `UNKNOWN_AGENT` envelopes; they
+are not wrapped as `CONTEXT_TREE_UPDATE_FAILED`. Selection is completed before
+the SDK is created or any credentials or network are accessed.
+
+The command performs a two-step, agent-scoped write. It first sends
+`GET /api/v1/agent/me` with the selected agent to obtain a non-empty
+`organizationId`, then sends the existing admin-only Class B request
+`PUT /api/v1/orgs/:orgId/settings/context_tree`, URL-encoding `orgId`. The
+selected agent identity, current user JWT, and current runtime-session token are
+used for both requests. This write flow does not call either Class B settings
+GET and never falls back to `/api/v1/me`, the legacy
+`/api/v1/context-tree/*` endpoints, the web app's current organization, a local
+workspace manifest, or a local checkout. The agent-profile GET may use the
+client's normal read retry behavior. The PUT is never retried automatically, so
+one invocation cannot repeat a settings-version increment after an ambiguous
+transport failure.
+
+`<repo>` accepts HTTPS, `ssh://`, and scp-like SSH repository coordinates. The
+value must have a host and repository path, contain no embedded credentials,
+have no surrounding whitespace, and contain no control characters. URL forms
+must use literal `https://` or `ssh://` syntax; queries, fragments, backslashes,
+and local drive paths are rejected. HTTP and `git://` URLs are rejected.
+`--branch` must be a valid Git branch name. In addition to being non-empty,
+single-line, and free of surrounding whitespace and control characters, it
+must satisfy Git ref-format rules such as rejecting `..`, `@{`, components
+that start with `.` or end with `.lock`, a branch name that starts with `-`,
+and forbidden ref characters. Invalid repo and branch values fail locally with
+`INVALID_CONTEXT_TREE_REPO` and
+`INVALID_CONTEXT_TREE_BRANCH`, respectively, exit `2`, and make no SDK,
+credential, or HTTP request.
+
+For example, these repository forms are accepted:
+
+```text
+https://github.com/acme/context-tree.git
+ssh://git@github.com/acme/context-tree.git
+git@github.com:acme/context-tree.git
+https://gitlab.company.example/group/subgroup/context-tree.git
+git@gitlab.company.example:group/subgroup/context-tree.git
+```
+
+For a GitLab repository, the Team must already have a current GitLab
+connection for the same exact web origin and the deployment operator must
+authorize that origin through `FIRST_TREE_GITLAB_EGRESS_ALLOWLIST`. A rejected
+origin does not trigger any outbound request. The Settings page deliberately
+keeps repository and branch editing available to admins in this release; every
+later Write, Review, and Web Context operation rereads the live binding and
+fails closed if it changed.
+
+When `--branch` is omitted, the request body contains only `{ "repo": "..." }`
+and an existing valid branch is preserved. On a first binding, the server's
+default branch is `main`. Supplying `--branch` replaces the branch. If a loose
+historical row contains an invalid branch, a repo-only update is rejected
+without a partial write; repair it by supplying both the repository and a
+valid `--branch`. A successful response must explicitly contain a valid repo
+and branch, must echo the requested repository, and must echo a provided
+branch; missing fields, unknown fields, mismatches, and otherwise invalid
+responses are update failures.
+
+Human output reports `Bound` and shows the repository and final branch. With
+`--json` or `FIRST_TREE_JSON=1`, successful output is exactly:
+
+```json
+{"ok":true,"data":{"status":"bound","provider":"github","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+```
+
+After local agent selection and input validation, all authentication,
+connection, timeout, HTTP, response-validation, and unexpected failures use
+this exact error envelope:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UPDATE_FAILED","message":"..."}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+403, other HTTP failures, and invalid or inconsistent responses exit `1`.
+When a network or server failure leaves the PUT result uncertain, the message
+directs the operator to rerun `first-tree org context-tree` with the same agent
+selection before retrying. Failure output never prints raw response bodies,
+tokens, credentials, or a full private repository coordinate; successful
+output includes the requested repository as documented above.
+
+For this write command, debug logs may identify the selected agent, request
+phase, derived organization, and final status. Warning logs contain only the
+sanitized failure category, exit code, and HTTP status; they do not contain
+secrets or raw response data.
 
 ---
 
@@ -587,8 +916,12 @@ after scaffolding the tree.
 
 The background service that holds the client WebSocket and runs every
 configured agent on this machine. Installed automatically by `first-tree
-login` on supported desktop platforms: launchd on macOS, `systemd --user`
-on Linux, and a per-user Task Scheduler logon task on Windows.
+login` on supported desktop platforms: launchd on macOS, systemd on
+Linux, and a per-user Task Scheduler logon task on Windows. Linux installs
+use a `systemd --user` unit for normal users; when the CLI is run as root,
+First Tree installs the same channel's unit in system scope instead
+(`/etc/systemd/system/<channel>.service`) so daemon setup does not depend
+on a root user D-Bus session.
 
 On Windows, Task Scheduler only owns per-user logon/start triggering. A hidden
 First Tree supervisor loop owns the daemon child process, exit-code restart
@@ -664,34 +997,416 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree creation, structural validation, and hierarchy browsing. The
-`tree` namespace carries `verify`, `tree`, and `init`; the rest (`migrate` /
-`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
-`automation` / `skill` groups) was retired in the 2026-06 cleanup because the
-cloud now owns workspace + tree provisioning and the client runtime inlines its
-own skill payload install (see PR following #844).
+Context Tree task-read activation, source-backed write and Seed preflight,
+GitHub App-backed review publication, provider-aware creation/adoption,
+structural validation, and hierarchy browsing. The `tree` namespace carries `read`, `write`, `review`, `seed`,
+`verify`, `tree`, and `init`; the rest (`migrate` / `upgrade` / `status` /
+`codeowners` / `claude-hook` / `inject` / `automation` / `skill` groups) was
+retired in the 2026-06 cleanup because the cloud now owns workspace + tree
+provisioning and the client runtime inlines its own skill payload install.
 
 ```
 first-tree tree
-├── init [options]                           # create a new team Context Tree repo with local gh
+├── init --team ID --provider github|gitlab \
+│        --repo URL --branch BRANCH \
+│        (--create|--adopt)                  # initialize through local gh/glab + git
+├── read --team ID --snapshot DIR            # activate one exact task read snapshot
+├── write --team ID --snapshot DIR \
+│        [--github-login LOGIN]               # provider-aware authoring preflight
+├── review --run ID --event EVENT \
+│        --body-file PATH                     # publish one GitHub App review for the live PR head
+├── seed --team ID                            # preflight clean Team Seed authority/binding
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
 
-`first-tree tree init` creates a brand-new team Context Tree repository with the
-user's local `gh`: it creates the repo (one path for user- and org-owned repos),
+`first-tree tree read` is the BYO Working Agent activation boundary for one
+task. Both `--team <team-id>` and `--snapshot <new-directory>` are required.
+The Team is always explicit: the command does not read a Web selection, the
+account's default organization, a local Agent, or a prior task receipt.
+
+Activation performs one member-authenticated Server request to
+`GET /api/v1/orgs/:orgId/settings/context_tree`. That Class B route resolves
+the URL Team's current active membership and current safe Context Tree binding;
+the activation disables transport retries so this authority check is not
+repeated after a transient response.
+Only after it succeeds does the CLI create staging state, execute one strict
+`git fetch` for the bound branch, resolve the fetched ref to an exact commit,
+and atomically publish a detached snapshot at the requested path. The final
+snapshot has no mutable Git remote and carries local Git metadata identifying
+the Team, binding, and commit. The destination must not already exist; the
+command never overwrites or reuses a prior task snapshot. Tracked symbolic
+links materialized as filesystem links are accepted only when a relative link
+resolves inside the snapshot to a regular file tracked by the same exact
+commit; directory, absolute, dangling, escaping, or untracked-target links
+fail before content is returned. When Git uses `core.symlinks=false`, an index
+symlink is instead a regular file containing the link blob. The snapshot
+accepts that file only when its raw object id still equals the exact index
+entry and treats it as opaque content rather than following it as an alias.
+
+Authority, invalid/unbound binding, fetch, commit resolution, and snapshot
+failures are distinct fail-closed stages. None falls back to cached content, a
+managed workspace checkout, a stale local branch, or another Team. Error
+messages and JSON envelopes do not include access credentials or raw upstream
+responses. Stable failure codes are:
+
+- `CONTEXT_TREE_READ_INVALID_INPUT`
+- `CONTEXT_TREE_READ_AUTHORITY_FAILED`
+- `CONTEXT_TREE_READ_BINDING_INVALID`
+- `CONTEXT_TREE_READ_UNBOUND`
+- `CONTEXT_TREE_READ_FETCH_FAILED`
+- `CONTEXT_TREE_READ_COMMIT_FAILED`
+- `CONTEXT_TREE_READ_SNAPSHOT_FAILED`
+
+If a later hierarchy read detects a removed marker, changed HEAD, or dirty
+worktree, it fails before returning content with
+`CONTEXT_TREE_READ_SNAPSHOT_INVALID`.
+
+With global `--json`, success returns one envelope whose `data` is
+`{ teamId, binding: { repo, branch }, commit, snapshotPath }`. Human output
+reports the same identity. For the rest of the task, run hierarchy selectors
+inside `snapshotPath` and read Markdown only from that root. A new task uses a
+new path and a new activation so membership, binding, and branch movement are
+observed.
+
+`first-tree tree write` is the stateless BYO Write preflight for a source-backed
+change. It requires the explicit Team and the existing exact snapshot created
+by `tree read`. A GitHub binding also requires the current local `gh` login via
+`--github-login`; a GitLab binding instead verifies local `glab`
+authentication for the exact current connection origin, including a
+non-default HTTPS port. It does not read a Workspace
+manifest, managed briefing, setup-chat transcript, Web selection, account
+default/current Team, local Agent, or prior task receipt.
+
+The command sends one member-authenticated request to
+`POST /api/v1/orgs/:orgId/context-tree/write-preflight`. The Server reads the
+live bound Tree and assigned Context Reviewer as one current tuple, verifies
+the requester's active Team/human identity and provider-specific forge
+authority, and checks that the Reviewer is an active non-human Agent. GitHub
+verifies the linked login; GitLab requires the bound repository origin to
+match the Team's current GitLab connection. The request cannot select a
+Reviewer, task key, Chat, sender, topic, review, or merge authority.
+
+After Server admission, the CLI requires the current binding to match the
+snapshot identity (canonical repository plus exact branch), strictly fetches
+the bound branch into temporary state, and requires its remote tip to equal the
+snapshot commit. It then re-verifies that the snapshot is still clean and fixed
+at the same commit. The command removes temporary fetch state and performs no
+remote mutation. It is safe to run at activation and repeat immediately before
+the first push or PR creation; each run observes Server current Reviewer state.
+
+With global `--json`, success returns
+`{ provider, teamId, binding, baseCommit, snapshotPath, reviewerAgentUuid,
+requesterGithubLogin, gitlabInstanceOrigin }`. Human output reports the same
+provider authority without exposing a credential. Stable local and
+Server failure codes distinguish invalid input/snapshot, explicit-Team
+mismatch, authority or identity denial, unavailable/unsupported binding,
+invalid configuration, unavailable review/Reviewer, changed binding, fetch
+failure, and a stale snapshot base. Failure creates no PR or Context Reviewer run.
+The returned Reviewer UUID is diagnostic only: callers must not cache or route
+from it, because the provider webhook resolves the Server current Reviewer
+again.
+
+Authoring happens in a separate task worktree/branch created from
+`baseCommit`; the exact read snapshot remains immutable. After a ready PR/MR
+exists, the forge webhook creates or reuses its stable provider-scoped
+Reviewer Chat and trusted review run. Writers do not create or wake a review
+Chat, repair the change, publish a verdict, or merge. GitHub uses the App
+webhook and App review path. GitLab uses a processable Merge Request event from
+the Team's inbound System Hook; the Reviewer reads and mutates GitLab with
+host-local `git` and `glab` credentials. System Hooks do not deliver Note
+events, and a normal GitLab Note never starts Context Review, so a Reviewer
+note cannot self-trigger another run.
+
+`first-tree tree review` is the GitHub App publication command and is available
+only inside an active GitHub Context Reviewer runtime session. It accepts a
+Server-authored run id, one of `APPROVE`,
+`REQUEST_CHANGES`, or `COMMENT`, and a UTF-8 body file (`-` reads stdin). It
+does not accept a head or alternate agent. The Server re-resolves the live
+installation, bound repository, pull request, run, configured Reviewer and
+current PR head before the GitHub App creates the review. Unauthorized
+submissions fail closed. The command never merges. After a successful
+`APPROVE`, the Reviewer takes the exact full SHA only from that response's
+`data.reviewedHead` and uses its local GitHub identity for one immediate REST
+squash-merge compare-and-set: `PUT repos/<owner/repo>/pulls/<number>/merge`
+with `sha=<reviewedHead>` and `merge_method=squash`. It does not use
+`gh pr merge`, `--admin`, `--auto`, a substitute head, a fallback merge path or
+a mutation retry. An unconfirmed mutation permits at most one read-only pull
+request `GET`; the Reviewer reports merged, open or unknown only from the
+resulting evidence. Real merge-queue, ruleset, permission and transport
+behavior remains a live GitHub QA boundary rather than a deterministic-stub
+security claim. GitLab Context Review never calls this command and never
+simulates an approval, status, label, ruleset, CODEOWNERS gate, merge queue, or
+admin bypass. A blocker is reported through one local-identity MR note. A
+clean ready MR is squash-merged exactly once with
+`glab mr merge --sha <reviewed-head>` (or the same-identity Merge Requests API
+only when it enforces the `sha` compare-and-set). Unsupported exact-SHA CAS and
+head, credential, pipeline/protection, deterministic-validation, or
+unknown-result failures all fail closed; an unknown merge permits one
+read-only reconciliation and no mutation retry.
+
+Existing Context Tree repositories should require pull requests, at least one
+current approval, and stale-review dismissal after every push. An administrator
+must update an existing repository ruleset with local `gh api`; the GitHub App
+does not change repository rules. Preserve non-fast-forward protection, disable
+Code Owner and last-push approval requirements, and verify the resulting live
+ruleset before relying on the merge gate. Also remove the retired
+`first-tree/context-review` required status check from every effective ruleset:
+the App-review-only workflow no longer publishes that status, so merely adding
+the approval ruleset while retaining the old check leaves the repository
+unmergeable.
+
+The one-approval gate intentionally prevents a single GitHub user from
+self-merging while the App Reviewer is unavailable; the PR needs the App or
+another human approval. Do not compensate by broadening App permissions,
+restoring CODEOWNERS, or adding a bypass actor.
+
+From the Context Tree checkout, an administrator should first identify the
+existing effective rulesets. Repository rulesets are edited in place; do not
+create a second named ruleset when the repository already has a default-branch
+ruleset such as `protect main`:
+
+```bash
+remote=$(git remote get-url origin)
+repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
+gh api "repos/$repo/rulesets?includes_parents=true&per_page=100" \
+  --jq '.[] | [.id, .name, .source_type, .source, .enforcement] | @tsv'
+```
+
+For each repository-owned ruleset that targets the default branch and contains
+the pull-request gate or retired status, set its id explicitly and update it
+without replacing unrelated rules. The transformation below preserves the
+ruleset name, enforcement, conditions, bypass actors, deletion/creation/
+non-fast-forward rules, and unrelated required status checks. Repeat it for
+each applicable repository-owned ruleset:
+
+```bash
+ruleset_id=<repository-ruleset-id>
+ruleset_input=$(mktemp)
+ruleset_update=$(mktemp)
+gh api "repos/$repo/rulesets/$ruleset_id" >"$ruleset_input"
+
+jq '
+  .rules |= (
+    map(
+      if .type == "pull_request" then
+        .parameters |= (. + {
+          required_approving_review_count: 1,
+          require_code_owner_review: false,
+          dismiss_stale_reviews_on_push: true,
+          require_last_push_approval: false,
+          required_review_thread_resolution: false
+        })
+      elif .type == "required_status_checks" then
+        .parameters.required_status_checks |=
+          map(select(.context != "first-tree/context-review"))
+      else . end
+    )
+    | map(select(
+        .type != "required_status_checks" or
+        (.parameters.required_status_checks | length) > 0
+      ))
+  )
+  | {
+      name,
+      target,
+      enforcement,
+      bypass_actors,
+      conditions,
+      rules
+    }
+' "$ruleset_input" >"$ruleset_update"
+
+gh api --method PUT "repos/$repo/rulesets/$ruleset_id" \
+  --input "$ruleset_update"
+rm -f -- "$ruleset_input" "$ruleset_update"
+```
+
+If no repository-owned default-branch ruleset exists, create the Seed ruleset
+instead of running the update above. A ruleset whose `source_type` is
+`Organization` is inherited and cannot be changed through the repository API;
+its organization ruleset owner must apply the same approval/stale-review and
+retired-status changes.
+
+After the update, inspect every effective default-branch ruleset and confirm
+that the combined policy requires at least one approval, dismisses stale
+reviews on push, blocks non-fast-forward updates, and contains no
+`first-tree/context-review` required status. Do not delete or overwrite
+unrelated organization policy while removing the retired check.
+
+`first-tree tree seed --team <team-id>` is the stateless admission boundary for
+portable Context Tree setup. The Team is required and explicit; this command
+does not consult a Workspace manifest, managed briefing, prior setup Chat,
+Web selection, or account default/current Team. The Server resolves the signed-in
+member's active role and the selected Team's current binding on every call.
+An active Admin receives either the exact bound repo/branch or the current
+unbound branch. An active ordinary member receives the stable
+`CONTEXT_TREE_SEED_NEEDS_ADMIN` response with the selected Team as the recovery
+anchor. Invalid historical binding data fails closed. The preflight creates no
+repository, binding, branch, PR, Chat, review, or merge state and disables
+transport retries; setup agents repeat it explicitly immediately before each
+remote mutation.
+
+Provider-aware Seed uses:
+
+```bash
+first-tree tree init \
+  --team <team-id> \
+  --provider github|gitlab \
+  --repo <exact-repository-url> \
+  --branch <branch> \
+  --create|--adopt
+```
+
+All five choices are explicit. The command never infers the provider or target
+repository from the current directory, Web selection, account default, or
+GitLab hostname. `--create` requires the exact remote to be absent, scaffolds
+and locally verifies the tree, then creates and pushes it with host-local
+`gh`/`glab` plus `git`. `--adopt` requires the exact remote and branch to be
+readable, clones it without pushing or overwriting history, and requires
+`tree verify` to pass. GitLab nested namespaces and Self-Managed hosts are
+preserved. GitHub may include `--with-workflow`; GitLab never creates a GitHub
+Actions workflow, approval rule, ruleset, CODEOWNERS gate, or App setup.
+
+The Server Seed preflight is repeated before remote mutation and final binding.
+An existing binding is an idempotent success only when provider, canonical
+repository, and branch all match; provider-aware Seed never replaces another
+binding. New finalization persists the explicit provider. A changed binding,
+branch, Team authority, forge credential, or remote state fails closed. If a
+create/push response is partial or final binding is unknown, the command
+reports the exact possibly-created remote, performs at most one read-only
+binding reconciliation, and never claims rollback or deletes a repository.
+
+For compatibility, invoking `first-tree tree init` without the provider-aware
+flags retains the legacy GitHub-only path through the 0.5.x line. This
+compatibility path and its `--owner`, `--name`, `--org`, `--no-bind`, and
+`--rebind` flags are deprecated and will be removed in First Tree 0.6.0;
+automation must migrate to the explicit
+`--team --provider --repo --branch --create|--adopt` contract before that
+release. No new provider behavior is added to the legacy implementation.
+That path creates a brand-new team
+Context Tree repository with the user's local `gh`: it creates the repo (one
+path for user- and org-owned repos),
 scaffolds a minimal valid tree (root `NODE.md` + members index + a creator member
 node), self-verifies before pushing, pushes, and — unless `--no-bind` — binds the
 org's `context_tree` setting and surfaces guidance for adding the repo to the
 team's GitHub App installation. It does not seed `.github/workflows/validate-tree.yml`
 by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
 to include it. In the bound path the repo is created under the team's GitHub App
-installation account (so the installation can cover it), and `tree init` refuses
-to replace an existing team binding unless `--rebind` is passed. Key options:
-`--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
-`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
+installation account (so the installation can cover it), and any explicit `--owner`
+is canonicalized before the remote create so case-variant input does not fail after
+GitHub has already accepted the repository. If create succeeds but binding or
+finalization fails, the CLI says the repo was created but not bound, includes the
+repo URL, and tells you to delete it manually if it is empty; it does not auto-delete
+created repositories by default. `tree init` refuses to replace an existing team
+binding unless `--rebind` is passed. Non-rebind finalization is conflict-safe: if
+another writer binds the org after preflight but before the local GitHub side
+effects finish, the server preserves that competing binding and `tree init`
+reports the conflict rather than overwriting it. A non-`--rebind` invocation
+requires a Server with the raw repair/finalize surface during preflight; older
+Servers fail before any GitHub repository is created. Key options: `--owner`,
+`--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
+`--rebind`, `--org`, `--team`. Run `first-tree tree init --help` for the full list.
 
-Run `first-tree tree verify --help` for options.
+The legacy portable GitHub path uses `tree init --team <team-id>` without
+`--provider`, `--repo`, `--branch`, `--create`, or `--adopt`. In that mode
+`--team` cannot be
+combined with `--org`, `--no-bind`, or `--rebind`; an existing binding is an
+idempotent success returned before local tool checks, and the command never
+replaces it. For an unbound Team the CLI repeats the Server Seed preflight before
+GitHub create/push and again before final binding. A concurrent binding is
+preserved, an authority or branch change fails closed, and a lost finalization
+response is reconciled against the Server's current binding. Failures after
+GitHub mutation name the created or possibly-created repository and never claim
+that it was rolled back. The legacy managed `--org`/default-org path remains
+available for existing workflows.
+
+The Seed workflow records merged Phase 1 authority in
+`<tree>/.first-tree/progress.md`: one versioned Seed marker, the checked Phase 1
+line, the explicit Team id, sorted canonical source identities with the exact
+commits used for evidence, and the approved top-level domains. A later process
+or agent resumes Phase 2 only after a fresh `tree seed --team` result matches
+the Tree origin/branch, that exact branch is strictly fetched, the progress
+ledger matches the same explicit sources, and every recorded commit remains
+readable. Transcript text, private caches, a familiar directory shape, and the
+current source head are not recovery authority; any binding, role, source
+identity, or recorded-commit mismatch fails closed.
+
+Before any GitHub repository write, the bound path reads the admin-only raw
+Context Tree setting. An HTTP 404 from that endpoint identifies an older Server
+without conditional-finalization support, so the command uses the legacy safe
+settings GET to classify the current state. A valid active binding still gets
+the normal existing-binding refusal; if the fallback confirms an unbound state,
+a non-`--rebind` invocation fails before looking up the GitHub App installation
+or creating a repository and requires a Server upgrade. With `--rebind`, the
+caller has explicitly authorized replacement and may continue through the
+compatible legacy write. Invalid fallback data and every other raw-read failure
+remain fail-stop.
+
+A valid branch-only setting remains unbound. Its branch is retained exactly and
+used for `git init`, the generated validation workflow filter, the final
+repo-and-branch binding, and the success summary; an absent setting uses
+`main`. Any invalid historical repo or branch fails closed before repository
+creation so an administrator can repair it without leaving remote side
+effects.
+
+Without `--rebind`, final binding uses the dedicated admin-only endpoint:
+
+```http
+POST /api/v1/orgs/:orgId/settings/context_tree/initialize
+Content-Type: application/json
+
+{"repo":"https://github.com/acme/tree.git","branch":"trunk","expectedUnboundBranch":"trunk"}
+```
+
+The Server acquires the organization settings parent lock and commits only if
+the setting is still unbound at exactly `expectedUnboundBranch`, the branch read
+during preflight. A competing full binding or branch-only change returns 409
+and is left unchanged. This dedicated endpoint also prevents an older Server
+from interpreting conditional finalization as an ordinary unconditional
+settings write. `--rebind` intentionally bypasses this compare-and-set path and
+uses the generic `PUT /api/v1/orgs/:orgId/settings/context_tree` with only
+`repo` and `branch` to replace the binding directly. The CLI strictly validates
+the final response before reporting success.
+
+Repository creation and push happen before final binding, so a finalization
+failure can leave the new repository unbound. When that happens, the CLI says
+the repository was created but not bound, includes the repo URL, and tells you
+to delete an empty repo manually instead of relying on the command to clean it
+up. A 409 from the non-rebind finalization POST has a known conflict outcome:
+the competing setting was preserved, and the CLI requires reading the
+organization's current Context Tree setting first without suggesting a retry or
+overwrite command. A finalization 404 during a rolling Server change reports
+that no binding was written and requires an upgrade plus read-back, also
+without an overwrite command. Other HTTP failures require read-back before
+retrying. A network failure, timeout, or invalid/unconfirmed response has an
+unknown write outcome and likewise requires read-back first.
+The error identifies the exact organization, repository, and retained branch.
+For an unknown outcome it also shows the exact recovery form `first-tree org
+bind-tree <repo> --org <orgId> --branch <branch>`, but explicitly makes running
+it conditional on read-back first confirming that the setting is still
+unbound.
+
+`first-tree tree verify` applies the current strict structural policy. Normal
+content requires parseable YAML frontmatter with non-empty `title` and `owners`;
+`description` and `soft_links`, when present, must have valid shapes. The
+separate member-node contract remains in force, while archive/supporting and
+repo-infrastructure Markdown are not treated as normal nodes.
+
+Broken `soft_links`, tree-local path escapes, and normal links into
+`raw-context/` fail verification. Markdown links are parsed structurally, but
+an otherwise tree-local Markdown target may be absent; external links, anchors,
+and plain prose that explains the archive class remain allowed. JSON output
+preserves the existing summary and adds stable findings plus per-class scan
+counts. Context Tree domain directories must not be symlinks; Markdown file
+symlinks are validated, must resolve to regular Markdown files, and must stay
+inside the tree without crossing content classes, except for the managed
+root-level `WHITEPAPER.md` pointer. That historical runtime-managed pointer
+remains exempt for compatibility only; writers must not add it to new trees.
+This is a breaking tightening for trees that relied on legacy metadata
+or normal-to-archive links: mechanical syntax can be corrected directly, while
+ownership assignments and promotion of durable archive content require human
+or source-backed decisions. Run `first-tree tree verify --help` for options.
 
 `first-tree tree tree [path]` resolves `path` relative to the current
 working directory, then renders from the current git repository root down
@@ -719,6 +1434,14 @@ Branch: feature/stale-tree
 Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
 ```
 
+An exact snapshot created by `tree read` is recognized through its local Git
+metadata. For that checkout, `tree tree` never pulls, even when `--no-pull` is
+omitted; it verifies that HEAD still equals the activated exact commit before
+returning content. Human output reports `snapshot:<short-sha>`, Team, binding,
+and the full exact commit with no stale-branch warning. Managed workspace
+checkouts retain the existing pull-before-selector and stale-local fallback
+semantics.
+
 The rendered tree's node labels use:
 
 ```text
@@ -744,7 +1467,9 @@ effective `path`. `data.branch` reports the current tree checkout as
 `{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
 and `origin/main`, including detached HEAD checkouts that match
 `refs/remotes/origin/main`; otherwise it contains the same stale-tree warning
-string shown in human mode. `data.tree` contains the same filtered hierarchy as
+string shown in human mode. `data.readSnapshot` is `null` for a managed
+checkout and contains the activated `{ teamId, binding, commit, snapshotPath }`
+identity for a BYO task snapshot. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
 `description`, and `owners`. Human tree text and branch warnings are not
@@ -827,7 +1552,7 @@ agent process can talk to the server without extra setup:
 | `FIRST_TREE_ACCESS_TOKEN` | The signed-in member's access JWT (short-lived). |
 | `FIRST_TREE_AGENT_ID` | The agent's own UUID — the CLI uses it to identify the sender. |
 | `FIRST_TREE_CLIENT_ID` | The client (machine) the agent is bound to. |
-| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by `chat send` / `chat invite`. |
+| `FIRST_TREE_CHAT_ID` | The chat the current session is bound to. Used by `chat send` / `chat invite`, and by every `cron` command (including `preview` / `list` / `show`). |
 | `FIRST_TREE_SERVER_URL` | Server URL override; falls back to client config. |
 
 ### Server (SaaS internal)
@@ -843,7 +1568,8 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used to stamp the issuer on short connect codes and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Public-facing server origin. Used to stamp the issuer on short connect codes and to build invite-link URLs plus Google and GitHub OAuth callbacks. **Required in production.** | — |
+| `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
@@ -889,6 +1615,75 @@ server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.
 | `FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET` | Webhook HMAC secret. |
 | `FIRST_TREE_GITHUB_APP_SLUG` | Optional explicit slug override. |
 
+**GitLab Context Tree snapshot egress:**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_GITLAB_EGRESS_ALLOWLIST` | Deployment-operator-owned JSON allowlist for Cloud anonymous HTTPS reads from exact GitLab origins. | `[]` (deny all) |
+
+Each entry authorizes one normalized `https://hostname:port` origin and either
+public-routable addresses or explicit IPv4/IPv6 CIDRs:
+
+```json
+[
+  {
+    "origin": "https://gitlab.example.com",
+    "addressPolicy": { "kind": "public" }
+  },
+  {
+    "origin": "https://gitlab.company.local:8443",
+    "addressPolicy": {
+      "kind": "cidrs",
+      "cidrs": ["10.20.0.0/16", "fd12:3456::/32"]
+    }
+  }
+]
+```
+
+This is deployment authority, not a Team setting. A Team admin can bind only a
+GitLab connection and repository whose exact origin is already authorized; the
+Web UI does not extend the allowlist. Invalid JSON, duplicate origins, empty or
+malformed CIDR policy, and any CIDR rooted in a permanently blocked range fail
+server startup.
+
+Every anonymous clone/fetch rechecks the live Team binding, current GitLab
+connection, current deployment allowlist, and every DNS A/AAAA result. The
+connection is pinned to the validated address while TLS retains the configured
+hostname. Redirects and ambient proxy/Git credential configuration are
+disabled. Loopback, link-local, unspecified, multicast, cloud-metadata, and
+reserved destinations remain blocked even under a CIDR policy. Removing an
+entry preserves existing Team settings but makes Web Context unavailable
+without attempting egress.
+
+First Tree Cloud never asks for, stores, logs, or injects a GitLab repository
+credential. Public/anonymous-readable authorized repositories can appear in
+the Context tab; private GitLab content stays Agent-local and the Context tab
+shows a provider-specific unavailable state. That content state is independent
+of inbound Webhook and automatic MR-review health.
+
+**Google OAuth / OIDC:**
+
+| Variable | Purpose |
+|---|---|
+| `FIRST_TREE_GOOGLE_CLIENT_ID` | Google OAuth 2.0 Web application client id. |
+| `FIRST_TREE_GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 Web application client secret. |
+
+Set both Google variables to enable Google sign-in; omit both to leave the
+provider disabled. A partial configuration fails server startup. First Tree
+requests only the fixed identity scopes `openid email profile` and does not
+persist Google access or refresh tokens.
+
+Register this exact authorized redirect URI in Google Cloud Console:
+
+```text
+${FIRST_TREE_PUBLIC_URL}/api/v1/auth/google/callback
+```
+
+The scheme, host, port, path, and trailing-slash form must exactly match the
+deployed `FIRST_TREE_PUBLIC_URL`. See
+[Google OAuth operator setup](development/google-oauth.md) for the full setup
+and verification procedure.
+
 **Rate limits:**
 
 | Variable | Default |
@@ -908,9 +1703,16 @@ Old per-route rate-limit env vars are no longer read.
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
 
-`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the GitHub-source archive idle
-threshold. Mapped chats also require all bound entities to be closed/merged;
-source=github chats with no mapping use the same idle threshold.
+`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the SCM-source archive idle
+threshold. Mapped GitHub/GitLab chats also require all bound entities to be
+closed/merged; provider-owned chats with no mapping use the same idle
+threshold.
+
+**Scheduled jobs (cron):**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_POLLING_INTERVAL_SECONDS` | Runtime polling cadence used by the cron worker; must be `1..10` so due occurrences remain inside the dispatch grace window. | `5` |
 
 **Observability:**
 

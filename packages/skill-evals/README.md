@@ -1,20 +1,28 @@
 # First Tree Skill Evals
 
-Opt-in live model evaluations for First Tree skills. These scripts are not part
-of `pnpm test`, `pnpm check`, or default CI because they can consume real model
-quota.
+Human-directed live model evaluations for First Tree skills. These scripts are
+not part of `pnpm test`, `pnpm check`, or default CI because they can consume
+real model quota.
+
+Agents run only no-model code checks such as `eval:floor` by default.
+`eval:gate`, `eval:quality`, `eval:periodic`, `--include-quality`, and any
+equivalent model-backed case require an explicit human instruction.
+`eval:select` therefore recommends only floor commands.
 
 ## Commands
 
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit
 pnpm --filter @first-tree/skill-evals eval:periodic
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
@@ -39,7 +47,7 @@ every on-disk `skills/*/` payload is either eval-covered or explicitly excluded,
 so nothing escapes both.
 
 `eval:select` is a no-model helper for local development and PR review. It
-looks at changed files and recommends the smallest relevant eval commands:
+looks at changed files and recommends the smallest relevant floor commands:
 
 ```bash
 pnpm --filter @first-tree/skill-evals eval:select -- --base main
@@ -47,19 +55,15 @@ pnpm --filter @first-tree/skill-evals eval:select -- --changed-file skills/first
 pnpm --filter @first-tree/skill-evals eval:select -- --base main --json
 ```
 
-The selector is intentionally conservative for shared skill-eval
-infrastructure: core runner or schema changes recommend floor plus all
-implemented deterministic gates, and judge-core changes also recommend quality.
-Provider runner changes additionally recommend the provider-sensitive
-`first-tree-read` periodic fixture. This is limited to provider infrastructure
-changes; ordinary skill changes still do not recommend periodic.
-Suite or skill changes recommend that suite's floor/gate/quality coverage where
-implemented. The command only recommends; live gate and quality evals remain
-opt-in and are not part of `pnpm test`.
+The selector never recommends model-backed execution. Suite or skill changes
+select the corresponding floor; shared runner, provider, judge, generated
+briefing, or eval-framework changes select the all-suite floor. Live gate,
+quality, and periodic commands remain available only when a human explicitly
+requests them.
 
-`eval:periodic` is the opt-in tier for broader, more expensive coverage that is
-not suitable for default gates or ordinary CI. It accepts the same basic live
-eval controls as gates, including `--suite`, `--case`, `--model`,
+`eval:periodic` is the human-directed tier for broader, more expensive coverage
+that is not suitable for default gates or ordinary CI. It accepts the same
+basic live eval controls as gates, including `--suite`, `--case`, `--model`,
 `--provider`, `--codex-bin`, `--claude-bin`, `--json`, and `--verbose`.
 `first-tree-read` periodic runs a runtime-generated briefing fixture with the
 installed First Tree skill topology; it is fixture coverage for the generated
@@ -71,11 +75,10 @@ bare source fixture from the current `first-tree` repo `HEAD` and still
 requires the seed bare-source worktree protocol. `eval:periodic` with no
 `--suite` runs all implemented periodic suites in one result-store run group.
 Suites without implemented periodic cases still print a clear no-op summary and
-exit 0. The default `eval:select` recommendations do not include periodic for
-ordinary skill changes; maintainers trigger periodic manually or via future
-scheduling.
+exit 0. `eval:select` never recommends periodic; run it only on explicit human
+instruction.
 
-`eval:quality` is an opt-in LLM-as-judge layer. It does not replace
+`eval:quality` is a human-directed LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate` by default. Each quality
 case first runs the corresponding live gate case and requires that deterministic
 gate to pass; only then does it send the actual produced artifact to the judge.
@@ -105,6 +108,12 @@ guards for common external side-effect commands such as `git`, `gh`,
 `first-tree`, `curl`, and `wget`. This is a guardrail for the text judge; it is
 not a substitute for a future direct no-tools judge API.
 
+`eval:gate -- --suite first-tree-qa` runs two complete-harness cases. One
+blocks readiness when the Web observer is unavailable; the other proves that
+both CLI and Web reach QA readiness before the requested CLI behavior is
+planned and executed. Both grade source immutability, evidence, performance,
+and final case disposition.
+
 `eval:gate -- --suite first-tree-read` runs the live tested-agent gate for
 `first-tree-read`. It covers the existing read cases through the shared gate
 runner:
@@ -117,11 +126,42 @@ runner:
 
 `eval:periodic -- --suite first-tree-read` runs
 `first-tree-read-runtime-generated-briefing-periodic`. The fixture writes a
-runtime-generated `AGENTS.md`/`CLAUDE.md` pair, installs the core onboarding
-skill plus tree-bound read/seed/write skills, binds a deterministic Context
-Tree fixture, and then runs the same read trigger oracle. This covers the
-generated-briefing and skill-topology boundary only; real Cloud chat delivery,
-GitHub webhooks, and live First Tree runtime E2E remain outside skill evals.
+runtime-generated `AGENTS.md`/`CLAUDE.md` pair, installs the default First
+Tree skill family, binds a deterministic Context Tree fixture, and then runs
+the same read trigger oracle. This covers the generated-briefing and
+skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
+live First Tree runtime E2E remain outside skill evals.
+
+`eval:gate -- --suite context-tree-review` runs the repair-first Context Tree
+pull request review gate. A task-local bare Git origin permits only an
+allowlisted normal commit and fast-forward push to the PR source branch; a hook
+mirrors that push to the local PR ref so the gate can require a dynamic
+successor-head validation and complete re-review. A separate hook supplies the
+push-denied case. The deterministic GitHub shim still permits only PR state
+reads, identity lookup, and one body-file review submission, so no external
+GitHub side effect is possible. Four repair scenarios cover validator repair,
+semantic repair, mixed safe/protected findings, and push denial. The grader
+uses structured shim events plus final Git/ref/content integrity to require one
+decision-preserving scoped repair commit, the expected source-branch result,
+successor validation and context review, current-head checks, and a verdict
+that does not hand a safe repair back to the author. Existing cases retain
+ready approval, draft deferral, archive-only scope, relationship expansion,
+human authority, and stale-head suppression. The gate deliberately does not
+interpret arbitrary shell wrappers or environment variants as a security
+boundary; the production Skill carries the exact repair procedure, and formal
+cross-surface QA owns the real GitHub/App/governance/merge chain. The fixture
+runs the real source-tree validator for review and repair worktrees without
+contacting GitHub.
+
+`eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
+against deterministic local default-branch fixtures. It requires the Audit
+skill to own routing exclusively, fixes discovery to a clean detached remote
+HEAD snapshot, replays a real source validator result before semantic reads,
+and records every forge or human artifact through mocks. Cases cover a
+mechanical focused PR, a strong evidence-backed write handoff, weak
+cross-domain escalation, locked-decision authority, report-only zero mutation,
+and missing-binding fail-closed behavior. This gate never performs a real
+GitHub or First Tree external write.
 
 `eval:gate -- --suite first-tree-write` runs the live tested-agent gate for
 `first-tree-write`. It covers the minimum source-boundary cases:
@@ -165,15 +205,28 @@ accepts the source row id as an alias.
   maintenance;
 - missing source clone stops on incomplete provisioning instead of partial
   seed;
+- an unbound workspace routes through `tree init --dir <managed tree path>`
+  before Phase 1;
 - bare source repos are read through a materialized read worktree, not as
-  checkouts.
+  checkouts;
+- an empty manifest may use a readable local checkout supplied in chat without
+  requiring GitHub App installation or team-resource registration;
+- a clean portable invocation with no Workspace manifest admits only its
+  explicit Team, Tree path, and sources, while an ordinary member stops with
+  stable Needs Admin before source or Tree work;
+- a new process recovers an approved Phase 1 from the current bound branch,
+  merged durable Seed marker, and canonical exact-commit source ledger without
+  prior transcript or private cache state; and
+- missing durable progress, source identity mismatch, unreadable recorded
+  commit, or a changed binding each fail closed before Phase 2 mutation.
 
 `eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
 deterministic gate first. If that hard-rule gate passes, the quality judge
 scores the actual Phase 1 skeleton proposal and source evidence. This judge is
-opt-in and does not replace the deterministic seed gate: empty-tree self-check,
-source boundary, bare worktree protocol, no tree/source/GitHub side effects, and
-no Phase 2 leaf content before approval remain hard-rule oracle conditions.
+human-directed and does not replace the deterministic seed gate: empty-tree
+self-check, source boundary, bare worktree protocol, no tree/source/GitHub side
+effects, and no Phase 2 leaf content before approval remain hard-rule oracle
+conditions.
 
 `eval:periodic -- --suite first-tree-seed` runs
 `first-tree-seed-real-first-tree-source-periodic`. The fixture creates an empty
@@ -186,12 +239,12 @@ periodic tier and is not part of the default seed gate.
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
-runs the selected tested-agent provider from the case workspace for live eval
-commands. Codex is the default provider. Use `--provider claude --claude-bin
-<path>` to opt into the Claude provider, or `--provider codex --codex-bin
-<path>` to be explicit. Claude support is opt-in and is validated by no-quota
-fake-binary tests by default; real Claude live evals consume provider quota and
-must be triggered intentionally.
+runs the selected tested-agent provider from the case workspace for
+human-directed live eval commands. Codex is the default provider. Use
+`--provider claude --claude-bin <path>` for the Claude provider, or
+`--provider codex --codex-bin <path>` to be explicit. Claude support is
+validated by no-quota fake-binary tests by default; real Claude live evals
+consume provider quota and require explicit human instruction.
 Fixture validation runs `tree verify` through the per-run `first-tree` shim by
 default. To validate fixtures with an installed channel binary instead, set
 `FIRST_TREE_EVAL_VERIFY_BIN` to the desired executable, for example

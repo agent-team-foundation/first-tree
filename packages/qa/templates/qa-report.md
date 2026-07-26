@@ -4,26 +4,41 @@
 
 `PASS` | `FAIL` | `BLOCKED` | `INCONCLUSIVE`
 
-One-sentence conclusion.
+One-sentence scoped conclusion.
+
+## Target And Harness
+
+- Target/artifact identities:
+- `QA READY` outcome:
+- Environment and capability limits:
 
 ## Scope Covered
 
-Summarize what actually ran, including any plan changes.
+Summarize what actually ran and any justified plan changes.
 
-## Evidence
+## Evidence And Findings
 
 - Artifact:
 - Observation:
 - Supports:
 
-## Findings
+List reproducible product issues and bug artifact paths, if any.
 
-List reproducible product issues, if any.
+## Performance
 
-## Limitations
+Summarize readiness characterization and task-specific performance evidence without overstating sample resolution.
 
-Record skipped checks, partial coverage, unstable evidence, or setup limits.
+## Limitations And Cleanup
+
+Record skipped, blocked, partial, unstable, or out-of-scope areas plus remaining resources and cleanup ownership.
+
+## Case Disposition
+
+`no-change` | `candidate-new-case` | `candidate-case-update` | `move-to-product-test` | `move-to-skill-eval` |
+`merge-or-retire`
+
+State the evidence and recommended separate maintenance action. Do not edit the committed case library during this run.
 
 ## Artifact Paths
 
-List local paths the operator can inspect.
+List safe local paths the operator can inspect.

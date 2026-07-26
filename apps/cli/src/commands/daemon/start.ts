@@ -2,11 +2,13 @@ import { join } from "node:path";
 import {
   applyClientLoggerConfig,
   ClientOrgMismatchError,
+  ClientRetiredError,
   ClientUserMismatchError,
   captureClientException,
   configureClientLoggerForService,
   createLogger,
   discoverClaudeCodeSkills,
+  discoverProviderModels,
   flushClientSentry,
   initClientSentry,
 } from "@first-tree/client";
@@ -132,6 +134,16 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // invoking us, run inline" so we don't recursively call systemctl
         // from inside our own ExecStart.
         const wantInline = options.foreground === true || isSupervisorChild;
+        if (options.foreground === true && !isSupervisorChild && isServiceSupported()) {
+          const svc = getClientServiceStatus();
+          if (svc.migrationRequired === "root-systemd-user-to-system") {
+            writeLine(
+              `\n  Service migration is required before foreground start (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
+            );
+            writeLine(`  Complete the root systemd migration out-of-service with \`${binName} login <code>\`.\n\n`);
+            process.exit(1);
+          }
+        }
         if (!wantInline && isServiceSupported()) {
           const svc = getClientServiceStatus();
           if (svc.state === "active") {
@@ -179,7 +191,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             writeLine(`  Logs:  ${join(after.logDir, "client.log")}\n`);
             const supervisorHint =
               after.platform === "systemd"
-                ? `  Supervisor fallback: \`journalctl --user -u ${after.label.replace(/\.service$/, "")}\`\n\n`
+                ? `  Supervisor fallback: \`journalctl ${after.managerScope === "system" ? "" : "--user "}-u ${after.label.replace(/\.service$/, "")}\`\n\n`
                 : after.platform === "task-scheduler"
                   ? `  Supervisor log: ${join(after.logDir, "supervisor.log")}\n  Wrapper fallback: ${join(
                       after.logDir,
@@ -194,11 +206,17 @@ export function registerDaemonStartCommand(daemon: Command): void {
             // don't recognise. Falling through to the inline path here would
             // race a still-supervised process for the same client.id, which
             // is exactly the failure mode this whole PR is trying to
-            // eliminate. Refuse and let the operator inspect.
+            // eliminate. Known migration-required states get stricter
+            // guidance because foreground bypass can recreate the duplicate
+            // runtime we are refusing.
             writeLine(
               `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
             );
-            writeLine(`  Inspect with \`${binName} daemon doctor\`, or pass \`--foreground\` to bypass.\n\n`);
+            if (svc.migrationRequired === "root-systemd-user-to-system") {
+              writeLine(`  Complete the root systemd migration out-of-service with \`${binName} login <code>\`.\n\n`);
+            } else {
+              writeLine(`  Inspect with \`${binName} daemon doctor\`, or pass \`--foreground\` to bypass.\n\n`);
+            }
             process.exit(1);
           }
           // state === "not-installed" → fall through to inline run.
@@ -349,6 +367,28 @@ export function registerDaemonStartCommand(daemon: Command): void {
           }).finally(() => capabilityRefresher.endInteractive(command.provider));
         });
 
+        // Host-local model catalog: web opens Model settings → server asks this
+        // daemon → we discover from the real provider and reply on the WS.
+        runtime.onProviderModelsList((command) => {
+          void (async () => {
+            try {
+              const catalog = await discoverProviderModels(command.provider);
+              runtime.sendProviderModelsResult(command.ref, catalog);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              writeStatus("⚠️", `provider-models:list failed for ${command.provider}: ${message}`);
+              runtime.sendProviderModelsResult(command.ref, {
+                provider: command.provider,
+                models: [],
+                defaultModelId: null,
+                fetchedAt: new Date().toISOString(),
+                source: "unavailable",
+                error: message,
+              });
+            }
+          })();
+        });
+
         await runtime.start();
 
         // Post-register capabilities upload + arm the background poll — the
@@ -435,6 +475,24 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // Keep process alive
         await new Promise(() => {});
       } catch (error) {
+        if (error instanceof ClientRetiredError) {
+          const resetCommand = `${binName} computer reset`;
+          const loginCommand = `${binName} login <code>`;
+          if (daemonOutput) {
+            writeStatus(
+              "✗",
+              `client identity has been retired (${error.message}); run \`${resetCommand}\`, then run \`${loginCommand}\` with a fresh connect code.`,
+            );
+            process.exit(1);
+          }
+          writeLine("\n");
+          writeLine("  ⚠️  This machine's client identity has been retired.\n");
+          writeLine(`     Server message: ${error.message}\n`);
+          writeLine(
+            `  Back up local workspaces if needed, run \`${resetCommand}\`, then run \`${loginCommand}\` with a fresh connect code.\n\n`,
+          );
+          process.exit(1);
+        }
         if (error instanceof ClientUserMismatchError) {
           if (daemonOutput) {
             writeStatus(

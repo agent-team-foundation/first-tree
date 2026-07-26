@@ -192,6 +192,25 @@ describe("DocPreviewDrawer", () => {
     expect(latestSearch).not.toContain("docAttachment=");
   });
 
+  it("reserves top and bottom safe-area insets in the mobile full-screen branch", async () => {
+    setupDom(true);
+    latestSearch = "";
+    const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");
+    const route = `/?docChat=chat-1&docMsg=msg-1&docAttachment=${ATT_ID}`;
+    const dom = await renderAt(route, <DocPreviewDrawer />, (client) => {
+      client.setQueryData(docAttachmentRefQueryKey(ATT_ID), docRef);
+    });
+
+    const drawer = dom.querySelector("[data-doc-preview-drawer]");
+    expect(drawer).not.toBeNull();
+    // Mobile branch is a viewport-fixed overlay, so it must reserve its own
+    // safe-area insets — the shell's pt-safe-top does not constrain a fixed
+    // child, so without this the header / close button can sit under the notch.
+    expect(drawer?.className).toContain("fixed inset-0");
+    expect(drawer?.className).toContain("pt-safe-top");
+    expect(drawer?.className).toContain("pb-safe-bottom");
+  });
+
   it("shows an integrity warning when the fetched bytes do not match ref.sha256", async () => {
     attachmentsMocks.sha256Hex.mockResolvedValue("b".repeat(64));
     const { DocPreviewDrawer } = await import("../doc-preview-drawer.js");

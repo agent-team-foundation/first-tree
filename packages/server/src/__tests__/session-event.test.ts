@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -9,7 +9,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import * as sessionEventService from "../services/session-event.js";
 import { uuidv7 } from "../uuid.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * S10 (NC2 backend) — session_events persistence & seq semantics.
@@ -293,6 +293,85 @@ describe("sessionEventService", () => {
 
     expect(remaining1).toHaveLength(0);
     expect(remaining2).toHaveLength(1);
+  });
+
+  it("chat-scoped batches expose private speaker evidence to speakers and watchers only", async () => {
+    const app = getApp();
+    const privateOne = await createTestAgent(app, { name: `private-one-${crypto.randomUUID().slice(0, 6)}` });
+    const privateTwo = await createTestAgent(app, { name: `private-two-${crypto.randomUUID().slice(0, 6)}` });
+    const nonSpeaker = await createTestAgent(app, { name: `non-speaker-${crypto.randomUUID().slice(0, 6)}` });
+    const viewer = await createTestAdmin(app);
+    const c = chatId();
+
+    const privateRows = await app.db
+      .update(agents)
+      .set({ visibility: "private" })
+      .where(inArray(agents.uuid, [privateOne.agent.uuid, privateTwo.agent.uuid]))
+      .returning({ visibility: agents.visibility });
+    expect(privateRows).toHaveLength(2);
+    expect(privateRows.every((row) => row.visibility === "private")).toBe(true);
+
+    await app.db.insert(chats).values({ id: c, organizationId: privateOne.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId: c, agentId: privateOne.agent.uuid, accessMode: "speaker" },
+      { chatId: c, agentId: privateTwo.agent.uuid, accessMode: "speaker" },
+      { chatId: c, agentId: viewer.humanAgentUuid, accessMode: "speaker" },
+    ]);
+
+    for (const target of [privateOne.agent.uuid, privateTwo.agent.uuid]) {
+      for (let i = 1; i <= 3; i++) {
+        await sessionEventService.appendEvent(app.db, target, c, {
+          kind: "assistant_text",
+          payload: { text: `${target}-event-${i}` },
+        });
+      }
+    }
+    // A forged/stale event for an agent that is not a chat speaker must never
+    // cross the chat-scoped disclosure boundary.
+    await sessionEventService.appendEvent(app.db, nonSpeaker.agent.uuid, c, {
+      kind: "assistant_text",
+      payload: { text: "not in this chat" },
+    });
+
+    const requestAsViewer = () =>
+      app.inject({
+        method: "GET",
+        url: `/api/v1/chats/${c}/session-events?limit=2&direction=desc`,
+        headers: { authorization: `Bearer ${viewer.accessToken}` },
+      });
+
+    const speakerResponse = await requestAsViewer();
+    expect(speakerResponse.statusCode).toBe(200);
+    const speakerBody = speakerResponse.json<{
+      feeds: Array<{ agentId: string; items: Array<{ seq: number; payload: unknown }>; nextCursor: number | null }>;
+    }>();
+    expect(speakerBody.feeds.map((feed) => feed.agentId)).toEqual(
+      [privateOne.agent.uuid, privateTwo.agent.uuid].sort(),
+    );
+    for (const feed of speakerBody.feeds) {
+      expect(feed.items.map((event) => event.seq)).toEqual([3, 2]);
+      expect(feed.nextCursor).toBe(2);
+    }
+    expect(speakerBody.feeds.some((feed) => feed.agentId === nonSpeaker.agent.uuid)).toBe(false);
+
+    // The product decision grants the same chat-scoped evidence to watchers.
+    await app.db
+      .update(chatMembership)
+      .set({ accessMode: "watcher" })
+      .where(and(eq(chatMembership.chatId, c), eq(chatMembership.agentId, viewer.humanAgentUuid)));
+    const watcherResponse = await requestAsViewer();
+    expect(watcherResponse.statusCode).toBe(200);
+    expect(watcherResponse.json<{ feeds: unknown[] }>().feeds).toHaveLength(2);
+
+    // Same-org membership is not enough: the caller must have access to this
+    // exact chat (directly or through a managed speaker).
+    const outsider = await createTestAdmin(app);
+    const outsiderResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${c}/session-events`,
+      headers: { authorization: `Bearer ${outsider.accessToken}` },
+    });
+    expect(outsiderResponse.statusCode).toBe(404);
   });
 
   it("summarizeChatTokenUsage sums per-turn deltas across agents into a cumulative total", async () => {

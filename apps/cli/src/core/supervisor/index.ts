@@ -44,9 +44,11 @@ export function installClientService(): ServiceInfo {
  * a child of the current daemon job, and unloading that label can terminate the
  * update handoff before the parent daemon exits with the restart signal.
  *
- * On systemd we keep the install path because the unit explicitly treats exit
- * 75 as restart-forced, and `enable --now` does not unload the running parent
- * process out from under the update callback.
+ * On systemd we keep the in-scope refresh path because the unit explicitly
+ * treats exit 75 as restart-forced, and `enable --now` does not unload the
+ * running parent process out from under the update callback. Root user-to-system
+ * scope migration is intentionally excluded from this in-daemon handoff: it
+ * must run out-of-service so it never stops the containing legacy unit.
  */
 export function refreshClientServiceUnitForUpdate(): ServiceInfo {
   return currentBackend().refreshForUpdate();

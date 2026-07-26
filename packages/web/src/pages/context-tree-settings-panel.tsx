@@ -1,11 +1,20 @@
+import {
+  type ContextTreeProvider,
+  deriveRepoLocalPath,
+  GITLAB_CONNECTION_READINESS,
+  resolveContextTreeProvider,
+  resolveGitLabRepositoryWebIdentity,
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listAllAgents, type ManagedAgent } from "../api/agents.js";
+import { gitlabConnectionsQueryKey, listGitlabConnectionsAt } from "../api/gitlab-connections.js";
 import {
   getContextTreeFeaturesSetting,
   getContextTreeSetting,
+  getRawContextTreeSetting,
   putContextTreeFeaturesSetting,
   putContextTreeSetting,
 } from "../api/org-settings.js";
@@ -19,8 +28,8 @@ import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.
 import { fetchAllAgents } from "./team/index.js";
 
 /**
- * Settings → Context tree. Per-org Context Tree **configuration**: which repo /
- * branch the team's tree is bound to, plus the Context Reviewer feature.
+ * Context Tree block on Settings → Repositories. It owns the per-org repo /
+ * branch binding plus the separate Context Reviewer feature.
  *
  * This page is config, not status — the live "is the tree fresh / who reads &
  * writes it" view is the top-level Context tab, and building a team's first tree
@@ -38,9 +47,19 @@ export function ContextTreeSettingsPanel() {
   const navigate = useNavigate();
 
   const settingQuery = useQuery({
-    queryKey: ["org-setting", organizationId, "context_tree"],
-    queryFn: () => (organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no org"))),
+    queryKey: ["org-setting", organizationId, "context_tree", isAdmin ? "raw" : "safe"],
+    queryFn: () =>
+      organizationId
+        ? isAdmin
+          ? getRawContextTreeSetting(organizationId)
+          : getContextTreeSetting(organizationId)
+        : Promise.reject(new Error("no org")),
     enabled: !!organizationId,
+  });
+  const resolvedSettingQuery = useQuery({
+    queryKey: ["org-setting", organizationId, "context_tree", "safe"],
+    queryFn: () => (organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no org"))),
+    enabled: isAdmin && !!organizationId,
   });
 
   const [repo, setRepo] = useState("");
@@ -48,6 +67,10 @@ export function ContextTreeSettingsPanel() {
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState(false);
   const hasBinding = !!settingQuery.data?.repo;
+  const provider =
+    resolvedSettingQuery.data?.provider ??
+    settingQuery.data?.provider ??
+    resolveContextTreeProvider({ repo: settingQuery.data?.repo ?? null }).provider;
 
   useEffect(() => {
     if (!settingQuery.data) return;
@@ -64,7 +87,8 @@ export function ContextTreeSettingsPanel() {
       });
     },
     onSuccess: (next) => {
-      queryClient.setQueryData(["org-setting", organizationId, "context_tree"], next);
+      queryClient.setQueryData(["org-setting", organizationId, "context_tree", "raw"], next);
+      void queryClient.invalidateQueries({ queryKey: ["org-setting", organizationId, "context_tree", "safe"] });
       setSaved(true);
       setEditing(false);
       setTimeout(() => setSaved(false), 2000);
@@ -80,12 +104,9 @@ export function ContextTreeSettingsPanel() {
   };
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <Section
-        title="Repository"
-        description="The repository your team's Context Tree lives in. Changes apply to new agent sessions — members should restart their agents to pick up the change."
-      >
-        <div style={{ paddingTop: "var(--sp-4)" }}>
+    <Section title="Context Tree" description="The repository that stores your team's shared context.">
+      <div>
+        <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
           {settingQuery.isLoading ? (
             <div className="text-body" style={{ color: "var(--fg-3)" }}>
               Loading…
@@ -98,6 +119,7 @@ export function ContextTreeSettingsPanel() {
             <BoundTree
               repo={settingQuery.data?.repo ?? ""}
               branch={settingQuery.data?.branch ?? "main"}
+              provider={provider}
               isAdmin={isAdmin}
               editing={editing}
               onToggleEdit={() => setEditing((v) => !v)}
@@ -111,6 +133,10 @@ export function ContextTreeSettingsPanel() {
               onGoToContext={() => navigate("/context")}
             />
           )}
+
+          {hasBinding && provider === "gitlab" ? (
+            <GitlabAutomationHealth repo={settingQuery.data?.repo ?? ""} organizationId={organizationId} />
+          ) : null}
 
           {/* Manual binding form — admin only, on demand. Edits an existing
               binding, or points at a tree repo the team already has elsewhere.
@@ -127,7 +153,7 @@ export function ContextTreeSettingsPanel() {
               />
               <SettingsField
                 label="Branch"
-                hint="Branch checked out by client agents on startup."
+                hint="Branch your agents check out on startup."
                 value={branch}
                 onChange={setBranch}
                 mono
@@ -143,10 +169,9 @@ export function ContextTreeSettingsPanel() {
             </form>
           ) : null}
         </div>
-      </Section>
-
-      <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} />
-    </div>
+        <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} provider={provider} />
+      </div>
+    </Section>
   );
 }
 
@@ -155,6 +180,7 @@ export function ContextTreeSettingsPanel() {
 function BoundTree({
   repo,
   branch,
+  provider,
   isAdmin,
   editing,
   onToggleEdit,
@@ -162,35 +188,105 @@ function BoundTree({
 }: {
   repo: string;
   branch: string;
+  provider: ContextTreeProvider | null;
   isAdmin: boolean;
   editing: boolean;
   onToggleEdit: () => void;
   onViewContext: () => void;
 }) {
+  const name = deriveRepoLocalPath(repo) || repo;
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-3)" }}>
-        <span className="text-label" style={{ color: "var(--fg-3)" }}>
-          Your team's Context Tree
-        </span>
-        {isAdmin ? (
-          <Button type="button" variant="link" className="h-auto p-0" onClick={onToggleEdit}>
-            {editing ? "Close" : "Edit"}
+      <div className="flex flex-col sm:flex-row sm:items-start" style={{ gap: "var(--sp-3)" }}>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-baseline" style={{ gap: "var(--sp-3)" }}>
+            <span className="text-body font-medium truncate" style={{ color: "var(--fg)" }} title={name}>
+              {name}
+            </span>
+            <span className="text-label shrink-0" style={{ color: "var(--fg-3)" }}>
+              {branch} branch
+            </span>
+            {provider ? (
+              <span className="text-label shrink-0" style={{ color: "var(--fg-3)", textTransform: "capitalize" }}>
+                {provider}
+              </span>
+            ) : (
+              <span className="text-label shrink-0" style={{ color: "var(--warning)" }}>
+                Provider unresolved
+              </span>
+            )}
+          </div>
+          <div
+            className="text-caption"
+            style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)", wordBreak: "break-all" }}
+          >
+            {repo}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center" style={{ gap: "var(--sp-4)" }}>
+          {isAdmin ? (
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0"
+              style={{ color: "var(--fg-3)" }}
+              onClick={onToggleEdit}
+            >
+              {editing ? "Close" : "Edit"}
+            </Button>
+          ) : null}
+          <Button type="button" variant="link" className="h-auto p-0" onClick={onViewContext}>
+            <span>Open Context</span>
+            <ArrowRight className="h-4 w-4" />
           </Button>
-        ) : null}
+        </div>
       </div>
-      <span className="text-body mono" style={{ color: "var(--fg)", wordBreak: "break-all" }}>
-        {repo}
-      </span>
-      <span className="text-label" style={{ color: "var(--fg-3)" }}>
-        branch <span className="mono">{branch}</span>
-      </span>
-      <div style={{ marginTop: "var(--sp-1)" }}>
-        <Button type="button" variant="link" className="h-auto p-0" onClick={onViewContext}>
-          <span>View on the Context page</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
-      </div>
+    </div>
+  );
+}
+
+function GitlabAutomationHealth({ repo, organizationId }: { repo: string; organizationId: string | null }) {
+  const connections = useQuery({
+    queryKey: gitlabConnectionsQueryKey(organizationId),
+    queryFn: () => (organizationId ? listGitlabConnectionsAt(organizationId) : Promise.resolve([])),
+    enabled: !!organizationId,
+  });
+  if (connections.isLoading) {
+    return <div className="text-label text-muted-foreground mt-2">Loading GitLab Webhook health…</div>;
+  }
+  if (connections.error) {
+    return <div className="text-label text-destructive mt-2">GitLab Webhook health unavailable.</div>;
+  }
+  const connection = connections.data?.[0] ?? null;
+  const originMatches =
+    connection !== null &&
+    resolveGitLabRepositoryWebIdentity(repo, connection.instanceOrigin)?.originMatchesConnection === true;
+  const readiness = connection?.health.readiness ?? null;
+  const status = !connection
+    ? "Degraded · no GitLab Webhook connection"
+    : !originMatches
+      ? `Degraded · Webhook origin ${connection.instanceOrigin} does not match the repository origin`
+      : readiness === GITLAB_CONNECTION_READINESS.needsAttention
+        ? "Degraded · Webhook processing needs attention"
+        : readiness === GITLAB_CONNECTION_READINESS.routingVerified
+          ? "Healthy · MR routing observed"
+          : readiness === GITLAB_CONNECTION_READINESS.transportReceived
+            ? "Waiting · Webhook received; waiting for an MR event"
+            : "Waiting · configure the System Hook";
+  return (
+    <div
+      className="text-label"
+      style={{
+        color:
+          originMatches && readiness === GITLAB_CONNECTION_READINESS.routingVerified ? "var(--success)" : "var(--fg-3)",
+        marginTop: "var(--sp-2)",
+      }}
+    >
+      GitLab Webhook: {status}
+      {connection?.health.lastValidInboundAt ? ` · last valid inbound ${connection.health.lastValidInboundAt}` : ""}
+      {connection?.health.lastSystemHookMergeRequestInboundAt
+        ? ` · last System Hook MR event ${connection.health.lastSystemHookMergeRequestInboundAt}`
+        : ""}
     </div>
   );
 }
@@ -243,7 +339,9 @@ function NoTree({
 }
 
 /** Context Reviewer: assign an agent to auto-review Context Tree PRs. Meaningful
- *  only once a tree is bound. Was the old "Features" tab; now a plain section.
+ *  only once a tree is bound. It is a row inside the Context Tree section, not
+ *  a peer heading: the binding and reviewer are one visible chapter but remain
+ *  separate settings models.
  *
  *  This is an immediate-save config block (no page-level Save), mirroring the
  *  Agent Detail Switch rows: flipping the Switch or picking an agent persists at
@@ -254,7 +352,15 @@ function NoTree({
  *  persists only once an agent is chosen. State is driven from the server query,
  *  not a local mirror, and every save passes an explicit payload so an instant
  *  handler never reads stale local state. */
-function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; isAdmin: boolean }) {
+function ContextReviewerSection({
+  hasBinding,
+  isAdmin,
+  provider,
+}: {
+  hasBinding: boolean;
+  isAdmin: boolean;
+  provider: ContextTreeProvider | null;
+}) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
   const { justSaved, markSaved } = useJustSaved();
@@ -296,7 +402,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   const selectedIsCandidate = reviewerCandidates.some((agent) => agent.uuid === serverAgentUuid);
   // Enabled, but the saved reviewer is no longer an active agent this admin can
   // see: keep the Switch on, warn, and let them re-pick or turn it off.
-  const reviewerMissing = serverEnabled && !selectedIsCandidate && !agentsLoading && reviewerCandidates.length > 0;
+  const reviewerMissing = serverEnabled && !selectedIsCandidate && !agentsLoading;
   // Switch is on for setup but no agent chosen yet — prompt for the pick that
   // actually enables the feature.
   const awaitingAgent = setupOpen && !serverEnabled && !agentsLoading && reviewerCandidates.length > 0;
@@ -313,6 +419,8 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
     },
   });
   const saving = featuresMutation.isPending;
+  const reviewLabel = provider === "gitlab" ? "Automatic MR review" : "Automatic PR review";
+  const reviewActionLabel = provider === "gitlab" ? "automatic MR review" : "automatic PR review";
 
   const handleToggle = (next: boolean) => {
     if (next) {
@@ -328,107 +436,126 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
     featuresMutation.mutate({ enabled: true, agentUuid: uuid });
   };
 
+  const selectedReviewer = reviewerCandidates.find((agent) => agent.uuid === serverAgentUuid) ?? null;
+
   return (
-    <Section
-      title={titleWithSemantics("Context Reviewer", justSaved)}
-      description="Assign one of your agents to automatically review Context Tree pull requests."
-    >
-      <div style={{ paddingTop: "var(--sp-4)" }}>
-        {!hasBinding ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
-            Available once your team has a Context Tree.
-          </div>
-        ) : featuresQuery.isLoading ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
-            Loading…
-          </div>
-        ) : featuresQuery.error ? (
-          <div className="text-body" style={{ color: "var(--state-error)" }}>
-            {featuresQuery.error instanceof Error ? featuresQuery.error.message : "Failed to load feature settings"}
-          </div>
-        ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            {isAdmin ? (
-              <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)", padding: "var(--sp-3) 0" }}>
+      {!hasBinding ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Available once your team has a Context Tree.
+        </div>
+      ) : featuresQuery.isLoading ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Loading…
+        </div>
+      ) : featuresQuery.error ? (
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
+          {featuresQuery.error instanceof Error ? featuresQuery.error.message : "Failed to load feature settings"}
+        </div>
+      ) : (
+        <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+          {isAdmin ? (
+            <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+              <div className="min-w-0">
                 <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                  Automatic PR review
+                  {titleWithSemantics(reviewLabel, justSaved)}
                 </span>
-                <Switch
-                  checked={switchOn}
-                  onCheckedChange={handleToggle}
-                  disabled={saving}
-                  aria-labelledby={toggleLabelId}
-                />
+                {serverEnabled && selectedReviewer ? (
+                  <button
+                    type="button"
+                    className="block rounded-[var(--radius-input)] border-0 bg-transparent p-0 text-left text-label focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}
+                    aria-expanded={setupOpen}
+                    onClick={() => setSetupOpen((open) => !open)}
+                  >
+                    Reviewer agent · {agentLabel(selectedReviewer)}
+                  </button>
+                ) : null}
               </div>
-            ) : (
-              <ContextReviewerReadOnly
-                contextReviewer={
-                  featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
-                }
+              <Switch
+                checked={switchOn}
+                onCheckedChange={handleToggle}
+                disabled={saving}
+                aria-labelledby={toggleLabelId}
               />
-            )}
+            </div>
+          ) : (
+            <ContextReviewerReadOnly
+              reviewLabel={reviewLabel}
+              contextReviewer={
+                featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
+              }
+            />
+          )}
 
-            {isAdmin && switchOn ? (
-              <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-                <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
-                  Reviewer agent
-                </span>
-                {agentsLoading ? (
-                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                    Loading agents…
-                  </div>
-                ) : reviewerCandidates.length === 0 ? (
-                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                    No active non-human agents are available.
-                  </div>
-                ) : (
-                  <Select
-                    aria-label="Context Reviewer agent"
-                    value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
-                    onChange={handleSelectAgent}
-                    disabled={saving}
-                    options={[
-                      { value: "", label: "Select an agent", disabled: true },
-                      ...reviewerCandidates.map((agent) => ({
-                        value: agent.uuid,
-                        label: agentLabel(agent),
-                        hint: agent.name || undefined,
-                      })),
-                    ]}
-                    placeholder="Select an agent"
-                    searchable={reviewerCandidates.length > 6}
-                  />
-                )}
-                {awaitingAgent ? (
-                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Select an agent to enable Context Reviewer.
-                  </div>
-                ) : null}
-                {reviewerMissing ? (
-                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Current reviewer is not an active organization agent. Choose another agent, or turn Context Reviewer
-                    off.
-                  </div>
-                ) : null}
-                {managedAgentsQuery.error ? (
-                  <div className="text-body" style={{ color: "var(--state-error)" }}>
-                    {managedAgentsQuery.error instanceof Error
-                      ? managedAgentsQuery.error.message
-                      : "Failed to load agents"}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+          {isAdmin && (setupOpen || reviewerMissing) ? (
+            <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+              <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
+                Reviewer agent
+              </span>
+              {agentsLoading ? (
+                <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                  Loading agents…
+                </div>
+              ) : reviewerCandidates.length === 0 ? (
+                <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                  No active non-human agents are available.
+                </div>
+              ) : (
+                <Select
+                  aria-label={`${reviewLabel} agent`}
+                  value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
+                  onChange={handleSelectAgent}
+                  disabled={saving}
+                  options={[
+                    { value: "", label: "Select an agent", disabled: true },
+                    ...reviewerCandidates.map((agent) => ({
+                      value: agent.uuid,
+                      label: agentLabel(agent),
+                      hint: agent.name || undefined,
+                    })),
+                  ]}
+                  placeholder="Select an agent"
+                  searchable={reviewerCandidates.length > 6}
+                />
+              )}
+              {awaitingAgent ? (
+                <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                  Select an agent to enable {reviewActionLabel}.
+                </div>
+              ) : null}
+              {reviewerMissing && reviewerCandidates.length > 0 ? (
+                <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                  Current reviewer is not an active organization agent. Choose another agent, or turn{" "}
+                  {reviewActionLabel} off.
+                </div>
+              ) : null}
+              {managedAgentsQuery.error ? (
+                <div className="text-body" style={{ color: "var(--state-error)" }}>
+                  {managedAgentsQuery.error instanceof Error
+                    ? managedAgentsQuery.error.message
+                    : "Failed to load agents"}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
-            {featuresMutation.error instanceof Error ? (
-              <div className="text-body" style={{ color: "var(--state-error)" }}>
-                {featuresMutation.error.message}
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
-    </Section>
+          {serverEnabled ? (
+            <div className="text-label" style={{ color: "var(--fg-3)" }}>
+              Changing the reviewer does not move open {provider === "gitlab" ? "MRs" : "PRs"} immediately. Re-run the
+              Context Tree write task for an existing {provider === "gitlab" ? "MR" : "PR"} to hand it over in the same
+              Chat.
+            </div>
+          ) : null}
+
+          {featuresMutation.error instanceof Error ? (
+            <div className="text-body" style={{ color: "var(--state-error)" }}>
+              {featuresMutation.error.message}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -438,7 +565,9 @@ function agentLabel(agent: ManagedAgent): string {
 
 function ContextReviewerReadOnly({
   contextReviewer,
+  reviewLabel,
 }: {
+  reviewLabel: string;
   contextReviewer: {
     enabled: boolean;
     agentUuid: string | null;
@@ -452,25 +581,20 @@ function ContextReviewerReadOnly({
     : null;
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+    <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+      <div className="min-w-0">
         <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          Automatic PR review
+          {reviewLabel}
         </span>
-        <span className="text-label" style={{ color: contextReviewer.enabled ? "var(--success)" : "var(--fg-3)" }}>
-          {contextReviewer.enabled ? "On" : "Off"}
-        </span>
+        {contextReviewer.enabled ? (
+          <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+            {reviewerLabel ? `Reviewer agent · ${reviewerLabel}` : "Configured reviewer is no longer available."}
+          </div>
+        ) : null}
       </div>
-      {contextReviewer.enabled ? (
-        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
-            Reviewer agent
-          </span>
-          <span className="text-body" style={{ color: reviewerLabel ? "var(--fg)" : "var(--fg-3)" }}>
-            {reviewerLabel ?? "Configured reviewer is no longer available."}
-          </span>
-        </div>
-      ) : null}
+      <span className="text-label" style={{ color: contextReviewer.enabled ? "var(--success)" : "var(--fg-3)" }}>
+        {contextReviewer.enabled ? "On" : "Off"}
+      </span>
     </div>
   );
 }

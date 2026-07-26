@@ -211,6 +211,64 @@ describe("org bind-tree CLI", () => {
     expect(envelope.data).toEqual({ orgId: "org-explicit", repo: "https://github.com/acme/tree" });
   });
 
+  it("with --org and --branch, PUTs an exact repo and branch without consulting /me", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    const program = await buildProgram();
+    await program.parseAsync([
+      "node",
+      "first-tree",
+      "org",
+      "bind-tree",
+      "https://github.com/acme/tree",
+      "--org",
+      "org-explicit",
+      "--branch",
+      "main",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe("http://first-tree.test/api/v1/orgs/org-explicit/settings/context_tree");
+    expect((init as RequestInit).method).toBe("PUT");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      repo: "https://github.com/acme/tree",
+      branch: "main",
+    });
+
+    const envelope = JSON.parse(stdout.trim().split("\n").pop() ?? "{}") as {
+      ok: boolean;
+      data: { branch: string; orgId: string; repo: string };
+    };
+    expect(envelope.ok).toBe(true);
+    expect(envelope.data).toEqual({ orgId: "org-explicit", repo: "https://github.com/acme/tree", branch: "main" });
+  });
+
+  it("rejects invalid --branch before the PUT", async () => {
+    const program = await buildProgram();
+    let caught: unknown;
+    try {
+      await program.parseAsync([
+        "node",
+        "first-tree",
+        "org",
+        "bind-tree",
+        "https://github.com/acme/tree",
+        "--org",
+        "org-explicit",
+        "--branch",
+        "feature..next",
+      ]);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ProcessExit);
+    expect(firstExitCode()).toBe(2);
+    expect(firstErrorEnvelope()?.error.code).toBe("INVALID_BRANCH");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("URL-encodes the org id in the PUT path", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 

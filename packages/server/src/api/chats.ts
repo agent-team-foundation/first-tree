@@ -3,13 +3,15 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   followGithubEntityRequestSchema,
+  followGitlabEntitySchema,
   paginationQuerySchema,
   parseLandingCampaignTrialChatMetadata,
   patchChatEngagementSchema,
+  pinMeChatSchema,
   sendMessageSchema,
   updateChatSchema,
 } from "@first-tree/shared";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -18,12 +20,20 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
-import { BadRequestError, ForbiddenError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
+import {
+  declareGitlabEntityFollowWithStatus,
+  listChatGitlabEntities,
+  listVisibleChatGitlabEntities,
+  projectChatGitlabEntity,
+  removeCurrentGitlabEntityFollow,
+  removeGitlabEntityFollow,
+} from "../services/gitlab-entity-follow.js";
 import {
   hasRemainingLandingCampaignTrialBudget,
   normalizeLandingCampaignTrialChatMetadataForRead,
@@ -35,14 +45,22 @@ import {
   leaveMeChat,
   markMeChatRead,
   markMeChatUnread,
+  pinMeChat,
   resolveChatTitle,
   setChatEngagement,
 } from "../services/me-chat.js";
-import { listOpenRequestsForViewer, sendMessage } from "../services/message.js";
+import {
+  encodeMessageHistoryCursor,
+  listOpenRequestsForViewer,
+  messageHistoryOrderBy,
+  messageHistoryWhere,
+  sendMessage,
+} from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
+import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
 import { extractSummary } from "../services/session.js";
-import { summarizeChatTokenUsage } from "../services/session-event.js";
+import { listChatSpeakerEvents, summarizeChatTokenUsage } from "../services/session-event.js";
 import { sendFollowResult } from "./github-entity-reply.js";
 
 /**
@@ -52,6 +70,15 @@ import { sendFollowResult } from "./github-entity-reply.js";
  * and gates participation/supervision.
  */
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
+  async function requireDirectHumanChatMembership(chatId: string, humanAgentId: string): Promise<void> {
+    const [direct] = await app.db
+      .select({ chatId: chatMembership.chatId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)))
+      .limit(1);
+    if (!direct) throw new NotFoundError(`Chat "${chatId}" not found`);
+  }
+
   function assertLandingCampaignTrialChatAcceptsHumanMessage(
     metadata: Record<string, unknown> | null,
     body: { metadata?: Record<string, unknown> },
@@ -206,6 +233,26 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * Recent runtime evidence for every non-human speaker in this chat. Chat
+   * access is the disclosure boundary: a private agent invited into the room
+   * is inspectable here without becoming discoverable anywhere else. The
+   * service re-filters event owners against current speaker membership and
+   * applies the limit independently per agent.
+   */
+  app.get<{
+    Params: { chatId: string };
+    Querystring: { limit?: string; direction?: string };
+  }>("/:chatId/session-events", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    const limit = request.query.limit !== undefined ? Number.parseInt(request.query.limit, 10) : undefined;
+    const direction = request.query.direction === "desc" ? "desc" : "asc";
+    return listChatSpeakerEvents(app.db, chat.id, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      direction,
+    });
+  });
+
+  /**
    * Cumulative token usage for this chat — the SUM over every persisted
    * `token_usage` event (across all participating agents). Drives the marker
    * the composer renders above the input box. Standard chat-visibility gate;
@@ -254,36 +301,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const { chat, scope } = await requireChatAccess(request, app.db);
       const body = followGithubEntityRequestSchema.parse(request.body);
 
-      const [human] = await app.db
-        .select({ delegateMention: agents.delegateMention })
-        .from(agents)
-        .where(eq(agents.uuid, scope.humanAgentId))
-        .limit(1);
-      if (!human?.delegateMention) {
+      const pair = await resolveHumanScmBindingPair(app.db, chat.id, scope.humanAgentId);
+      if (!pair) {
         throw new BadRequestError(
-          "Following needs a delegate agent to receive the entity's events, and your account has no " +
-            "delegate_mention configured. Set one in your member settings, then retry.",
-        );
-      }
-
-      const [delegate] = await app.db
-        .select({ agentId: chatMembership.agentId })
-        .from(chatMembership)
-        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-        .where(
-          and(
-            eq(chatMembership.chatId, chat.id),
-            eq(chatMembership.agentId, human.delegateMention),
-            eq(chatMembership.accessMode, "speaker"),
-            eq(agents.status, "active"),
-          ),
-        )
-        .limit(1);
-      if (!delegate) {
-        throw new BadRequestError(
-          "Your delegate agent is not an active speaker of this chat, so the entity's events could never wake " +
-            "it here. Invite the delegate into this chat (chat invite) — or follow from the chat where it " +
-            "already speaks — then retry.",
+          "Following needs delegate_mention to identify an active delegate speaker in this chat; the configured " +
+            "delegate is not an active speaker. Invite that delegate into the chat, then retry.",
         );
       }
 
@@ -292,9 +314,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         { appCredentials: app.config.oauth?.githubApp },
         {
           chatId: chat.id,
-          organizationId: scope.organizationId,
-          humanAgentId: scope.humanAgentId,
-          delegateAgentId: human.delegateMention,
+          organizationId: pair.organizationId,
+          humanAgentId: pair.humanAgentId,
+          delegateAgentId: pair.wakeAgentId,
           boundVia: "human_declared",
           entity: body.entity,
           rebind: body.rebind,
@@ -318,6 +340,83 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
       }
       return removeEntityFollow(app.db, { chatId: chat.id, entity });
+    },
+  );
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return {
+      // Retain the legacy explicit-row field for response compatibility.
+      entities: await listChatGitlabEntities(app.db, chat.id),
+      ...(await listVisibleChatGitlabEntities(app.db, chat.id)),
+    };
+  });
+
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/gitlab-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const { chat, scope } = await requireChatAccess(request, app.db);
+      await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
+      const body = followGitlabEntitySchema.parse(request.body);
+      const pair = await resolveHumanScmBindingPair(app.db, chat.id, scope.humanAgentId);
+      if (!pair) {
+        throw new BadRequestError(
+          "Following needs delegate_mention to identify an active delegate speaker in this chat; the configured " +
+            "delegate is not an active speaker. Invite that delegate into the chat, then retry.",
+        );
+      }
+      const result = await declareGitlabEntityFollowWithStatus(app.db, {
+        organizationId: pair.organizationId,
+        connectionId: body.connectionId,
+        chatId: chat.id,
+        declaredByAgentId: scope.humanAgentId,
+        humanAgentId: pair.humanAgentId,
+        delegateAgentId: pair.wakeAgentId,
+        boundVia: "human_declared",
+        entityUrl: body.entityUrl,
+        rebind: body.rebind,
+      });
+      if (result.outcome === "conflict") {
+        return reply.status(409).send({
+          error: "ENTITY_FOLLOWED_ELSEWHERE",
+          message:
+            `This GitLab attention line already lives in chat ${result.conflict.chatId}. ` +
+            "Work there, or re-issue with rebind to move it into this chat.",
+          conflict: result.conflict,
+        });
+      }
+      return reply.status(result.outcome === "already_following" ? 200 : 201).send({
+        status: result.outcome,
+        entity: projectChatGitlabEntity(result.row),
+      });
+    },
+  );
+
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string; mappingId?: string } }>(
+    "/:chatId/gitlab-entities",
+    async (request) => {
+      const { chat, scope } = await requireChatAccess(request, app.db);
+      await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
+      if (request.query.entity) {
+        return removeCurrentGitlabEntityFollow(app.db, {
+          organizationId: scope.organizationId,
+          chatId: chat.id,
+          entityUrl: request.query.entity,
+        });
+      }
+      if (!request.query.mappingId) {
+        throw new BadRequestError(
+          "Pass ?entity=<GitLab Issue or Merge Request URL> to unfollow. Legacy clients may pass ?mappingId=<id>.",
+        );
+      }
+      return {
+        removed: await removeGitlabEntityFollow(app.db, {
+          organizationId: scope.organizationId,
+          chatId: chat.id,
+          mappingId: request.query.mappingId,
+        }),
+      };
     },
   );
 
@@ -355,9 +454,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     await requireChatAccess(request, app.db);
     const query = paginationQuerySchema.parse(request.query);
 
-    const where = query.cursor
-      ? and(eq(messages.chatId, request.params.chatId), lt(messages.createdAt, new Date(query.cursor)))
-      : eq(messages.chatId, request.params.chatId);
+    const where = messageHistoryWhere(request.params.chatId, query.cursor);
 
     const rows = await app.db
       .select({
@@ -381,13 +478,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       })
       .from(messages)
       .where(where)
-      .orderBy(desc(messages.createdAt))
+      .orderBy(...messageHistoryOrderBy())
       .limit(query.limit + 1);
 
     const hasMore = rows.length > query.limit;
     const items = hasMore ? rows.slice(0, query.limit) : rows;
     const last = items[items.length - 1];
-    const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+    const nextCursor = hasMore && last ? encodeMessageHistoryCursor(last.createdAt, last.id) : null;
 
     return {
       items: items.map((m) => ({
@@ -496,6 +593,19 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/unread", async (request) => {
     const { scope } = await requireChatAccess(request, app.db);
     return markMeChatUnread(app.db, request.params.chatId, scope.humanAgentId);
+  });
+
+  /** POST /chats/:chatId/pin — set/clear the caller's per-user pin. Idempotent. */
+  app.post<{ Params: { chatId: string } }>("/:chatId/pin", async (request) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    const { pinned } = pinMeChatSchema.parse(request.body);
+    const result = await pinMeChat(app.db, request.params.chatId, scope.humanAgentId, pinned);
+    // Fan a PRIVATE me-chats invalidation to the caller's OTHER devices so the
+    // pin regroups everywhere in realtime. User-scoped (never broadcast to other
+    // members — pin state is private per-user); fire-and-forget, the 30s
+    // me-chats poll is the durable floor.
+    void app.notifier.notifyMeChatsChanged(scope.humanAgentId, scope.organizationId);
+    return result;
   });
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */

@@ -1,5 +1,6 @@
 import type { Config } from "./config.js";
 import { assertEncryptionKeyValid } from "./services/crypto.js";
+import { assertGitlabEgressAllowlistValid } from "./services/gitlab-egress-policy.js";
 
 /**
  * Boot-time configuration sanity checks. Called from `buildApp` (and thus
@@ -11,6 +12,7 @@ export function assertBootConfigValid(config: Config): void {
   assertSecretsValid(config);
   assertProductionRequiresPublicUrl(config);
   assertGithubAppConfigComplete(config);
+  assertGitlabEgressAllowlistValid(config.gitlab?.egressAllowlist ?? []);
 }
 
 function assertSecretsValid(config: Config): void {

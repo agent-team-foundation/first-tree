@@ -130,7 +130,19 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   // step 5 has already set `chats.updated_at = NOW()` earlier in the same
   // transaction; setting it again to `messageCreatedAt` would be a
   // redundant write that may leave the value slightly behind real time.
-  await tx.update(chats).set({ lastMessageAt: ts, lastMessagePreview: previewClipped }).where(eq(chats.id, chatId));
+  // `activity_at` IS bumped: a new message is real work, so the conversation
+  // list floats the chat by it (chats.activity_at is the recency sort key).
+  // Monotonic via GREATEST: two qualifying writers (two sends, or a send + a
+  // description change) can commit out of timestamp order, so a later-committing
+  // older event must NOT move the recency key backwards.
+  await tx
+    .update(chats)
+    .set({
+      lastMessageAt: ts,
+      lastMessagePreview: previewClipped,
+      activityAt: sql`GREATEST(${chats.activityAt}, ${ts.toISOString()}::timestamptz)`,
+    })
+    .where(eq(chats.id, chatId));
 
   // 2. Engagement auto-revive: any participant whose `chat_user_state` row
   // sits in `archived` flips back to `active` on a new message. `deleted`

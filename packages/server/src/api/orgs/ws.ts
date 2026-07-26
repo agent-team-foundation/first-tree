@@ -102,6 +102,10 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     void dispatchChatUpdated(chatId);
   });
 
+  notifier.onMeChatsChanged(({ humanAgentId, organizationId }) => {
+    dispatchMeChatsChanged(humanAgentId, organizationId);
+  });
+
   /**
    * Deliver a session:state / session:event / session:runtime frame. The
    * recomputed agent status carries the agent's narration (activity.detail
@@ -178,6 +182,27 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     for (const [ws, meta] of adminSockets) {
       if (ws.readyState !== 1) continue;
       if (!audience.has(meta.humanAgentId)) continue;
+      try {
+        ws.send(frame);
+      } catch {
+        // socket-level errors surface via close handler
+      }
+    }
+  }
+
+  // Per-USER sibling of dispatchChatUpdated: a private me-chats change (pin /
+  // unpin) fans a bare `me-chats:changed` invalidation to ONLY the acting
+  // user's own sockets in that org. Deliberately NO chat-audience lookup — pin
+  // state is private and must never reach another member's devices, so the gate
+  // is identity (`humanAgentId`) + org, not chat membership. One user with two
+  // devices in the org sees both rails regroup; nobody else is touched. Sync
+  // (no DB), so it runs inline on the notifier callback.
+  function dispatchMeChatsChanged(humanAgentId: string, organizationId: string): void {
+    if (adminSockets.size === 0) return;
+    const frame = JSON.stringify({ type: "me-chats:changed" });
+    for (const [ws, meta] of adminSockets) {
+      if (ws.readyState !== 1) continue;
+      if (meta.humanAgentId !== humanAgentId || meta.organizationId !== organizationId) continue;
       try {
         ws.send(frame);
       } catch {

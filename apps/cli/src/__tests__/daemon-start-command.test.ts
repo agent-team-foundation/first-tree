@@ -54,6 +54,7 @@ const failMock = vi.hoisted(() =>
 vi.mock("@first-tree/client", () => ({
   ...clientMocks,
   ClientOrgMismatchError: class ClientOrgMismatchError extends Error {},
+  ClientRetiredError: class ClientRetiredError extends Error {},
   ClientUserMismatchError: class ClientUserMismatchError extends Error {},
 }));
 
@@ -82,6 +83,7 @@ vi.mock("../cli/output.js", () => ({
 const originalHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 const originalServiceMode = process.env.FIRST_TREE_SERVICE_MODE;
+const originalClientId = process.env.FIRST_TREE_CLIENT_ID;
 const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined) => {
   throw Object.assign(new Error(`process.exit ${code}`), { exitCode: code });
@@ -96,6 +98,8 @@ let runtimeInstance: {
   watchAgentsDir: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
   onRuntimeAuthStart: ReturnType<typeof vi.fn>;
+  onProviderModelsList: ReturnType<typeof vi.fn>;
+  sendProviderModelsResult: ReturnType<typeof vi.fn>;
   emitConnectionResilienceEvent: ReturnType<typeof vi.fn>;
 };
 let refresherInstance: {
@@ -120,6 +124,9 @@ beforeEach(() => {
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
   delete process.env.FIRST_TREE_SERVICE_MODE;
+  // Host agent / portable installs inject FIRST_TREE_CLIENT_ID; it must not
+  // override the fixture client.yaml id used by these assertions.
+  delete process.env.FIRST_TREE_CLIENT_ID;
 
   for (const mock of Object.values(clientMocks)) mock.mockReset();
   for (const mock of Object.values(coreMocks)) mock.mockReset();
@@ -198,6 +205,8 @@ beforeEach(() => {
     }),
     onReconnect: vi.fn(),
     onRuntimeAuthStart: vi.fn(),
+    onProviderModelsList: vi.fn(),
+    sendProviderModelsResult: vi.fn(),
     emitConnectionResilienceEvent: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
@@ -223,6 +232,8 @@ afterEach(() => {
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
   if (originalServiceMode === undefined) delete process.env.FIRST_TREE_SERVICE_MODE;
   else process.env.FIRST_TREE_SERVICE_MODE = originalServiceMode;
+  if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
+  else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
 });
 
 async function runStart(args: string[] = []): Promise<unknown> {
@@ -328,6 +339,31 @@ describe("daemon start command", () => {
     expect(output()).toContain("Supervisor fallback: `journalctl --user -u first-tree`");
   });
 
+  it("prints system journal hints for root systemd services", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "inactive",
+        label: "first-tree.service",
+        logDir: "/logs",
+        managerScope: "system",
+      })
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "active",
+        label: "first-tree.service",
+        detail: "pid 123",
+        logDir: "/logs",
+        managerScope: "system",
+      });
+
+    await expect(runStart()).resolves.toBeTruthy();
+    expect(coreMocks.startClientService).toHaveBeenCalled();
+    expect(output()).toContain("Supervisor fallback: `journalctl -u first-tree`");
+    expect(output()).not.toContain("journalctl --user -u first-tree");
+  });
+
   it("starts an inactive launchd service and prints stdout/stderr fallback logs", async () => {
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus
@@ -414,6 +450,42 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("Service state could not be determined (launchd).");
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "unknown",
+      label: "first-tree.service",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      logDir: "/logs",
+      managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
+    });
+
+    await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("legacy root systemd user unit requires out-of-service migration");
+    expect(output()).toContain("Complete the root systemd migration out-of-service with `first-tree-dev login <code>`");
+    expect(output()).not.toContain("--foreground");
+    expect(coreMocks.startClientService).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "unknown",
+      label: "first-tree.service",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      logDir: "/logs",
+      managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
+    });
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("Service migration is required before foreground start");
+    expect(output()).toContain("Complete the root systemd migration out-of-service with `first-tree-dev login <code>`");
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
   });
 
   it("runs inline, reconciles local state, uploads capabilities and skills", async () => {
@@ -444,6 +516,7 @@ describe("daemon start command", () => {
     );
     expect(coreMocks.CapabilityRefresher.mock.calls[0]?.[0]).not.toHaveProperty("initial");
     expect(runtimeInstance.onReconnect).toHaveBeenCalledWith(expect.any(Function));
+    expect(runtimeInstance.onProviderModelsList).toHaveBeenCalledWith(expect.any(Function));
     expect(refresherInstance.start).toHaveBeenCalled();
     expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({
       serverUrl: "https://first-tree.example",
@@ -725,6 +798,26 @@ describe("daemon start command", () => {
 
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("client.yaml is not accepted"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
+    expect(output()).toBe("");
+  });
+
+  it("logs service-mode retired client through error-level logger with reset recovery", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    writeFileSync(
+      join(home, "config", "client.yaml"),
+      "logLevel: error\nserver:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
+    );
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    const client = await import("@first-tree/client");
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientRetiredError("client retired"));
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("client identity has been retired"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");

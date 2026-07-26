@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
  * Lock the Claude Agent SDK option shape the handler passes to `query()`.
@@ -41,7 +41,16 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
   };
 });
 
+vi.mock("../runtime/agent-briefing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime/agent-briefing.js")>();
+  return {
+    ...actual,
+    buildAgentBriefing: vi.fn(actual.buildAgentBriefing),
+  };
+});
+
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
+import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
@@ -58,12 +67,16 @@ afterAll(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
-function buildCache() {
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+function buildCache(env: Array<{ key: string; value: string; sensitive: boolean }> = []) {
   const stubSdk = {
     fetchAgentConfig: async () => ({
       agentId: AGENT_ID,
       version: 1,
-      payload: { prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos: [] },
+      payload: { prompt: { append: "" }, model: "", mcpServers: [], env, gitRepos: [] },
       updatedAt: new Date().toISOString(),
       updatedBy: "test",
     }),
@@ -71,8 +84,9 @@ function buildCache() {
   return createAgentConfigCache({ sdk: stubSdk });
 }
 
-function buildSessionCtx(chatId: string): SessionContext {
+function buildSessionCtx(chatId: string, buildAgentEnv?: SessionContext["buildAgentEnv"]): SessionContext {
   const sendMessage = async () => undefined;
+  const plumbing = mockCtxPlumbing({ sendMessage }, chatId);
   return {
     agent: {
       agentId: AGENT_ID,
@@ -88,7 +102,8 @@ function buildSessionCtx(chatId: string): SessionContext {
     log: () => {},
     recordProviderActivity: () => {},
     emitEvent: () => {},
-    ...mockCtxPlumbing({ sendMessage }, chatId),
+    ...plumbing,
+    ...(buildAgentEnv ? { buildAgentEnv } : {}),
   };
 }
 
@@ -154,4 +169,51 @@ describe("claude-code handler — SDK options", () => {
 
     await handler.shutdown();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the payload-overridden final child PATH for provider CLI detection",
+    async () => {
+      capturedCalls.length = 0;
+      vi.mocked(buildAgentBriefing).mockClear();
+
+      const daemonBin = join(workspaceRoot, "daemon-bin");
+      const payloadBin = join(workspaceRoot, "payload-bin");
+      const finalProviderBin = join(workspaceRoot, "final-provider-bin");
+      mkdirSync(daemonBin, { recursive: true });
+      mkdirSync(payloadBin, { recursive: true });
+      mkdirSync(finalProviderBin, { recursive: true });
+      writeFileSync(join(daemonBin, "gh"), "#!/bin/sh\n", { mode: 0o755 });
+      writeFileSync(join(payloadBin, "gh"), "#!/bin/sh\n", { mode: 0o755 });
+      writeFileSync(join(finalProviderBin, "glab"), "#!/bin/sh\n", { mode: 0o755 });
+      vi.stubEnv("PATH", daemonBin);
+
+      const cache = buildCache([{ key: "PATH", value: payloadBin, sensitive: false }]);
+      await cache.refresh(AGENT_ID);
+
+      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+      const buildAgentEnv = vi.fn((env: NodeJS.ProcessEnv) => ({ ...env, PATH: finalProviderBin }));
+      const ctx = buildSessionCtx("chat-provider-path", buildAgentEnv);
+      await handler.start(
+        {
+          id: "msg-provider-path",
+          chatId: "chat-provider-path",
+          senderId: "user",
+          format: "text",
+          content: "hi",
+          metadata: null,
+        },
+        ctx,
+      );
+
+      const childEnv = capturedCalls[0]?.options?.env;
+      expect(buildAgentEnv).toHaveBeenCalledWith(expect.objectContaining({ PATH: payloadBin }));
+      expect(childEnv).toMatchObject({ PATH: finalProviderBin });
+
+      const briefing = vi.mocked(buildAgentBriefing).mock.results[0]?.value;
+      expect(briefing).not.toContain("final provider `PATH`");
+      expect(briefing).not.toContain("detected `glab`");
+
+      await handler.shutdown();
+    },
+  );
 });

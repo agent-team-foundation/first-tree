@@ -32,7 +32,7 @@ export function resolveSenderName(input: {
 
   if (agents.size === 0) return { kind: "none" };
 
-  if (override) return { kind: "ok", name: override };
+  if (override !== undefined) return { kind: "ok", name: override };
 
   if (envAgentId) {
     for (const [name, cfg] of agents) {

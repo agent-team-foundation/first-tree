@@ -1,0 +1,1 @@
+ALTER TABLE "gitlab_connections" ADD COLUMN "last_system_hook_merge_request_inbound_at" timestamp with time zone;

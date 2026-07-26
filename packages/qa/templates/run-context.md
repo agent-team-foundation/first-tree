@@ -1,38 +1,43 @@
-# Run Context
+# Run Context And Harness Readiness
 
 ## Target
 
 - Object:
 - Ref:
 - Source worktree:
+- Artifact identities:
 
 ## Run Cell
 
 - Run root:
-- Container image:
-- Mounted paths:
+- Docker project/images:
+- Native/device/provider bridges:
+- Mounted paths and isolated homes:
 - Cleanup owner:
 
-## Services
+## Product Surface Capability Matrix
 
-- Required:
-- Started:
-- Endpoints:
+| Surface | Build | Run | Drive | Observe | Measure | Reset | Evidence / gap |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | |
+
+## Services And Data
+
+- Started services/endpoints:
 - Health evidence:
+- Fixtures/seed state:
+- Identities/auth/provider readiness:
 
-## Data Setup
+## Readiness Performance
 
-- Fixtures:
-- Seed state:
-- Reset path:
+- Install/build duration and artifact size:
+- Startup/readiness duration:
+- Idle resources:
+- Driver/observer/reset probe:
 
-## Runtime And Provider Readiness
+## `QA READY` Outcome
 
-- Provider needed:
-- Binary/source path:
-- Auth/session state:
-- Readiness evidence:
-
-## Known Limits
-
-Record setup facts that may limit what this run can honestly conclude.
+- Status: `READY` | `FAIL` | `BLOCKED` | `INCONCLUSIVE`
+- Evidence:
+- Capability gaps and limitations:
+- Reset/cleanup path:

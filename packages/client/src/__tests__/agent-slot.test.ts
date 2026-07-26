@@ -46,8 +46,25 @@ type Deferred<T> = {
 };
 
 class FakeClientConnection extends EventEmitter {
-  bindAgent = vi.fn(async () => ({ sdk: this.sdk }));
+  tokenProviders = new Map<string, () => string | undefined>();
+  bindAgent = vi.fn(async () => {
+    const token = (this.sdk as { runtimeSessionToken?: unknown }).runtimeSessionToken;
+    return {
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+      sdk: this.sdk,
+      ...(typeof token === "string" && token.length > 0 ? { runtimeSessionToken: token } : {}),
+    };
+  });
   unbindAgent = vi.fn(async () => {});
+  setRuntimeSessionTokenProvider = vi.fn((agentId: string, provider: () => string | undefined) => {
+    this.tokenProviders.set(agentId, provider);
+  });
+  clearRuntimeSessionTokenProvider = vi.fn((agentId: string, provider?: () => string | undefined) => {
+    if (provider && this.tokenProviders.get(agentId) !== provider) return;
+    this.tokenProviders.delete(agentId);
+  });
   sendInboxAck = vi.fn();
   reportSessionState = vi.fn();
   reportRuntimeState = vi.fn();
@@ -637,7 +654,7 @@ describe("AgentSlot", () => {
     connection.bindAgent.mockImplementationOnce(async () => {
       connection.emit("inbox:deliver", "inbox_agent-1", makeFrame({ entryId: 77, inboxId: "inbox_agent-1" }));
       connection.emit("inbox:deliver", "inbox_agent-1", makeFrame({ entryId: 78, inboxId: "inbox_agent-1" }));
-      return { sdk };
+      return { agentId: "agent-1", displayName: "Agent One", agentType: "agent", sdk };
     });
 
     await slot.start();
@@ -752,6 +769,8 @@ describe("AgentSlot", () => {
       await slot.start();
       expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-1");
       expect((state.sessionConfigs[0] as { runtimeSessionTokenFile?: string }).runtimeSessionTokenFile).toBe(tokenFile);
+      expect(connection.setRuntimeSessionTokenProvider).toHaveBeenCalledWith("agent-1", expect.any(Function));
+      expect(connection.tokenProviders.get("agent-1")?.()).toBe("runtime-token-1");
 
       const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-1"], runtimeSessionToken: "runtime-token-2" });
       connection.emit("agent:bound", {
@@ -770,6 +789,8 @@ describe("AgentSlot", () => {
     }
 
     expect(existsSync(tokenFile)).toBe(false);
+    expect(connection.clearRuntimeSessionTokenProvider).toHaveBeenCalledWith("agent-1", expect.any(Function));
+    expect(connection.tokenProviders.has("agent-1")).toBe(false);
   });
 
   it("starts a fresh active-runtime-chat refresh after rebind even when the old refresh is in flight", async () => {
@@ -955,7 +976,7 @@ describe("AgentSlot", () => {
     const { slot, connection, sdk } = await makeSlot({ syncDelayMs: 4_900, omitReconcileInterval: true });
     connection.bindAgent.mockImplementationOnce(async () => {
       connection.emit("agent:bound", { agentId: "agent-1" });
-      return { sdk };
+      return { agentId: "agent-1", displayName: "Agent One", agentType: "agent", sdk };
     });
 
     const startPromise = slot.start();

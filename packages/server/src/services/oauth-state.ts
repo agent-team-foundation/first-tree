@@ -20,8 +20,8 @@ import { jwtVerify, SignJWT } from "jose";
 
 const STATE_EXPIRY = "10m";
 const NONCE_BYTES = 24;
-export const OAUTH_STATE_COOKIE = "oauth_state_nonce";
-export const OAUTH_STATE_COOKIE_MAX_AGE_S = 10 * 60;
+export const STATE_NONCE_COOKIE_NAME = "oauth_state_nonce";
+export const STATE_NONCE_COOKIE_TTL_SECONDS = 10 * 60;
 
 type StatePayload = {
   /** Random nonce; must match the cookie's value. */
@@ -47,6 +47,11 @@ type StatePayload = {
    * browser). Absent on the plain `/auth/github/start` sign-in flow.
    */
   kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink" | "install";
+  userId?: string;
+  provider?: "google" | "github";
+  oidcNonce?: string;
+  targetIdentityId?: string;
 };
 
 export type SignOAuthStateOptions = {
@@ -54,6 +59,11 @@ export type SignOAuthStateOptions = {
   targetOrganizationId?: string;
   /** See `StatePayload.kickoffUserId`. */
   kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink" | "install";
+  userId?: string;
+  provider?: "google" | "github";
+  oidcNonce?: string;
+  targetIdentityId?: string;
 };
 
 /**
@@ -74,6 +84,11 @@ export async function signOAuthState(
   if (opts.kickoffUserId) {
     claims.kickoffUserId = opts.kickoffUserId;
   }
+  if (opts.intent) claims.intent = opts.intent;
+  if (opts.userId) claims.userId = opts.userId;
+  if (opts.provider) claims.provider = opts.provider;
+  if (opts.oidcNonce) claims.oidcNonce = opts.oidcNonce;
+  if (opts.targetIdentityId) claims.targetIdentityId = opts.targetIdentityId;
   const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -96,7 +111,16 @@ export async function verifyOAuthState(
   jwtSecret: string,
   token: string,
   cookieNonce: string | null,
-): Promise<{ next: string; targetOrganizationId?: string; kickoffUserId?: string }> {
+): Promise<{
+  next: string;
+  targetOrganizationId?: string;
+  kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink" | "install";
+  userId?: string;
+  provider?: "google" | "github";
+  oidcNonce?: string;
+  targetIdentityId?: string;
+}> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
   try {
@@ -115,6 +139,18 @@ export async function verifyOAuthState(
   if (payload.kickoffUserId !== undefined && typeof payload.kickoffUserId !== "string") {
     throw new Error("OAuth state payload malformed");
   }
+  if (payload.intent !== undefined && !["sign-in", "link", "unlink", "install"].includes(payload.intent)) {
+    throw new Error("OAuth state payload malformed");
+  }
+  if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github") {
+    throw new Error("OAuth state payload malformed");
+  }
+  for (const value of [payload.userId, payload.oidcNonce]) {
+    if (value !== undefined && typeof value !== "string") throw new Error("OAuth state payload malformed");
+  }
+  if (payload.targetIdentityId !== undefined && typeof payload.targetIdentityId !== "string") {
+    throw new Error("OAuth state payload malformed");
+  }
 
   if (!cookieNonce || cookieNonce !== payload.nonce) {
     throw new Error("OAuth state nonce / cookie mismatch");
@@ -124,5 +160,10 @@ export async function verifyOAuthState(
     next: payload.next,
     ...(payload.targetOrganizationId ? { targetOrganizationId: payload.targetOrganizationId } : {}),
     ...(payload.kickoffUserId ? { kickoffUserId: payload.kickoffUserId } : {}),
+    ...(payload.intent ? { intent: payload.intent } : {}),
+    ...(payload.userId ? { userId: payload.userId } : {}),
+    ...(payload.provider ? { provider: payload.provider } : {}),
+    ...(payload.oidcNonce ? { oidcNonce: payload.oidcNonce } : {}),
+    ...(payload.targetIdentityId ? { targetIdentityId: payload.targetIdentityId } : {}),
   };
 }

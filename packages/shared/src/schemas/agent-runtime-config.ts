@@ -262,16 +262,37 @@ const claudeCodeTuiRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.ex
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
   // Maps to codex-sdk ThreadOptions.modelReasoningEffort. Default "high"
-  // preserves the value the handler previously hardcoded. "minimal" is
+  // preserves the value the handler previously hardcoded. Newer Codex models
+  // additionally advertise provider-native "max" and "ultra" values. Support
+  // is model-dependent, so the runtime passes them through and lets the
+  // provider return an explicit compatibility error. "minimal" remains
   // intentionally excluded — it is incompatible with the default tool set and
   // breaks tool calls (see the codex handler's footgun notes).
-  reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).default("high"),
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).default("high"),
+});
+
+const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("cursor"),
+  // No `reasoningEffort` — Cursor has no separate effort channel; effort/fast/
+  // context selection is already encoded in the provider-native model id the
+  // free-form `model` field carries. The safety posture (`--sandbox disabled
+  // --force`) is a runtime decision, not a configurable field, so no
+  // `sandboxMode` / `approvalPolicy` either.
+});
+
+const kimiCodeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("kimi-code"),
+  // No First Tree reasoning-effort field in V1. Kimi thinking configuration is
+  // provider-native; an empty model delegates to the operator's local Kimi
+  // configuration while a non-empty exact id is passed to the SDK.
 });
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
   claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
+  cursorRuntimeConfigPayloadShape,
+  kimiCodeRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
 
@@ -392,6 +413,32 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
 };
 
 /**
+ * Default payload for a fresh cursor agent. `model` is empty by default so the
+ * spawn omits `--model` and the Cursor CLI picks its local default (`auto`); a
+ * non-empty operator value is passed through verbatim as one argv entry.
+ */
+export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "cursor",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+};
+
+/** Default payload for Kimi Code. Empty model inherits ~/.kimi-code config. */
+export const DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "kimi-code",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+};
+
+/**
  * Default payload selector by runtime provider.
  */
 export function defaultRuntimeConfigPayload(
@@ -400,6 +447,10 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "cursor":
+      return { ...DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD };
+    case "kimi-code":
+      return { ...DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code-tui":
       return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":
@@ -448,7 +499,7 @@ const agentRuntimeConfigPatchShape = z
     // patch shape is flat and provider-agnostic, while the allowed values
     // differ per provider. Validity is enforced when the merged payload is
     // re-parsed against the tagged union in `commitWrite` — an out-of-range
-    // value (e.g. "max" for codex, "xhigh" for claude) is rejected there.
+    // value (e.g. "" for codex, "xhigh" for claude) is rejected there.
     reasoningEffort: z.string(),
   })
   .partial();

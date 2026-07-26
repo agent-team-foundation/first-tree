@@ -1,8 +1,10 @@
 import crypto, { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { describe, expect, it, vi } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -10,11 +12,40 @@ import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
+import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createGitlabConnection } from "../services/gitlab-connections.js";
 import * as orgSettingsService from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(
+  observer: ReturnType<typeof postgres>,
+  applicationNames: readonly string[],
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ application_name: string; wait_event_type: string | null }[]>`
+      SELECT application_name, wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name IN ${observer(applicationNames)}
+    `;
+    const waitingNames = new Set(
+      rows.filter((row) => row.wait_event_type === "Lock").map((row) => row.application_name),
+    );
+    if (applicationNames.every((name) => waitingNames.has(name))) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock waits: ${applicationNames.join(", ")}`);
+}
 
 async function createReviewerAgent(
   app: FastifyInstance,
@@ -48,6 +79,40 @@ async function createReviewerAgent(
   return agent;
 }
 
+async function seedReviewerInstallation(
+  app: FastifyInstance,
+  organizationId: string,
+  options: { pullRequests?: "read" | "write"; suspendedAt?: string | null } = {},
+): Promise<void> {
+  const numericId = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+  await upsertInstallationFromMetadata(app.db, {
+    installation: {
+      id: numericId,
+      accountType: "Organization",
+      accountLogin: "owner",
+      accountGithubId: numericId + 1,
+      permissions: { metadata: "read", pull_requests: options.pullRequests ?? "write" },
+      events: ["pull_request"],
+      suspendedAt: options.suspendedAt ?? null,
+    },
+    hubOrganizationId: organizationId,
+  });
+  await app.db
+    .insert(organizationSettings)
+    .values({
+      organizationId,
+      namespace: "context_tree",
+      value: {
+        provider: "github",
+        repo: "https://github.com/example/context-tree.git",
+        branch: "main",
+      },
+      version: 1,
+      updatedBy: null,
+    })
+    .onConflictDoNothing();
+}
+
 describe("org-settings service", () => {
   const getApp = useTestApp();
 
@@ -57,6 +122,83 @@ describe("org-settings service", () => {
 
     const ct = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree");
     expect(ct).toEqual({ branch: "main" });
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toEqual({
+      binding: null,
+      updatedAt: null,
+    });
+  });
+
+  it("reads the complete Context Review runtime from one joined database snapshot", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const connection = await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal:8443",
+    });
+    const select = vi.spyOn(app.db, "select");
+
+    try {
+      await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+        bindingState: "unbound",
+        provider: null,
+        repo: null,
+        branch: "main",
+        providerMatchesRepository: false,
+        gitlabConnection: {
+          id: connection.connectionId,
+          instanceOrigin: "https://gitlab.internal:8443",
+        },
+        contextReviewer: { enabled: false, agentUuid: null },
+      });
+      expect(select).toHaveBeenCalledTimes(1);
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  it("keeps a GitLab Tree snapshot current when only Reviewer state changes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal", addressPolicy: { kind: "public" } }],
+      },
+    );
+    const expectedRuntime = await orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId);
+
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree_features",
+      value: { contextReviewer: { enabled: true, agentUuid: uuidv7() } },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.isOrgContextTreeBindingRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(true);
+    await expect(
+      orgSettingsService.isOrgContextReviewRuntimeCurrent(app.db, admin.organizationId, expectedRuntime),
+    ).resolves.toBe(false);
   });
 
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
@@ -96,7 +238,239 @@ describe("org-settings service", () => {
       { branch: null },
       { updatedBy: admin.userId },
     );
-    expect(after).toEqual({ repo: "https://github.com/example/tree", branch: "main" });
+    expect(after).toEqual({ provider: "github", repo: "https://github.com/example/tree", branch: "main" });
+  });
+
+  it("putOrgSetting replaces the repo without changing an existing branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/example/original.git", branch: "release/2026-07" },
+      { updatedBy: admin.userId },
+    );
+
+    const rebound = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "git@github.com:example/rebound.git" },
+      { updatedBy: admin.userId },
+    );
+    expect(rebound).toEqual({
+      provider: "github",
+      repo: "git@github.com:example/rebound.git",
+      branch: "release/2026-07",
+    });
+  });
+
+  it("putInitializedOrgContextTreeBinding initializes a branch-only row", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "legacy-branch" },
+      version: 4,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "legacy-branch", updatedBy: admin.userId },
+      ),
+    ).resolves.toEqual({ repo: "https://github.com/example/initialized.git", branch: "main" });
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({
+      value: { repo: "https://github.com/example/initialized.git", branch: "main" },
+      version: 5,
+    });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves a branch changed after preflight", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const current = { branch: "release/concurrent" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: current,
+      version: 3,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/stale-initializer.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: current, version: 3 });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves an existing raw repo binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({
+        value: organizationSettings.value,
+        version: organizationSettings.version,
+        updatedBy: organizationSettings.updatedBy,
+      })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 7, updatedBy: admin.userId });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves a repo-less invalid branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { branch: "--bad" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 8,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 8 });
+  });
+
+  it("can read and repair a historical Context Tree row that is looser than the write schema", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { repo: "http://legacy.example.com/context-tree.git", branch: " legacy\nbranch " };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      historical,
+    );
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toMatchObject({
+      binding: null,
+      updatedAt: expect.any(Date),
+    });
+
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree",
+        { repo: "https://github.com/example/repaired.git" },
+        { updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow(/valid Git branch name/);
+
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      historical,
+    );
+
+    const repaired = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/example/repaired.git", branch: "main" },
+      { updatedBy: admin.userId },
+    );
+    expect(repaired).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/repaired.git",
+      branch: "main",
+    });
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(repaired);
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({
+      value: {
+        provider: "github",
+        repo: "https://github.com/example/repaired.git",
+        branch: "main",
+      },
+      version: 2,
+    });
   });
 
   it("rejects empty-string repo at the schema layer (#3)", async () => {
@@ -182,6 +556,113 @@ describe("org-settings service", () => {
         ),
       );
     expect(v2?.version).toBe(2);
+  });
+
+  it.each([
+    { label: "an existing setting row", seedExisting: true, expectedVersion: 3 },
+    { label: "the first setting write", seedExisting: false, expectedVersion: 2 },
+  ])("serializes concurrent partial updates for $label", async ({ seedExisting, expectedVersion }) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const suffix = randomUUID().slice(0, 8);
+    const repoWriterName = `ct_repo_${suffix}`;
+    const branchWriterName = `ct_branch_${suffix}`;
+    const holder = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const repoWriter = connectDatabase(databaseUrlWithApplicationName(databaseUrl, repoWriterName));
+    const branchWriter = connectDatabase(databaseUrlWithApplicationName(databaseUrl, branchWriterName));
+    let releaseHolder = (): void => undefined;
+    const holderRelease = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let reportHolderLocked = (): void => undefined;
+    const holderLocked = new Promise<void>((resolve) => {
+      reportHolderLocked = resolve;
+    });
+    let holderTransaction: Promise<unknown> | undefined;
+    let repoUpdate: Promise<unknown> | undefined;
+    let branchUpdate: Promise<unknown> | undefined;
+
+    try {
+      if (seedExisting) {
+        await orgSettingsService.putOrgSetting(
+          app.db,
+          admin.organizationId,
+          "context_tree",
+          { repo: "https://github.com/example/original.git", branch: "main" },
+          { updatedBy: admin.userId },
+        );
+      }
+
+      holderTransaction = holder.begin(async (tx) => {
+        await tx.unsafe("SELECT id FROM organizations WHERE id = $1 FOR UPDATE", [admin.organizationId]);
+        if (seedExisting) {
+          await tx.unsafe(
+            `
+            SELECT organization_id
+            FROM organization_settings
+            WHERE organization_id = $1
+              AND namespace = 'context_tree'
+            FOR UPDATE
+          `,
+            [admin.organizationId],
+          );
+        }
+        reportHolderLocked();
+        await holderRelease;
+      });
+      const holderFailure = holderTransaction.catch((error: unknown) => {
+        throw error;
+      });
+      await Promise.race([holderLocked, holderFailure]);
+
+      repoUpdate = orgSettingsService.putOrgSetting(
+        repoWriter,
+        admin.organizationId,
+        "context_tree",
+        { repo: "https://github.com/example/concurrent.git" },
+        { updatedBy: admin.userId },
+      );
+      branchUpdate = orgSettingsService.putOrgSetting(
+        branchWriter,
+        admin.organizationId,
+        "context_tree",
+        { branch: "release/concurrent" },
+        { updatedBy: admin.userId },
+      );
+
+      await waitForPostgresLockWait(observer, [repoWriterName, branchWriterName]);
+      releaseHolder();
+      await Promise.all([repoUpdate, branchUpdate, holderTransaction]);
+
+      const [row] = await app.db
+        .select({ value: organizationSettings.value, version: organizationSettings.version })
+        .from(organizationSettings)
+        .where(
+          and(
+            eq(organizationSettings.organizationId, admin.organizationId),
+            eq(organizationSettings.namespace, "context_tree"),
+          ),
+        );
+      expect(row).toEqual({
+        value: {
+          provider: "github",
+          repo: "https://github.com/example/concurrent.git",
+          branch: "release/concurrent",
+        },
+        version: expectedVersion,
+      });
+    } finally {
+      releaseHolder();
+      await Promise.allSettled(
+        [holderTransaction, repoUpdate, branchUpdate].filter(
+          (operation): operation is Promise<unknown> => operation !== undefined,
+        ),
+      );
+      await Promise.allSettled([repoWriter.end(), branchWriter.end(), holder.end(), observer.end()]);
+    }
   });
 
   it("deleteOrgSetting drops the row; subsequent get returns defaults", async () => {
@@ -362,6 +843,7 @@ describe("org-settings service", () => {
     const admin = await createAdminContext(app);
     const otherManager = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, { managerId: otherManager.memberId });
+    await seedReviewerInstallation(app, admin.organizationId);
 
     const out = await orgSettingsService.putOrgSetting(
       app.db,
@@ -382,13 +864,14 @@ describe("org-settings service", () => {
     expect(re).toEqual(out);
   });
 
-  it("context_tree_features clears agentUuid when disabled", async () => {
+  it("context_tree_features preserves the selected reviewer when disabled", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
 
     await orgSettingsService.putOrgSetting(
       app.db,
@@ -405,7 +888,95 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId, memberId: admin.memberId },
     );
 
-    expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
+  });
+
+  it("context_tree_features rejects enabling the Reviewer without a writable GitHub App installation", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "github",
+        repo: "https://github.com/example/context-tree.git",
+        branch: "main",
+      },
+      { updatedBy: admin.userId },
+    );
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      ),
+    ).rejects.toThrow(/Pull requests: write permission/);
+
+    await seedReviewerInstallation(app, admin.organizationId, { pullRequests: "read" });
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      ),
+    ).rejects.toThrow(/Pull requests: write permission/);
+  });
+
+  it("context_tree_features uses a matching GitLab Webhook connection instead of GitHub App permissions", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Private GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal", addressPolicy: { kind: "public" } }],
+      },
+    );
+
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      ),
+    ).resolves.toMatchObject({
+      contextReviewer: { enabled: true, agentUuid: reviewer.uuid },
+    });
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {
@@ -682,10 +1253,40 @@ describe("org-settings API (admin gating + masking)", () => {
       method: "PUT",
       url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: "https://github.com/example/api", branch: "api" },
+      payload: { repo: "https://github.com/example/api" },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toMatchObject({ repo: "https://github.com/example/api", branch: "api" });
+    expect(put.json()).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/api",
+      branch: "main",
+    });
+
+    const branched = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/api", branch: "api" },
+    });
+    expect(branched.statusCode).toBe(200);
+    expect(branched.json()).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/api",
+      branch: "api",
+    });
+
+    const rebound = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "git@github.com:example/rebound-api.git" },
+    });
+    expect(rebound.statusCode).toBe(200);
+    expect(rebound.json()).toEqual({
+      provider: "github",
+      repo: "git@github.com:example/rebound-api.git",
+      branch: "api",
+    });
 
     const del = await app.inject({
       method: "DELETE",
@@ -702,15 +1303,870 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
+  it("accepts a Context Tree binding when expectedUnboundBranch matches", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const branch = "release/candidate";
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const unbound = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch },
+    });
+    expect(unbound.statusCode).toBe(200);
+    expect(unbound.json()).toEqual({ branch });
+
+    const binding = {
+      provider: "github" as const,
+      repo: "https://github.com/example/precondition-match.git",
+      branch,
+    };
+    const bound = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: binding.provider,
+        repo: binding.repo,
+        branch: binding.branch,
+        expectedUnboundBranch: branch,
+      },
+    });
+
+    expect(bound.statusCode).toBe(200);
+    // The precondition is request metadata and must never be persisted or
+    // exposed in the settings response.
+    expect(bound.json()).toEqual(binding);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: binding, version: 2 });
+  });
+
+  it("rejects an invalid expectedUnboundBranch sentinel without writing", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const response = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/invalid-precondition.git",
+        branch: "main",
+        expectedUnboundBranch: "bad..branch",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toBeUndefined();
+  });
+
+  it("rejects a stale expectedUnboundBranch after another writer binds the Context Tree", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    const winningBinding = {
+      provider: "github" as const,
+      repo: "https://github.com/example/concurrent-winner.git",
+      branch: "main",
+    };
+
+    const winner = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: winningBinding,
+    });
+    expect(winner.statusCode).toBe(200);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "github",
+        repo: "https://github.com/example/stale-initializer.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: "Context Tree setting changed after tree initialization began" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: winningBinding, version: 1 });
+  });
+
+  it("rejects a stale expectedUnboundBranch after another writer changes only the branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const branchChange = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { branch: "release/concurrent" },
+    });
+    expect(branchChange.statusCode).toBe(200);
+    expect(branchChange.json()).toEqual({ branch: "release/concurrent" });
+
+    const stale = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "github",
+        repo: "https://github.com/example/stale-branch-initializer.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: "Context Tree setting changed after tree initialization began" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { branch: "release/concurrent" }, version: 1 });
+  });
+
+  it("rejects a conditional binding over invalid historical storage", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 6,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = '{"repo":null,"branch":"main"}'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    const response = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "github",
+        repo: "https://github.com/example/conditional-repair.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { repo: null, branch: "main" }, version: 6 });
+  });
+
+  it("allows only one of two concurrent initializer binding writes to commit", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    const candidates = [
+      { provider: "github" as const, repo: "https://github.com/example/initializer-a.git", branch: "main" },
+      { provider: "github" as const, repo: "https://github.com/example/initializer-b.git", branch: "main" },
+    ] as const;
+
+    const responses = await Promise.all(
+      candidates.map((payload) =>
+        app.inject({
+          method: "POST",
+          url: finalizeUrl,
+          headers: { authorization: `Bearer ${admin.accessToken}` },
+          payload: {
+            provider: payload.provider,
+            repo: payload.repo,
+            branch: payload.branch,
+            expectedUnboundBranch: "main",
+          },
+        }),
+      ),
+    );
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const successful = responses.find((response) => response.statusCode === 200);
+    const conflicted = responses.find((response) => response.statusCode === 409);
+    expect(successful).toBeDefined();
+    expect(conflicted?.json()).toMatchObject({
+      error: "Context Tree setting changed after tree initialization began",
+    });
+    const winningBinding = successful?.json();
+    expect(candidates).toContainEqual(winningBinding);
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: winningBinding, version: 1 });
+  });
+
+  it("keeps an intentional branch-only clear readable on the member-safe endpoint", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch: "trunk" },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ branch: "trunk" });
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(200);
+      expect(safeRead.json()).toEqual({ branch: "trunk" });
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual({ branch: "trunk" });
+  });
+
+  it("projects the resolved GitLab provider for a legacy binding through the member-safe endpoint", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    const legacyBinding = {
+      repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      branch: "main",
+    };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: legacyBinding,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const response = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ provider: "gitlab", ...legacyBinding });
+    }
+  });
+
+  it("clears a stale provider and keeps an unclassifiable replacement binding degraded", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const initial = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/context-tree.git",
+        branch: "main",
+      },
+    });
+    expect(initial.statusCode).toBe(200);
+
+    const replacement = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "git@unknown-forge.example:acme/context-tree.git",
+        branch: "release",
+      },
+    });
+    expect(replacement.statusCode).toBe(200);
+    expect(replacement.json()).toEqual({
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+
+    await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+      bindingState: "bound",
+      provider: null,
+      providerSource: "unknown",
+      providerMatchesRepository: false,
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+    const [stored] = await app.db
+      .select({ value: organizationSettings.value })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(stored?.value).toEqual({
+      repo: "git@unknown-forge.example:acme/context-tree.git",
+      branch: "release",
+    });
+  });
+
+  it("clears GitLab provider when an HTTPS replacement changes the exact forge port", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await createGitlabConnection(app.db, {
+      organizationId: admin.organizationId,
+      memberId: admin.memberId,
+      displayName: "Self-Managed GitLab",
+      instanceOrigin: "https://gitlab.internal:8443",
+    });
+    const initial = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.internal:8443/acme/context-tree.git",
+        branch: "main",
+      },
+      {
+        updatedBy: admin.userId,
+        memberId: admin.memberId,
+        gitlabEgressAllowlist: [{ origin: "https://gitlab.internal:8443", addressPolicy: { kind: "public" } }],
+      },
+    );
+    expect(initial).toEqual({
+      provider: "gitlab",
+      repo: "https://gitlab.internal:8443/acme/context-tree.git",
+      branch: "main",
+    });
+
+    const replacement = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      {
+        repo: "https://gitlab.internal:9443/acme/context-tree.git",
+        branch: "release",
+      },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    expect(replacement).toEqual({
+      repo: "https://gitlab.internal:9443/acme/context-tree.git",
+      branch: "release",
+    });
+    await expect(orgSettingsService.getOrgContextReviewRuntime(app.db, admin.organizationId)).resolves.toMatchObject({
+      bindingState: "bound",
+      provider: null,
+      providerMatchesRepository: false,
+      repo: "https://gitlab.internal:9443/acme/context-tree.git",
+      branch: "release",
+    });
+  });
+
+  it("fails closed for a repo-less historical row with an invalid branch", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "--bad" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+      expect(safeRead.json()).toMatchObject({
+        error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+      });
+      expect(safeRead.body).not.toContain("--bad");
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual({ branch: "--bad" });
+  });
+
+  it("fails closed for an empty historical repo while keeping the raw row repairable", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "", branch: "main" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+      expect(safeRead.json()).toMatchObject({
+        error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+      });
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual(historical);
+  });
+
+  it("treats a JSON null row as invalid instead of an absent Context Tree setting", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = 'null'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+    }
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toMatchObject({
+      binding: null,
+      updatedAt: expect.any(Date),
+    });
+  });
+
+  it("returns a JSONB string scalar from the raw repair endpoint as valid JSON", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const rawUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree/raw`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = '"legacy"'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    const response = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/^application\/json/u);
+    expect(response.body).toBe('"legacy"');
+    expect(response.json()).toBe("legacy");
+  });
+
+  it.each([
+    ["JSON null", "null"],
+    ["array JSON", "[]"],
+    ["scalar JSON", '"legacy"'],
+    ["null repo", '{"repo":null,"branch":"main"}'],
+    ["null branch", '{"repo":"https://github.com/legacy/tree.git","branch":null}'],
+  ])("allows a complete replacement to repair %s storage while partial updates fail closed", async (_label, rawJson) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = ${rawJson}::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    const partial = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/partial-repair.git" },
+    });
+    expect(partial.statusCode).toBe(400);
+    const [afterPartial] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(afterPartial).toEqual({ value: JSON.parse(rawJson), version: 1 });
+
+    const repairedBinding = {
+      provider: "github" as const,
+      repo: "https://github.com/example/repaired-context-tree.git",
+      branch: "repair/storage",
+    };
+    const repaired = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: repairedBinding,
+    });
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.json()).toEqual(repairedBinding);
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(
+      repairedBinding,
+    );
+    const [afterRepair] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(afterRepair).toEqual({ value: repairedBinding, version: 2 });
+  });
+
+  it("does not partially clear an invalid historical Context Tree binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    const partialClear = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null },
+    });
+
+    expect(partialClear.statusCode).toBe(400);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 7 });
+  });
+
+  it("allows a complete unbound replacement to repair an invalid historical Context Tree binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    const repaired = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch: "main" },
+    });
+
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.json()).toEqual({ branch: "main" });
+    const safeRead = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(safeRead.statusCode).toBe(200);
+    expect(safeRead.json()).toEqual({ branch: "main" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { branch: "main" }, version: 8 });
+  });
+
+  it("keeps context_tree GET runtime-safe and exposes raw repair data only on the admin endpoint", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const rawUrl = `${safeUrl}/raw`;
+    const historical = {
+      repo: "https://legacy-user:legacy-secret@github.com/example/context-tree.git",
+      branch: "main",
+    };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    const adminSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminSafeRead.statusCode).toBe(409);
+    expect(adminSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
+    expect(adminSafeRead.body).not.toContain("legacy-user");
+    expect(adminSafeRead.body).not.toContain("legacy-secret");
+
+    const memberSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberSafeRead.statusCode).toBe(409);
+    expect(memberSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
+    expect(memberSafeRead.body).not.toContain("legacy-user");
+    expect(memberSafeRead.body).not.toContain("legacy-secret");
+
+    const adminRawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminRawRead.statusCode).toBe(200);
+    expect(adminRawRead.json()).toEqual(historical);
+
+    const memberRawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberRawRead.statusCode).toBe(403);
+
+    const repaired = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/repaired-context-tree.git", branch: "release/2026-07" },
+    });
+    expect(repaired.statusCode).toBe(200);
+
+    const repairedMemberRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(repairedMemberRead.statusCode).toBe(200);
+    expect(repairedMemberRead.json()).toEqual({
+      provider: "github",
+      repo: "https://github.com/example/repaired-context-tree.git",
+      branch: "release/2026-07",
+    });
+  });
+
+  it("strictly validates Context Tree PUT bodies without partially updating the setting", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/original.git",
+      branch: "release",
+    };
+
+    const initial = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: original,
+    });
+    expect(initial.statusCode).toBe(200);
+
+    for (const payload of [
+      { repo: "https://github.com" },
+      { repo: " https://github.com/example/tree.git" },
+      { repo: "https://github.com/example/tree.git\u0000" },
+      { repo: "https:/github.com/example/tree.git" },
+      { repo: "https:///github.com/example/tree.git" },
+      { repo: "https://github.com\\example/tree.git" },
+      { repo: "C:\\workspace\\context-tree.git" },
+      { repo: "https://github.com/example/tree.git?access_token=secret" },
+      { repo: "https://github.com/example/tree.git\u2028forged" },
+      { branch: "" },
+      { branch: " release" },
+      { branch: "release\nnext" },
+      { branch: "feature..next" },
+      { branch: ".hidden" },
+      { branch: "release.lock" },
+      { branch: "topic~1" },
+      { branch: "--bad" },
+      { repo: "https://github.com/example/new.git", branch: "main", unexpected: true },
+    ]) {
+      const res = await app.inject({
+        method: "PUT",
+        url,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
+  });
+
   it("context tree snapshot uses the org id from the route, not the caller's primary org", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const sideOrgId = await attachOrg(app, admin.userId);
+    const sideRepo = "https://127.0.0.1:1/example/current-team-context.git";
     await orgSettingsService.putOrgSetting(
       app.db,
       sideOrgId,
       "context_tree",
-      { repo: "https://github.com/example/current-team-context", branch: "--bad" },
+      { repo: sideRepo, branch: "route-org" },
       { updatedBy: admin.userId },
     );
 
@@ -721,8 +2177,8 @@ describe("org-settings API (admin gating + masking)", () => {
     });
     expect(sideSnapshot.statusCode).toBe(200);
     expect(sideSnapshot.json()).toMatchObject({
-      repo: "https://github.com/example/current-team-context",
-      branch: "--bad",
+      repo: sideRepo,
+      branch: "route-org",
       snapshotStatus: "unavailable",
     });
 
@@ -738,20 +2194,182 @@ describe("org-settings API (admin gating + masking)", () => {
     });
   });
 
-  it("non-admin member is forbidden from PUT / DELETE on context_tree (write is admin-only)", async () => {
+  it("context tree snapshots treat invalid historical bindings as unbound", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const sideOrgId = await attachOrg(app, admin.userId);
+    await app.db.insert(organizationSettings).values([
+      {
+        organizationId: sideOrgId,
+        namespace: "context_tree",
+        value: { repo: "https://github.com/example/current-team-context", branch: "--bad" },
+        version: 1,
+        updatedBy: admin.userId,
+      },
+      {
+        organizationId: admin.organizationId,
+        namespace: "context_tree",
+        value: { repo: "http://legacy.example/context-tree.git", branch: "main" },
+        version: 1,
+        updatedBy: admin.userId,
+      },
+    ]);
+
+    const sideSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${sideOrgId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(sideSnapshot.statusCode).toBe(200);
+    expect(sideSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+    });
+
+    const defaultSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(defaultSnapshot.statusCode).toBe(200);
+    expect(defaultSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+    });
+
+    const userSnapshot = await app.inject({
+      method: "GET",
+      url: "/api/v1/context-tree/snapshot?window=7d",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(userSnapshot.statusCode).toBe(200);
+    expect(userSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+    });
+  });
+
+  it("non-admin member is forbidden from every context_tree write surface", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/member-guard.git",
+      branch: "main",
+    };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
+      updatedBy: admin.userId,
+    });
 
-    for (const method of ["PUT", "DELETE"] as const) {
+    const writes = [
+      { method: "PUT", url, payload: { branch: "x" } },
+      {
+        method: "POST",
+        url: `${url}/initialize`,
+        payload: {
+          provider: "github",
+          repo: "https://github.com/example/member-finalize-guard.git",
+          branch: "main",
+          expectedUnboundBranch: "main",
+        },
+      },
+      { method: "DELETE", url, payload: undefined },
+    ] as const;
+
+    for (const write of writes) {
       const res = await app.inject({
-        method,
-        url,
+        method: write.method,
+        url: write.url,
         headers: { authorization: `Bearer ${member.accessToken}` },
-        ...(method === "PUT" ? { payload: { branch: "x" } } : {}),
+        ...(write.payload ? { payload: write.payload } : {}),
       });
-      expect(res.statusCode, `${method} should be 403 for non-admin`).toBe(403);
+      expect(res.statusCode, `${write.method} ${write.url} should be 403 for non-admin`).toBe(403);
     }
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
+  });
+
+  it("re-evaluates admin membership on every Context Tree write and leaves the setting unchanged", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = {
+      provider: "github" as const,
+      repo: "https://github.com/example/realtime-guard.git",
+      branch: "main",
+    };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
+      updatedBy: admin.userId,
+    });
+
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+    const downgraded = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/forbidden-downgrade.git" },
+    });
+    expect(downgraded.statusCode).toBe(403);
+    const downgradedFinalize = await app.inject({
+      method: "POST",
+      url: `${url}/initialize`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "github",
+        repo: "https://github.com/example/forbidden-downgrade-finalize.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+    expect(downgradedFinalize.statusCode).toBe(403);
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      original,
+    );
+
+    await app.db.update(members).set({ role: "admin", status: "left" }).where(eq(members.id, admin.memberId));
+    const departed = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/forbidden-departure.git" },
+    });
+    expect(departed.statusCode).toBe(403);
+    const departedFinalize = await app.inject({
+      method: "POST",
+      url: `${url}/initialize`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        provider: "github",
+        repo: "https://github.com/example/forbidden-departure-finalize.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+    expect(departedFinalize.statusCode).toBe(403);
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
   });
 
   it("unknown namespace returns 400", async () => {
@@ -801,13 +2419,14 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ repos: [] });
   });
 
-  it("admin can GET and PUT context_tree_features through the generic settings route", async () => {
+  it("admin can persist and preserve a disabled Reviewer selection through the compatibility route", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree_features`;
 
     const get1 = await app.inject({
@@ -822,12 +2441,12 @@ describe("org-settings API (admin gating + masking)", () => {
       method: "PUT",
       url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+      payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(put.statusCode).toBe(200);
     expect(put.json()).toEqual({
       contextReviewer: {
-        enabled: true,
+        enabled: false,
         agentUuid: reviewer.uuid,
         reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
       },
@@ -840,7 +2459,13 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(disabled.statusCode).toBe(200);
-    expect(disabled.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled.json()).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
   });
 
   it("member can GET source_repos and context_tree (readPolicy: member) but cannot PUT / DELETE", async () => {
@@ -874,6 +2499,50 @@ describe("org-settings API (admin gating + masking)", () => {
     }
   });
 
+  it("rechecks active membership for each explicit-Team Context Tree binding read", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const otherTeamId = await attachOrg(app, admin.userId);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const binding = {
+      provider: "github" as const,
+      repo: "https://github.com/example/byo-read-tree.git",
+      branch: "main",
+    };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", binding, {
+      updatedBy: admin.userId,
+    });
+
+    const active = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(active.statusCode).toBe(200);
+    expect(active.json()).toEqual(binding);
+
+    const wrongTeam = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${otherTeamId}/settings/context_tree`,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(wrongTeam.statusCode).toBe(403);
+
+    for (const status of ["left", "removed"] as const) {
+      await app.db
+        .update(members)
+        .set({ status })
+        .where(and(eq(members.userId, member.userId), eq(members.organizationId, admin.organizationId)));
+      const inactive = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      });
+      expect(inactive.statusCode, `${status} membership must fail closed`).toBe(403);
+      expect(inactive.body).not.toContain(binding.repo);
+    }
+  });
+
   it("member can GET context_tree_features but cannot PUT or DELETE", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
@@ -882,6 +2551,7 @@ describe("org-settings API (admin gating + masking)", () => {
       displayName: "Team Reviewer",
       name: `team-reviewer-${crypto.randomUUID().slice(0, 8)}`,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree_features`;
 
     await orgSettingsService.putOrgSetting(

@@ -1,4 +1,4 @@
-import type { AgentType } from "@first-tree/shared";
+import type { AgentType, RuntimeProvider } from "@first-tree/shared";
 import { setConfig } from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
@@ -6,9 +6,11 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
+import { serverInstances } from "../db/schema/server-instances.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
@@ -58,6 +60,8 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
+  googleOAuth?: boolean;
+  githubOAuth?: boolean;
   /** Document review (docloop) routes. Defaults to enabled in tests. */
   docsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
@@ -75,6 +79,7 @@ export type CreateTestAppOptions = {
   runtimeHttpTokenEnforcement?: boolean;
   runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
+  gitlabEgressAllowlist?: NonNullable<Config["gitlab"]>["egressAllowlist"];
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
    * `/github-app-installation/install-url` 503 test — the slug is the
@@ -144,10 +149,36 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       refreshTokenExpiry: "30d",
       connectTokenExpiry: "10m",
     },
+    gitlab: {
+      egressAllowlist:
+        opts.gitlabEgressAllowlist ??
+        [
+          "gitlab.com",
+          "gitlab.current",
+          "gitlab.customer",
+          "gitlab.duplicate",
+          "gitlab.example",
+          "gitlab.internal",
+          "gitlab.replacement",
+          "gitlab.resurrected",
+          "gitlab.stale",
+        ].map((host) => ({
+          origin: `https://${host}`,
+          addressPolicy: { kind: "public" as const },
+        })),
+    },
     ...(opts.allowedOrganizationId !== undefined
       ? { access: { allowedOrganizationId: opts.allowedOrganizationId.trim() || undefined } }
       : {}),
     oauth: {
+      ...(opts.googleOAuth
+        ? {
+            google: {
+              clientId: "test-google-client-id",
+              clientSecret: "test-google-client-secret",
+            },
+          }
+        : {}),
       // Stub GitHub App creds. Tests that exercise the App flow inject
       // fetchers / mocks at the service-call layer and never actually
       // consume these values — see github-app.test.ts.
@@ -167,7 +198,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     trustProxy: false,
     connectBootstrap: {
-      method: "npm",
       portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
       ...opts.connectBootstrap,
     },
@@ -203,6 +233,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     instanceId: "test-instance",
   };
+  if (opts.githubOAuth === false && config.oauth) Reflect.deleteProperty(config.oauth, "githubApp");
   // Pin the singleton so service-layer helpers that go through
   // `getServerCliBinding()` (e.g. message / agent error hints)
   // find a config in-process. Production paths reach this via `initConfig`;
@@ -332,13 +363,16 @@ export async function seedAgentFactory(app: FastifyInstance) {
     status: "connected",
   });
 
-  return async (opts: { name?: string; type?: AgentType; displayName?: string } = {}) => {
+  return async (
+    opts: { name?: string; type?: AgentType; displayName?: string; runtimeProvider?: RuntimeProvider } = {},
+  ) => {
     return createAgent(app.db, {
       name: opts.name ?? `seed-agent-${crypto.randomUUID().slice(0, 8)}`,
       type: opts.type ?? "agent",
       displayName: opts.displayName ?? "Seed Agent",
       managerId: admin.memberId,
       clientId: opts.type === "human" ? undefined : clientId,
+      ...(opts.runtimeProvider ? { runtimeProvider: opts.runtimeProvider } : {}),
     });
   };
 }
@@ -348,6 +382,71 @@ export async function seedClient(app: FastifyInstance, userId: string, organizat
   const id = `cli-${crypto.randomUUID().slice(0, 8)}`;
   await app.db.insert(clients).values({ id, userId, organizationId, status: "connected" });
   return id;
+}
+
+/** Seed the exact live route and install-only capability facts used by runtime health gates. */
+export async function seedHealthyAgentRuntime(
+  app: FastifyInstance,
+  input: {
+    agentUuid: string;
+    clientId: string;
+    runtimeProvider?: RuntimeProvider;
+    now?: Date;
+  },
+): Promise<void> {
+  const now = input.now ?? new Date();
+  const runtimeProvider = input.runtimeProvider ?? "claude-code";
+  const instanceId = `instance-${input.clientId}`;
+  await app.db
+    .update(clients)
+    .set({
+      status: "connected",
+      instanceId,
+      lastSeenAt: now,
+      retiredAt: null,
+      pausedReason: null,
+      metadata: {
+        capabilities: {
+          [runtimeProvider]: {
+            state: "ok",
+            available: true,
+            detectedAt: now.toISOString(),
+          },
+        },
+      },
+    })
+    .where(eq(clients.id, input.clientId));
+  await app.db
+    .insert(serverInstances)
+    .values({ instanceId, lastHeartbeat: now })
+    .onConflictDoUpdate({
+      target: serverInstances.instanceId,
+      set: { lastHeartbeat: now },
+    });
+  await app.db
+    .insert(agentPresence)
+    .values({
+      agentId: input.agentUuid,
+      status: "online",
+      clientId: input.clientId,
+      instanceId,
+      runtimeType: runtimeProvider,
+      runtimeState: "idle",
+      lastSeenAt: now,
+      runtimeUpdatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: agentPresence.agentId,
+      set: {
+        status: "online",
+        clientId: input.clientId,
+        instanceId,
+        runtimeType: runtimeProvider,
+        runtimeState: "idle",
+        lastSeenAt: now,
+        runtimeUpdatedAt: now,
+      },
+    });
 }
 
 /**

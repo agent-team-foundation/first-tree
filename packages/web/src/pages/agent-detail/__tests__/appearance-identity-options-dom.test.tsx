@@ -690,14 +690,12 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     const disabledName = document.body.querySelector<HTMLInputElement>("input.font-mono");
     expect(disabledName?.value).toBe("@bestony");
     expect(disabledName?.disabled).toBe(true);
-    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
     const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
     const delegateSelect = document.body.querySelector<HTMLButtonElement>("#profile-delegate");
-    if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected fields");
+    if (!visibilitySelect || !delegateSelect) throw new Error("Expected human projection fields");
+    expect(document.body.querySelector("#profile-display")).toBeNull();
+    expect(document.body.textContent).not.toContain("Display name");
     // Each field saves on its own commit — no Save button.
-    await setInputValue(displayInput, "Bestony Renamed");
-    await blurInput(displayInput);
-    expect(onSave).toHaveBeenCalledWith({ displayName: "Bestony Renamed" });
     await chooseSelectOption(visibilitySelect, "Visible to your team");
     expect(onSave).toHaveBeenCalledWith({ visibility: "organization" });
     await chooseSelectOption(delegateSelect, "Second Helper");

@@ -61,6 +61,102 @@ describe("server config", () => {
     expect(fieldSchema.parse(undefined)).toBeUndefined();
   });
 
+  it("keeps the cron polling cadence inside the dispatch-safe range", () => {
+    const fieldSchema = serverConfigSchema.runtime.pollingIntervalSeconds.schema;
+
+    expect(fieldSchema.parse(undefined)).toBe(5);
+    expect(fieldSchema.parse("1")).toBe(1);
+    expect(fieldSchema.parse("10")).toBe(10);
+    expect(() => fieldSchema.parse("0")).toThrow();
+    expect(() => fieldSchema.parse("11")).toThrow();
+    expect(() => fieldSchema.parse("60")).toThrow();
+  });
+
+  it("loads Google OAuth only when both credentials are configured", async () => {
+    const missingDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    const missing = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: missingDir,
+    });
+    expect(missing.oauth?.google).toBeUndefined();
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_ID", "google-client-id");
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_SECRET", "google-client-secret");
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+    expect(configured.oauth?.google).toEqual({
+      clientId: "google-client-id",
+      clientSecret: "google-client-secret",
+    });
+  });
+
+  it("loads the deployment GitLab egress allowlist from operator JSON and defaults to deny", async () => {
+    const defaultDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    const denied = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultDir,
+    });
+    expect(denied.gitlab).toBeUndefined();
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv(
+      "FIRST_TREE_GITLAB_EGRESS_ALLOWLIST",
+      JSON.stringify([
+        {
+          origin: "https://GITLAB.COMPANY.LOCAL:8443",
+          addressPolicy: { kind: "cidrs", cidrs: ["10.20.0.0/16"] },
+        },
+      ]),
+    );
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+    expect(configured.gitlab?.egressAllowlist).toEqual([
+      {
+        origin: "https://gitlab.company.local:8443",
+        addressPolicy: { kind: "cidrs", cidrs: ["10.20.0.0/16"] },
+      },
+    ]);
+  });
+
+  it("rejects malformed GitLab egress allowlist JSON during config initialization", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_GITLAB_EGRESS_ALLOWLIST", "not-json");
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/gitlab|array/iu);
+  });
+
+  it("rejects partial Google OAuth configuration", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_ID", "google-client-id");
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/clientSecret/);
+  });
+
   it("keeps growth landing pages disabled by default and enables them via env", async () => {
     const defaultConfigDir = makeTempConfigDir();
     stubRequiredProductionConfig();
@@ -264,10 +360,10 @@ describe("server config", () => {
     expect(config.rateLimit).toEqual({ max: 1234 });
   });
 
-  it("resolves connect bootstrap portable env overrides", async () => {
+  it("ignores the removed bootstrap method env and resolves the portable base URL", async () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();
-    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "portable");
+    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "npm");
     vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", "https://downloads.example.test");
 
     const config = await initConfig({
@@ -277,9 +373,9 @@ describe("server config", () => {
     });
 
     expect(config.connectBootstrap).toEqual({
-      method: "portable",
       portableDownloadBaseUrl: "https://downloads.example.test",
     });
+    expect(serverConfigSchema.connectBootstrap).not.toHaveProperty("method");
   });
 
   it("uses inbox delivery fairness defaults when the inbox group is active", () => {

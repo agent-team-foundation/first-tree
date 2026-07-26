@@ -30,9 +30,15 @@ export type CreatedAgentInfo = {
   args: CreateAgentArgs;
 };
 
+export type AgentCreationFailure = {
+  reasonCode: "agent_create_failed" | "agent_runtime_timeout";
+  retryable: true;
+};
+
 export type UseAgentCreationOptions = {
   onCreated?: (info: CreatedAgentInfo) => void | Promise<void>;
   onOnline?: (uuid: string) => void;
+  onFailure?: (failure: AgentCreationFailure) => void;
 };
 
 /**
@@ -53,8 +59,10 @@ export function useAgentCreation(options: UseAgentCreationOptions = {}) {
   const pollCancelRef = useRef<{ cancelled: boolean } | null>(null);
   const onCreatedRef = useRef(options.onCreated);
   const onOnlineRef = useRef(options.onOnline);
+  const onFailureRef = useRef(options.onFailure);
   onCreatedRef.current = options.onCreated;
   onOnlineRef.current = options.onOnline;
+  onFailureRef.current = options.onFailure;
 
   useEffect(
     () => () => {
@@ -84,7 +92,10 @@ export function useAgentCreation(options: UseAgentCreationOptions = {}) {
         return;
       }
       if (Date.now() - startedAt > RUNTIME_READY_TIMEOUT_MS) {
-        if (!token.cancelled) setPhase("timeout");
+        if (!token.cancelled) {
+          setPhase("timeout");
+          onFailureRef.current?.({ reasonCode: "agent_runtime_timeout", retryable: true });
+        }
         return;
       }
       await new Promise((r) => setTimeout(r, RUNTIME_READY_POLL_MS));
@@ -116,6 +127,7 @@ export function useAgentCreation(options: UseAgentCreationOptions = {}) {
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to add your agent to the team");
         setPhase("idle");
+        onFailureRef.current?.({ reasonCode: "agent_create_failed", retryable: true });
         return;
       }
       await pollUntilReady(agentUuid);

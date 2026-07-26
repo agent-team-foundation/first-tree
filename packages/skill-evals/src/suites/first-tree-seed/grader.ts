@@ -1,9 +1,11 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
+import { approvedPhase1ChatHistoryMarkdown, SEED_EVAL_TEAM_ID, sourceRemoteRef } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -47,6 +49,31 @@ const PROTECTED_BARE_SOURCE_CONTENT_PATHS = [
   ".first-tree-eval/source-origin/packed-refs",
   ".first-tree-eval/source-origin/refs/",
 ];
+const SYNTHETIC_SOURCE_EVIDENCE_HINTS = [
+  "Apollo Console",
+  "CLI App",
+  "Web Dashboard",
+  "Team Practice",
+  "Context Tree commands",
+  "operator dashboard",
+  "runtime coordination",
+];
+const REAL_FIRST_TREE_SOURCE_EVIDENCE_HINTS = [
+  "Context-grounded agentic work for teams",
+  "shared context, not isolated prompts",
+  "human-agent work loop",
+  "team-maintained memory of decisions",
+  "first-tree-monorepo",
+  "skill-evals",
+];
+const CHAT_HISTORY_PATH = ".first-tree-eval/chat-history.md";
+const CHAT_HISTORY_EVIDENCE_HINTS = ["Phase 1 proposal", "Approved", "Phase 1 PR handoff"];
+
+function sourceEvidenceHints(evalCase: FirstTreeSeedEvalCase): readonly string[] {
+  return evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
+    ? REAL_FIRST_TREE_SOURCE_EVIDENCE_HINTS
+    : SYNTHETIC_SOURCE_EVIDENCE_HINTS;
+}
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -136,8 +163,97 @@ function segmentTouchesSourceWorktree(segment: string): boolean {
 // True when a captured command string operates on the source worktree. Split on
 // shell operators first so a search sub-command's quoted pattern is not
 // attributed to a neighboring real operation.
+function unwrapShellCommand(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(?:\S*\/)?(?:bash|sh|zsh)\s+-lc\s+([\s\S]+)$/u);
+  if (!match?.[1]) return trimmed;
+  const wrapped = match[1].trim();
+  const quote = wrapped[0];
+  if ((quote === '"' || quote === "'") && wrapped.at(-1) === quote) {
+    return wrapped.slice(1, -1).replace(/\\(["'])/gu, "$1");
+  }
+  return wrapped;
+}
+
+type ShellConnector = "&&" | "||" | ";" | "|";
+type ShellCommandSegment = { connectorBefore: ShellConnector | null; text: string };
+
+// Split the command without discarding the operators that determine whether a
+// segment ran. Separators inside quoted arguments are data, not shell control
+// flow (for example `sed -n '1;20p'`). This is deliberately a small shell
+// scanner rather than an attempted full shell parser: it recognizes the
+// top-level operators the grader reasons about and treats everything else as
+// opaque command text.
+function shellCommandSegmentsWithConnectors(text: string): ShellCommandSegment[] {
+  const command = unwrapShellCommand(text);
+  const segments: ShellCommandSegment[] = [];
+  let connectorBefore: ShellConnector | null = null;
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  const push = (connector: ShellConnector | null): void => {
+    if (current.trim().length > 0) {
+      segments.push({ connectorBefore, text: current });
+      current = "";
+    }
+    connectorBefore = connector;
+  };
+
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      current += character;
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      current += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === "&" && next === "&") {
+      push("&&");
+      index++;
+      continue;
+    }
+    if (character === "|" && next === "|") {
+      push("||");
+      index++;
+      continue;
+    }
+    if (character === "|") {
+      push("|");
+      continue;
+    }
+    if (character === ";" || character === "\n") {
+      push(";");
+      continue;
+    }
+    current += character;
+  }
+  push(null);
+  return segments;
+}
+
+function shellCommandSegments(text: string): string[] {
+  return shellCommandSegmentsWithConnectors(text).map((segment) => segment.text);
+}
+
 function commandTouchesSourceWorktree(text: string): boolean {
-  return text.split(/&&|\|\||[;|\n]/u).some((segment) => segmentTouchesSourceWorktree(segment));
+  return shellCommandSegments(text).some((segment) => segmentTouchesSourceWorktree(segment));
 }
 
 function eventTouchesSourceWorktree(event: unknown): boolean {
@@ -248,6 +364,37 @@ function collectCommandStrings(value: unknown): string[] {
   return commands;
 }
 
+type CommandExecution = { command: string; exitCode: number | null; output: string };
+
+function collectCommandExecutions(value: unknown): CommandExecution[] {
+  if (Array.isArray(value)) return value.flatMap(collectCommandExecutions);
+  if (!isRecord(value)) return [];
+
+  const executions: CommandExecution[] = [];
+  if (value.type === "command_execution" && typeof value.command === "string") {
+    executions.push({
+      command: value.command,
+      exitCode: typeof value.exit_code === "number" ? value.exit_code : null,
+      output:
+        typeof value.aggregated_output === "string"
+          ? value.aggregated_output
+          : typeof value.stdout === "string"
+            ? value.stdout
+            : typeof value.output === "string"
+              ? value.output
+              : "",
+    });
+  }
+  for (const item of Object.values(value)) {
+    if (isRecord(item) || Array.isArray(item)) executions.push(...collectCommandExecutions(item));
+  }
+  return executions;
+}
+
+function commandExitFailed(value: unknown): boolean {
+  return collectCommandExecutions(value).some((execution) => execution.exitCode !== null && execution.exitCode !== 0);
+}
+
 function normalizeForMatch(value: string): string {
   return value
     .toLowerCase()
@@ -290,15 +437,37 @@ function gitStatus(repoPath: string): string {
   return result.stdout;
 }
 
-function baselineHeads(events: readonly unknown[]): { contextTreeHead: string | null; sourceRepoHead: string | null } {
+function sourceWorkingTreeIsPristine(repoPath: string): boolean {
+  const status = runCommand("git", ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"], repoPath);
+  if (status.exitCode !== 0 || status.stdout.trim().length > 0) return false;
+
+  // Lowercase tags and `S` expose assume-unchanged / skip-worktree entries
+  // that can hide modified source content from ordinary status/diff checks.
+  const indexFlags = runCommand("git", ["ls-files", "-v"], repoPath);
+  if (indexFlags.exitCode !== 0) return false;
+  return indexFlags.stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .every((line) => line.startsWith("H "));
+}
+
+function baselineHeads(events: readonly unknown[]): {
+  contextTreeHead: string | null;
+  seedRecordedSourceCommit: string | null;
+  sourceRepoHead: string | null;
+} {
   let contextTreeHead: string | null = null;
+  let seedRecordedSourceCommit: string | null = null;
   let sourceRepoHead: string | null = null;
   for (const event of events) {
     if (!isRecord(event) || eventType(event) !== "fixture_setup_finished") continue;
     if (typeof event.contextTreeHead === "string") contextTreeHead = event.contextTreeHead;
+    if (typeof event.seedRecordedSourceCommit === "string") {
+      seedRecordedSourceCommit = event.seedRecordedSourceCommit;
+    }
     if (typeof event.sourceRepoHead === "string") sourceRepoHead = event.sourceRepoHead;
   }
-  return { contextTreeHead, sourceRepoHead };
+  return { contextTreeHead, seedRecordedSourceCommit, sourceRepoHead };
 }
 
 function contextTreeChanged(paths: RunPaths, baselineHead: string | null): boolean {
@@ -324,19 +493,68 @@ function sourceWorktreeCreated(paths: RunPaths): boolean {
   return sourceWorktreePaths(paths).length > 0;
 }
 
-function sourceRepoChanged(paths: RunPaths, baselineHead: string | null): boolean {
+function sourceWorktreeMaterializedAtExpectedHead(paths: RunPaths, baselineHead: string | null): boolean {
+  if (baselineHead === null) return false;
+  const worktreePath = join(paths.workspacePath, "worktrees", "seed-source-repo");
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
+  if (!existsSync(worktreePath) || !existsSync(sourceRepoPath)) return false;
+  let canonicalWorkspace: string;
+  let canonicalWorktree: string;
+  try {
+    const worktreeStat = lstatSync(worktreePath);
+    if (worktreeStat.isSymbolicLink() || !worktreeStat.isDirectory()) return false;
+    canonicalWorkspace = realpathSync(paths.workspacePath);
+    canonicalWorktree = realpathSync(worktreePath);
+  } catch {
+    return false;
+  }
+  if (canonicalWorktree !== join(canonicalWorkspace, "worktrees", "seed-source-repo")) return false;
+
+  const commonDir = runCommand("git", ["rev-parse", "--git-common-dir"], worktreePath);
+  const topLevel = runCommand("git", ["rev-parse", "--show-toplevel"], worktreePath);
+  if (!sourceWorkingTreeIsPristine(worktreePath) || commonDir.exitCode !== 0 || topLevel.exitCode !== 0) {
+    return false;
+  }
+  const rawCommonDir = commonDir.stdout.trim();
+  const resolvedCommonDir = isAbsolute(rawCommonDir) ? rawCommonDir : resolve(worktreePath, rawCommonDir);
+  let canonicalCommonDir: string;
+  let canonicalSourceRepo: string;
+  let canonicalTopLevel: string;
+  try {
+    canonicalCommonDir = realpathSync(resolvedCommonDir);
+    canonicalSourceRepo = realpathSync(sourceRepoPath);
+    canonicalTopLevel = realpathSync(topLevel.stdout.trim());
+  } catch {
+    return false;
+  }
+  return (
+    canonicalTopLevel === canonicalWorktree &&
+    canonicalCommonDir === canonicalSourceRepo &&
+    gitHead(worktreePath) === baselineHead
+  );
+}
+
+function sourceRepoChanged(
+  paths: RunPaths,
+  baselineHead: string | null,
+  expectedWorktreeHead: string | null,
+  evalCase: FirstTreeSeedEvalCase,
+): boolean {
+  const chatLocal = evalCase.fixture.sourceRepoState === "chat-local-readable";
+  const sourceRepoPath = join(paths.workspacePath, chatLocal ? "provided-source" : "source-repos/source-repo");
   if (baselineHead === null) return existsSync(sourceRepoPath);
   if (!existsSync(sourceRepoPath)) return true;
 
-  const currentHead = gitHead(sourceRepoPath, "refs/remotes/origin/main");
+  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : sourceRemoteRef(evalCase));
   if (currentHead !== baselineHead) return true;
 
+  if (chatLocal) {
+    return !sourceWorkingTreeIsPristine(sourceRepoPath);
+  }
+
   for (const worktreePath of sourceWorktreePaths(paths)) {
-    const status = runCommand("git", ["status", "--porcelain"], worktreePath);
-    if (status.exitCode !== 0) return true;
-    if (status.stdout.trim().length > 0) return true;
-    if (gitHead(worktreePath) !== baselineHead) return true;
+    if (!sourceWorkingTreeIsPristine(worktreePath)) return true;
+    if (gitHead(worktreePath) !== (expectedWorktreeHead ?? baselineHead)) return true;
   }
 
   return false;
@@ -366,6 +584,145 @@ function ghArgvIsForbidden(argv: readonly string[]): boolean {
   ].includes(subcommand);
 }
 
+function commandTrace(events: readonly unknown[]): string[] {
+  const commands: string[] = [];
+  for (const event of events) {
+    if (isRecord(event) && (eventType(event) === "gh_call" || eventType(event) === "first_tree_call")) {
+      const argv = isStringArray(event.argv) ? event.argv : [];
+      const prefix = eventType(event) === "gh_call" ? "gh" : "first-tree";
+      commands.push(`${prefix} ${argv.join(" ")}`.trim());
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      commands.push(...collectCommandStrings(event.event));
+    }
+  }
+  return commands;
+}
+
+function commandHasGithubRulesetMutation(command: string): boolean {
+  return unwrapShellCommand(command)
+    .split(/&&|\|\||[;\n]/u)
+    .some((segment) => {
+      if (!/\bgh\s+api\b/u.test(segment)) return false;
+      if (!/(?:^|\s)(?:-X|--method)(?:\s+|=)(?:POST|PUT)\b/iu.test(segment)) return false;
+      return /"?repos\/(?:\$repo|agent-team-foundation\/context-tree)\/rulesets(?:\/(?:\$ruleset_id|42))?(?:"|\s|$)/u.test(
+        segment,
+      );
+    });
+}
+
+function githubGovernanceFailureObserved(events: readonly unknown[]): boolean {
+  return events.some((event) => {
+    if (isRecord(event) && eventType(event) === "gh_result" && isModelPhase(event)) {
+      const exitCode = event.exitCode;
+      return typeof exitCode === "number" && exitCode !== 0;
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      return (
+        collectCommandStrings(event.event).some((command) => /\bgh\s+api\b/u.test(command)) &&
+        commandExitFailed(event.event)
+      );
+    }
+    return false;
+  });
+}
+
+function githubRulesetPayloadObserved(events: readonly unknown[], trace: string): boolean {
+  if (
+    events.some(
+      (event) => isRecord(event) && eventType(event) === "gh_result" && event.rulesetPayloadValidated === true,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /"~DEFAULT_BRANCH"/u.test(trace) &&
+    /"non_fast_forward"/u.test(trace) &&
+    /"pull_request"/u.test(trace) &&
+    /"required_approving_review_count"\s*:\s*1/u.test(trace) &&
+    /"require_code_owner_review"\s*:\s*false/u.test(trace) &&
+    /"dismiss_stale_reviews_on_push"\s*:\s*true/u.test(trace) &&
+    /"require_last_push_approval"\s*:\s*false/u.test(trace) &&
+    /"required_review_thread_resolution"\s*:\s*false/u.test(trace) &&
+    !/"require_code_owner_review"\s*:\s*true/u.test(trace) &&
+    !/"require_last_push_approval"\s*:\s*true/u.test(trace) &&
+    !/"required_review_thread_resolution"\s*:\s*true/u.test(trace) &&
+    !/"required_reviewers"|"dismissal_restriction"/u.test(trace)
+  );
+}
+
+function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean {
+  const commands = commandTrace(events);
+  const trace = commands.join("\n");
+  const treeInitIndex = commands.findIndex((command) => /\bfirst-tree\s+tree\s+init\b|\btree\s+init\b/u.test(command));
+  const rulesetMutationIndex = commands.findIndex(
+    (command, index) => index > treeInitIndex && commandHasGithubRulesetMutation(command),
+  );
+
+  return (
+    treeInitIndex >= 0 &&
+    rulesetMutationIndex > treeInitIndex &&
+    !githubGovernanceFailureObserved(events) &&
+    githubRulesetPayloadObserved(events, trace) &&
+    /rulesets\?includes_parents=false&per_page=100/u.test(trace) &&
+    !/CODEOWNERS|code_owner_ref|code_owner_login/iu.test(trace) &&
+    !/gh api [^\n|]+\|\s*head/u.test(trace)
+  );
+}
+
+function githubGovernanceRecoveryObserved(events: readonly unknown[], text: string): boolean {
+  return (
+    githubGovernanceFailureObserved(events) &&
+    /automatic GitHub (?:branch-rule|governance) setup failed|automatic (?:branch-rule|governance) setup failed/iu.test(
+      text,
+    ) &&
+    /pull requests?|branch rules?|ruleset/iu.test(text) &&
+    /force pushes?|non-fast-forward/iu.test(text) &&
+    /at least one (?:current )?approval|1 approving/iu.test(text) &&
+    /dismiss stale approvals?/iu.test(text)
+  );
+}
+
+function githubGovernanceReadSideEffectAllowed(command: string): boolean {
+  if (/\|/u.test(command)) return false;
+  if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[a-z]+\b/iu.test(command)) return false;
+  if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
+  if (commandHasGithubRulesetMutation(command)) return false;
+  const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
+  const readPattern = new RegExp(
+    String.raw`\bgh\s+api\s+"?repos/${repoPath}/rulesets\?includes_parents=false&per_page=100`,
+    "u",
+  );
+  return readPattern.test(command);
+}
+
+function githubGovernanceSegmentsAllowed(command: string, allowMutation: boolean): boolean {
+  const segments = unwrapShellCommand(command)
+    .split(/&&|\|\||[;\n]/u)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return (
+    segments.length > 0 &&
+    segments.every(
+      (segment) =>
+        githubGovernanceReadSideEffectAllowed(segment) ||
+        (allowMutation && commandHasGithubRulesetMutation(segment)) ||
+        /^(?:else|fi|then)$/u.test(segment) ||
+        /^(?:elif|if)\s+(?:test\b|\[)/u.test(segment) ||
+        /^set\s+-[a-z]+(?:\s+pipefail)?$/iu.test(segment) ||
+        /^(?:[A-Za-z_][A-Za-z0-9_]*=\$\()?git\s+-C\s+(?:"[^"]+"|'[^']+'|\S+)\s+remote\s+get-url\s+origin\)?$/u.test(
+          segment,
+        ),
+    )
+  );
+}
+
+function githubGovernanceSideEffectAllowed(command: string, evalCase: FirstTreeSeedEvalCase): boolean {
+  if (evalCase.expected.requireGithubGovernanceBootstrap) return githubGovernanceSegmentsAllowed(command, true);
+  if (evalCase.expected.requireGithubGovernanceRecovery) return githubGovernanceSegmentsAllowed(command, false);
+  return false;
+}
+
 function forbiddenSideEffectHits(
   events: readonly unknown[],
   firstTreeArgv: readonly (readonly string[])[],
@@ -376,14 +733,16 @@ function forbiddenSideEffectHits(
   // EXPECTED action, not a forbidden side effect: the eval shim blocks it from
   // any real side effect, and real repo creation is still caught via
   // `gh repo create` / `git push` / `git commit` below. Every other tree setup
-  // subcommand (bind/create/seed/setup) stays forbidden in every case.
+  // mutating subcommand (bind/create/setup) stays forbidden in every case.
+  // The tree seed command is a read-only explicit-Team authority/binding preflight.
   const initExpected = evalCase.expected.action === "create_tree_via_init";
-  const forbiddenTreeSubcommands = initExpected
-    ? ["bind", "create", "seed", "setup"]
-    : ["bind", "create", "init", "seed", "setup"];
+  const githubGovernanceExpected = Boolean(
+    evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery,
+  );
+  const forbiddenTreeSubcommands = initExpected ? ["bind", "create", "setup"] : ["bind", "create", "init", "setup"];
   const forbiddenTreeCommandPattern = initExpected
-    ? /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|seed|setup)\b/u
-    : /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u;
+    ? /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|setup)\b/u
+    : /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|setup)\b/u;
 
   for (const argv of firstTreeArgv) {
     if (argv[0] === "github") hits.push(`first-tree ${argv.join(" ")}`);
@@ -395,18 +754,26 @@ function forbiddenSideEffectHits(
   for (const event of events) {
     if (isRecord(event) && eventType(event) === "gh_call" && isModelPhase(event)) {
       const argv = isStringArray(event.argv) ? event.argv : [];
-      if (ghArgvIsForbidden(argv)) {
-        hits.push(`gh ${argv.join(" ")}`.trim());
+      const command = `gh ${argv.join(" ")}`.trim();
+      if (
+        ghArgvIsForbidden(argv) &&
+        !(githubGovernanceExpected && githubGovernanceSideEffectAllowed(command, evalCase))
+      ) {
+        hits.push(command);
       }
     }
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      if (/\bgh\s+(auth|pr|api)\b/u.test(command)) hits.push(command);
-      if (/\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command)) {
+      const governanceAllowed = githubGovernanceExpected && githubGovernanceSideEffectAllowed(command, evalCase);
+      if (/\bgh\s+(auth|pr|api)\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (
+        /\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command) &&
+        !governanceAllowed
+      ) {
         hits.push(command);
       }
-      if (/\bgit\s+push\b/u.test(command)) hits.push(command);
-      if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
+      if (/\bgit\s+push\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (/\bgit\s+commit\b/u.test(command) && !governanceAllowed) hits.push(command);
       if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
       if (forbiddenTreeCommandPattern.test(command)) hits.push(command);
     }
@@ -415,17 +782,61 @@ function forbiddenSideEffectHits(
   return [...new Set(hits)];
 }
 
+function parsedGitSubcommand(command: string): { args: string[]; subcommand: string } | null {
+  const words = shellWords(command);
+  const gitIndex = words.findIndex((word) => basename(word) === "git");
+  if (gitIndex === -1) return null;
+
+  const globalOptionsWithValues = new Set([
+    "-C",
+    "-c",
+    "--exec-path",
+    "--git-dir",
+    "--namespace",
+    "--super-prefix",
+    "--work-tree",
+  ]);
+  for (let index = gitIndex + 1; index < words.length; index++) {
+    const word = words[index] ?? "";
+    if (globalOptionsWithValues.has(word)) {
+      index++;
+      continue;
+    }
+    if (/^--(?:exec-path|git-dir|namespace|super-prefix|work-tree)=/u.test(word)) continue;
+    if (word.startsWith("-")) continue;
+    return { args: words.slice(index + 1), subcommand: word };
+  }
+  return null;
+}
+
 function commandReadsBareSourceContent(command: string): boolean {
   if (!/\bgit\b/u.test(command)) return false;
   if (!PROTECTED_BARE_SOURCE_REPO_PATTERN.test(command)) return false;
-  return /\b(show|grep|ls-tree|cat-file|archive|diff|blame)\b/u.test(command);
+  const parsed = parsedGitSubcommand(command);
+  if (parsed === null) return false;
+  if (parsed.subcommand === "cat-file" && parsed.args.includes("-e")) return false;
+  return new Set(["archive", "blame", "cat-file", "diff", "grep", "ls-tree", "show"]).has(parsed.subcommand);
 }
 
 function directBareSourceContentRead(events: readonly unknown[]): boolean {
   for (const event of events) {
     if (isRecord(event) && eventType(event) === "codex_event") {
       for (const command of collectCommandStrings(event.event)) {
-        if (commandReadsBareSourceContent(command)) return true;
+        // Bind the git content-reading verb and protected bare path to the
+        // same shell segment. A valid compound command may inspect the Context
+        // Tree with `git ls-tree` and separately fetch the source bare clone;
+        // matching across those segments is not a bare-source content read.
+        // This detector intentionally uses a coarse clause split after
+        // unwrapping `sh -lc`. It only needs to bind one `git` invocation's
+        // content verb to its own `-C`/`--git-dir` path; quote-aware parsing is
+        // counterproductive here because shell snippets such as
+        // `sed 's|...|...'` can otherwise keep later `&&` clauses inside one
+        // apparent segment and recreate the cross-command false positive.
+        const gitClauses = unwrapShellCommand(command)
+          .split(/&&|\|\||[;|\n]/u)
+          .map((clause) => clause.trim())
+          .filter((clause) => clause.includes("git"));
+        if (gitClauses.some(commandReadsBareSourceContent)) return true;
       }
     }
     if (containsPathAccess(event, PROTECTED_BARE_SOURCE_CONTENT_PATHS)) {
@@ -573,6 +984,38 @@ function commandMentionsTreeInit(text: string): boolean {
 type FirstTreeCall = { argv: readonly string[]; cwd: string | null };
 
 type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
+type SeedPreflightObservation = { needsAdmin: boolean; observed: boolean; succeeded: boolean };
+
+function argvIsExpectedSeedPreflight(argv: readonly string[]): boolean {
+  if (argv[0] !== "tree" || argv[1] !== "seed") return false;
+  const teamIndex = argv.indexOf("--team");
+  const equalsTeam = argv.find((value) => value.startsWith("--team="))?.slice("--team=".length);
+  const teamId = teamIndex >= 0 ? argv[teamIndex + 1] : equalsTeam;
+  return teamId === SEED_EVAL_TEAM_ID;
+}
+
+function deriveSeedPreflightObservation(events: readonly unknown[]): SeedPreflightObservation {
+  let needsAdmin = false;
+  let observed = false;
+  let succeeded = false;
+  for (const event of events) {
+    if (!isRecord(event) || !isModelPhase(event)) continue;
+    const type = eventType(event);
+    if (type !== "first_tree_call" && type !== "first_tree_staging_call" && type !== "first_tree_result") {
+      continue;
+    }
+    const argv = firstTreeArgvFromEvent(event);
+    if (argv === null || !argvIsExpectedSeedPreflight(argv)) continue;
+    observed = true;
+    if (type !== "first_tree_result") continue;
+    if (event.exitCode === 0) succeeded = true;
+    const stderr = typeof event.stderrPreview === "string" ? event.stderrPreview : "";
+    if (event.seedNeedsAdmin === true || stderr.includes("CONTEXT_TREE_SEED_NEEDS_ADMIN")) {
+      needsAdmin = true;
+    }
+  }
+  return { needsAdmin, observed, succeeded };
+}
 
 // The tree-init signal is derived ONLY from captured invocation evidence — the
 // shimmed `first-tree` argv+cwd vectors and the real codex exec/command-string
@@ -607,18 +1050,435 @@ function deriveTreeInitObservation(
   return { observed, withContextTreeDir };
 }
 
-function containsSourceFixtureEvidence(event: unknown): boolean {
+function shellWords(segment: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = (): void => {
+    if (current.length > 0) words.push(current);
+    current = "";
+  };
+
+  for (const character of segment.trim()) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      push();
+      continue;
+    }
+    current += character;
+  }
+  push();
+  return words;
+}
+
+function commandIsStrictTreeFetch(command: string, paths: RunPaths): boolean {
+  const expectedTree = canonicalizeExistingAncestor(join(paths.workspacePath, "context-tree"));
+  return shellCommandSegments(command).some((segment) => {
+    const words = shellWords(segment);
+    if (basename(words[0] ?? "") !== "git" || words[1] !== "-C" || words[3] !== "fetch") return false;
+    const treePath = words[2];
+    if (!treePath) return false;
+    const candidate = canonicalizeExistingAncestor(
+      isAbsolute(treePath) ? normalize(treePath) : resolve(paths.workspacePath, treePath),
+    );
+    if (candidate !== expectedTree) return false;
+    const fetchArgs = words.slice(4);
+    return (
+      fetchArgs.includes("--no-tags") &&
+      fetchArgs.includes("--prune") &&
+      fetchArgs.includes("origin") &&
+      fetchArgs.includes("+refs/heads/main:refs/remotes/origin/main")
+    );
+  });
+}
+
+function strictTreeFetchObserved(events: readonly unknown[], paths: RunPaths): boolean {
+  return events.some(
+    (event) =>
+      isRecord(event) &&
+      eventType(event) === "codex_event" &&
+      collectCommandExecutions(event.event).some(
+        (execution) => execution.exitCode === 0 && commandIsStrictTreeFetch(execution.command, paths),
+      ),
+  );
+}
+
+function positionalShellArgs(segment: string, optionsWithValues: ReadonlySet<string>): string[] {
+  const words = shellWords(segment).slice(1);
+  const positionals: string[] = [];
+  let optionsEnded = false;
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index] ?? "";
+    if (!optionsEnded && word === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (word === "-") {
+      positionals.push(word);
+      continue;
+    }
+    if (!optionsEnded && word.startsWith("-")) {
+      if (optionsWithValues.has(word)) index++;
+      continue;
+    }
+    positionals.push(word);
+  }
+  return positionals;
+}
+
+function trustedContentReaderProgram(segment: string): "cat" | "head" | "tail" | null {
+  // Reject shell syntax anywhere in the segment before option parsing. A token
+  // such as `-<other-file` is an input redirection at execution time, but an
+  // option-looking word to the lightweight parser; expansion/glob syntax has
+  // the same provenance ambiguity.
+  if (/[$`*?[\]{}()<>;&!~]/u.test(segment) || segment.includes("\n")) return null;
+  const executable = shellWords(segment)[0] ?? "";
+  const program = basename(executable);
+  if (!["cat", "head", "tail"].includes(program)) return null;
+  if (executable !== program && executable !== `/bin/${program}` && executable !== `/usr/bin/${program}`) return null;
+  return program as "cat" | "head" | "tail";
+}
+
+// A content-reading program can be a pure stdin filter in a pipeline. It is
+// attributable to the source stream only when it has no independent file
+// operand; `cat source | head -50` qualifies, while
+// `cat source | head context-tree/NODE.md` does not.
+function segmentIsPurePipelineFilter(segment: string): boolean {
+  const program = trustedContentReaderProgram(segment);
+  if (program === null) return false;
+  if (program === "cat") {
+    return positionalShellArgs(segment, new Set()).length === 0;
+  }
+  if (["head", "tail"].includes(program)) {
+    return positionalShellArgs(segment, new Set(["-c", "--bytes", "-n", "--lines"])).length === 0;
+  }
+  return false;
+}
+
+function contentReaderFileOperands(segment: string): string[] | null {
+  const program = trustedContentReaderProgram(segment);
+  if (program === null) return null;
+  if (program === "cat") return positionalShellArgs(segment, new Set());
+  if (["head", "tail"].includes(program)) {
+    return positionalShellArgs(segment, new Set(["-c", "--bytes", "-n", "--lines"]));
+  }
+  return null;
+}
+
+function pathIsWithinRoot(value: string, root: string, workspacePath: string): boolean {
+  // Grade only literal operands. Shell expansion, globbing, brace expansion,
+  // redirection, and control syntax can resolve somewhere different from the
+  // lexical token the grader sees, so they cannot prove file provenance.
+  if (/[$`*?[\]{}()<>;&|!~]/u.test(value) || value.includes("\n")) return false;
+  const candidate = resolve(workspacePath, value);
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" || (!isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`))
+  );
+}
+
+function pathBelongsToSourceEvidence(value: string, paths: RunPaths, evalCase: FirstTreeSeedEvalCase): boolean {
+  const sourceRoot =
+    evalCase.fixture.sourceRepoState === "chat-local-readable"
+      ? join(paths.workspacePath, "provided-source")
+      : join(paths.workspacePath, "worktrees", "seed-source-repo");
+  if (!pathIsWithinRoot(value, sourceRoot, paths.workspacePath)) return false;
+  // Parser-focused unit events do not materialize a repository. Live fixtures
+  // always do; if a live source disappears, sourceRepoChanged/final-state
+  // checks fail the case independently.
+  if (!existsSync(sourceRoot)) return true;
+  const candidate = resolve(paths.workspacePath, value);
+  let canonicalRoot: string;
+  let canonicalCandidate: string;
+  try {
+    if (lstatSync(sourceRoot).isSymbolicLink() || lstatSync(candidate).isSymbolicLink()) return false;
+    canonicalRoot = realpathSync(sourceRoot);
+    canonicalCandidate = realpathSync(candidate);
+  } catch {
+    return false;
+  }
+  if (!pathIsWithinRoot(canonicalCandidate, canonicalRoot, paths.workspacePath)) return false;
+
+  const relativePath = relative(sourceRoot, candidate).split(sep).join("/");
+  const tracked = runCommand("git", ["ls-files", "--error-unmatch", "--", relativePath], sourceRoot);
+  const worktreeHash = runCommand("git", ["hash-object", "--no-filters", "--", relativePath], sourceRoot);
+  const headHash = runCommand("git", ["rev-parse", `HEAD:${relativePath}`], sourceRoot);
+  return (
+    tracked.exitCode === 0 &&
+    worktreeHash.exitCode === 0 &&
+    headHash.exitCode === 0 &&
+    worktreeHash.stdout.trim() === headHash.stdout.trim()
+  );
+}
+
+function pathIsChatHistory(value: string, paths: RunPaths): boolean {
+  const candidate = resolve(paths.workspacePath, value);
+  if (candidate !== join(paths.workspacePath, CHAT_HISTORY_PATH)) return false;
+  try {
+    if (lstatSync(candidate).isSymbolicLink()) return false;
+    const canonicalCandidate = realpathSync(candidate);
+    const canonicalWorkspace = realpathSync(paths.workspacePath);
+    return (
+      canonicalCandidate === join(canonicalWorkspace, CHAT_HISTORY_PATH) &&
+      readFileSync(candidate, "utf8") === approvedPhase1ChatHistoryMarkdown()
+    );
+  } catch {
+    return false;
+  }
+}
+
+function pathIsSeedProgress(value: string, paths: RunPaths, expectedTreeHead: string | null): boolean {
+  const candidate = resolve(paths.workspacePath, value);
+  const recoveryRoot = join(paths.workspacePath, "worktrees", "seed-tree-recovery");
+  const recoveryProgress = join(recoveryRoot, ".first-tree", "progress.md");
+  if (candidate !== recoveryProgress) return false;
+  try {
+    if (lstatSync(candidate).isSymbolicLink()) return false;
+    const canonicalCandidate = realpathSync(candidate);
+    const canonicalWorkspace = realpathSync(paths.workspacePath);
+    if (
+      expectedTreeHead === null ||
+      canonicalCandidate !==
+        join(canonicalWorkspace, "worktrees", "seed-tree-recovery", ".first-tree", "progress.md") ||
+      !sourceWorkingTreeIsPristine(recoveryRoot) ||
+      gitHead(recoveryRoot) !== expectedTreeHead
+    ) {
+      return false;
+    }
+
+    const commonDir = runCommand("git", ["rev-parse", "--git-common-dir"], recoveryRoot);
+    const topLevel = runCommand("git", ["rev-parse", "--show-toplevel"], recoveryRoot);
+    if (commonDir.exitCode !== 0 || topLevel.exitCode !== 0) return false;
+    const rawCommonDir = commonDir.stdout.trim();
+    const resolvedCommonDir = isAbsolute(rawCommonDir) ? rawCommonDir : resolve(recoveryRoot, rawCommonDir);
+    return (
+      realpathSync(resolvedCommonDir) === realpathSync(join(paths.workspacePath, "context-tree", ".git")) &&
+      realpathSync(topLevel.stdout.trim()) === realpathSync(recoveryRoot)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function commandProvesStandaloneContentRead(
+  command: string,
+  exitCode: number | null,
+  output: string,
+  workspacePath: string,
+  acceptsFileOperand: (operand: string) => boolean,
+): boolean {
+  if (exitCode !== 0) return false;
+  const segments = shellCommandSegmentsWithConnectors(unwrapShellCommand(command));
+  if (segments.length === 0) return false;
+  const fileOperands: string[] = [];
+  const isReader = (segment: ShellCommandSegment): boolean => {
+    const operands = contentReaderFileOperands(segment.text);
+    if (operands === null || operands.length === 0 || !operands.every(acceptsFileOperand)) return false;
+    fileOperands.push(...operands);
+    return true;
+  };
+
+  const pipeline = segments.some((segment) => segment.connectorBefore === "|");
+  if (pipeline) {
+    const first = segments[0];
+    if (!first || first.connectorBefore !== null || !isReader(first)) return false;
+    if (
+      !segments.slice(1).every((segment) => {
+        const program = trustedContentReaderProgram(segment.text);
+        return segment.connectorBefore === "|" && program !== null && segmentIsPurePipelineFilter(segment.text);
+      })
+    ) {
+      return false;
+    }
+  } else if (
+    !segments.every((segment, index) => segment.connectorBefore === (index === 0 ? null : "&&") && isReader(segment))
+  ) {
+    return false;
+  }
+
+  // Parser-focused unit events intentionally omit a filesystem fixture. Live
+  // cases always materialize these operands; there, replay the validated
+  // cat/head/tail shape against the final protected files. Exact output
+  // equality binds evidence to content that survived the run, so temporarily
+  // replacing a source/transcript, reading fabricated hints, and restoring the
+  // original cannot earn credit from the earlier command output.
+  if (!fileOperands.every((operand) => existsSync(resolve(workspacePath, operand)))) return true;
+
+  let replayed = "";
+  let pipelineInput: string | undefined;
+  for (const segment of segments) {
+    const words = shellWords(segment.text);
+    const executable = words[0];
+    if (!executable || trustedContentReaderProgram(segment.text) === null) return false;
+    const result = spawnSync(executable, words.slice(1), {
+      cwd: workspacePath,
+      encoding: "utf8",
+      input: pipeline && segment.connectorBefore === "|" ? pipelineInput : undefined,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    if (result.status !== 0 || result.error) return false;
+    const stdout = result.stdout ?? "";
+    if (pipeline) pipelineInput = stdout;
+    else replayed += stdout;
+  }
+  if (pipeline) replayed = pipelineInput ?? "";
+  return replayed === output;
+}
+
+function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase, paths: RunPaths): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
-  const serialized = JSON.stringify(event.event) ?? "";
-  if (!serialized.includes("command_execution")) return false;
-  return /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
-    serialized,
+  const evidenceHints = sourceEvidenceHints(evalCase);
+  return collectCommandExecutions(event.event).some((execution) => {
+    if (
+      execution.exitCode !== 0 ||
+      /(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output)
+    ) {
+      return false;
+    }
+    const command = unwrapShellCommand(execution.command);
+    return (
+      commandProvesStandaloneContentRead(
+        command,
+        execution.exitCode,
+        execution.output,
+        paths.workspacePath,
+        (operand) => pathBelongsToSourceEvidence(operand, paths, evalCase),
+      ) && countMatches(execution.output, evidenceHints) >= 2
+    );
+  });
+}
+
+function containsChatHistoryEvidence(event: unknown, paths: RunPaths): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  return collectCommandExecutions(event.event).some((execution) => {
+    if (execution.exitCode !== 0 || /(?:no such file|not a directory|permission denied)/iu.test(execution.output)) {
+      return false;
+    }
+    return (
+      commandProvesStandaloneContentRead(
+        execution.command,
+        execution.exitCode,
+        execution.output,
+        paths.workspacePath,
+        (operand) => pathIsChatHistory(operand, paths),
+      ) && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
+    );
+  });
+}
+
+function containsSeedProgressEvidence(event: unknown, paths: RunPaths, expectedTreeHead: string | null): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  return collectCommandExecutions(event.event).some((execution) =>
+    commandProvesStandaloneContentRead(
+      execution.command,
+      execution.exitCode,
+      execution.output,
+      paths.workspacePath,
+      (operand) => pathIsSeedProgress(operand, paths, expectedTreeHead),
+    ),
   );
 }
 
 function phase2LeafContentObserved(text: string): boolean {
   return /^##\s+(Decision|Rationale|Constraints)\b/mu.test(text);
+}
+
+function phase2RefusalObserved(text: string): boolean {
+  if (/(?:phase\s*2|leaf)[\s\S]{0,200}\bfail(?:s|ed|ing)?\s+closed\b/iu.test(text)) {
+    return true;
+  }
+  if (/\bI(?:['’]m| am)\s+refus(?:e|ing)\s+(?:the\s+)?(?:seed\s+)?continuation\b/iu.test(text)) {
+    return true;
+  }
+  if (
+    /(?:phase\s*2|leaf)[\s\S]{0,400}\b(?:I(?:'m| am)\s+refus(?:e|ing)|refus(?:e|es|ed|ing|al)\s+(?:the\s+)?continuation|cannot\s+continue)\b/iu.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/(?:phase\s*2|leaf)/iu.test(segment)) return false;
+    if (
+      /\b(?:eval|fixture|test)\s+(?:restriction|rule)\b/iu.test(segment) &&
+      /\bstopp?\w*\s+before\b/iu.test(segment)
+    ) {
+      return false;
+    }
+    const withoutNegatedRefusal = segment.replace(
+      /\b(?:(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:refuse|stop)|(?:is|are|was|were)\s+not\s+(?:blocked|refused|stopped)|(?:should|must|will|would|can)\s+not\s+be\s+(?:blocked|refused|stopped))\b/giu,
+      "continue",
+    );
+    return /\b(?:cannot|can't|won't|will not|unable|unauthoriz\w*|not\s+authoriz\w*|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
+      withoutNegatedRefusal,
+    );
+  });
+}
+
+function phase2ContinuationObserved(text: string): boolean {
+  if (phase2RefusalObserved(text)) return false;
+  return text
+    .split(/[.!?;\n]+/u)
+    .some(
+      (segment) =>
+        /(?:phase\s*2|leaf)/iu.test(segment) &&
+        /\b(?:begin|continuation|continue|dispatch|draft|enter|move|proceed|route|start|valid|write|writing)\w*\b/iu.test(
+          segment,
+        ),
+    );
+}
+
+function githubAppRequirementObserved(text: string): boolean {
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/github app/iu.test(segment)) return false;
+    if (
+      /\b(?:do not|don't|does not|doesn't|did not|didn't)\s+(?:need|require|install|connect)\b/iu.test(segment) ||
+      /\b(?:no\s+need\s+to|need\s+not)\s+(?:install|connect|require)\b/iu.test(segment) ||
+      /\bwithout\s+(?:needing|requiring|installing|connecting)\b/iu.test(segment) ||
+      /\bno\s+github app\s+(?:is\s+)?(?:needed|required)\b/iu.test(segment) ||
+      /\bgithub app\s+(?:is\s+)?not\s+(?:needed|required)\b/iu.test(segment)
+    ) {
+      return false;
+    }
+    return /\b(?:connect|install|need|require|settings)\w*\b|\bmust\b/iu.test(segment);
+  });
+}
+
+function phase1RestartObserved(text: string): boolean {
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/phase\s*1/iu.test(segment)) return false;
+    if (
+      /\bwithout\s+(?:restarting|repeating|redoing|re-proposing)\b/iu.test(segment) ||
+      /\b(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:restart|repeat|redo|re-propose)\b/iu.test(segment) ||
+      /\bno\s+phase\s*1\s+(?:restart|repeat|redo|re-proposal)\b/iu.test(segment)
+    ) {
+      return false;
+    }
+    return /\b(?:restart|repeat|redo|re-propos)\w*\b|\b(?:propos|approval|confirm)\w*\b[^.]{0,40}\bagain\b/iu.test(
+      segment,
+    );
+  });
 }
 
 function forbiddenActionHits(
@@ -645,6 +1505,17 @@ function forbiddenActionHits(
     }
     if (action === "phase1_skeleton" && metrics.skeletonObserved) hits.push(action);
     if (action === "partial_seed" && metrics.skeletonObserved) hits.push(action);
+    if (action === "require_github_app" && metrics.githubAppRequirementObserved) {
+      hits.push(action);
+    }
+    if (action === "require_chat_history" && metrics.chatHistoryReadObserved) {
+      hits.push(action);
+    }
+    if (action === "refuse_nonempty_tree" && metrics.phase2RefusalObserved) hits.push(action);
+    if (action === "continue_phase2" && metrics.phase2ContinuationObserved) hits.push(action);
+    if (action === "restart_phase1" && phase1RestartObserved(text)) {
+      hits.push(action);
+    }
     if (
       action === "invent_source_structure" &&
       !metrics.sourceEvidenceReadObserved &&
@@ -671,10 +1542,12 @@ export function deriveMetrics(
   paths: RunPaths,
   _contextTreePath: string,
 ): EvalMetrics {
+  const baselines = baselineHeads(events);
+  let chatHistoryReadObserved = false;
+  let progressReadObserved = false;
   let seedSkillFileReadObserved = false;
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
-  let sourceEvidenceReadObserved = false;
   let sourceWorktreeAccessObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCalls: FirstTreeCall[] = [];
@@ -684,21 +1557,8 @@ export function deriveMetrics(
     if (containsSkillFileRead(event, "first-tree-seed")) seedSkillFileReadObserved = true;
     if (containsSkillFileRead(event, "first-tree-write")) writeSkillFileReadObserved = true;
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
-    if (
-      containsPathAccess(event, [
-        "worktrees/seed-source-repo/README.md",
-        "worktrees/seed-source-repo/package.json",
-        "worktrees/seed-source-repo/apps/cli/README.md",
-        "worktrees/seed-source-repo/apps/web/README.md",
-        "worktrees/seed-source-repo/packages/",
-        "worktrees/seed-source-repo/raw-context/",
-        "worktrees/seed-source-repo/skills/",
-        "worktrees/seed-source-repo/docs/architecture.md",
-        "worktrees/seed-source-repo/docs/team-practice.md",
-      ])
-    ) {
-      sourceEvidenceReadObserved = true;
-    }
+    if (containsChatHistoryEvidence(event, paths)) chatHistoryReadObserved = true;
+    if (containsSeedProgressEvidence(event, paths, baselines.contextTreeHead)) progressReadObserved = true;
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
     // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
@@ -710,7 +1570,6 @@ export function deriveMetrics(
     if (eventTouchesSourceWorktree(event)) {
       sourceWorktreeAccessObserved = true;
     }
-
     modelOutputTexts.push(...collectModelOutputText(event));
 
     if (!isRecord(event)) continue;
@@ -728,15 +1587,20 @@ export function deriveMetrics(
   }
 
   const finalResponse = modelOutputTexts.at(-1) ?? "";
-  const baselines = baselineHeads(events);
   const directBareRead = directBareSourceContentRead(events);
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
+  const sourceWorktreeIsMaterialized = sourceWorktreeMaterializedAtExpectedHead(
+    paths,
+    baselines.seedRecordedSourceCommit ?? baselines.sourceRepoHead,
+  );
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
   const treeInit = deriveTreeInitObservation(events, firstTreeCalls, paths.workspacePath);
+  const seedPreflight = deriveSeedPreflightObservation(events);
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
+    chatHistoryReadObserved,
     contextTreeChanged: contextTreeChanged(paths, baselines.contextTreeHead),
     contextTreeStatus: contextTreeStatus(paths),
     directBareSourceContentReadObserved: directBareRead,
@@ -745,17 +1609,36 @@ export function deriveMetrics(
     firstTreeArgv,
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
+    githubGovernanceBootstrapObserved: githubGovernanceBootstrapObserved(events),
+    githubGovernanceRecoveryObserved: githubGovernanceRecoveryObserved(events, finalResponse),
+    githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
+    progressReadObserved,
+    phase2ContinuationObserved: phase2ContinuationObserved(finalResponse),
     phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),
+    phase2RefusalObserved: phase2RefusalObserved(finalResponse),
     runnerExitCode,
+    seedNeedsAdminObserved: seedPreflight.needsAdmin,
+    seedPreflightObserved: seedPreflight.observed,
+    seedPreflightSucceeded: seedPreflight.succeeded,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
-    sourceEvidenceReadObserved:
-      sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
-    sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead),
+    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event, evalCase, paths)),
+    sourceRepoChanged: sourceRepoChanged(
+      paths,
+      baselines.sourceRepoHead,
+      baselines.seedRecordedSourceCommit ?? baselines.sourceRepoHead,
+      evalCase,
+    ),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
+    // Command text cannot prove which executable or Git subcommand actually
+    // ran. Credit materialization only from the final clean managed worktree,
+    // at the expected source HEAD, whose git-common-dir is the declared bare
+    // clone. Eval prompts that require a worktree therefore leave it in place.
+    sourceWorktreeMaterializedObserved: sourceWorktreeIsMaterialized,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
+    treeStrictFetchObserved: strictTreeFetchObserved(events, paths),
     workspaceManifestReadObserved,
     writeSkillFileReadObserved,
   };
@@ -767,11 +1650,40 @@ export function deriveMetrics(
 }
 
 export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
+  const portable = evalCase.fixture.invocationMode === "portable";
   if (!metrics.fixtureValidationOk) return false;
   if (metrics.runnerExitCode !== 0) return false;
   if (!metrics.seedSkillFileReadObserved) return false;
-  if (!metrics.workspaceManifestReadObserved) return false;
-  if (metrics.contextTreeChanged) return false;
+  if (portable) {
+    if (metrics.workspaceManifestReadObserved || !metrics.seedPreflightObserved) return false;
+    if (evalCase.fixture.seedAuthority === "member") {
+      if (!metrics.seedNeedsAdminObserved || metrics.seedPreflightSucceeded) return false;
+    } else if (!metrics.seedPreflightSucceeded) {
+      return false;
+    }
+    const admitted = evalCase.fixture.seedAuthority !== "member";
+    const bindingMatches = evalCase.fixture.seedBindingState !== "different";
+    if (admitted && bindingMatches && !metrics.treeStrictFetchObserved) return false;
+    if (!bindingMatches && (metrics.treeStrictFetchObserved || metrics.progressReadObserved)) return false;
+    if (
+      admitted &&
+      evalCase.fixture.treeState === "phase1-approved" &&
+      bindingMatches &&
+      !metrics.progressReadObserved
+    ) {
+      return false;
+    }
+  } else if (!metrics.workspaceManifestReadObserved) {
+    return false;
+  }
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) return false;
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) return false;
+  const expectedContextTreeCreation = Boolean(
+    evalCase.expected.action === "create_tree_via_init" &&
+      (evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery),
+  );
+  if (metrics.contextTreeChanged && !expectedContextTreeCreation) return false;
   if (metrics.sourceRepoChanged) return false;
   if (metrics.forbiddenActionHits.length > 0) return false;
   if (metrics.forbiddenSideEffectHits.length > 0) return false;
@@ -779,8 +1691,9 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "propose_phase1_skeleton") {
     return (
-      metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeCreated &&
+      (evalCase.expected.requireWorktree
+        ? metrics.sourceWorktreeMaterializedObserved
+        : !metrics.sourceWorktreeCreated && !metrics.sourceWorktreeAccessObserved) &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
       metrics.approvalRequestObserved &&
@@ -790,8 +1703,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "materialize_bare_worktree") {
     return (
-      metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeCreated &&
+      metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
       metrics.approvalRequestObserved &&
@@ -801,6 +1713,32 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "refuse_nonempty_tree") {
     return (
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
+      !metrics.sourceEvidenceReadObserved &&
+      !metrics.directBareSourceContentReadObserved &&
+      !metrics.skeletonObserved &&
+      (!portable || metrics.phase2RefusalObserved)
+    );
+  }
+
+  if (evalCase.expected.action === "report_needs_admin") {
+    return (
+      metrics.seedNeedsAdminObserved &&
+      !metrics.treeStrictFetchObserved &&
+      !metrics.progressReadObserved &&
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
+      !metrics.sourceEvidenceReadObserved &&
+      !metrics.directBareSourceContentReadObserved &&
+      !metrics.skeletonObserved
+    );
+  }
+
+  if (evalCase.expected.action === "refuse_phase2_recovery") {
+    return (
+      metrics.phase2RefusalObserved &&
+      !metrics.phase2ContinuationObserved &&
       !metrics.sourceWorktreeCreated &&
       !metrics.sourceWorktreeAccessObserved &&
       !metrics.sourceEvidenceReadObserved &&
@@ -819,6 +1757,9 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
+    const githubGovernancePass =
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved);
     // PASS only when the state check routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
@@ -840,9 +1781,20 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // source read is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
+      githubGovernancePass &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.sourceWorktreeCreated &&
       !metrics.sourceWorktreeAccessObserved
+    );
+  }
+
+  if (evalCase.expected.action === "continue_phase2") {
+    return (
+      metrics.sourceWorktreeMaterializedObserved &&
+      metrics.sourceEvidenceReadObserved &&
+      metrics.phase2ContinuationObserved &&
+      !metrics.phase2RefusalObserved &&
+      !metrics.directBareSourceContentReadObserved
     );
   }
 
@@ -851,30 +1803,55 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
 export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): string | null {
   const notes: string[] = [];
+  const portable = evalCase.fixture.invocationMode === "portable";
   if (!metrics.seedSkillFileReadObserved) {
     notes.push("first-tree-seed/SKILL.md was not read by the model.");
   }
-  if (!metrics.workspaceManifestReadObserved) {
+  if (!portable && !metrics.workspaceManifestReadObserved) {
     notes.push("Workspace manifest was not read during seed self-check.");
+  }
+  if (portable && metrics.workspaceManifestReadObserved) {
+    notes.push("Portable Seed read managed Workspace state instead of relying only on explicit inputs.");
+  }
+  if (portable && !metrics.seedPreflightObserved) {
+    notes.push("Portable Seed did not run the explicit-Team authority and binding preflight.");
+  }
+  if (
+    portable &&
+    evalCase.fixture.seedAuthority !== "member" &&
+    evalCase.fixture.seedBindingState !== "different" &&
+    !metrics.treeStrictFetchObserved
+  ) {
+    notes.push("Portable Seed did not strictly fetch the current binding branch.");
+  }
+  if (
+    portable &&
+    evalCase.fixture.treeState === "phase1-approved" &&
+    evalCase.fixture.seedBindingState !== "different" &&
+    !metrics.progressReadObserved
+  ) {
+    notes.push("Portable Phase 2 recovery did not read merged durable Seed progress.");
+  }
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) {
+    notes.push("Required visible prior-turn transcript was not read.");
   }
   if (!metrics.expectedResponseObserved) {
     notes.push("Final response did not include the expected seed action signal.");
   }
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) {
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeMaterializedObserved) {
     notes.push("Required bare-source read worktree was not materialized.");
   }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) {
     notes.push("Source evidence from the materialized worktree was not read.");
   }
-  if (
-    (evalCase.expected.action === "propose_phase1_skeleton" ||
-      evalCase.expected.action === "materialize_bare_worktree") &&
-    !metrics.writeSkillFileReadObserved
-  ) {
-    notes.push("first-tree-write/SKILL.md was not read before proposing the Phase 1 skeleton.");
-  }
   if (metrics.directBareSourceContentReadObserved) {
     notes.push("Model attempted to read source files directly from the bare source repo path.");
+  }
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) {
+    notes.push("Required GitHub governance bootstrap was not observed in the event trace.");
+  }
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) {
+    notes.push("Required GitHub governance recovery guidance was not observed.");
   }
   if (metrics.contextTreeChanged) {
     notes.push("Context Tree fixture changed; seed gate cases must stop before writing or deleting tree content.");
@@ -906,8 +1883,14 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
       );
     }
   }
-  if (metrics.phase2LeafContentObserved) {
+  if (metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2") {
     notes.push("Phase 2-style leaf content was observed before user approval.");
+  }
+  if (evalCase.expected.action === "continue_phase2" && !metrics.phase2ContinuationObserved) {
+    notes.push("Durable fresh-process recovery did not positively route into Phase 2 leaf drafting.");
+  }
+  if (evalCase.expected.action === "continue_phase2" && metrics.phase2RefusalObserved) {
+    notes.push("Model refused a verified durable Phase 2 continuation.");
   }
   return notes.length > 0 ? notes.join(" ") : null;
 }

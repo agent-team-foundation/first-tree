@@ -533,6 +533,62 @@
       "when": 1783501214695,
       "tag": "0075_right_jigsaw",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1783752407120,
+      "tag": "0076_lazy_risque",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1784082957566,
+      "tag": "0077_flashy_changeling",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1784156659253,
+      "tag": "0078_ancient_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1784173454437,
+      "tag": "0079_good_virginia_dare",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1784191584500,
+      "tag": "0080_happy_komodo",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1784284070652,
+      "tag": "0081_dizzy_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1784778296618,
+      "tag": "0082_heavy_moonstone",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1784805906735,
+      "tag": "0083_tiresome_bucky",
+      "breakpoints": true
     }
   ]
 }

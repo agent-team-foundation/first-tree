@@ -1,5 +1,15 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sanitizePath } from "../analytics.js";
+
+const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+
+describe("production gtag bootstrap", () => {
+  it("queues the official Arguments object so gtag.js processes commands", () => {
+    expect(indexHtml).toContain("window.dataLayer.push(arguments)");
+    expect(indexHtml).not.toContain("window.dataLayer.push(args)");
+  });
+});
 
 describe("sanitizePath", () => {
   it("templates invite tokens so the code never reaches GA", () => {

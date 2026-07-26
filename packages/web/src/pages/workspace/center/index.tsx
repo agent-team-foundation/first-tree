@@ -23,6 +23,7 @@ export function CenterPanel({
   narrow,
   onShowConversations,
   initialParticipantIds,
+  presentation = "workspace",
   isTrial = false,
 }: {
   selectedChatId: string | null;
@@ -44,6 +45,7 @@ export function CenterPanel({
    *  page "Chat" action pre-selects that agent). Takes precedence over the
    *  default-delegate seed. */
   initialParticipantIds?: string[];
+  presentation?: "workspace" | "mobile";
 }) {
   const { organizationId } = useAuth();
 
@@ -64,6 +66,7 @@ export function CenterPanel({
         onCreated={onSelectChat}
         onShowConversations={onShowConversations}
         initialParticipantIds={initialParticipantIds}
+        mobile={presentation === "mobile"}
       />
     );
   }
@@ -76,6 +79,7 @@ export function CenterPanel({
         onShowConversations={onShowConversations}
         onClearChat={onClearChat}
         isTrial={isTrial}
+        presentation={presentation}
       />
     );
   }

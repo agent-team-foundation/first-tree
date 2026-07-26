@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/private/tmp/cursor-cli-resume-3qSQXm","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","model":"Codex 5.3 High","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Without tools, reply exactly FT_CROSS_FAMILY_SWITCH_OK followed by one space and the nonce from the first turn."}]},"session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4"}

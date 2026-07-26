@@ -400,6 +400,11 @@ export function DocPreviewDrawer() {
   if (!hasDocRef) return null;
 
   return (
+    // The mobile branch is a viewport-fixed overlay, so it reserves its own top
+    // and bottom safe-area insets (pt-safe-top / pb-safe-bottom): the shell's
+    // pt-safe-top does not constrain a fixed child, so without these the header /
+    // close button can render under the notch and the scroll surface under the
+    // home indicator.
     <aside
       aria-label="Document preview"
       aria-modal={isMobile}
@@ -408,7 +413,7 @@ export function DocPreviewDrawer() {
         "z-40 flex flex-col bg-card text-foreground",
         "animate-in slide-in-from-right duration-200",
         isMobile
-          ? "fixed inset-0 w-full border-l border-border"
+          ? "fixed inset-0 w-full border-l border-border pt-safe-top pb-safe-bottom"
           : "relative h-auto shrink-0 overflow-hidden border-l border-border-faint max-w-[calc(100vw-var(--sp-8))]",
       )}
       onKeyDown={trapMobileFocus}

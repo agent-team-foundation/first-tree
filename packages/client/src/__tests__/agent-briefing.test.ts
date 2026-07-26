@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -47,9 +47,22 @@ function topLevelSection(briefing: string, heading: string): string {
   const start = briefing.indexOf(marker);
   expect(start, `missing section ${heading}`).toBeGreaterThanOrEqual(0);
   const contentStart = start + 1;
-  const next = briefing.slice(contentStart + heading.length + 1).search(/\n# [^\n]+\n/u);
-  if (next === -1) return briefing.slice(contentStart);
-  return briefing.slice(contentStart, contentStart + heading.length + 1 + next);
+  const searchStart = contentStart + heading.length + 1;
+  const knownHeadings = [
+    "# Identity",
+    "# Team Prompt (team-shared — read-only for agents)",
+    "# Agent Prompt (this agent only — editable)",
+    "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    "# Agent Prompt (legacy merged — may include team-shared content)",
+    "# Working in First Tree (First Tree Managed)",
+    "# Context Tree (First Tree Managed)",
+    "# Skills (First Tree Managed)",
+  ];
+  const nextStarts = knownHeadings
+    .map((candidate) => briefing.indexOf(`\n${candidate}\n`, searchStart))
+    .filter((candidateStart) => candidateStart >= 0);
+  if (nextStarts.length === 0) return briefing.slice(contentStart);
+  return briefing.slice(contentStart, Math.min(...nextStarts));
 }
 
 function lineCount(text: string): number {
@@ -67,6 +80,31 @@ describe("buildAgentBriefing — generated skeleton", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("# Identity\n\nYou are Test Agent, an autonomous agent.");
     expect(briefing.endsWith("\n")).toBe(true);
+    expect(briefing.endsWith("\n\n")).toBe(false);
+  });
+
+  it("keeps complete briefing prose in EJS and runtime code limited to structured data", () => {
+    const templatePath = resolveAgentBriefingTemplatePath();
+    const templateSource = readFileSync(templatePath, "utf8");
+    const runtimeSource = readFileSync(resolve(dirname(templatePath), "..", "agent-briefing.ts"), "utf8");
+
+    for (const marker of [
+      "You are running inside **First Tree**",
+      "Blocking questions never ride inside plain `chat send`",
+      "The Context Tree is durable context",
+      "## GitLab Working Posture",
+      "# Skills (First Tree Managed)",
+    ]) {
+      expect(templateSource).toContain(marker);
+      expect(runtimeSource).not.toContain(marker);
+    }
+
+    expect(templateSource).not.toContain("<%=");
+    expect(runtimeSource).not.toContain("requiredReadingBlock");
+    expect(runtimeSource).not.toContain("function generatedBannerSection(");
+    expect(runtimeSource).not.toContain("function workingInFirstTreeSection(");
+    expect(runtimeSource).not.toContain("function contextTreeSection(");
+    expect(runtimeSource.match(/getCliBinding\(\)/gu)).toHaveLength(1);
   });
 
   it("keeps top-level section order stable and excludes per-chat Current Chat Context", () => {
@@ -74,7 +112,6 @@ describe("buildAgentBriefing — generated skeleton", () => {
     const expectedOrder = [
       "# Identity",
       "# Working in First Tree (First Tree Managed)",
-      "# Required Reading (First Tree Managed)",
       "# Context Tree (First Tree Managed)",
       "# Skills (First Tree Managed)",
     ];
@@ -127,12 +164,12 @@ describe("buildAgentBriefing — generated skeleton", () => {
     );
 
     expect(lineCount(topLevelSection(briefing, "# Working in First Tree (First Tree Managed)"))).toBeLessThanOrEqual(
-      190,
+      220,
     );
-    expect(lineCount(topLevelSection(briefing, "# Required Reading (First Tree Managed)"))).toBeLessThanOrEqual(18);
-    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(80);
+    expect(briefing).not.toContain("# Required Reading (First Tree Managed)");
+    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(210);
     expect(lineCount(topLevelSection(briefing, "# Skills (First Tree Managed)"))).toBeLessThanOrEqual(20);
-    expect(lineCount(briefing)).toBeLessThanOrEqual(440);
+    expect(lineCount(briefing)).toBeLessThanOrEqual(580);
   });
 
   it("renders identity from visibility", () => {
@@ -160,13 +197,37 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     reasoningEffort: "" as const,
   };
 
-  it("renders legacy append only as the legacy fallback", () => {
-    expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("## Agent-Specific Prompt");
+  it("renders legacy append only as the legacy fallback, with self-contained provenance", () => {
+    expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("legacy merged");
 
     const payload = { ...basePayload, prompt: { append: "Follow the local plan." } };
     const briefing = buildAgentBriefing(makeOpts({ payload }));
-    expect(briefing).toContain("## Agent-Specific Prompt\n\nFollow the local plan.");
+    expect(briefing).toContain("# Agent Prompt (legacy merged — may include team-shared content)");
+    expect(briefing).toContain("Follow the local plan.");
+    expect(briefing).not.toContain("## Agent-Specific Prompt");
     expect(briefing).not.toContain("# Agent Prompt (this agent only — editable)");
+
+    // The fallback section itself names its source and both edit entry
+    // points, so the file stays self-contained without the structured trio.
+    expect(briefing).toContain("served as one merged blob");
+    expect(briefing).toContain("first-tree agent config prompt show test-agent --raw");
+    expect(briefing).toContain("first-tree agent config prompt set test-agent");
+    expect(briefing).toContain("Do NOT copy any of this\nmerged section into your per-agent prompt.");
+
+    // The merged blob can also embed binding-managed agent prompt overrides,
+    // which `prompt set` cannot edit — both the banner and the Source
+    // paragraph must name that class and its Cloud-managed edit path.
+    expect(briefing.match(/binding-managed agent prompt overrides/g)).toHaveLength(2);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides[\s\S]{0,160}?Org Settings →\s+Resources/);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides\s+\(NOT editable with `prompt set`/);
+
+    // The banner documents the heading that actually renders on this path —
+    // the legacy merged entry replaces the structured three-heading map.
+    expect(briefing).toContain("# Agent Prompt (legacy merged) → this agent's prompt configuration");
+    expect(briefing).toContain("NEVER copy the merged section back into prompt set");
+    expect(briefing).not.toContain("# Team Prompt   → team prompt resources");
+    expect(briefing).not.toContain("# Agent Prompt Overrides → agent-specific resource bindings");
+    expect(briefing).toContain("Every other section is First Tree Managed");
   });
 
   it("separates team prompt, editable agent prompt, and non-editable overrides", () => {
@@ -194,36 +255,114 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     expect(briefing).toContain("## Tone guide\n\nOverride body.");
     expect(briefing).toMatch(/NOT editable with `prompt set`/);
     expect(briefing).not.toContain("## Agent-Specific Prompt");
+    expect(briefing).not.toContain("legacy merged");
+  });
+
+  it("renders identity, prompt, and path values without HTML escaping", () => {
+    const workspacePath = "/tmp/<team>&/it's-`safe`";
+    const sourcePath = `${workspacePath}/source-repos/<repo>&'`;
+    const contextTreePath = `${workspacePath}/context-tree/<tree>&'`;
+    const payload = {
+      ...basePayload,
+      prompt: {
+        append: "legacy ignored",
+        sections: [
+          {
+            scope: "team" as const,
+            name: "Rules <raw> & O'Brien `ops`",
+            body: "Keep <prompt> & O'Brien `literal`.",
+            editable: false,
+          },
+          {
+            scope: "agent" as const,
+            name: "",
+            body: "Agent body <raw> & 'quoted' `ticks`.",
+            editable: true,
+          },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        identity: makeIdentity({ displayName: "A<ly & O'Brien `ops`" }),
+        payload,
+        workspacePath,
+        sourceRepos: [
+          {
+            absolutePath: sourcePath,
+            url: "ssh://git@example.com/group/<repo>&'`tick`.git",
+          },
+        ],
+        contextTreePath,
+        contextTreeRepoUrl: "ssh://git@example.com/context/<tree>&'`tick`.git",
+        contextTreeBranch: "feature/<raw>&'`tick`",
+      }),
+    );
+
+    expect(briefing).toContain("You are A<ly & O'Brien `ops`, an autonomous agent.");
+    expect(briefing).toContain("## Rules <raw> & O'Brien `ops`");
+    expect(briefing).toContain("Keep <prompt> & O'Brien `literal`.");
+    expect(briefing).toContain("Agent body <raw> & 'quoted' `ticks`.");
+    expect(briefing).toContain(`Your fixed working directory is \`${workspacePath}\`.`);
+    expect(briefing).toContain(`- \`${sourcePath}\``);
+    expect(briefing).toContain(contextTreePath);
+    expect(briefing).toContain("it'\\''s-`safe`");
+    expect(briefing).toContain("feature/<raw>&'\\''`tick`");
+    expect(briefing).not.toMatch(/&(?:amp|lt|gt|#39|#96);/u);
   });
 });
 
-describe("buildAgentBriefing — Required Reading and skill routing", () => {
-  it("emits the tree-bound first-tree-write mandate without implying a retired skill", () => {
+describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
+  it("emits the structured Context Tree policy baseline in generated briefing", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
+    const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
 
-    expect(briefing).toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
-    expect(briefing).toContain("source-system boundary");
-    expect(briefing).toContain("Hard Rules +\nDouble Test");
-    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-write/SKILL.md`);
+    expect(tree).toContain("## Context Tree Policy");
+    expect(tree).toContain("### Source-System Boundary");
+    expect(tree).toContain("### Content Classes And Authority");
+    expect(tree).toContain("**Normal content**");
+    expect(tree).toContain("**Archive/supporting content**");
+    expect(tree).toContain("**Member content**");
+    expect(tree).toContain("### Code vs Tree Drift Authority");
+    expect(tree).toContain("code is the ground truth");
+    expect(tree).toContain("`decisionLocksCode: true` reverses that default");
+    expect(tree).toContain("### The Double Test");
+    expect(tree).toContain("### Content Model: What / Why / Who");
+    expect(tree).toContain("### Add vs Edit");
+    expect(tree).toContain("### Node Shape");
+    expect(tree).toContain("`lastReviewed` records an actual\nowner review");
+    expect(tree).toContain("update it only through that review/audit workflow");
+    expect(tree).toContain("never during\na source-backed write");
+    expect(tree).toContain('Use `owners: ["*"]` only when a human explicitly opens');
+    expect(tree).toContain("ownership to everyone");
+    expect(tree).toContain("Metadata supports scanning, routing, and responsibility");
+    expect(tree).toContain("### Write / Verify / PR/MR Discipline");
+    expect(briefing).not.toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
     expect(briefing).toContain("`first-tree-read`");
     expect(briefing).toContain("`first-tree-seed`");
     expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
     expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
   });
 
-  it("omits Required Reading for tree-less agents", () => {
+  it("emits the policy baseline and tree-less binding guidance", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
+    const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
+    expect(tree).toContain("## Context Tree Policy");
+    expect(tree).toContain("This briefing was generated without a bound tree");
+    expect(tree).toContain("before any tree read/write, re-check the workspace binding");
   });
 
-  it("marks first-tree-write unconditional only for tree-bound agents", () => {
+  it("lists every installed First Tree skill in the family map", () => {
     const familyMap = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: "/tree" })),
       "# Skills (First Tree Managed)",
     );
-    expect(familyMap).toMatch(/`first-tree-write` is \*\*unconditional\*\*/);
-    expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| unconditional \(see `# Required Reading`\)/);
+    expect(familyMap).toContain("The generated Context Tree Policy is always present");
     expect(familyMap).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
+    expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(familyMap).toMatch(/\|\s*`context-tree-review`\s*\| a trusted GitHub App Context Review run/);
+    expect(familyMap).toMatch(/\|\s*`context-tree-audit`\s*\| a human explicitly asks to audit/);
 
     const treelessFamily = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: null })),
@@ -231,8 +370,15 @@ describe("buildAgentBriefing — Required Reading and skill routing", () => {
     );
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
-    expect(treelessFamily).toContain("first-tree-write");
-    expect(treelessFamily).not.toContain("first-tree-read");
+    expect(treelessFamily).toContain("first-tree-file-bug");
+    expect(treelessFamily).not.toContain("first-tree-gitlab");
+    expect(treelessFamily).toContain("first-tree-qa");
+    expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
+    expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a trusted GitHub App Context Review run/);
+    expect(treelessFamily).toMatch(/\|\s*`context-tree-audit`\s*\| a human explicitly asks to audit/);
+    expect(treelessFamily).toMatch(/without a binding, the audit fails closed/);
+    expect(treelessFamily).toContain("These skills install in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
   });
 });
@@ -339,12 +485,34 @@ describe("buildAgentBriefing — Working in First Tree hard rules", () => {
     expect(communication).toMatch(/Use\s+`-f markdown`/);
   });
 
-  it("uses the channel-resolved binary name in chat commands", () => {
+  it("uses one channel-resolved binary name across prompt, chat, GitHub, and tree commands", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     try {
-      const briefing = buildAgentBriefing(makeOpts());
+      const briefing = buildAgentBriefing(
+        makeOpts({
+          contextTreePath: "/tree",
+          payload: {
+            kind: "claude-code",
+            model: "",
+            prompt: {
+              append: "",
+              sections: [{ scope: "agent", name: "", body: "Channel prompt.", editable: true }],
+            },
+            mcpServers: [],
+            env: [],
+            gitRepos: [],
+            resourceSkills: [],
+            reasoningEffort: "",
+          },
+        }),
+      );
+      expect(briefing).toContain("first-tree-staging agent config prompt show <agent> --raw");
+      expect(briefing).toContain("first-tree-staging agent config prompt show test-agent --raw");
       expect(briefing).toContain("first-tree-staging chat send");
-      expect(briefing).not.toMatch(/\bfirst-tree chat /);
+      expect(briefing).toContain("first-tree-staging github follow <url>");
+      expect(briefing).toContain("first-tree-staging tree verify");
+      expect(briefing).toContain("first-tree-staging tree tree --help");
+      expect(briefing).not.toMatch(/\bfirst-tree (?:agent|chat|github|tree)\b/u);
     } finally {
       setCliBinding({ binName: "first-tree", packageName: "first-tree" });
     }
@@ -380,14 +548,68 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(asking).not.toContain("--close");
   });
 
+  it("keeps Scheduled jobs briefing contract compact and fail-closed", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const scheduled = briefing.slice(
+      briefing.indexOf("## Scheduled jobs"),
+      briefing.indexOf("## GitHub Working Posture"),
+    );
+
+    expect(scheduled).toContain("cron` only");
+    expect(scheduled).toContain("never provider-native schedulers");
+    expect(scheduled).toContain("Managing human's explicit instruction for that create/update/pause/resume/delete");
+    expect(scheduled).toContain("no re-`chat ask`");
+    expect(scheduled).toContain("fail closed");
+    expect(scheduled).toContain("cron preview");
+    expect(scheduled).toContain("chat ask` managing human");
+    expect(scheduled).toContain("applied/not-applied");
+    expect(scheduled).toContain("cron list");
+    expect(scheduled).toContain("Pause blocks future accepts only");
+    expect(scheduled).toContain("accepted/delivered/running continue");
+    expect(scheduled).toContain("acceptedWorkPreserved");
+    expect(scheduled).toContain("FIRST_TREE_CHAT_ID");
+    expect(scheduled).not.toContain("Current-Chat human instruction");
+    expect(scheduled).not.toContain("CronCreate");
+  });
+
   it("keeps GitHub posture and follow-after-create rules inline", () => {
     const briefing = buildAgentBriefing(makeOpts());
-    expect(briefing).toContain("## GitHub Working Posture");
-    expect(briefing.indexOf("## GitHub Working Posture")).toBeLessThan(briefing.indexOf("## GitHub Entity Attention"));
+    const orderedHeadings = [
+      "## Scheduled jobs",
+      "## GitHub Working Posture",
+      "## GitHub Entity Attention",
+      "## GitLab Working Posture",
+      "## GitLab Entity Attention",
+      "## Asking Humans",
+    ];
+    let previousIndex = -1;
+    for (const heading of orderedHeadings) {
+      const index = briefing.indexOf(heading);
+      expect(index, `${heading} missing or out of order`).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    }
+
     expect(briefing).toContain("try the host `gh` CLI first");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
+    expect(briefing).not.toContain("final provider `PATH`");
+    expect(briefing).toContain("gh auth status");
+    expect(briefing).toContain("gh auth login");
+    expect(briefing).toContain("gh <command> --help");
     expect(briefing).toContain("If the current member is not an org admin");
     expect(briefing).toContain("hidden server sync path");
+
+    // Issues/PRs the agent files for the user default to the repo the work is
+    // about (the bound source repo), not reflexively First Tree's own repo.
+    // Regression guard for agents misfiling a user's issue into
+    // agent-team-foundation/first-tree; a First Tree platform defect still
+    // routes through `first-tree-file-bug`.
+    expect(briefing).toContain("target the repo the work is about with an explicit `--repo`");
+    expect(briefing).toMatch(
+      /Don't default to First Tree's own repository unless the work is genuinely about First Tree itself/,
+    );
+    expect(briefing).toContain(
+      "a First Tree platform defect specifically goes through the `first-tree-file-bug` skill",
+    );
 
     expect(briefing).toContain("Creating a PR or issue **never** follows it");
     expect(briefing).toContain("first-tree github follow <url>");
@@ -396,6 +618,73 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
     expect(briefing).toContain("first-tree github follow --help");
     expect(briefing).not.toContain("`first-tree-github` skill");
+    expect(briefing).toContain("enables **Settings → Setup**");
+    expect(briefing).toContain("missing,\n  suspended, or does not cover the repo");
+    expect(briefing).toContain("Give this handoff once");
+    expect(briefing).not.toContain("enables **Settings → GitHub**");
+  });
+
+  it("keeps compact GitLab posture inline and routes detailed operations on demand", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const gitlab = briefing.slice(briefing.indexOf("## GitLab Working Posture"), briefing.indexOf("## Asking Humans"));
+
+    expect(gitlab).toContain("try the host `glab` CLI first");
+    expect(gitlab).toContain("merge requests, issues, pipelines/jobs, repository metadata, comments");
+    expect(gitlab).toContain("ordinary merge request / issue creation");
+    expect(gitlab).toContain("GitLab.com");
+    expect(gitlab).toContain("GitLab Dedicated");
+    expect(gitlab).toContain("GitLab Self-Managed");
+    expect(gitlab).toContain("infers the host from the current repository remote");
+    expect(gitlab).not.toContain("final provider `PATH`");
+    expect(gitlab).toContain("missing, unauthenticated, points at the wrong host, or lacks access");
+    expect(gitlab).toContain("install GitLab CLI");
+    expect(gitlab).toContain("fix auth/access/project permissions");
+    expect(gitlab).toContain("use a local clone");
+    expect(gitlab).toContain("glab <command> --help");
+    expect(gitlab).not.toContain("glab auth status");
+    expect(gitlab).not.toContain("--hostname <host>");
+    expect(gitlab).not.toContain("glab auth login");
+    expect(gitlab).toContain("Never expose a token");
+    expect(gitlab).toContain("command output, logs, or shell history");
+    expect(gitlab).toContain("only notifications for the current authenticated account");
+    expect(gitlab).toContain("do not bind GitLab events to a First Tree chat");
+    expect(gitlab).toContain("do not require the First Tree GitHub App");
+
+    expect(gitlab).toContain("Default: follow what you create");
+    expect(gitlab).toContain("first-tree gitlab follow <url>");
+    expect(gitlab).toContain("inbound-only and may return pending or active");
+    expect(gitlab).toContain("while an already active line stays active");
+    expect(gitlab).toContain("without calling GitLab");
+    expect(gitlab).toContain("gitlab follow <url> --rebind");
+    expect(gitlab).toContain("does not invalidate an entity that was already created");
+    expect(gitlab).toContain("only when the human explicitly asks for personal-account notifications");
+    expect(gitlab).toContain("only when the human explicitly asks this chat");
+    expect(gitlab).toContain("never automatically when an Issue closes");
+    expect(gitlab).toContain("an MR merges, or the task finishes");
+    expect(gitlab).toContain("first-tree gitlab unfollow <url>");
+    expect(gitlab).toContain("removes every automatic or manual binding");
+    expect(gitlab).toContain("may create a new route");
+    expect(gitlab).toContain("first-tree gitlab following");
+    expect(gitlab).not.toContain("first-tree-gitlab");
+
+    expect(gitlab).not.toContain("install the First Tree GitHub App");
+    expect(gitlab).not.toMatch(/`glab (?:issue|mr) (?:subscribe|unsubscribe) [^`]+`/u);
+    expect(gitlab).not.toContain("-R <group/project>");
+  });
+
+  it("always renders compact host posture without session-scoped CLI availability", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+
+    expect(briefing).toContain("## GitHub Working Posture");
+    expect(briefing).toContain("## GitHub Entity Attention");
+    expect(briefing).toContain("## GitLab Working Posture");
+    expect(briefing).toContain("## GitLab Entity Attention");
+    expect(briefing).not.toContain("detected `gh`");
+    expect(briefing).not.toContain("did not detect `gh`");
+    expect(briefing).not.toContain("detected `glab`");
+    expect(briefing).not.toContain("did not detect `glab`");
+    expect(briefing).not.toContain("final provider `PATH`");
+    expect(briefing).toContain("## Asking Humans");
   });
 
   it("keeps chat metadata rules compact but actionable", () => {
@@ -430,8 +719,12 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
     expect(overview).toContain("first-tree github …");
+    expect(overview).toContain("first-tree gitlab …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
+    expect(overview).toContain("first-tree tree read");
+    expect(overview).toContain("first-tree tree write");
+    expect(overview).toContain("first-tree tree review");
     expect(overview).not.toContain("github scan");
     expect(overview).not.toContain("first-tree tree …");
 
@@ -443,11 +736,8 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
       "codeowners",
       "claude-hook",
       "inject",
-      "review",
       "automation",
       "skill",
-      "read",
-      "write",
       "publish",
     ]) {
       const re = new RegExp(`\\b(?:first-tree|ft)\\s+tree\\s+${retired}\\b`, "u");
@@ -464,11 +754,20 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("## Core Model");
     expect(tree).toContain("decisions,\nconstraints, ownership, and cross-domain relationships");
+    expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
+    expect(tree).toContain("Load `context-tree-review` only for GitHub PRs");
+    expect(tree).toContain("Load\n`context-tree-audit` exclusively for audits");
+    expect(tree).toContain("**Normal content**");
+    expect(tree).toContain("**Archive/supporting content**");
+    expect(tree).toContain("**Member content**");
+    expect(tree).toContain("Default to normal content as current truth");
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
+    expect(tree).toContain("GitLab MRs use ordinary GitLab review on a stable head");
+    expect(tree).toContain("never enter the GitHub-only Context Reviewer state machine");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");
@@ -477,7 +776,7 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("fresh context");
     expect(tree).toContain("persistent context");
-    expect(tree).toContain("specific PR, design doc");
+    expect(tree).toContain("specific PR/MR, design doc");
     expect(tree).toMatch(/request explicitly includes\s+creating and updating the needed tree-node\s+files/);
     expect(tree).toContain("`NODE.md` and other `*.md` nodes");
     expect(tree).toMatch(/Implementation-only changes skip\s+the tree write/);
@@ -485,8 +784,8 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("first-tree tree verify");
     expect(tree).toContain("open them together");
     expect(tree).toContain("cross-link");
-    expect(tree).toContain("open the tree PR as a draft");
-    expect(tree).toContain("merge the code PR first");
+    expect(tree).toContain("open the tree PR/MR as a draft");
+    expect(tree).toContain("merge the code PR/MR first");
     expect(tree).toContain("final merged code");
     expect(tree).not.toContain("need not merge first");
     expect(tree).not.toContain("`first-tree-context`");
@@ -497,13 +796,25 @@ describe("buildAgentBriefing — Context Tree", () => {
 
   it("surfaces tree-less binding as a human/operator gap", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
+    const cli = briefing.slice(
+      briefing.indexOf("## CLI Overview"),
+      briefing.indexOf("# Context Tree (First Tree Managed)"),
+    );
     const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
-    expect(tree).toContain("This agent has no Context Tree bound");
+    expect(cli).toContain("run its `tree init` path directly");
+    expect(cli).toContain("do not pre-confirm admin or ask who will bind");
+    expect(cli).toContain("only if the command actually fails");
+    expect(cli).not.toContain("confirmed org admin");
+    expect(tree).toContain("At briefing generation time this agent had no Context Tree bound");
+    expect(tree).toContain("Re-check the\nbinding if the user says a tree was created or bound during the session");
     expect(tree).toMatch(/surface that\s+gap to a human/);
     expect(tree).toContain("operator action");
     expect(tree).toContain("build / set up the Context Tree");
-    expect(tree).toContain("confirmed org admin");
-    expect(tree).toContain('"who runs the bind?"');
+    expect(tree).toContain("without pre-confirming admin");
+    expect(tree).toContain('asking "who runs the\nbind?"');
+    expect(tree).toContain("validates admin/auth and fails closed");
+    expect(tree).toContain("only after an actual command failure");
+    expect(tree).not.toContain("confirmed org admin");
     expect(tree).not.toContain("first-tree-onboarding");
   });
 
@@ -561,6 +872,62 @@ describe("buildAgentBriefing — Skills", () => {
     expect(skillMap).not.toContain("`first-tree-github-scan`");
     expect(skillMap).not.toContain("`attention`");
     expect(skillMap).not.toContain("`github-scan`");
+  });
+
+  it("locks first-tree-file-bug routing scope across every shipped surface", () => {
+    // Regression guard for the incident where a generic "file an issue" for
+    // work in the user's own/bound repo was misrouted to First Tree's public
+    // tracker (agent-team-foundation/first-tree). first-tree-file-bug is
+    // deliberately excluded from live skill-evals (UNEVALUATED_SHIPPED_SKILLS
+    // in @first-tree/skill-evals), which documents that its trigger boundary is
+    // covered by unit/drift tests here instead. Every routing surface the model
+    // sees must keep BOTH the positive "First Tree platform defect" scope AND
+    // the negative "not the user's own/bound repo" exclusion, so a future
+    // broadening of any one surface fails loudly instead of silently restoring
+    // the misroute.
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    const skillDir = resolve(testFileDir, "..", "..", "..", "..", "skills", "first-tree-file-bug");
+
+    // Surface 1 — SKILL.md frontmatter description (primary progressive disclosure).
+    const descLine = readFileSync(join(skillDir, "SKILL.md"), "utf-8")
+      .split("\n")
+      .find((line) => line.startsWith("description:"));
+    expect(descLine, "SKILL.md must have a frontmatter description").toBeDefined();
+    expect(descLine).toMatch(/defect in First Tree itself/i);
+    expect(descLine).toMatch(/GitLab integration/i);
+    expect(descLine).toMatch(/not for filing an issue into the user's own or bound source repo/i);
+
+    // Surface 2 — Codex metadata (independent routing surface for the codex provider).
+    const openaiYaml = readFileSync(join(skillDir, "agents", "openai.yaml"), "utf-8");
+    expect(openaiYaml).toMatch(/ONLY for a defect in First Tree itself/i);
+    expect(openaiYaml).toMatch(/not for filing an issue into the user's own or bound repo/i);
+    expect(openaiYaml).toMatch(/not into the user's repo/i);
+
+    // Surface 3 — both generated family-map rows (tree-bound and tree-less).
+    for (const contextTreePath of ["/tree", null]) {
+      const row = buildAgentBriefing(makeOpts({ contextTreePath }))
+        .split("\n")
+        .find((line) => line.startsWith("| `first-tree-file-bug`"));
+      expect(row, `file-bug family-map row missing for contextTreePath=${contextTreePath}`).toBeDefined();
+      expect(row).toMatch(/bug in First Tree itself/i);
+      expect(row).toMatch(/GitHub or GitLab integration/i);
+      expect(row).toMatch(/First Tree's own repo \(not the user's own\/bound repo\)/i);
+    }
+  });
+
+  it("keeps GitLab tree reviews outside the GitHub-only Context Reviewer route", () => {
+    for (const contextTreePath of ["/tree", null]) {
+      const briefing = buildAgentBriefing(makeOpts({ contextTreePath }));
+      const reviewRow = briefing.split("\n").find((line) => line.startsWith("| `context-tree-review`"));
+      const seedRow = briefing.split("\n").find((line) => line.startsWith("| `first-tree-seed`"));
+
+      expect(reviewRow, `context-tree-review row missing for contextTreePath=${contextTreePath}`).toBeDefined();
+      expect(reviewRow).toContain("GitHub Context Tree pull request");
+      expect(reviewRow).toContain("GitLab MRs use ordinary GitLab review");
+      expect(seedRow, `first-tree-seed row missing for contextTreePath=${contextTreePath}`).toContain(
+        "GitHub or GitLab URL",
+      );
+    }
   });
 
   it("nests Team Skills before First Tree Family when resource skills exist", () => {

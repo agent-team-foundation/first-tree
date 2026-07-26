@@ -16,22 +16,56 @@ chats and the adjacent campaign quickstart handoff.
   guardrail, and wakes the agent from visible task text. The campaign skill is
   not server-materialized: the kickoff message instructs the trial agent to
   clone the campaign's skill repo and run the named skill on the connected repo.
+- Campaign quickstart may carry an anonymous `{ attemptId, variant }`
+  attribution pair. The pair is stored only on the trial chat's JSON metadata
+  and included in the internal campaign export; it does not change trial
+  idempotency, quota, or runtime behavior and requires no schema migration.
 - A `/me/onboarding/kickoff` request carrying `campaign` is a stale quickstart
   request. It must not create an onboarding kickoff chat or campaign idempotency
   key; it returns `410 campaign_kickoff_moved` when landing campaigns are enabled
   and `404 feature_disabled` when they are disabled.
 - The first-chat endpoint does not accept the retired `kind` discriminator.
-- `POST /api/v1/me/onboarding/tree-setup/kickoff` is the only tree setup
-  kickoff entry. It uses the org-level `tree-setup` idempotency key.
-- A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
-  is a production-scan fix conversion arriving via onboarding. It keys the
-  kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default
-  `<humanAgent>:<agent>:onboarding` key. This is the SAME key the
-  already-onboarded direct path composes (`POST /api/v1/orgs/:orgId/chats` task
-  mode, also from `scanFixRepoSlug`): both write `chats.onboarding_kickoff_key`,
-  so its unique constraint makes re-entering the fix link — through either path
-  — reuse the one fix launcher instead of creating a duplicate. It still stamps
-  onboarding completion like any onboarding kickoff.
+- `POST /api/v1/orgs/:orgId/context-tree/setup-chat` is the only Context Tree
+  setup kickoff entry. It requires an org admin, accepts only the selected
+  agent, owns the canonical topic/bootstrap on the server, uses an initiating
+  human + selected-agent `tree-setup` idempotency key, and never stamps
+  onboarding completion. The chat is an ordinary private task chat; an org-wide
+  key must not cross private-agent ownership boundaries.
+- A retired `<organization>:tree-setup` chat is re-keyed and reused only when
+  its complete membership is exactly the initiating human and selected agent,
+  preserving safe Phase 1 history. Any ownership mismatch leaves the legacy
+  chat untouched and creates the caller's scoped chat instead.
+- A `/me/onboarding/kickoff` request may carry `stamp` to say how the
+  membership's onboarding state is stamped once the kickoff chat exists:
+  `"completed"` (default, same as the older `complete: true`), `"none"`
+  (same as `complete: false`), or `"invitee_skip"` — the team-agent start.
+  `"invitee_skip"` is used when a joining member starts their first chat with a
+  teammate's org-visible agent instead of creating their own: it writes only
+  the auto-open suppressor (`onboarding_suppressed_reason = "invitee_skip"`),
+  never `onboarding_completed_at`, so the standard connect-computer →
+  create-agent journey stays pending and resumable. `stamp` supersedes
+  `complete` when both are present; the kickoff key stays the normal
+  `<humanAgent>:<agent>:onboarding` key, so a team-agent start and a later
+  personal-agent start-chat are distinct chats.
+- A campaign result action carries `campaignAction: { campaign, repoSlug }`
+  through either `/me/onboarding/kickoff` or the already-onboarded direct task
+  path (`POST /api/v1/orgs/:orgId/chats`). Both endpoints compose the same
+  server-owned `chats.onboarding_kickoff_key`, so re-entering an action link
+  through either path reuses one launcher. Production Scan retains its deployed
+  `<humanAgent>:scan-fix:<repoSlug>` key; this keeps existing chats and stale web
+  bundles compatible without a data migration. `scanFixRepoSlug` remains a
+  legacy input that normalizes to `{ campaign: "production-scan", repoSlug }`;
+  requests must not send both fields. An onboarding action still stamps
+  completion like any onboarding kickoff.
+- A successfully created campaign action chat is best-effort recorded on the
+  caller's matching trial-chat metadata. This keeps conversion measurement
+  inside the existing trial-export authorization boundary; ordinary action
+  chat content is never added to the cross-tenant export.
+- Campaign action fields belong only to the signed-in Web DTO
+  (`CreateWebTaskChat`). The agent SDK's `CreateTaskChat` type and
+  `/api/v1/agent/chats` contract do not expose them; a raw agent request that
+  attempts either field is rejected rather than silently receiving Web-user
+  authority.
 
 ## Retired Contract Boundary
 
@@ -45,6 +79,9 @@ Those request and prompt contracts are intentionally retired:
 - A `/me/onboarding/kickoff` request carrying `kind` is rejected with
   `409 stale_onboarding_kickoff_contract`. The recovery is to refresh the web app
   and retry through the current endpoint contract.
+- The retired `/me/onboarding/tree-setup/kickoff` route is authenticated and
+  non-mutating; it returns `410 tree_setup_kickoff_moved` so a stale browser tab
+  gets an explicit refresh boundary rather than an ambiguous 404.
 - The client renders legacy onboarding metadata as ordinary message metadata; it
   does not append hidden instructions to the agent prompt. Campaign skill
   activation must not rely on a client-appended directive.

@@ -7,10 +7,28 @@ describe("Context Reviewer PR internals", () => {
   });
 
   it("classifies supported and unsupported PR webhook triggers", async () => {
-    const { contextReviewerPrTestInternals } = await import("../services/context-reviewer-pr.js");
+    const { contextReviewerPrTestInternals, isContextReviewerCandidateEvent } = await import(
+      "../services/context-reviewer-pr.js"
+    );
 
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "opened")).toBe(true);
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "closed")).toBe(false);
+    expect(isContextReviewerCandidateEvent("pull_request", "reopened")).toBe(true);
+    expect(
+      isContextReviewerCandidateEvent("pull_request", "edited", {
+        action: "edited",
+        changes: { body: { from: "old" } },
+      }),
+    ).toBe(false);
+    expect(
+      isContextReviewerCandidateEvent("pull_request", "edited", {
+        action: "edited",
+        changes: { title: { from: "old" } },
+      }),
+    ).toBe(false);
+    expect(isContextReviewerCandidateEvent("issue_comment", "created")).toBe(true);
+    expect(isContextReviewerCandidateEvent("issue_comment", "edited")).toBe(false);
+    expect(isContextReviewerCandidateEvent("pull_request_review_comment", "edited")).toBe(true);
   });
 
   it("fails clearly when the prompt template is missing from every runtime layout", async () => {
@@ -41,8 +59,8 @@ describe("Context Reviewer PR internals", () => {
         commentUrl: null,
         commentAuthorLogin: null,
         organizationId: "org_1",
+        contextReviewRunId: "01900000-0000-7000-8000-000000000001",
         reviewerManagerGithubLogin: null,
-        reviewerManagerIsPrAuthor: false,
       }),
     ).rejects.toThrow("Context Reviewer PR prompt template is missing");
   });

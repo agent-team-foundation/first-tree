@@ -371,7 +371,7 @@ async function validateDelegateMentionTarget(db: Database, targetUuid: string, s
  * delegate-mention selector when `agent.type === "human"`. Without this
  * server-side check, CLI / Admin API / internal scripts could write
  * delegateMention onto non-human rows, silently re-enabling the
- * autonomous-agent-self-mention path that resolveAudience would then fan
+ * autonomous-agent-self-mention path that resolveGithubAudience would then fan
  * out. Called from `createAgent` / `updateAgent` before
  * `validateDelegateMentionTarget` so a wrong source type fails fast without
  * the target lookup round-trip.
@@ -1060,6 +1060,19 @@ export async function getNewChatDefaultCandidate(
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
+
+  if (data.displayName !== undefined) {
+    const [membership] = await db
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.agentId, agent.uuid))
+      .limit(1);
+    if (membership) {
+      throw new BadRequestError(
+        "Membership-backed human display names must be updated through the member or profile endpoint.",
+      );
+    }
+  }
 
   // `clientId` is one-shot via this generic PATCH entry: NULL → ID is allowed
   // (admin claiming an unbound agent for a known client). Once bound, direct

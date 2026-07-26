@@ -51,14 +51,31 @@ export function buildResourceSkillsBriefing(
   workspace: string,
   payload: AgentRuntimeConfigPayload | null | undefined,
 ): string {
-  const skills = payload?.resourceSkills ?? [];
-  if (skills.length === 0) return "";
+  const rows = buildResourceSkillBriefingRows(workspace, payload);
+  if (rows.length === 0) return "";
   const lines = ["## Team Skills", ""];
-  for (const skill of skills) {
-    lines.push(`- ${skill.name}: ${skill.description || "No description"}`);
-    lines.push(`  Path: ${resourceSkillPath(workspace, skill.resourceId)}`);
+  for (const row of rows) {
+    lines.push(`- ${row.name}: ${row.description}`);
+    lines.push(`  Path: ${row.path}`);
   }
   return lines.join("\n");
+}
+
+export type ResourceSkillBriefingRow = Readonly<{
+  name: string;
+  description: string;
+  path: string;
+}>;
+
+export function buildResourceSkillBriefingRows(
+  workspace: string,
+  payload: AgentRuntimeConfigPayload | null | undefined,
+): ResourceSkillBriefingRow[] {
+  return (payload?.resourceSkills ?? []).map((skill) => ({
+    name: skill.name,
+    description: skill.description || "No description",
+    path: resourceSkillPath(workspace, skill.resourceId),
+  }));
 }
 
 function buildSkillMarkdown(skill: RuntimeResourceSkill): string {

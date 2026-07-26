@@ -11,6 +11,7 @@ import {
   getGithubAppInstallUrl,
 } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
+import { Button } from "../components/ui/button.js";
 
 /**
  * Per-tab marker set when the admin kicks off an install. It locks the CTA (a
@@ -114,24 +115,9 @@ function NotConnectedSummary({
         requests, and reviews as routed messages.
       </p>
       {!readOnly && (
-        <button
-          type="button"
-          onClick={onOpenPanel}
-          disabled={disabled}
-          className="inline-flex items-center justify-center font-medium"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-2) var(--sp-3)",
-            background: "var(--primary)",
-            color: "var(--primary-on)",
-            border: "none",
-            borderRadius: "var(--radius-input)",
-            cursor: disabled ? "default" : "pointer",
-            opacity: disabled ? 0.6 : 1,
-          }}
-        >
+        <Button type="button" size="sm" onClick={onOpenPanel} disabled={disabled}>
           Connect GitHub
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -178,15 +164,7 @@ function InstalledState({
           <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
             {githubAccountPath(data.accountLogin)}
           </span>
-          <span
-            className="text-label"
-            style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              background: "var(--bg-sunken)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg-3)",
-            }}
-          >
+          <span className="text-caption" style={{ color: "var(--fg-3)" }}>
             {data.accountType}
           </span>
         </div>
@@ -199,39 +177,15 @@ function InstalledState({
 
       {!readOnly && (
         <div className="flex items-center" style={{ gap: "var(--sp-2)", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={onOpenPanel}
-            className="inline-flex items-center text-body"
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-1_5) var(--sp-2_5)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              background: "transparent",
-              color: "var(--fg)",
-              cursor: "pointer",
-            }}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={onOpenPanel}>
             Manage connection
-          </button>
-          <a
-            href={data.manageUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center text-body"
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-1_5) var(--sp-2_5)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg)",
-              textDecoration: "none",
-            }}
-          >
-            Manage on GitHub
-            <ExternalLink className="h-3 w-3" />
-          </a>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <a href={data.manageUrl} target="_blank" rel="noreferrer">
+              Manage on GitHub
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </Button>
         </div>
       )}
     </div>
@@ -356,22 +310,10 @@ function ConnectPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
       <div>
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center text-label"
-          style={{
-            gap: "var(--sp-1)",
-            color: "var(--fg-3)",
-            background: "transparent",
-            border: "none",
-            padding: 0,
-            cursor: "pointer",
-          }}
-        >
+        <Button type="button" variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft aria-hidden className="h-3 w-3" />
           Back
-        </button>
+        </Button>
       </div>
 
       {/* ── Step 1: get the App installed on GitHub ──────────────────── */}
@@ -393,65 +335,24 @@ function ConnectPanel({
             <span className="text-body" style={{ color: "var(--fg-2)" }}>
               GitHub App installed.
             </span>
-            <button
-              type="button"
-              onClick={handleInstall}
-              disabled={installDisabled}
-              className="inline-flex items-center text-body"
-              style={{
-                gap: "var(--sp-1)",
-                padding: "var(--sp-1) var(--sp-2)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-input)",
-                background: "transparent",
-                color: "var(--fg)",
-                cursor: installDisabled ? "default" : "pointer",
-                opacity: installDisabled ? 0.6 : 1,
-              }}
-            >
+            <Button type="button" variant="outline" size="sm" onClick={handleInstall} disabled={installDisabled}>
               {installUrlMutation.isPending ? "Opening GitHub…" : "Reinstall"}
-            </button>
-            <a
-              href={bound.manageUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center text-body"
-              style={{
-                gap: "var(--sp-1)",
-                padding: "var(--sp-1) var(--sp-2)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg)",
-                textDecoration: "none",
-              }}
-            >
-              Manage on GitHub
-              <ExternalLink className="h-3 w-3" />
-            </a>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <a href={bound.manageUrl} target="_blank" rel="noreferrer">
+                Manage on GitHub
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </Button>
           </div>
         ) : (
           // Button (not anchor) because the install URL is minted on click,
           // then a synchronously-opened new tab is navigated to it — keeps the
           // state JWT + nonce cookie fresh and the popup unblocked.
-          <button
-            type="button"
-            onClick={handleInstall}
-            disabled={installDisabled}
-            className="inline-flex items-center justify-center font-medium"
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-2) var(--sp-3)",
-              background: "var(--primary)",
-              color: "var(--primary-on)",
-              border: "none",
-              borderRadius: "var(--radius-input)",
-              cursor: installDisabled ? "default" : "pointer",
-              opacity: installDisabled ? 0.6 : 1,
-            }}
-          >
+          <Button type="button" size="sm" onClick={handleInstall} disabled={installDisabled}>
             {installUrlMutation.isPending ? "Opening GitHub…" : "Install on GitHub"}
             <ExternalLink className="h-3 w-3" />
-          </button>
+          </Button>
         )}
         {installUrlMutation.error && !slugMissing && (
           <p className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
@@ -478,20 +379,9 @@ function ConnectPanel({
             <span className="text-label" style={{ color: "var(--fg-3)" }}>
               Waiting for GitHub… You may need a GitHub org admin to approve.
             </span>
-            <button
-              type="button"
-              onClick={handleStartOver}
-              className="text-label underline underline-offset-2"
-              style={{
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                color: "var(--fg-3)",
-                cursor: "pointer",
-              }}
-            >
+            <Button type="button" variant="link" size="sm" onClick={handleStartOver}>
               Didn't work? Start over
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -562,26 +452,22 @@ function InstallationAction({
   disconnectMutation: ReturnType<typeof useMutation<void, Error, void>>;
 }) {
   if (installation.status === "connectable") {
+    // Disable every connectable row while any connect is in flight, not just the
+    // clicked one: the server enforces one installation per team, so two racing
+    // POSTs are decided by whichever write lands first (the loser 409s). If a
+    // second row could fire mid-flight, the final binding would be that race's
+    // winner, not the user's last click — so serialize connects here. Only the
+    // row actually being connected shows the "Connecting…" label.
+    const connecting = connectMutation.isPending && connectMutation.variables === installation.installationId;
     return (
-      <button
+      <Button
         type="button"
+        size="sm"
         onClick={() => connectMutation.mutate(installation.installationId)}
         disabled={connectMutation.isPending}
-        className="text-body font-medium"
-        style={{
-          padding: "var(--sp-1) var(--sp-2)",
-          border: "none",
-          borderRadius: "var(--radius-input)",
-          background: "var(--primary)",
-          color: "var(--primary-on)",
-          cursor: connectMutation.isPending ? "default" : "pointer",
-          opacity: connectMutation.isPending ? 0.6 : 1,
-        }}
       >
-        {connectMutation.isPending && connectMutation.variables === installation.installationId
-          ? "Connecting…"
-          : "Connect"}
-      </button>
+        {connecting ? "Connecting…" : "Connect"}
+      </Button>
     );
   }
 
@@ -591,22 +477,17 @@ function InstallationAction({
         <span className="text-label" style={{ color: "var(--fg-3)" }}>
           Connected to this team
         </span>
-        <button
+        {/* Neutral outline for now; unifying destructive styling with the
+            clients page is deferred. */}
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={() => disconnectMutation.mutate()}
           disabled={disconnectMutation.isPending}
-          className="text-body"
-          style={{
-            padding: "var(--sp-1) var(--sp-2)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            background: "transparent",
-            color: "var(--state-error)",
-            cursor: disconnectMutation.isPending ? "default" : "pointer",
-          }}
         >
           {disconnectMutation.isPending ? "Disconnecting…" : "Disconnect"}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -633,15 +514,7 @@ function InstallationRow({
         <span className="text-body font-medium" style={{ color: "var(--fg)", overflowWrap: "anywhere" }}>
           {githubAccountPath(installation.accountLogin)}
         </span>
-        <span
-          className="text-label"
-          style={{
-            padding: "var(--sp-0_5) var(--sp-1_5)",
-            background: "var(--bg-sunken)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg-3)",
-          }}
-        >
+        <span className="text-caption" style={{ color: "var(--fg-3)" }}>
           {installation.accountType}
         </span>
         {installation.suspended && (
@@ -671,20 +544,13 @@ function ConnectionDetails({ data }: { data: GithubAppInstallationOutput }) {
 
   return (
     <div style={{ borderTop: "var(--hairline) solid var(--border)", paddingTop: "var(--sp-3)" }}>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls={open ? regionId : undefined}
-        className="inline-flex items-center text-label"
-        style={{
-          gap: "var(--sp-1)",
-          color: "var(--fg-3)",
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-        }}
       >
         <ChevronRight
           aria-hidden
@@ -692,7 +558,7 @@ function ConnectionDetails({ data }: { data: GithubAppInstallationOutput }) {
           style={{ transform: open ? "rotate(90deg)" : "none" }}
         />
         Connection details
-      </button>
+      </Button>
 
       {open && (
         <div

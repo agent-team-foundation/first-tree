@@ -13,9 +13,9 @@ import {
   installGlobalSpec,
   installPortableSpec,
   isServiceSupported,
-  PACKAGE_NAME,
   restartClientService,
 } from "../core/index.js";
+import { getChannelInstallCommand } from "../core/install-guidance.js";
 import { print } from "../core/output.js";
 
 /**
@@ -49,12 +49,8 @@ export function registerUpgradeCommand(program: Command): void {
         return;
       }
       if (mode === "npx") {
-        print.line("\n  Not launched from a global npm install — cannot self-upgrade.\n");
-        // PACKAGE_NAME is never null in this branch: dev channel (null
-        // pkg) short-circuits to mode==="source" above. Defend anyway so
-        // the message stays readable if that contract ever changes.
-        const installHint = PACKAGE_NAME ?? binName;
-        print.line(`  Install globally first:  npm i -g ${installHint}\n\n`);
+        print.line("\n  Not launched from an installed CLI — cannot self-upgrade.\n");
+        print.line(`  Install this channel first:\n  ${getChannelInstallCommand()}\n\n`);
         return;
       }
 

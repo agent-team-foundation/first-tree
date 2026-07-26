@@ -170,6 +170,18 @@ describe("runValidateMembers — nested directories under a member node", () => 
     expect(result.exitCode).toBe(1);
     expect(result.errors.some((message) => message.includes("missing 'domains' field"))).toBe(true);
   });
+
+  it("does not follow directory symlink loops in personal member subtrees", (ctx) => {
+    const root = makeTempDir("validate-members-");
+    write(root, "members/alice/NODE.md", VALID_MEMBER_FRONTMATTER("alice"));
+    try {
+      symlinkSync("..", join(root, "members", "alice", "loop"), "dir");
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    expect(runValidateMembers(root)).toEqual({ exitCode: 0, errors: [] });
+  });
 });
 
 describe("runValidateMembers — missing members directory", () => {

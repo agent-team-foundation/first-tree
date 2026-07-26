@@ -31,6 +31,13 @@ vi.mock("../../api/client.js", () => ({
   api: { post: apiMocks.post },
 }));
 
+vi.mock("../../hooks/use-server-channel.js", () => ({
+  useAuthProviderAvailabilityState: () => ({
+    providers: { google: true, github: true },
+    settled: true,
+  }),
+}));
+
 import { InviteAcceptPage } from "../invite-accept.js";
 
 let root: Root | null = null;

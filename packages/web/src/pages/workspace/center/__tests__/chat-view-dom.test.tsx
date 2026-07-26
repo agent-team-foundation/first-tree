@@ -13,7 +13,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
-import type { SessionEventRow } from "../../../../api/sessions.js";
+import type { ChatSessionEventsResponse, SessionEventRow } from "../../../../api/sessions.js";
 import { agentSessionsQueryKey } from "../../../../api/sessions.js";
 import { ToastProvider } from "../../../../components/ui/toast.js";
 
@@ -39,6 +39,7 @@ const agentMocks = vi.hoisted(() => ({
 }));
 
 const attachmentMocks = vi.hoisted(() => ({
+  downloadAttachment: vi.fn(),
   fetchAttachmentBase64: vi.fn(),
   uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
@@ -71,6 +72,7 @@ const readStateMocks = vi.hoisted(() => ({
 }));
 
 const sessionMocks = vi.hoisted(() => ({
+  listChatSessionEvents: vi.fn(),
   listSessionEvents: vi.fn(),
   listSessionOutputs: vi.fn(),
 }));
@@ -79,6 +81,7 @@ const authMock = vi.hoisted(() => ({
   value: {
     agentId: "human-agent-self",
     memberId: "member-self",
+    organizationId: "org-1",
     role: "admin",
   },
 }));
@@ -116,6 +119,7 @@ vi.mock("../../../../api/read-state-store.js", () => readStateMocks);
 
 vi.mock("../../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/sessions.js")>()),
+  listChatSessionEvents: sessionMocks.listChatSessionEvents,
   listSessionEvents: sessionMocks.listSessionEvents,
   listSessionOutputs: sessionMocks.listSessionOutputs,
 }));
@@ -400,6 +404,17 @@ const SESSION_EVENTS: { items: SessionEventRow[]; nextCursor: number | null } = 
   nextCursor: null,
 };
 
+function chatSessionEvents(
+  ...feeds: Array<{
+    agentId: string;
+    events: { items: SessionEventRow[]; nextCursor: number | null };
+  }>
+): ChatSessionEventsResponse {
+  return {
+    feeds: feeds.map(({ agentId, events }) => ({ agentId, ...events })),
+  };
+}
+
 function installBrowserStubs(): void {
   const storage = createStorage();
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
@@ -467,6 +482,7 @@ function createClient(): QueryClient {
     },
   });
   queryClient.setQueryData(["agents", "org-list"], { items: ORG_AGENTS, nextCursor: null });
+  queryClient.setQueryData(["gitlab-connections", "org-1"], []);
   queryClient.setQueryData(
     ["chat-agent-status", "chat-1"],
     [
@@ -523,7 +539,10 @@ function seedChat(
   queryClient.setQueryData(["chat-detail", detail.id], detail);
   queryClient.setQueryData(["chat-messages-cache", detail.id], page.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", detail.id], page);
-  queryClient.setQueryData(["session-events", "agent-1", detail.id], SESSION_EVENTS);
+  queryClient.setQueryData(
+    ["chat-session-events", detail.id],
+    chatSessionEvents({ agentId: "agent-1", events: SESSION_EVENTS }),
+  );
   queryClient.setQueryData(["chat-read-state", detail.id], {
     chatId: detail.id,
     bottomVisibleMessageId: "msg-1",
@@ -601,6 +620,17 @@ async function setValue(element: HTMLInputElement | HTMLTextAreaElement, value: 
   await flush();
 }
 
+function dispatchCopy(target: Element): { event: Event; payloads: Map<string, string> } {
+  const payloads = new Map<string, string>();
+  const event = new Event("copy", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    configurable: true,
+    value: { setData: (type: string, value: string) => payloads.set(type, value) },
+  });
+  target.dispatchEvent(event);
+  return { event, payloads };
+}
+
 async function changeFiles(element: HTMLInputElement, files: File[]): Promise<void> {
   Object.defineProperty(element, "files", { configurable: true, value: files });
   await act(async () => {
@@ -637,7 +667,12 @@ beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { agentId: "human-agent-self", memberId: "member-self", role: "admin" };
+  authMock.value = {
+    agentId: "human-agent-self",
+    memberId: "member-self",
+    organizationId: "org-1",
+    role: "admin",
+  };
   activityMocks.listClients.mockResolvedValue([
     {
       id: "client-1",
@@ -737,7 +772,19 @@ beforeEach(() => {
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
-  sessionMocks.listSessionEvents.mockResolvedValue(SESSION_EVENTS);
+  sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
+    Promise.resolve(
+      requestedAgentId === "agent-1"
+        ? SESSION_EVENTS
+        : {
+            items: [],
+            nextCursor: null,
+          },
+    ),
+  );
+  sessionMocks.listChatSessionEvents.mockResolvedValue(
+    chatSessionEvents({ agentId: "agent-1", events: SESSION_EVENTS }),
+  );
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 
@@ -747,6 +794,69 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("renders typed GitHub/GitLab header links only for anchored provider chats", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const cases = [
+      {
+        id: "chat-github-link",
+        metadata: {
+          source: "github",
+          entityType: "pull_request",
+          entityKey: "acme/web#42",
+          entityUrl: "https://github.com/acme/web/pull/42",
+        },
+        title: "View on GitHub",
+        href: "https://github.com/acme/web/pull/42",
+      },
+      {
+        id: "chat-gitlab-link",
+        metadata: {
+          source: "gitlab",
+          entityType: "pull_request",
+          entityKey: "501:pull_request:42",
+          entityUrl: "https://gitlab.internal/acme/web/-/merge_requests/42",
+        },
+        title: "View on GitLab",
+        href: "https://gitlab.internal/acme/web/-/merge_requests/42",
+      },
+      {
+        id: "chat-gitlab-no-url",
+        metadata: {
+          source: "gitlab",
+          entityType: "pull_request",
+          entityKey: "501:pull_request:43",
+        },
+        title: null,
+        href: null,
+      },
+      { id: "chat-manual-link", metadata: {}, title: null, href: null },
+    ] as const;
+
+    for (const entry of cases) {
+      const detail = chatDetail({
+        id: entry.id,
+        title: `Header ${entry.id}`,
+        topic: `Header ${entry.id}`,
+        metadata: entry.metadata,
+      });
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId={entry.id} initialChatDetail={detail} />,
+        undefined,
+        "/",
+      );
+      await waitForText(container, `Header ${entry.id}`);
+      const link = entry.title ? container.querySelector<HTMLAnchorElement>(`a[title="${entry.title}"]`) : null;
+      if (entry.href) {
+        expect(link?.href).toBe(entry.href);
+        expect(link?.target).toBe("_blank");
+        expect(link?.rel).toBe("noopener noreferrer");
+      } else {
+        expect(container.querySelector('a[title^="View on "]')).toBeNull();
+      }
+      await act(async () => root.unmount());
+    }
+  });
+
   it("hides chat-management affordances on the trial surface even when read-only (route-scoped)", async () => {
     const { ChatView } = await import("../chat-view.js");
     // A persisted-open sidebar must NOT re-appear on the trial surface.
@@ -789,7 +899,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders timeline chrome, sidebar controls, rename, restore, and read-only join states", async () => {
+  it("keeps full chat details on the generic narrow Workspace path", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
     const onShowConversations = vi.fn();
@@ -802,22 +912,206 @@ describe("ChatView", () => {
     await waitForText(container, "Launch planning");
     await waitForText(container, "Example recoverable runtime error");
     await waitForText(container, "Preview image for");
-    await waitForText(container, "Participants");
-    await waitForText(container, "Release checklist");
+    expect(container.querySelector<HTMLElement>("[data-error-header]")?.style.overflowWrap).toBe("anywhere");
+    expect(container.querySelector<HTMLElement>("[data-error-message]")?.style.overflowWrap).toBe("anywhere");
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+    expect(container.textContent).toContain("GitHub");
+    expect(container.querySelector('button[aria-label$="Open participants."]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Hide agent final messages"]')).toBeNull();
+    // Generic narrow Workspace keeps click-to-rename: it is gated on mobile
+    // presentation, not viewport width, so resizing to the narrow breakpoint
+    // does not drop the pre-existing rename affordance.
+    expect(buttonByTitle(container, "Click to rename")).not.toBeNull();
 
     await click(container.querySelector('button[aria-label="Show conversations"]'));
     expect(onShowConversations).toHaveBeenCalledTimes(1);
 
-    await click(buttonByTitle(container, "Click to rename"));
-    const renameInput = container.querySelector<HTMLInputElement>("input");
-    if (!renameInput) throw new Error("Rename input missing");
-    await setValue(renameInput, "Renamed launch");
-    await click(buttonByTitle(container, "Save"));
-    await waitForCondition(() => chatMocks.renameChat.mock.calls.length > 0, "Expected rename");
-    expect(chatMocks.renameChat).toHaveBeenCalledWith("chat-1", "Renamed launch");
+    await click(container.querySelector('button[aria-label="Hide chat options"]'));
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
 
-    await click(container.querySelector('button[aria-label="Dismiss"]'));
+    await act(async () => root.unmount());
+  });
 
+  it("uses a mobile chat details sheet with participants and read-only GitHub follows", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+    const onShowConversations = vi.fn();
+    const { container, root } = await renderDom(
+      <ChatView
+        agentId="agent-1"
+        chatId="chat-1"
+        narrow
+        presentation="mobile"
+        onShowConversations={onShowConversations}
+      />,
+      undefined,
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+    // Mobile presentation keeps the header context-only: no click-to-rename.
+    expect(buttonByTitle(container, "Click to rename")).toBeNull();
+    // Q4: mobile chat detail exits with a back arrow, not the hamburger.
+    expect(container.querySelector('button[aria-label="Back to conversations"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Show conversations"]')).toBeNull();
+
+    await click(container.querySelector('button[aria-label="Show chat details"]'));
+    await waitForText(container, "Participants · 4");
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).not.toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+    expect(container.textContent).toContain("Add");
+    expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("Following in this chat");
+    expect(container.textContent).toContain("Release checklist");
+    expect(container.querySelector('[data-mobile-github-section="true"] a[target="_blank"]')).not.toBeNull();
+
+    await click(container.querySelector('button[aria-label="Close chat details"]'));
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("lands on the stored bottom-visible anchor on mobile open even when the chat has a summary", async () => {
+    // Regression guard for the PR 1997 mobile Work surface: a summarized
+    // chat must still land on the stored bottom-visible anchor (newer
+    // messages surface via the pill) instead of jumping to the timeline
+    // top to show the in-flow Current state card.
+    const { ChatView } = await import("../chat-view.js");
+    const summarized = chatDetail({ description: "Status: shipping the mobile Work surface soon." });
+    chatMocks.getChat.mockResolvedValue(summarized);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        seedChat(queryClient, summarized);
+      },
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+    const scrollIntoViewMock = HTMLElement.prototype.scrollIntoView as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await waitForCondition(
+      () =>
+        scrollIntoViewMock.mock.calls.some((args) => (args[0] as ScrollIntoViewOptions | undefined)?.block === "end"),
+      "Expected mobile open to land on the stored bottom-visible anchor",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("waits for the persisted read state before committing the chat-open landing", async () => {
+    // PR 2017 review: with cached messages rendering first and the IDB
+    // read-state lookup still in flight, the one-shot landing must NOT
+    // commit the bottom fallback — otherwise a cold open permanently
+    // misses the stored anchor.
+    const { ChatView } = await import("../chat-view.js");
+    let resolveReadState: (
+      value: {
+        chatId: string;
+        bottomVisibleMessageId: string | null;
+        latestKnownMessageId: string | null;
+        updatedAt: number;
+      } | null,
+    ) => void = () => {
+      throw new Error("getReadState was not called");
+    };
+    readStateMocks.getReadState.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveReadState = resolve;
+        }),
+    );
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        // Messages stay cached (they render immediately); the read-state
+        // cache is dropped so the query hits the still-pending mock.
+        queryClient.removeQueries({ queryKey: ["chat-read-state", "chat-1"] });
+      },
+      "/",
+    );
+
+    // Messages render while the read state is still pending: no landing
+    // may fire yet (neither the anchor scroll nor the bottom fallback).
+    await waitForText(container, "I found one rollout risk");
+    const scrollIntoViewMock = HTMLElement.prototype.scrollIntoView as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const scrollToMock = HTMLElement.prototype.scrollTo as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await flush();
+    await flush();
+    expect(scrollIntoViewMock.mock.calls.length).toBe(0);
+    expect(scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto")).toBe(
+      false,
+    );
+
+    // Once the persisted row resolves, the landing commits to its anchor.
+    await act(async () => {
+      resolveReadState({
+        chatId: "chat-1",
+        bottomVisibleMessageId: "msg-1",
+        latestKnownMessageId: "msg-1",
+        updatedAt: Date.now(),
+      });
+    });
+    await waitForCondition(
+      () =>
+        scrollIntoViewMock.mock.calls.some((args) => (args[0] as ScrollIntoViewOptions | undefined)?.block === "end"),
+      "Expected the landing to fire once the persisted read state resolved",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("falls back to the timeline bottom when the persisted read state has no row", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    let resolveReadState: (value: null) => void = () => {
+      throw new Error("getReadState was not called");
+    };
+    readStateMocks.getReadState.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          resolveReadState = resolve;
+        }),
+    );
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" onShowConversations={vi.fn()} />,
+      (queryClient) => {
+        queryClient.removeQueries({ queryKey: ["chat-read-state", "chat-1"] });
+      },
+      "/",
+    );
+
+    await waitForText(container, "I found one rollout risk");
+    const scrollToMock = HTMLElement.prototype.scrollTo as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    await flush();
+    expect(scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto")).toBe(
+      false,
+    );
+
+    // A resolved-but-empty row (first-time visit) still lands at the bottom.
+    await act(async () => {
+      resolveReadState(null);
+    });
+    await waitForCondition(
+      () => scrollToMock.mock.calls.some((args) => (args[0] as ScrollToOptions | undefined)?.behavior === "auto"),
+      "Expected the bottom fallback once the empty read state resolved",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("renders restore and read-only join states", async () => {
+    const { ChatView } = await import("../chat-view.js");
     const deleted = chatDetail({ engagementStatus: "deleted", title: "Deleted launch" });
     chatMocks.getChat.mockResolvedValue(deleted);
     const deletedView = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
@@ -840,10 +1134,169 @@ describe("ChatView", () => {
       />,
     );
     await waitForText(readOnly.container, "watching");
+    const readOnlyStatus = readOnly.container.querySelector("[data-compose-status-bar]");
+    const readOnlyComposer = readOnly.container.querySelector(".composer-card");
+    expect(readOnlyStatus).not.toBeNull();
+    expect(readOnlyStatus?.nextElementSibling).toBe(readOnlyComposer);
+    expect(readOnlyComposer?.getAttribute("style")).not.toContain("border-radius");
     await waitForText(readOnly.container, "Join failed");
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
+  });
+
+  it("places token usage above the connected status and composer surfaces", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(["chat-token-usage", "chat-1"], {
+        inputTokens: 100,
+        cachedInputTokens: 250,
+        outputTokens: 50,
+        totalTokens: 400,
+      });
+    });
+
+    await waitForText(container, "400 processed tokens in this chat");
+    const tokenUsage = container.querySelector<HTMLElement>('[title^="Processed 400"]');
+    const statusSurface = container.querySelector<HTMLElement>("[data-compose-status-bar]");
+    const composer = container.querySelector<HTMLElement>(".composer-card");
+    expect(tokenUsage).not.toBeNull();
+    expect(statusSurface).not.toBeNull();
+    expect(composer).not.toBeNull();
+    expect(tokenUsage?.compareDocumentPosition(statusSurface ?? document.body) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(statusSurface?.compareDocumentPosition(composer ?? document.body) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(statusSurface?.nextElementSibling).toBe(composer);
+
+    await act(async () => root.unmount());
+  });
+
+  it("loads secondary-agent activity into the timeline so current-output links have evidence", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const secondaryEvents = {
+      items: [
+        {
+          id: "event-agent-2",
+          agentId: "agent-2",
+          chatId: "chat-1",
+          seq: 1,
+          kind: "assistant_text" as const,
+          payload: { text: "Reviewing the mobile interaction." },
+          createdAt: "2026-05-28T11:59:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    };
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(
+        ["chat-session-events", "chat-1"],
+        chatSessionEvents(
+          { agentId: "agent-1", events: SESSION_EVENTS },
+          { agentId: "agent-2", events: secondaryEvents },
+        ),
+      );
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [
+          {
+            agentId: "agent-1",
+            main: "ready",
+            reachable: true,
+            engagement: "active",
+            working: false,
+            errored: false,
+            activity: null,
+          },
+          {
+            agentId: "agent-2",
+            main: "working",
+            reachable: true,
+            engagement: "active",
+            working: true,
+            errored: false,
+            activity: {
+              agentId: "agent-2",
+              kind: "assistant_text",
+              label: "Writing",
+              startedAt: NOW,
+              turnText: "Reviewing the mobile interaction.",
+            },
+          },
+        ],
+      );
+    });
+
+    await waitForCondition(
+      () => container.querySelector('[data-working-agent="agent-2"]') !== null,
+      "Expected secondary agent timeline evidence",
+    );
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
+    expect(container.querySelector('button[aria-label="View Design Critique in the timeline"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps chat details open while current output expands and collapses inline", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+
+    await waitForCondition(
+      () => container.querySelector('button[aria-label="Show chat details"]') !== null,
+      "Expected chat details trigger",
+    );
+    await click(container.querySelector('button[aria-label="Show chat details"]'));
+    await waitForCondition(
+      () => container.querySelector('aside[aria-label="Chat details"]') !== null,
+      "Expected chat details to be open",
+    );
+    const outputTrigger = container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(outputTrigger);
+    await waitForCondition(
+      () => container.querySelector("[data-current-agent-output]") !== null,
+      "Expected current output to expand",
+    );
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+
+    await click(outputTrigger);
+    expect(container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("collapses current output on composer focus before the mention layer consumes Escape", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
+    await waitForCondition(
+      () => container.querySelector("[data-current-agent-output]") !== null,
+      "Expected current output to expand",
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await act(async () => textarea.focus());
+    await flush();
+    await waitForCondition(
+      () => container.querySelector("[data-current-agent-output]") === null,
+      "Expected composer focus to collapse current output",
+    );
+    await waitForCondition(
+      () => container.querySelector('[role="listbox"][aria-label="Mention suggestions"]') !== null,
+      "Expected mention suggestions to open after focus primed @",
+    );
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
+    expect(container.querySelector("[data-current-agent-output]")).toBeNull();
+    expect(document.activeElement).toBe(textarea);
 
     await act(async () => root.unmount());
   });
@@ -851,41 +1304,48 @@ describe("ChatView", () => {
   it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-      queryClient.setQueryData(["session-events", "agent-1", "chat-1"], {
-        items: [
-          {
-            id: "retry-event",
-            agentId: "agent-1",
-            chatId: "chat-1",
-            seq: 1,
-            kind: "error",
-            payload: {
-              source: "runtime",
-              message: encodeProviderRetryEventMessage({
-                event: "provider_retry_scheduled",
-                provider: "codex",
-                scope: "provider_turn",
-                category: "transient_transport",
-                reasonCode: "provider_transient_transport",
-                attempt: 1,
-                maxAttempts: 2,
-                retryMode: "foreground",
-                delayMs: 500,
-                replaySafety: "pre_visible",
-                userSeverity: "info",
-                messagePreview: "fetch failed",
-              }),
-            },
-            createdAt: "2026-05-28T11:56:30.000Z",
+      queryClient.setQueryData(
+        ["chat-session-events", "chat-1"],
+        chatSessionEvents({
+          agentId: "agent-1",
+          events: {
+            items: [
+              {
+                id: "retry-event",
+                agentId: "agent-1",
+                chatId: "chat-1",
+                seq: 1,
+                kind: "error",
+                payload: {
+                  source: "runtime",
+                  message: encodeProviderRetryEventMessage({
+                    event: "provider_retry_scheduled",
+                    provider: "codex",
+                    scope: "provider_turn",
+                    category: "transient_transport",
+                    reasonCode: "provider_transient_transport",
+                    attempt: 1,
+                    maxAttempts: 2,
+                    retryMode: "foreground",
+                    delayMs: 500,
+                    replaySafety: "pre_visible",
+                    userSeverity: "info",
+                    messagePreview: "fetch failed",
+                  }),
+                },
+                createdAt: "2026-05-28T11:56:30.000Z",
+              },
+            ] satisfies SessionEventRow[],
+            nextCursor: null,
           },
-        ] satisfies SessionEventRow[],
-        nextCursor: null,
-      });
+        }),
+      );
     });
 
     await waitForText(container, "Retrying provider");
     expect(container.textContent).toContain("fetch failed");
     expect(container.querySelector("[data-error-agent]")).toBeNull();
+    expect(container.querySelector('[data-status-reason-agent="agent-1"]')).not.toBeNull();
     await act(async () => root.unmount());
   });
 
@@ -956,7 +1416,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
         // agent-1 has clientId "client-1" in ORG_AGENTS.
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -979,7 +1442,10 @@ describe("ChatView", () => {
     it("does NOT render a Connect button for a non-credential failure (provider capacity)", async () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], capacityErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: capacityErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "at capacity");
@@ -993,7 +1459,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
         // The failing agent is not in the org roster, so clientIdForAgent → null.
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-unbound"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-unbound", events: credentialErrorEvents("agent-unbound") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1012,7 +1481,10 @@ describe("ChatView", () => {
       // `listClients()` (the caller's own computers) returns only client-1, so
       // agent-teammate's client-teammate is resolvable but unowned.
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-teammate"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-teammate", events: credentialErrorEvents("agent-teammate") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1026,7 +1498,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       // agent-1 → client-1, and listClients() returns client-1 → owned.
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1075,7 +1550,10 @@ describe("ChatView", () => {
       }
 
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], tuiCredentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: tuiCredentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1136,7 +1614,10 @@ describe("ChatView", () => {
       });
 
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForCondition(
@@ -1208,7 +1689,10 @@ describe("ChatView", () => {
       });
 
       const { container, root, queryClient } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (qc) => {
-        qc.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        qc.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForCondition(
@@ -1270,6 +1754,277 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("renders sent mentions with displayName while preserving the stored handle and refreshes after rename", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const numericHuman = participant({
+      agentId: "human-agent-alice",
+      type: "human",
+      name: "1736192959",
+      displayName: "李坤阳",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        numericHuman,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const body = "请 @1736192959 处理";
+    const page = messages([
+      message({
+        id: "display-name-mention",
+        senderId: "agent-1",
+        content: body,
+        metadata: { mentions: [numericHuman.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@李坤阳");
+    const chip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="1736192959"]');
+    expect(chip?.textContent).toBe("@李坤阳");
+    expect(chip?.getAttribute("title")).toBe("@李坤阳 (@1736192959)");
+    expect(chip?.getAttribute("aria-label")).toBe("@李坤阳 (@1736192959)");
+    expect(markdownMocks.render).toHaveBeenCalledWith(body);
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-detail", "chat-1"], {
+        ...detail,
+        participants: detail.participants.map((row) =>
+          row.agentId === numericHuman.agentId ? { ...row, displayName: "李坤阳（新）" } : row,
+        ),
+      });
+    });
+    await waitForText(container, "@李坤阳（新）");
+    expect(chip?.textContent).toBe("@李坤阳（新）");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not reassign a historical mention when its canonical handle is reused", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const currentOwner = participant({
+      agentId: "agent-new-owner",
+      name: "reused-handle",
+      displayName: "New Owner",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        currentOwner,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "historical-handle-owner",
+        senderId: "agent-1",
+        content: "旧消息 @reused-handle",
+        metadata: {
+          mentions: ["agent-deleted-owner"],
+          // System routing can point at the new owner for reasons unrelated to
+          // this token. Only the explicit token-to-ID mapping may relabel it.
+          addressedAgentIds: [currentOwner.agentId],
+        },
+        source: "api",
+      }),
+      message({
+        id: "current-handle-owner",
+        senderId: "agent-1",
+        content: "新消息 @reused-handle",
+        metadata: { mentions: [currentOwner.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@New Owner");
+    const historical = container.querySelector<HTMLElement>('[data-message-id="historical-handle-owner"]');
+    const current = container.querySelector<HTMLElement>('[data-message-id="current-handle-owner"]');
+    expect(historical?.textContent).toContain("@reused-handle");
+    expect(historical?.querySelector(".mention-chip")).toBeNull();
+    expect(current?.textContent).toContain("@New Owner");
+    expect(current?.querySelector('.mention-chip[data-mention-agent-id="agent-new-owner"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("disambiguates one persisted recipient against duplicate display names in the full chat roster", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const duplicateLabel = "Sam with an intentionally long shared display name for narrow screens";
+    const alice = participant({ agentId: "agent-alice-sam", name: "alice-sam", displayName: duplicateLabel });
+    const bob = participant({ agentId: "agent-bob-sam", name: "bob-sam", displayName: duplicateLabel });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        alice,
+        bob,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "duplicate-display-single-recipient",
+        senderId: "agent-1",
+        content: "请 @alice-sam 处理",
+        metadata: { mentions: [alice.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, duplicateLabel);
+    const chip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="alice-sam"]');
+    expect(chip?.querySelector(".mention-chip-display")?.textContent).toBe(`@${duplicateLabel}`);
+    expect(chip?.querySelector(".mention-chip-handle")?.textContent).toBe("(@alice-sam)");
+    expect(chip?.getAttribute("title")).toBe(`@${duplicateLabel} (@alice-sam)`);
+    expect(container.querySelector('.mention-chip[data-mention-name="bob-sam"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("copies canonical handles when copy targets the composer or body, including cross-message rich text", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const numericHuman = participant({
+      agentId: "human-agent-alice",
+      type: "human",
+      name: "1736192959",
+      displayName: "李坤阳",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        numericHuman,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "copy-display-name-1",
+        senderId: "human-agent-self",
+        content: "**请** 先看  \n下一行 @1736192959\n\n第二段 [查看详情](https://example.com)",
+        metadata: { mentions: [numericHuman.agentId] },
+        createdAt: "2026-05-28T11:55:00.000Z",
+      }),
+      message({
+        id: "copy-display-name-2",
+        senderId: "agent-1",
+        content: "然后通知 @nova",
+        metadata: { mentions: ["agent-1"] },
+        source: "api",
+        createdAt: "2026-05-28T11:56:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@李坤阳");
+    const firstBody = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-1"] div.text-body');
+    const firstParagraph = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-1"] p');
+    const secondParagraph = container.querySelector<HTMLElement>('[data-message-id="copy-display-name-2"] p');
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea");
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const numericChip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="1736192959"]');
+    if (!firstBody || !firstParagraph || !secondParagraph || !composer || !timeline || !numericChip) {
+      throw new Error("Expected copy fixtures and composer");
+    }
+
+    const selection = window.getSelection();
+    const singleRange = document.createRange();
+    singleRange.selectNodeContents(firstBody);
+    // Real non-editable copy keeps the previously focused composer as the
+    // event target while the mouse selection lives in the timeline.
+    composer.focus();
+    selection?.removeAllRanges();
+    selection?.addRange(singleRange);
+    expect(selection?.toString()).toContain("@李坤阳");
+    expect(timeline.contains(singleRange.commonAncestorContainer)).toBe(true);
+    expect(singleRange.intersectsNode(numericChip)).toBe(true);
+
+    const singleCopy = dispatchCopy(composer);
+    expect(singleCopy.event.defaultPrevented).toBe(true);
+    expect(singleCopy.payloads.get("text/plain")).toContain("请 先看");
+    expect(singleCopy.payloads.get("text/plain")).toContain("下一行 @1736192959");
+    expect(singleCopy.payloads.get("text/plain")).toContain("第二段 查看详情");
+    expect(singleCopy.payloads.get("text/html")).toContain("<strong>请</strong>");
+    expect(singleCopy.payloads.get("text/html")).toContain("@1736192959");
+    expect(singleCopy.payloads.get("text/html")).toContain("https://example.com");
+    expect(singleCopy.payloads.get("text/html")).not.toContain("李坤阳");
+
+    const crossRange = document.createRange();
+    crossRange.setStart(firstBody, 0);
+    crossRange.setEnd(secondParagraph, secondParagraph.childNodes.length);
+    selection?.removeAllRanges();
+    selection?.addRange(crossRange);
+
+    const crossCopy = dispatchCopy(document.body);
+    expect(crossCopy.event.defaultPrevented).toBe(true);
+    expect(crossCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(crossCopy.payloads.get("text/plain")).toContain("@nova");
+    expect(crossCopy.payloads.get("text/plain")).not.toContain("@李坤阳");
+    expect(crossCopy.payloads.get("text/html")).toContain("<strong>请</strong>");
+    expect(crossCopy.payloads.get("text/html")).toContain("@1736192959");
+    expect(crossCopy.payloads.get("text/html")).toContain("@nova");
+    expect(crossCopy.payloads.get("text/html")).not.toContain("mention-chip");
+
+    const outsideAfter = document.createElement("p");
+    outsideAfter.textContent = "outside after";
+    document.body.append(outsideAfter);
+    const outsideAfterText = outsideAfter.firstChild;
+    if (!outsideAfterText) throw new Error("Expected outside-after text");
+    const insideToOutside = document.createRange();
+    insideToOutside.setStart(firstParagraph, 0);
+    insideToOutside.setEnd(outsideAfterText, outsideAfterText.textContent?.length ?? 0);
+    selection?.removeAllRanges();
+    selection?.addRange(insideToOutside);
+
+    const insideToOutsideCopy = dispatchCopy(document.body);
+    expect(insideToOutsideCopy.event.defaultPrevented).toBe(true);
+    expect(insideToOutsideCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(insideToOutsideCopy.payloads.get("text/plain")).toContain("outside after");
+    expect(insideToOutsideCopy.payloads.get("text/html")).not.toContain("李坤阳");
+
+    const outsideBefore = document.createElement("p");
+    outsideBefore.textContent = "outside before";
+    document.body.insertBefore(outsideBefore, document.body.firstChild);
+    const outsideBeforeText = outsideBefore.firstChild;
+    if (!outsideBeforeText) throw new Error("Expected outside-before text");
+    const outsideToInside = document.createRange();
+    outsideToInside.setStart(outsideBeforeText, 0);
+    outsideToInside.setEnd(secondParagraph, secondParagraph.childNodes.length);
+    selection?.removeAllRanges();
+    selection?.addRange(outsideToInside);
+
+    const outsideToInsideCopy = dispatchCopy(composer);
+    expect(outsideToInsideCopy.event.defaultPrevented).toBe(true);
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("outside before");
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("@1736192959");
+    expect(outsideToInsideCopy.payloads.get("text/plain")).toContain("@nova");
+    expect(outsideToInsideCopy.payloads.get("text/html")).not.toContain("mention-chip");
+
+    selection?.removeAllRanges();
+    outsideBefore.remove();
+    outsideAfter.remove();
+    await act(async () => root.unmount());
+  });
+
   it("renders a request as a normal message and does not re-render its body when a reply arrives", async () => {
     const { ChatView } = await import("../chat-view.js");
     const request = message({
@@ -1285,6 +2040,22 @@ describe("ChatView", () => {
             { label: "Hold", description: "wait" },
           ],
         },
+        attachments: [
+          {
+            attachmentId: "11111111-1111-4111-8111-111111111111",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "lifecycle.png",
+            size: 42,
+          },
+          {
+            attachmentId: "11111111-1111-4111-8111-111111111112",
+            kind: "image",
+            mimeType: "image/jpeg",
+            filename: "lifecycle-alt.jpg",
+            size: 84,
+          },
+        ],
       },
       source: "api",
       createdAt: "2026-05-28T12:00:00.000Z",
@@ -1310,6 +2081,16 @@ describe("ChatView", () => {
     // `format="request"`. Viewer agent-1 is not the target, so there is no
     // answer overlay either.
     await waitForText(container, "Lifecycle");
+    await waitForCondition(
+      () => container.querySelector('button[aria-label="Open image lifecycle.png"]') !== null,
+      "request image thumbnail did not render",
+    );
+    const requestRow = container.querySelector('[data-message-id="req-render"]');
+    expect(
+      [...(requestRow?.querySelectorAll('button[aria-label^="Open image "]') ?? [])].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Open image lifecycle.png", "Open image lifecycle-alt.jpg"]);
     expect(container.textContent).not.toContain("RESOLVED");
     await flush();
     markdownMocks.render.mockClear();
@@ -1884,7 +2665,10 @@ describe("ChatView", () => {
       <ChatView agentId="agent-1" chatId="chat-empty" />,
       (queryClient) => {
         seedChat(queryClient, emptyDetail, messages([]));
-        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
       },
       "/",
     );
@@ -1897,6 +2681,107 @@ describe("ChatView", () => {
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected direct send");
     expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
     await act(async () => empty.root.unmount());
+  });
+
+  function directDetail(): ChatDetail {
+    return chatDetail({
+      id: "chat-empty",
+      title: "Empty direct",
+      type: "direct",
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+  }
+
+  it("mobile composer: one-line rest, 44-unit send hit area, simplified placeholder, Enter does not send", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-empty" narrow presentation="mobile" />,
+      (queryClient) => {
+        seedChat(queryClient, directDetail(), messages([]));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
+      },
+      "/",
+    );
+    await waitForText(container, "Send a message to start the conversation");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const footer = container.querySelector<HTMLElement>("[data-chat-composer-footer]");
+    if (!textarea || !send || !timeline || !footer) throw new Error("Mobile composer or timeline missing");
+
+    expect(timeline.style.padding).toContain("var(--sp-4)");
+    expect(footer.style.paddingInline).toBe("var(--sp-4)");
+
+    // Resting height is one row: the auto-resize hook measures the `rows`-sized
+    // empty box, so `rows` (not just the min-height floor) must drop to 1.
+    expect(Number(textarea.rows)).toBe(1);
+    // Send is the ONLY send path on mobile (Enter inserts a newline), so its hit
+    // area must clear the touch minimum.
+    expect(Number.parseInt(send.style.width, 10)).toBe(44);
+    expect(Number.parseInt(send.style.height, 10)).toBe(44);
+    // Placeholder drops the desktop keyboard-shortcut teaching text.
+    await setValue(textarea, "");
+    expect(textarea.placeholder).not.toContain("for commands");
+    expect(textarea.placeholder).not.toContain("to mention");
+
+    // Enter inserts a newline and sends nothing; the button is the only send.
+    await setValue(textarea, "hello there");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+    await click(send);
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected button send on mobile");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("desktop composer unchanged: two-row rest, compact send, full placeholder, Enter sends", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-empty" />,
+      (queryClient) => {
+        seedChat(queryClient, directDetail(), messages([]));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
+      },
+      "/",
+    );
+    await waitForText(container, "Send a message to start the conversation");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const footer = container.querySelector<HTMLElement>("[data-chat-composer-footer]");
+    if (!textarea || !send || !timeline || !footer) throw new Error("Desktop composer or timeline missing");
+
+    expect(timeline.style.padding).toContain("var(--sp-6)");
+    expect(footer.style.paddingInline).toBe("var(--sp-6)");
+
+    expect(Number(textarea.rows)).toBe(2);
+    expect(Number.parseInt(send.style.width, 10)).toBe(28);
+    expect(Number.parseInt(send.style.height, 10)).toBe(28);
+    await setValue(textarea, "");
+    expect(textarea.placeholder).toContain("for commands");
+
+    // Desktop keeps Enter-to-send.
+    await setValue(textarea, "hello there");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected Enter send on desktop");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
+
+    await act(async () => root.unmount());
   });
 
   it("renders an agent worktree-path link as plain text while keeping real web links (issue 831)", async () => {
@@ -1932,6 +2817,183 @@ describe("ChatView", () => {
     expect(container.textContent).toContain("worktrees/build-tree");
     // A genuine external link in the same message still renders as an anchor.
     expect(anchorHrefs).toContain("https://example.com/guide");
+
+    await act(async () => root.unmount());
+  });
+
+  it("shortens only bare entity links from the Team's connected GitLab instance", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const canonical = "https://gitlab.internal/acme/web/-/merge_requests/42";
+    const legacy = "https://gitlab.internal/acme/web/issues/7";
+    const otherOrigin = "https://gitlab.example/acme/web/-/merge_requests/9";
+    const page = messages([
+      message({
+        id: "msg-gitlab-links",
+        senderId: "agent-1",
+        source: "api",
+        content: [canonical, legacy, otherOrigin, `[Review the MR](${canonical})`].join("\n\n"),
+        createdAt: "2026-05-28T11:59:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail(), page);
+        queryClient.setQueryData(["gitlab-connections", "org-1"], [{ instanceOrigin: "https://gitlab.internal" }]);
+      },
+      "/",
+    );
+
+    await waitForText(container, "acme/web!42");
+
+    const anchors = [...container.querySelectorAll<HTMLAnchorElement>("a")];
+    const compactMr = anchors.find((anchor) => anchor.textContent === "acme/web!42");
+    expect(compactMr?.getAttribute("href")).toBe(canonical);
+    expect(compactMr?.title).toBe(canonical);
+    expect(anchors.find((anchor) => anchor.textContent === "acme/web#7")?.getAttribute("href")).toBe(legacy);
+    expect(anchors.find((anchor) => anchor.textContent === otherOrigin)?.getAttribute("href")).toBe(otherOrigin);
+    expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
+
+    await act(async () => root.unmount());
+  });
+
+  it("binds compact GitLab links to the rendered chat Team while the shell still points elsewhere", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    authMock.value = {
+      agentId: "human-agent-self",
+      memberId: "member-self",
+      organizationId: "shell-org",
+      role: "admin",
+    };
+    const chatOriginUrl = "https://chat-gitlab.example/acme/web/-/merge_requests/42";
+    const shellOriginUrl = "https://shell-gitlab.example/acme/web/-/merge_requests/9";
+    const page = messages([
+      message({
+        id: "msg-cross-org-gitlab",
+        senderId: "agent-1",
+        source: "api",
+        content: [chatOriginUrl, shellOriginUrl].join("\n\n"),
+        createdAt: "2026-05-28T11:59:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail({ organizationId: "chat-org" }), page);
+        queryClient.setQueryData(
+          ["gitlab-connections", "shell-org"],
+          [{ instanceOrigin: "https://shell-gitlab.example" }],
+        );
+        queryClient.setQueryData(
+          ["gitlab-connections", "chat-org"],
+          [{ instanceOrigin: "https://chat-gitlab.example" }],
+        );
+      },
+      "/",
+    );
+
+    await waitForText(container, "acme/web!42");
+    const anchors = [...container.querySelectorAll<HTMLAnchorElement>("a")];
+    expect(anchors.find((anchor) => anchor.textContent === "acme/web!42")?.href).toBe(chatOriginUrl);
+    expect(anchors.find((anchor) => anchor.textContent === shellOriginUrl)?.href).toBe(shellOriginUrl);
+
+    await act(async () => root.unmount());
+  });
+
+  it("uses the same compact GitLab presentation in the blocking request body", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const canonical = "https://gitlab.internal/acme/web/-/merge_requests/42";
+    const request = message({
+      id: "req-gitlab-link",
+      senderId: "agent-1",
+      format: "request",
+      content: [canonical, `[Review the MR](${canonical})`].join("\n\n"),
+      metadata: {
+        mentions: ["human-agent-self"],
+        request: {
+          options: [
+            { label: "Approve", description: "ship it" },
+            { label: "Hold", description: "wait" },
+          ],
+        },
+        attachments: [
+          {
+            attachmentId: "22222222-2222-4222-8222-222222222222",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "evidence.png",
+            size: 42,
+          },
+        ],
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:59:00.000Z",
+    });
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => {
+        seedChat(queryClient, chatDetail(), messages([request]));
+        queryClient.setQueryData(["gitlab-connections", "org-1"], [{ instanceOrigin: "https://gitlab.internal" }]);
+      },
+      "/",
+    );
+
+    await waitForCondition(
+      () => container.querySelector('[role="dialog"] a') !== null,
+      "Expected the blocking request body links",
+    );
+    const dialog = container.querySelector('[role="dialog"]');
+    const anchors = [...(dialog?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+    const compact = anchors.find((anchor) => anchor.textContent === "acme/web!42");
+    expect(compact?.getAttribute("href")).toBe(canonical);
+    expect(compact?.title).toBe(canonical);
+    expect(anchors.find((anchor) => anchor.textContent === "Review the MR")?.getAttribute("href")).toBe(canonical);
+    expect(dialog?.querySelector('button[aria-label="Open image evidence.png"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("opens the image lightbox on thumbnail click and closes on Escape", async () => {
+    // BASE_MESSAGES' msg-3 is a one-image message ("preview.png").
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+    const thumb = () => container.querySelector<HTMLButtonElement>('button[aria-label="Open image preview.png"]');
+    await waitForCondition(() => thumb() !== null, "image thumbnail did not render");
+
+    await click(thumb());
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector('img[alt="preview.png"]')).not.toBeNull();
+    expect(dialog?.querySelector('button[aria-label="Download original"]')).not.toBeNull();
+    expect(dialog?.querySelector('button[aria-label="Close"]')).not.toBeNull();
+    // Single image: no prev/next paging affordances.
+    expect(dialog?.querySelector('button[aria-label="Next image"]')).toBeNull();
+
+    // Radix listens for Escape on document; this closes the lightbox.
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await waitForCondition(
+      () => document.querySelector('[role="dialog"]') === null,
+      "lightbox did not close on Escape",
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("bounds the image thumbnail by the message column (no fixed-px overflow on narrow/mobile)", async () => {
+    // The inline maxWidth must stay container-relative (`min(..., 100%)`), not a
+    // bare fixed cap that would override `img { max-width: 100% }` and overflow
+    // the narrow mobile message column. Layout isn't measurable in jsdom, so
+    // assert the container-aware declaration is present.
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+    const thumbImg = () => container.querySelector<HTMLImageElement>('button[aria-label="Open image preview.png"] img');
+    await waitForCondition(() => thumbImg() !== null, "image thumbnail did not render");
+
+    const style = thumbImg()?.getAttribute("style") ?? "";
+    expect(style).toContain("100%");
+    expect(style).toContain("min(");
 
     await act(async () => root.unmount());
   });

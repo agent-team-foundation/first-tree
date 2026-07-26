@@ -1,5 +1,14 @@
-import type { InvolveReason, NormalizedEvent, NormalizedEventKind, WebhookSource } from "@first-tree/shared";
-import { extractEventEntity, type GithubEntity, isRecord, parseFixesRefs } from "../api/webhooks/github-entity.js";
+import type {
+  InvolveReason,
+  NormalizedEventKind,
+  NormalizedScmEvent,
+  ScmEntityObservation,
+  ScmIngressContext,
+  ScmNormalizedWebhook,
+} from "@first-tree/shared";
+import { extractEventEntity, type GithubEntity, isRecord } from "../api/webhooks/github-entity.js";
+import type { EntityStateSeed } from "./github-entity-state.js";
+import { parseSameProjectClosingIssueRefs } from "./scm-related-refs.js";
 
 const MENTION_REGEX = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;
 
@@ -26,6 +35,134 @@ function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function pullRequestStateFromPayload(pr: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(pr.state);
+  if (action === "closed" || state === "closed") {
+    return pr.merged === true ? "merged" : "closed";
+  }
+  return pr.draft === true ? "draft" : "open";
+}
+
+function issueStateFromPayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(issue.state);
+  return action === "closed" || state === "closed" ? "closed" : "open";
+}
+
+function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
+  const state = readString(issue.state);
+  if (action === "closed" || state === "closed") {
+    const pr = isRecord(issue.pull_request) ? issue.pull_request : null;
+    return readString(pr?.merged_at) ? "merged" : "closed";
+  }
+  return issue.draft === true ? "draft" : "open";
+}
+
+function resolveEntityStateSeed(
+  eventType: string,
+  action: string,
+  payload: Record<string, unknown>,
+  repoFullName: string,
+): EntityStateSeed | null {
+  if (
+    eventType === "pull_request" ||
+    eventType === "pull_request_review" ||
+    eventType === "pull_request_review_comment"
+  ) {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const number = readNumber(pr?.number);
+    if (!pr || number === null) return null;
+    return {
+      entityType: "pull_request",
+      entityKey: `${repoFullName}#${number}`,
+      state: pullRequestStateFromPayload(pr, action),
+    };
+  }
+  if (eventType === "issues" || eventType === "issue_comment") {
+    const issue = isRecord(payload.issue) ? payload.issue : null;
+    const number = readNumber(issue?.number);
+    if (!issue || number === null) return null;
+    if (isRecord(issue.pull_request)) {
+      return {
+        entityType: "pull_request",
+        entityKey: `${repoFullName}#${number}`,
+        state: pullRequestStateFromIssuePayload(issue, action),
+      };
+    }
+    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
+  }
+  return null;
+}
+
+function resolveEntityStateUpdate(
+  eventType: string,
+  action: string,
+  payload: Record<string, unknown>,
+  repoFullName: string,
+): EntityStateSeed | null {
+  if (eventType === "pull_request") {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const number = readNumber(pr?.number);
+    if (!pr || number === null) return null;
+    if (action === "closed" || action === "reopened") {
+      return {
+        entityType: "pull_request",
+        entityKey: `${repoFullName}#${number}`,
+        state: pullRequestStateFromPayload(pr, action),
+      };
+    }
+    if (action === "converted_to_draft") {
+      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "draft" };
+    }
+    if (action === "ready_for_review") {
+      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "open" };
+    }
+    return null;
+  }
+  if (eventType === "issues") {
+    const issue = isRecord(payload.issue) ? payload.issue : null;
+    const number = readNumber(issue?.number);
+    if (!issue || number === null || (action !== "closed" && action !== "reopened")) return null;
+    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
+  }
+  return null;
+}
+
+export type NormalizedGithubWebhook = ScmNormalizedWebhook & {
+  entityStateSeed: EntityStateSeed | null;
+};
+
+/** Pure GitHub adapter output: lifecycle observation and semantic event are independent. */
+export function normalizeGithubWebhook(
+  eventType: string,
+  payload: unknown,
+  ingress: ScmIngressContext,
+): NormalizedGithubWebhook {
+  const event = normalizeGithubEvent(eventType, payload, ingress);
+  if (!isRecord(payload)) return { ingress, observation: null, event, entityStateSeed: null };
+  const repo = isRecord(payload.repository) ? payload.repository : null;
+  const repoFullName = readString(repo?.full_name);
+  const action = readString(payload.action);
+  if (!repoFullName || !action) return { ingress, observation: null, event, entityStateSeed: null };
+
+  const entityStateSeed = resolveEntityStateSeed(eventType, action, payload, repoFullName);
+  const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
+  const entity = extractEventEntity(eventType, payload);
+  const observation: ScmEntityObservation | null = entity
+    ? {
+        entity: {
+          type: entity.type,
+          projectKey: repoFullName,
+          key: entity.key,
+          ...(entity.title ? { title: entity.title } : {}),
+          ...(entity.url ? { url: entity.url } : {}),
+        },
+        state: stateUpdate?.state ?? null,
+        observedAt: new Date().toISOString(),
+      }
+    : null;
+  return { ingress, observation, event, entityStateSeed };
+}
+
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -38,7 +175,7 @@ function readStringArray(value: unknown): string[] {
   return out;
 }
 
-type InvolveItem = { githubLogin: string; reason: InvolveReason };
+type InvolveItem = { externalUsername: string; reason: InvolveReason };
 
 function buildInvolves(items: ReadonlyArray<{ logins: string[]; reason: InvolveReason }>): InvolveItem[] {
   // First-occurrence wins per (lowercased) login. Callers should list
@@ -52,7 +189,7 @@ function buildInvolves(items: ReadonlyArray<{ logins: string[]; reason: InvolveR
       const key = login.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ githubLogin: key, reason: group.reason });
+      out.push({ externalUsername: key, reason: group.reason });
     }
   }
   return out;
@@ -97,9 +234,8 @@ type RuleOutcome = {
 export function normalizeGithubEvent(
   eventType: string,
   payload: unknown,
-  source: WebhookSource,
-  deliveryId: string | null,
-): NormalizedEvent | null {
+  ingress: ScmIngressContext,
+): NormalizedScmEvent | null {
   if (!isRecord(payload)) return null;
 
   const senderRec = isRecord(payload.sender) ? payload.sender : null;
@@ -116,20 +252,19 @@ export function normalizeGithubEvent(
   if (!rule) return null;
 
   return {
-    source,
-    deliveryId,
-    rawEventType: eventType,
-    rawAction: action,
+    ...ingress,
+    eventType,
+    action,
     entity: {
       type: rule.entity.type,
-      repo,
+      projectKey: repo,
       key: rule.entity.key,
       title: rule.entity.title,
       url: rule.entity.url,
     },
-    actor: { githubLogin: senderLogin, isBot: senderIsBot },
+    actor: { externalUsername: senderLogin, isBot: senderIsBot },
     kind: rule.kind,
-    involves: rule.involves,
+    targets: rule.involves,
     surface: rule.surface,
     relatedRefs: rule.relatedRefs,
   };
@@ -196,7 +331,7 @@ function buildPullRequestRule(
           { logins: mentionLogins, reason: "mentioned" },
         ]),
         surface,
-        relatedRefs: parseFixesRefs(body, repo).map((ref) => ({ type: "issue", key: ref.key })),
+        relatedRefs: parseSameProjectClosingIssueRefs(body, repo),
       };
     }
     case "edited": {

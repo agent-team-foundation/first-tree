@@ -1,41 +1,38 @@
 # @first-tree/qa
 
-Internal QA workflow assets for agent-run First Tree validation.
+First Tree-specific QA assets consumed by the shipped `first-tree-qa` skill.
 
-This package is intentionally a prompt-and-asset package. It gives an agent enough structure to run credible QA without
-turning QA judgment into a brittle schema or a fake test runner.
+The skill owns the universal lifecycle: discover the complete product, establish a complete harness, gate `QA READY`,
+scope the task, execute real behavior, and report evidence plus case disposition. This package adds the stricter First
+Tree run-cell contract and the cases, recipes, templates, and fixtures needed to apply that lifecycle to this repository.
+It does not define a second workflow.
 
-## Use This Package When
+Deterministic behavior belongs in product tests. Recurring agent behavior belongs in `@first-tree/skill-evals`. This
+package is for live, cross-surface, provider-backed, release, exploratory, or judgment-dependent validation.
 
-- A teammate asks for task-scoped QA of a PR, issue, release candidate, or behavior slice.
-- The validation needs live product observation, multiple surfaces, runtime/provider behavior, or exploratory judgment.
-- The output should be an honest QA report with evidence and limitations.
+## Run Artifacts
 
-Do not use it as recurring regression infrastructure. Deterministic checks belong in product tests; recurring
-agent-behavior regression coverage belongs in `@first-tree/skill-evals`.
+Keep all process output under a temporary run directory, never in the repository:
 
-## Run Shape
+- `run-context.md` records target identity, the product-surface capability matrix, harness state, performance baselines,
+  and the `QA READY` outcome.
+- `plan.md` is created only after readiness and records the task validation question, selected cases, scope, evidence,
+  limits, and stop conditions.
+- `evidence/` holds logs, screenshots, command output, API probes, database notes, performance observations, or runtime
+  traces.
+- `report.md` states one status and includes scope, evidence, performance, limitations, artifact paths, and case
+  disposition.
 
-A normal QA run has four local artifacts, all under a temporary run directory. Start from the templates in `templates/`
-when they fit, and keep them short when the run is narrow:
-
-- `plan.md` records the validation question, selected cases, environment, evidence, limits, and stop conditions.
-- `run-context.md` records the target ref, run root, service endpoints, data setup, provider readiness, and known setup
-  facts.
-- `evidence/` holds logs, screenshots, command output, API probes, database notes, or runtime traces that support the
-  conclusion.
-- `report.md` states one result: `PASS`, `FAIL`, `BLOCKED`, or `INCONCLUSIVE`.
-
-These artifacts are process output. Summarize them back to the requester; do not commit them to this package.
+Start from `templates/` when useful and keep artifacts proportional to the run.
 
 ## Directory Map
 
-- `AGENTS.md` is the package-level instruction contract.
-- `briefings/` describes how to plan, set up, execute, and report a run.
-- `cases/` describes how to author prose QA cases and stores reusable cases.
-- `environment/` describes isolated run-cell recipes.
-- `observability/` describes evidence choices and redaction rules.
-- `templates/` provides minimal run artifact templates.
-- `fixtures/` is for reusable, non-sensitive QA assets only.
+- `AGENTS.md` contains the First Tree-specific formal QA contract.
+- `briefings/` covers harness setup, post-readiness planning, execution, and reporting.
+- `cases/` stores reusable prose QA cases and authoring guidance.
+- `environment/` provides isolated run-cell and bridge recipes.
+- `observability/` covers evidence, readiness measurements, and redaction.
+- `templates/` contains minimal run artifact templates.
+- `fixtures/` stores reusable, non-sensitive assets, never run output.
 
-The package deliberately has no public `bin`, runner lifecycle, case validator, or CI gate.
+The package deliberately has no public runner, lifecycle CLI, case validator, or CI gate.

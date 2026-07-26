@@ -1,4 +1,6 @@
 import {
+  type LandingCampaignActionConversion,
+  type LandingCampaignAttribution,
   type LandingCampaignRepoMetadata,
   type LandingCampaignTrialAwaitingUserKind,
   type LandingCampaignTrialChatState,
@@ -42,6 +44,8 @@ export function buildLandingCampaignChatMetadata(input: {
   skillSetId: string;
   skillSetVersion: string;
   repo: LandingCampaignRepoMetadata;
+  attribution?: LandingCampaignAttribution;
+  actionConversion?: LandingCampaignActionConversion;
   state: LandingCampaignTrialChatState;
   inputLocked: boolean;
   awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
@@ -62,6 +66,8 @@ export function buildLandingCampaignChatMetadata(input: {
       skillSetId: input.skillSetId,
       skillSetVersion: input.skillSetVersion,
       repo: input.repo,
+      ...(input.attribution ? { attribution: input.attribution } : {}),
+      ...(input.actionConversion ? { actionConversion: input.actionConversion } : {}),
       state: input.state,
       inputLocked: input.inputLocked,
       ...(input.awaitingUserKind ? { awaitingUserKind: input.awaitingUserKind } : {}),

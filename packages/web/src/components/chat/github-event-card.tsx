@@ -1,10 +1,15 @@
-import { type GithubEntityType, type GithubEventCard, githubEventCardSchema } from "@first-tree/shared";
+import {
+  type GithubEntityType,
+  type GithubEventCard,
+  isGithubEventCardContent,
+  isGithubSystemSenderMetadata,
+  isTrustedGithubDispatcherMessage,
+  TRUSTED_SYSTEM_SENDER_NAMES,
+} from "@first-tree/shared";
 import { Github } from "lucide-react";
 import type { ReactNode } from "react";
 
-export function isGithubEventCardContent(content: unknown): content is GithubEventCard {
-  return githubEventCardSchema.safeParse(content).success;
-}
+export { isGithubEventCardContent, isGithubSystemSenderMetadata, isTrustedGithubDispatcherMessage };
 
 /**
  * The GitHub-dispatcher delivery path writes `systemSender: "github"` into
@@ -14,41 +19,7 @@ export function isGithubEventCardContent(content: unknown): content is GithubEve
  * next to the card so the metadata flag and the visual override stay in
  * lockstep.
  */
-export const GITHUB_SYSTEM_SENDER_NAME = "GitHub";
-
-export function isGithubSystemSenderMetadata(metadata: unknown): boolean {
-  if (typeof metadata !== "object" || metadata === null) return false;
-  return (metadata as { systemSender?: unknown }).systemSender === "github";
-}
-
-/**
- * Conjunctive trust gate for re-attributing a row to the synthetic
- * "GitHub" sender. Metadata alone is not sufficient — `sendMessageSchema`
- * accepts arbitrary `metadata`, so a malicious agent could otherwise post
- * a normal text message with `{ systemSender: "github" }` and have the UI
- * render it as if from GitHub (sender-impersonation / phishing surface
- * flagged in code review). The dispatcher path uniquely sets
- * ALL of: `source === "github"`, `format === "card"`, a content payload
- * that validates as a `GithubEventCard`, and the metadata marker.
- * Requiring the conjunction makes the override impossible to trigger
- * from regular agent sends and impossible to trigger accidentally even
- * if a future write path mis-copies one flag.
- */
-type TrustedGithubMessageShape = {
-  source: string | null | undefined;
-  format: string;
-  content: unknown;
-  metadata: unknown;
-};
-
-export function isTrustedGithubDispatcherMessage(msg: TrustedGithubMessageShape): boolean {
-  return (
-    msg.source === "github" &&
-    msg.format === "card" &&
-    isGithubEventCardContent(msg.content) &&
-    isGithubSystemSenderMetadata(msg.metadata)
-  );
-}
+export const GITHUB_SYSTEM_SENDER_NAME = TRUSTED_SYSTEM_SENDER_NAMES.github;
 
 export function GithubSystemAvatar({ size = 20 }: { size?: number }) {
   const dim = `${size}px`;
@@ -243,10 +214,13 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
 
   const entityChip = (
     <span
+      data-github-card-entity
       className="mono text-label"
       style={{
         display: "inline-flex",
         alignItems: "center",
+        minWidth: 0,
+        maxWidth: "100%",
         gap: "var(--sp-1)",
         padding: "var(--sp-px) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
@@ -256,10 +230,16 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         lineHeight: 1.4,
       }}
     >
-      <span className="font-semibold" style={{ color: "var(--primary)" }}>
+      <span className="font-semibold" style={{ color: "var(--primary)", flexShrink: 0 }}>
         {tagLabel}
       </span>
-      <span style={{ color: "var(--fg-3)" }}>{entityNumber}</span>
+      <span
+        data-github-card-entity-number
+        title={entityNumber}
+        style={{ color: "var(--fg-3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+      >
+        {entityNumber}
+      </span>
     </span>
   );
 
@@ -282,30 +262,57 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
               href={link}
               target="_blank"
               rel="noopener noreferrer"
+              data-github-card-title
               className="font-medium no-underline hover:underline"
-              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
+              style={{
+                color: "var(--fg)",
+                minWidth: 0,
+                flex: "1 1 auto",
+                overflowWrap: "anywhere",
+                textDecoration: "none",
+              }}
             >
               {titleText}
             </a>
           ) : (
-            <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
+            <span
+              data-github-card-title
+              className="font-medium"
+              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", overflowWrap: "anywhere" }}
+            >
               {titleText}
             </span>
           )
         ) : null}
-        <span className="mono text-caption" style={{ color: "var(--fg-4)", marginLeft: "auto", flexShrink: 0 }}>
+        <span
+          data-github-card-repository
+          className="mono text-caption"
+          style={{
+            color: "var(--fg-4)",
+            marginLeft: "auto",
+            minWidth: 0,
+            maxWidth: "100%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {repoShort}
         </span>
       </div>
 
       {/* L2 — action sentence: @actor verb */}
-      <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+      <div
+        className="text-caption"
+        style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)", overflowWrap: "anywhere" }}
+      >
         <span className="mono">@{content.sender}</span> {verb}
       </div>
 
       {/* L3 — quoted body preview */}
       {previewBody ? (
         <div
+          data-github-card-body
           className="text-body"
           style={{
             marginTop: "var(--sp-1)",
@@ -313,6 +320,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
             borderLeft: "var(--hairline-bold) solid var(--border)",
             paddingLeft: "var(--sp-2)",
             whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
             display: "-webkit-box",
             WebkitLineClamp: 3,
             WebkitBoxOrient: "vertical",

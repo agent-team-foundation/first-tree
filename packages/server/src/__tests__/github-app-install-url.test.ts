@@ -5,7 +5,7 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
-import { OAUTH_STATE_COOKIE, verifyOAuthState } from "../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, verifyOAuthState } from "../services/oauth-state.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -15,7 +15,7 @@ const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
 function readStateCookie(setCookie: string | string[] | undefined): string | null {
   if (!setCookie) return null;
   const raw = Array.isArray(setCookie) ? setCookie.join("; ") : setCookie;
-  const m = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`).exec(raw);
+  const m = new RegExp(`${STATE_NONCE_COOKIE_NAME}=([^;]+)`).exec(raw);
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 
@@ -52,6 +52,8 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     // on — the browser's github.com identity at callback time may differ.
     expect(verified.targetOrganizationId).toBe(admin.organizationId);
     expect(verified.kickoffUserId).toBe(admin.userId);
+    expect(verified.intent).toBe("install");
+    expect(verified.provider).toBe("github");
   });
 
   it("bakes an allowlisted ?next= into the signed state (onboarding flow)", async () => {

@@ -165,7 +165,7 @@ function PageHeaderBar({
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             placeholder="Search name or @handle"
-            className="text-body"
+            className="text-caption"
             style={{ width: compact ? "100%" : "var(--sp-60)", paddingLeft: "var(--sp-7)" }}
           />
         </div>

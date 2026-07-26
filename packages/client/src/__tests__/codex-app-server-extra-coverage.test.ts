@@ -636,6 +636,58 @@ describe("codex app-server handler extra branches", () => {
     await handler.shutdown();
   });
 
+  it.each([
+    "max",
+    "ultra",
+  ] as const)("passes Codex %s effort through app-server turn/start", async (reasoningEffort) => {
+    const fake = new FakeAppServerClient();
+    const payload = {
+      kind: "codex",
+      prompt: { append: "" },
+      model: "gpt-5.6-sol",
+      reasoningEffort,
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+    } satisfies AgentRuntimeConfigPayload;
+    const cachedConfig = runtimeConfig(payload);
+    const agentConfigCache = {
+      refresh: vi.fn(async () => cachedConfig),
+      get: vi.fn(() => cachedConfig),
+    } as unknown as AgentConfigCache;
+    const handler = createCodexAppServerHandler({
+      workspaceRoot,
+      agentConfigCache,
+      codexRuntimeBinaryResolver: async () => ({
+        ok: true,
+        binary: "/tmp/fake-codex",
+        runtimeSource: "path",
+        runtimePath: "/tmp/fake-codex",
+        version: "0.0.0-test",
+      }),
+      codexAppServerClientFactory: async (options: {
+        onNotification?: NotificationHandler;
+        onClose?: CloseHandler;
+      }) => {
+        fake.onNotification = options.onNotification ?? null;
+        fake.onClose = options.onClose ?? null;
+        return fake;
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m-effort", "run"), makeContext());
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "effort turn/start");
+    const turnStart = fake.requests.find((request) => request.method === "turn/start");
+    expect(asRecord(turnStart?.params)?.effort).toBe(reasoningEffort);
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "completed", error: null, items: [{ type: "agentMessage", text: "done" }] },
+    });
+    await startPromise;
+    await handler.shutdown();
+  });
+
   it("returns a queued route and retries when initial inbound formatting fails", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
@@ -873,7 +925,8 @@ describe("codex app-server handler extra branches", () => {
     const successFake = new FakeAppServerClient();
     const successToken = makeDeliveryToken();
     const successHandler = makeHandler(successFake);
-    const successCtx = makeContext();
+    const successLog = vi.fn<(message: string) => void>();
+    const successCtx = makeContext({ log: successLog });
     const successSendMessage = vi.fn<SessionContext["sdk"]["sendMessage"]>().mockResolvedValue(sentMessageResponse());
     successCtx.sdk.sendMessage = successSendMessage;
 
@@ -905,6 +958,13 @@ describe("codex app-server handler extra branches", () => {
       completion: "consumed",
       reason: "usage_limit_notice_posted",
     });
+    // The usage-limit turn must leave a slot-log line (issue #1732): external
+    // log watchers (account-failover automation) tail client.log and can only
+    // react if the failure is logged with the stable provider_usage_limit tag.
+    const successLogLines = successLog.mock.calls.map(([line]) => line);
+    expect(successLogLines.some((line) => line.includes("provider_usage_limit"))).toBe(true);
+    expect(successLogLines.some((line) => line.includes("usage limit reached"))).toBe(true);
+    expect(successLogLines.some((line) => line.includes("usage exhausted"))).toBe(true);
     await successHandler.shutdown();
 
     const failureFake = new FakeAppServerClient();

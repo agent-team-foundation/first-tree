@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   AgentRuntimeConfig,
@@ -116,6 +116,7 @@ export class AgentSlot {
   private postBindReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners: ConnectionListener[] = [];
   private stopping: Promise<void> | null = null;
+  private readonly runtimeSessionTokenProvider = (): string | undefined => this.readRuntimeSessionToken();
   /**
    * Aborts an in-flight bring-up config-fetch retry (see
    * {@link loadAgentConfigWithRetry}) so a stop()/unbind during the backoff
@@ -158,6 +159,7 @@ export class AgentSlot {
 
   async start(): Promise<RegisterResult> {
     this.bringupAbort = new AbortController();
+    this.clientConnection.setRuntimeSessionTokenProvider(this.config.agentId, this.runtimeSessionTokenProvider);
     // Attach listeners BEFORE `bindAgent` so the server's bind-time
     // reset+drain push (which fires within ~1ms of the `agent:bound`
     // response on the server side) never lands on a listener-less
@@ -193,7 +195,10 @@ export class AgentSlot {
     };
     const onBound = (boundAgent: BoundAgent) => {
       if (boundAgent.agentId === this.config.agentId) {
-        if (boundAgent.sdk) this.adoptRuntimeTransport(boundAgent.sdk);
+        if (boundAgent.runtimeSessionToken) {
+          this.persistRuntimeSessionToken(boundAgent.runtimeSessionToken);
+          if (boundAgent.sdk) this.adoptRuntimeTransport(boundAgent.sdk);
+        }
         if (typeof this.sessionManager?.noteBindRecoveryComplete === "function") {
           this.sessionManager.noteBindRecoveryComplete();
         }
@@ -244,6 +249,7 @@ export class AgentSlot {
       const bound = await this.clientConnection.bindAgent(this.config.agentId, runtimeType, this.config.runtimeVersion);
       bindSucceeded = true;
       const sdk = bound.sdk;
+      if (bound.runtimeSessionToken) this.persistRuntimeSessionToken(bound.runtimeSessionToken);
       this.adoptRuntimeTransport(sdk);
       const agent = await sdk.register();
 
@@ -448,7 +454,6 @@ export class AgentSlot {
 
   private adoptRuntimeTransport(sdk: FirstTreeHubSDK): void {
     this.sdk = sdk;
-    this.persistRuntimeSessionToken(sdk.runtimeSessionToken);
     this.activeRuntimeChatIdsRefreshGeneration++;
     this.activeRuntimeChatIdsRefreshInFlight = null;
     if (this.activeRuntimeChatIdsRefreshTimer) {
@@ -460,16 +465,33 @@ export class AgentSlot {
   }
 
   private persistRuntimeSessionToken(token: string | undefined): void {
+    let tmpFile: string | null = null;
     try {
       if (!token) {
         rmSync(this.runtimeSessionTokenFile, { force: true });
         return;
       }
       mkdirSync(dirname(this.runtimeSessionTokenFile), { recursive: true, mode: 0o700 });
-      writeFileSync(this.runtimeSessionTokenFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      tmpFile = `${this.runtimeSessionTokenFile}.tmp.${process.pid}.${Date.now()}.${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      writeFileSync(tmpFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      chmodSync(tmpFile, 0o600);
+      renameSync(tmpFile, this.runtimeSessionTokenFile);
+      tmpFile = null;
       chmodSync(this.runtimeSessionTokenFile, 0o600);
     } catch (err) {
+      if (tmpFile) rmSync(tmpFile, { force: true });
       this.logger.warn({ err }, "failed to persist runtime session token");
+    }
+  }
+
+  private readRuntimeSessionToken(): string | undefined {
+    try {
+      const token = readFileSync(this.runtimeSessionTokenFile, "utf8").trim();
+      return token || undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -502,6 +524,7 @@ export class AgentSlot {
       this.clientConnection.off(entry.event, entry.fn);
     }
     this.listeners = [];
+    this.clientConnection.clearRuntimeSessionTokenProvider(this.config.agentId, this.runtimeSessionTokenProvider);
     let firstError: unknown = null;
     try {
       await this.clientConnection.unbindAgent(this.config.agentId);
@@ -545,6 +568,7 @@ export class AgentSlot {
       this.clientConnection.off(entry.event, entry.fn);
     }
     this.listeners = [];
+    this.clientConnection.clearRuntimeSessionTokenProvider(this.config.agentId, this.runtimeSessionTokenProvider);
     if (opts.unbind) {
       try {
         await this.clientConnection.unbindAgent(this.config.agentId);

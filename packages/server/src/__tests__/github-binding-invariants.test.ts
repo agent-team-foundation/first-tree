@@ -163,7 +163,6 @@ describe("github binding invariants", () => {
       const humanA = await seedAgent(app, { orgId: admin.organizationId, memberId: admin.memberId, type: "human" });
       const humanB = await seedAgent(app, { orgId: admin.organizationId, memberId: admin.memberId, type: "human" });
       const smallerHuman = humanA < humanB ? humanA : humanB;
-
       const chatId = await seedChat(app, admin.organizationId, [humanA, humanB, delegate]);
       const pair = await resolveBindingPair(app.db, chatId, delegate);
 

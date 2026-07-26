@@ -288,12 +288,13 @@ type ResultMessage = {
   total_cost_usd?: number;
   num_turns?: number;
   session_id?: string;
-  // Per-model token usage for this turn. Anthropic's Claude Agent SDK populates
-  // this on every ResultMessage (success and error subtypes). A single turn can
-  // span multiple models (e.g. fast-mode), so we emit one `token_usage` event
-  // per entry. Keys are model identifiers (e.g. "claude-opus-4-7"). Older SDK
-  // versions may omit the field entirely — treat absence as "no usage to emit"
-  // rather than an error.
+  // Per-model cumulative token usage for the current SDK Query. Anthropic's
+  // Claude Agent SDK populates this on every ResultMessage (success and error
+  // subtypes). A single turn can span multiple models (e.g. fast-mode), so the
+  // handler diffs consecutive snapshots and emits one `token_usage` delta per
+  // changed model. Keys are model identifiers (e.g. "claude-opus-4-7"). Older
+  // SDK versions may omit the field entirely — treat absence as "no usage to
+  // emit" rather than an error.
   modelUsage?: Record<
     string,
     {
@@ -303,6 +304,13 @@ type ResultMessage = {
       cacheCreationInputTokens?: number;
     }
   >;
+};
+
+type ClaudeModelUsageCounters = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 };
 
 function isResultMessage(message: unknown): message is ResultMessage {
@@ -344,22 +352,45 @@ export function detectClaudeAuthFailure(message: unknown): { rawMessage: string 
 }
 
 /**
- * Emit one `token_usage` event per (model) entry in the result's `modelUsage`.
- * The SDK lumps cache-creation tokens under their own field, but the wire
- * schema folds them into `inputTokens` because they bill as input. Best-effort:
- * a missing/empty `modelUsage` is silently skipped (older SDKs and some error
- * subtypes don't populate it). Per-entry emit failures are swallowed so token
- * accounting never blocks the turn close that follows.
+ * Diff a Query's cumulative `modelUsage` snapshots and emit one `token_usage`
+ * event per changed model. The baseline is scoped to the concrete SDK Query:
+ * a respawn/resume starts from an empty baseline because the new native process
+ * owns a fresh cumulative counter. The SDK lumps cache-creation tokens under
+ * their own field, but the wire schema folds their delta into `inputTokens`
+ * because they bill as input.
+ *
+ * Best-effort: a missing/empty `modelUsage` is silently skipped (older SDKs
+ * and some error subtypes don't populate it). Per-entry emit failures are
+ * swallowed so token accounting never blocks the turn close that follows.
  */
-function emitTokenUsageFromResult(message: ResultMessage, sessionCtx: SessionContext): void {
+function emitTokenUsageFromResult(
+  message: ResultMessage,
+  sessionCtx: SessionContext,
+  baseline: Map<string, ClaudeModelUsageCounters>,
+): void {
   const usage = message.modelUsage;
   if (!usage) return;
   for (const [model, m] of Object.entries(usage)) {
     if (!m) continue;
-    const cacheCreation = m.cacheCreationInputTokens ?? 0;
-    const cachedRead = m.cacheReadInputTokens ?? 0;
-    const inputTokens = (m.inputTokens ?? 0) + cacheCreation;
-    const outputTokens = m.outputTokens ?? 0;
+    const current: ClaudeModelUsageCounters = {
+      inputTokens: m.inputTokens ?? 0,
+      outputTokens: m.outputTokens ?? 0,
+      cacheReadInputTokens: m.cacheReadInputTokens ?? 0,
+      cacheCreationInputTokens: m.cacheCreationInputTokens ?? 0,
+    };
+    const previous = baseline.get(model);
+    baseline.set(model, current);
+    const delta = (key: keyof ClaudeModelUsageCounters): number => {
+      const value = current[key];
+      const prior = previous?.[key] ?? 0;
+      // Defensive reset handling: if a provider counter ever rolls back within
+      // one Query, treat the new value as the start of a fresh counter rather
+      // than dropping the usage or emitting a negative schema value.
+      return value >= prior ? value - prior : value;
+    };
+    const inputTokens = delta("inputTokens") + delta("cacheCreationInputTokens");
+    const cachedRead = delta("cacheReadInputTokens");
+    const outputTokens = delta("outputTokens");
     if (inputTokens === 0 && cachedRead === 0 && outputTokens === 0) continue;
     try {
       sessionCtx.emitEvent({
@@ -781,8 +812,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let claudeSessionId: string | null = null;
   let currentQuery: Query | null = null;
+  let activeProviderEnv: Record<string, string | undefined> | null = null;
   let inputController: InputController<PendingSdkInput> | null = null;
-  let abortController: AbortController | null = null;
+  let providerRetryBackoffAbort: AbortController | null = null;
   let consumerDone: Promise<void> | null = null;
   let retryCount = 0;
   let ctx: SessionContext | null = null;
@@ -833,6 +865,46 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * tracked separately by `PendingAckMessage.providerEntered`.
    */
   const unclosedSdkInputs: PendingSdkInput[] = [];
+
+  function cancelProviderRetryBackoff(): void {
+    providerRetryBackoffAbort?.abort();
+    providerRetryBackoffAbort = null;
+  }
+
+  function providerRetryBackoffPending(): boolean {
+    return providerRetryBackoffAbort !== null;
+  }
+
+  /**
+   * Honor the shared provider retry delay while allowing suspend/shutdown to
+   * interrupt the foreground retry chain immediately.
+   */
+  async function waitForProviderRetry(delayMs: number): Promise<boolean> {
+    if (delayMs <= 0) return true;
+
+    cancelProviderRetryBackoff();
+    const backoffAbort = new AbortController();
+    providerRetryBackoffAbort = backoffAbort;
+
+    try {
+      await new Promise<void>((resolveDelay) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          backoffAbort.signal.removeEventListener("abort", finish);
+          resolveDelay();
+        };
+        const timer = setTimeout(finish, delayMs);
+        backoffAbort.signal.addEventListener("abort", finish, { once: true });
+        if (backoffAbort.signal.aborted) finish();
+      });
+      return !backoffAbort.signal.aborted;
+    } finally {
+      if (providerRetryBackoffAbort === backoffAbort) providerRetryBackoffAbort = null;
+    }
+  }
 
   function emitProviderTurnRetryEvent(
     sessionCtx: SessionContext,
@@ -931,29 +1003,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     sessionId: string,
   ): Promise<SDKUserMessage> {
-    // Image messages — two supported shapes:
-    //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
-    //      live on local disk, fetched from the `attachments` store on delivery
-    //      (see SessionManager.ensureImagesLocal).
-    //   2. legacy inline: `{data, mimeType, filename, size}` — pre-refactor
-    //      messages still pending at rollout time. Decode once and drop the
-    //      temp path into the prompt.
-    //
-    // Either way we direct the model at a real file path because Claude Code's
-    // native Read tool loads images as multimodal content blocks — the SDK
-    // does not reliably forward `{ type: "image" }` blocks to the underlying
-    // model.
     if (message.format === "file") {
-      // Build the full attribution header (name · type · sent) once up front so
-      // both branches emit the same `[From: …]` header as the default text path.
-      const header = await sessionCtx.formatFromHeader(message);
-      const prefix = header ? `${header}\n\n` : "";
+      // Preserve the specialized current-image prompt while routing it through
+      // the shared formatter, which is responsible for the supported generic
+      // request images in precedingMessages. Clear current metadata because
+      // batch documents are appended explicitly below.
+      const formatFileText = async (text: string): Promise<string> =>
+        sessionCtx.formatInboundContent({
+          ...message,
+          format: "text",
+          content: text,
+          metadata: null,
+        });
 
-      // Batched send (caption + N images in one message). Resolve every
-      // imageId to a local path the Read tool can open; missing-byte cases
-      // surface a per-attachment "not available on this device" placeholder
-      // so the session keeps moving and a partial-delivery doesn't strand
-      // the whole turn.
       if (isImageBatchRefContent(message.content)) {
         const caption = message.content.caption?.trim() ?? "";
         const lines: string[] = [];
@@ -965,20 +1027,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         );
         for (const att of message.content.attachments) {
           const imagePath = findImagePath(message.chatId, att.imageId, att.mimeType);
-          if (imagePath) {
-            lines.push(`\nFilename: ${att.filename}\nPath: ${imagePath}`);
-          } else {
-            lines.push(`\n[Image "${att.filename}" not available on this device]`);
-          }
+          lines.push(
+            imagePath
+              ? `\nFilename: ${att.filename}\nPath: ${imagePath}`
+              : `\n[Image "${att.filename}" not available on this device]`,
+          );
         }
-        // A mixed send (images + documents) also carries document/file refs in
-        // metadata.attachments — append their on-disk paths so the agent sees
-        // both. Null when the message has no documents (the common image case).
         const docNote = renderDocumentAttachmentsForLLM(message);
         if (docNote) lines.push(`\n${docNote}`);
         return {
           type: "user",
-          message: { role: "user", content: `${prefix}${lines.join("\n")}` },
+          message: { role: "user", content: await formatFileText(lines.join("\n")) },
           parent_tool_use_id: null,
           session_id: sessionId,
         };
@@ -987,28 +1046,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
         const imagePath = findImagePath(message.chatId, imageId, mimeType);
-        if (imagePath) {
-          const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
-          return {
-            type: "user",
-            message: { role: "user", content: text },
-            parent_tool_use_id: null,
-            session_id: sessionId,
-          };
-        }
-        // Bytes never reached this client (the attachments fetch failed or
-        // the ref points at a deleted/expired attachment). Treat as the
-        // "not available on this device" case so the session keeps moving.
-        const fallbackText = `[Image "${filename}" not available on this device]`;
+        const text = imagePath
+          ? `An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`
+          : `[Image "${filename}" not available on this device]`;
         return {
           type: "user",
-          message: { role: "user", content: `${prefix}${fallbackText}` },
+          message: { role: "user", content: await formatFileText(text) },
           parent_tool_use_id: null,
           session_id: sessionId,
         };
       }
 
       if (isLegacyImageFileContent(message.content)) {
+        // Preserve the pre-refactor inline-image path unchanged; historical
+        // inline payload behavior is explicitly outside this PR's scope.
+        const header = await sessionCtx.formatFromHeader(message);
+        const prefix = header ? `${header}\n\n` : "";
         const { filename } = message.content;
         try {
           const imagePath = await writeLegacyImageToTempFile(message.content, message.chatId);
@@ -1133,13 +1186,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /** Create query and input controller, then start consumer loop. */
-  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+  function spawnQuery(
+    sessionId: string,
+    sessionCtx: SessionContext,
+    resume?: string,
+    providerEnv?: Record<string, string | undefined>,
+  ): void {
     // The latest chat-context and source-repo snapshot live in module-scoped
     // caches (`chatContextForPrompt`, `sourceReposForPrompt`) which the
     // handler refreshes in start/resume BEFORE this call. `maybeSwitchConfig`
     // additionally rewrites the briefing before invoking `buildQuery` so a
     // mid-session config swap surfaces in the freshly read CLAUDE.md.
-    buildQuery(sessionId, sessionCtx, resume);
+    buildQuery(sessionId, sessionCtx, resume, providerEnv);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
   }
@@ -1256,6 +1314,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await maybeSwitchConfig(sessionCtx);
     } catch (err) {
       sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
+      // Path B may already have retired the provider-retry consumer before a
+      // fallible config-restart step fails. Do not continue into an orphaned
+      // input controller. Retire the provider transport before returning the
+      // provider-entered prefix and unentered tail to runtime recovery so a
+      // fresh handler cannot overlap the abandoned native process.
+      retireProviderTransport();
+      retryBufferedMessages("claude_config_restart_failed_recovery");
+      failFatalSessionForRecovery(sessionCtx, "claude_config_restart_failed");
+      return;
     }
     if (recoverIfInputClosed(item)) return;
 
@@ -1332,6 +1399,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx.failSessionForRecovery?.(reason, claudeSessionId ?? undefined);
   }
 
+  function retireProviderTransport(): void {
+    cancelProviderRetryBackoff();
+
+    const controller = inputController;
+    inputController = null;
+    try {
+      controller?.end();
+    } catch {
+      // best-effort transport cleanup
+    }
+
+    const query = currentQuery;
+    currentQuery = null;
+    try {
+      query?.close();
+    } catch {
+      // best-effort transport cleanup
+    }
+
+    activeProviderEnv = null;
+  }
+
   /**
    * Rebuild the SDK query in resume mode AND re-push every input already handed
    * to the previous query's controller for the still-unclosed turn, preserving
@@ -1352,7 +1441,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * input normally.
    */
   function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
-    buildQuery(sessionId, sessionCtx, sessionId);
+    buildQuery(sessionId, sessionCtx, sessionId, activeProviderEnv ?? buildEnv(sessionCtx));
     const replay = unclosedSdkInputs.slice();
     for (const input of replay) {
       inputController?.push(input);
@@ -1371,10 +1460,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     appliedPayload = cached?.payload ?? null;
   }
 
-  function buildQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
-    inputRecoveryReason = null;
-    inputController = new InputController<PendingSdkInput>();
-    abortController = new AbortController();
+  function buildQuery(
+    sessionId: string,
+    sessionCtx: SessionContext,
+    resume?: string,
+    providerEnv?: Record<string, string | undefined>,
+  ): void {
+    // Construct the replacement locally so a synchronous SDK constructor
+    // failure cannot leave the handler pointing at an orphan controller while
+    // the previous query still owns the unsettled turn.
+    const nextInputController = new InputController<PendingSdkInput>();
+    const nextAbortController = new AbortController();
 
     // Step 6: M1 hard-codes bypassPermissions per PRD §5.1.6 (permission mode
     // is intentionally not exposed to admins).
@@ -1382,14 +1478,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
 
-    currentQuery = claudeQuery({
-      prompt: providerPromptInputs(inputController.iterable),
+    const childEnv = providerEnv ?? buildEnv(sessionCtx);
+
+    const nextQuery = claudeQuery({
+      prompt: providerPromptInputs(nextInputController.iterable),
       options: {
         sessionId: resume ? undefined : sessionId,
         resume,
         cwd: cwd ?? undefined,
         persistSession: true,
-        abortController,
+        abortController: nextAbortController,
         permissionMode,
         allowDangerouslySkipPermissions: true,
         // SDK 0.2.84 defaults to isolation mode — no filesystem settings are
@@ -1409,7 +1507,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         //     `mcpServers` list) still win because they are passed as
         //     explicit SDK options below, which layer on top of settings.
         settingSources: ["user", "project"],
-        env: buildEnv(sessionCtx),
+        env: childEnv,
         // AskUserQuestion is not supported in First Tree — agents resolve
         // ask-a-human inline. Disable the tool at the SDK level so it never
         // surfaces in a session.
@@ -1420,6 +1518,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ...buildClaudeQueryOptions(payload, chatContextForPrompt),
       },
     });
+
+    inputRecoveryReason = null;
+    inputController = nextInputController;
+    currentQuery = nextQuery;
+    activeProviderEnv = childEnv;
   }
 
   /**
@@ -1438,7 +1541,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       appliedPayload.model !== newPayload.model;
 
     // Path A: same-family model swap → in-flight setModel.
-    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model)) {
+    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model) && !providerRetryBackoffPending()) {
       try {
         await currentQuery.setModel(newPayload.model);
         sessionCtx.log(
@@ -1458,12 +1561,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // still iterating the OLD query and will exit once `oldQuery.close()`
     // drains it, so the new query would otherwise have no reader.
     sessionCtx.log(`[configHotSwitch] path=restart fromVersion=${appliedConfigVersion} toVersion=${cached.version}`);
+    // Path B takes ownership of the unsettled turn. Retire an old consumer
+    // that may be waiting in provider retry backoff before any async restart
+    // preparation can yield; otherwise its timer could later respawn another
+    // query alongside the config-switch consumer.
+    cancelProviderRetryBackoff();
     // Rewrite AGENTS.md (CLAUDE.md symlink) with the new payload so the
     // restarted SDK Query — which reads CLAUDE.md via `settingSources:
     // ["project"]` on construction — picks up the new prompt.append. The
     // briefing is now the single channel; without this rewrite the swap
     // would update model/mcp/effort but silently leave the per-agent prompt
     // at the old version until the next session restart.
+    const providerEnv = buildEnv(sessionCtx);
     if (cwd) {
       // A resource skill bound mid-session (config version bumped, model
       // unchanged) reaches the active session on this restart path. Materialize
@@ -1486,7 +1595,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
     const sid = claudeSessionId;
     const oldQuery = currentQuery;
-    buildQuery(sid, sessionCtx, sid);
+    buildQuery(sid, sessionCtx, sid, providerEnv);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
     try {
@@ -1549,7 +1658,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (!currentQuery) return;
 
         try {
-          for await (const message of currentQuery) {
+          // `modelUsage` is cumulative only within one concrete Query/native
+          // process. Capture both together so a config hot-switch can start a
+          // new consumer without sharing or clearing the old consumer's
+          // accounting baseline while it drains.
+          const query = currentQuery;
+          const modelUsageBaseline = new Map<string, ClaudeModelUsageCounters>();
+          for await (const message of query) {
             // Every message refreshes lastActivity to prevent idle timeout
             sessionCtx.recordProviderActivity();
 
@@ -1575,7 +1690,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
             if (isResultMessage(message)) {
               const providerEnteredPrefix = pendingProviderEnteredPrefix();
-              emitTokenUsageFromResult(message, sessionCtx);
+              emitTokenUsageFromResult(message, sessionCtx, modelUsageBaseline);
               const providerFailure = mergeClaudeProviderFailures({
                 resultFailure: claudeFailureFromSdkResult(message),
                 assistantFailure: pendingAssistantProviderFailure,
@@ -1596,6 +1711,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     emitProviderTurnSettlementEvent(sessionCtx, settlement);
                     sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
                     toolCallProcessor.flush();
+                    if (!(await waitForProviderRetry(settlement.decision.delayMs))) {
+                      sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+                      return;
+                    }
                     try {
                       respawnQuery(claudeSessionId, sessionCtx);
                     } catch (resumeErr) {
@@ -1864,6 +1983,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, errMsg);
           sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
 
+          if (!(await waitForProviderRetry(decision.delayMs))) {
+            sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+            return;
+          }
+
           try {
             respawnQuery(claudeSessionId, sessionCtx);
           } catch (resumeErr) {
@@ -2056,6 +2180,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
+      const providerEnv = buildEnv(sessionCtx);
       const briefing = currentBriefing(sessionCtx, cwd, payload);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
@@ -2079,7 +2204,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // replay payload while still attaching ACK metadata before the SDK can
       // pull the prompt.
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
-      spawnQuery(claudeSessionId, sessionCtx);
+      spawnQuery(claudeSessionId, sessionCtx, undefined, providerEnv);
       deliverUserMessage(sdkMsg, message, deliveryToken, claudeSessionId, sessionCtx);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
@@ -2142,6 +2267,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // (set above), NOT the agent home, so the files land where this
         // session's briefing paths and the SDK cwd resolve them.
         await materializeResourceSkills(cwd, payload, sessionCtx);
+        const providerEnv = buildEnv(sessionCtx);
         writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
@@ -2150,7 +2276,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (message) {
           sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
         }
-        spawnQuery(sessionId, sessionCtx, sessionId);
+        spawnQuery(sessionId, sessionCtx, sessionId, providerEnv);
         if (sdkMsg) {
           if (message) pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, deliveryToken));
         }
@@ -2174,6 +2300,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
+      const providerEnv = buildEnv(sessionCtx);
       const briefing = currentBriefing(sessionCtx, cwd, payload);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
@@ -2200,7 +2327,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (message) {
           freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
         }
-        spawnQuery(freshSessionId, sessionCtx);
+        spawnQuery(freshSessionId, sessionCtx, undefined, providerEnv);
         if (freshSdkMsg && message) {
           deliverUserMessage(freshSdkMsg, message, deliveryToken, freshSessionId, sessionCtx);
         }
@@ -2227,7 +2354,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (message) {
         resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       }
-      spawnQuery(sessionId, sessionCtx, sessionId);
+      spawnQuery(sessionId, sessionCtx, sessionId, providerEnv);
       if (resumeSdkMsg && message) {
         deliverUserMessage(resumeSdkMsg, message, deliveryToken, sessionId, sessionCtx);
       }
@@ -2254,16 +2381,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     async suspend(reason?: string) {
       ctx?.log("Suspending session");
-
-      if (inputController) {
-        inputController.end();
-        inputController = null;
-      }
-
-      if (currentQuery) {
-        currentQuery.close();
-        currentQuery = null;
-      }
+      retireProviderTransport();
 
       // Wait for consumer loop to finish
       if (consumerDone) {
@@ -2271,7 +2389,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         consumerDone = null;
       }
 
-      abortController = null;
       // The session is no longer active — any pending replay inputs would be
       // moot. Resume goes through `handler.resume(message, sessionId)`, which
       // builds a fresh replay buffer from its own pushed inputs.

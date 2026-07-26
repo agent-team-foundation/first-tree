@@ -1,77 +1,144 @@
-import { NavLink, Outlet } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { NavLink, Outlet, useLocation } from "react-router";
+import { getContextTreeSnapshot } from "../api/context-tree.js";
+import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
+import {
+  contextTreeSnapshotNeedsAttention,
+  personalSetupNeedsAttention,
+  teamSetupNeedsAttention,
+} from "./settings/setup-attention.js";
 
 /**
- * Settings layout — sidebar + main content. Replaces the earlier double-tab
- * pattern (global nav tabs + sub-tabs) which stacked two tab visuals against
- * each other.
+ * Settings layout — a flat desktop sidebar plus the active module.
  *
- * Why sidebar (and not another row of tabs / flat single page)?
- *   - Settings is an *index of independent modules*, not multiple views of a
- *     single entity. Industry pattern (GitHub / Linear / Stripe / Vercel) is
- *     left sidebar for settings; top tabs for entity-detail views.
- *   - Single-page flat layout scales poorly past ~5 sections; with Billing /
- *     Security / API keys / Webhooks on the roadmap, sidebar lets the list
- *     grow without redesign.
- *
- * Width: the main column inside still respects the shared 960 canvas (see
- * `components/layout.tsx`), the sidebar is an additional 200 on the left
- * (sidebar 200 + main 960 = 1160 total).
- * Layout opts out of the default 960 wrapper via `isSettings` so this whole
- * shell can centre itself at ~1180.
- *
- * Narrow viewport (<48rem): the sidebar would steal half the screen,
- * so it collapses into a horizontally-scrollable pill bar above the
- * `<Outlet/>`. Same NavLink semantics (active state via `isActive`), same
- * route targets — only the chrome shape changes.
- *
- * Sub-routes:
- *   Computers     — user-scoped: machines connected to First Tree (most-frequent
- *                   entry point — placed first)
- *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
- *                   to all members (read-only); only admins can edit.
- *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
- *                   Visible to all members (read-only); only admins can manage.
- *   GitHub        — GitHub connection + source repos. Visible to all members
- *                   (read-only); only admins can manage the connection/resources.
- *   Onboarding    — guided-setup stepper enable/disable (hidden once
- *                   onboarding is permanently completed)
+ * Desktop deliberately has no Personal / Team headings. Setup is a permanent
+ * overview of the current member's access plus team capabilities, so it sits
+ * immediately after Account and remains visible after first-run onboarding is
+ * complete. The narrow pill navigation keeps its existing scope grouping;
+ * mobile Settings is outside this desktop IA change.
  */
 
 type Item = {
   to: string;
   label: string;
+  /**
+   * Optional one-line lead rendered under the (visually-hidden) page heading.
+   * Present only where it adds context the sidebar label can't.
+   */
+  description?: string;
 };
 
-const ITEMS: Item[] = [
-  { to: "/settings/computers", label: "Computers" },
-  { to: "/settings/context", label: "Context tree" },
-  { to: "/settings/resources", label: "Resources" },
-  { to: "/settings/github", label: "GitHub" },
-  { to: "/settings/onboarding", label: "Onboarding" },
+type ItemGroup = {
+  label: string;
+  items: Item[];
+};
+
+const ACCOUNT_ITEM: Item = {
+  to: "/settings/account",
+  label: "Account",
+  description: "Manage your profile and sign-in methods. These settings follow you across all your teams.",
+};
+const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup" };
+const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
+const REPOSITORIES_ITEM: Item = {
+  to: "/settings/repositories",
+  label: "Repositories",
+  description: "Manage the Team code repositories available to agents.",
+};
+const RESOURCES_ITEM: Item = {
+  to: "/settings/resources",
+  label: "Resources",
+  description: "Team defaults and opt-in resources your agents load when they start.",
+};
+const INTEGRATIONS_ITEM: Item = {
+  to: "/settings/integrations",
+  label: "Integrations",
+  description: "Connect providers for webhooks, identity, and event routing.",
+};
+const ITEMS: Item[] = [ACCOUNT_ITEM, SETUP_ITEM, COMPUTERS_ITEM, REPOSITORIES_ITEM, RESOURCES_ITEM, INTEGRATIONS_ITEM];
+
+// Preserve the existing narrow Settings IA; only desktop removes visible
+// scope groups. Every link still uses the canonical Setup route.
+const NARROW_GROUPS: ItemGroup[] = [
+  {
+    label: "Personal",
+    items: [ACCOUNT_ITEM, COMPUTERS_ITEM],
+  },
+  {
+    label: "Team",
+    items: [REPOSITORIES_ITEM, RESOURCES_ITEM, INTEGRATIONS_ITEM, SETUP_ITEM],
+  },
 ];
 
-export function SettingsLayout() {
-  const { onboardingCompletedAt, meLoaded } = useAuth();
+export function SettingsLayout({ activePathname, children }: { activePathname?: string; children?: ReactNode } = {}) {
+  const { meLoaded, organizationId, role, currentOrgHasUsableAgent, onboardingDismissedAt, onboardingCompletedAt } =
+    useAuth();
   const viewport = useWorkspaceViewport();
-  // Wait for `/me` to resolve before rendering the nav so role-dependent
-  // entries such as Onboarding do not flicker during a fresh page load.
+  const { pathname: routePathname } = useLocation();
+  const teamAttentionEnabled = meLoaded && viewport !== "narrow" && role === "admin" && organizationId !== null;
+  const setupCapabilitiesQuery = useQuery({
+    queryKey: setupCapabilitiesQueryKey(organizationId),
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getTeamSetupCapabilitiesAt(organizationId);
+    },
+    // The dot is desktop-only and members never receive Team actions. The
+    // Setup page itself still reads this projection for every role.
+    enabled: teamAttentionEnabled,
+  });
+  const currentCapabilities =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess ? setupCapabilitiesQuery.data : undefined;
+  const contextBound = currentCapabilities?.contextTree.binding.state === "bound";
+  const contextTreeSnapshotQuery = useQuery({
+    queryKey: ["context-tree-snapshot", organizationId, "7d", false],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getContextTreeSnapshot(organizationId, "7d");
+    },
+    enabled: teamAttentionEnabled && contextBound,
+  });
+  const currentContextTreeSnapshotStatus =
+    teamAttentionEnabled && setupCapabilitiesQuery.isSuccess && contextBound && contextTreeSnapshotQuery.isSuccess
+      ? contextTreeSnapshotQuery.data.snapshotStatus
+      : undefined;
+  const setupNeedsAttention =
+    personalSetupNeedsAttention({
+      currentOrgHasUsableAgent,
+      onboardingDismissedAt,
+      onboardingCompletedAt,
+    }) ||
+    teamSetupNeedsAttention(currentCapabilities, role) ||
+    contextTreeSnapshotNeedsAttention(currentContextTreeSnapshotStatus, role);
+  // DEV preview galleries render this real layout below their own route. Let
+  // those galleries supply the path whose heading/nav state they are showing;
+  // production always follows the actual router location.
+  const pathname = activePathname ?? routePathname;
+  // Wait for `/me` to resolve so team-aware Settings content does not flicker
+  // during a fresh page load.
   if (!meLoaded) {
     return null;
   }
-  // Once onboarding completes, the wizard is terminal and the entry is hidden.
-  // Direct URL access to /settings/onboarding still redirects out via the page's
-  // own guard.
-  const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
-  const visible = ITEMS.filter((it) => {
-    if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
-    return true;
-  });
+  // The active sub-route drives the single page `<h1>` (visually hidden) and
+  // the optional lead. Match the longest `to` that prefixes the pathname so a
+  // future nested route (e.g. /settings/resources/:id) still resolves to its
+  // section header.
+  const activeItem =
+    [...ITEMS].sort((a, b) => b.to.length - a.to.length).find((it) => pathname.startsWith(it.to)) ?? ITEMS[0];
 
   if (viewport === "narrow") {
+    // Mobile Settings is outside this desktop IA change. Preserve its existing
+    // one-shot Setup visibility while pointing incomplete users at the new
+    // canonical route.
+    const visibleNarrowGroups = NARROW_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item !== SETUP_ITEM || onboardingCompletedAt === null),
+    })).filter((group) => group.items.length > 0);
+
     return (
       <div className="flex flex-col" style={{ minHeight: "100%" }}>
         <nav
@@ -92,12 +159,25 @@ export function SettingsLayout() {
             overflowX: "auto",
           }}
         >
-          {visible.map((item) => (
-            <PillLink key={item.to} to={item.to} label={item.label} />
+          {visibleNarrowGroups.map((group) => (
+            <div key={group.label} className="flex shrink-0 items-center" style={{ gap: "var(--sp-1)" }}>
+              <span className="text-eyebrow shrink-0" style={{ color: "var(--fg-4)", padding: "0 var(--sp-1)" }}>
+                {group.label.toUpperCase()}
+              </span>
+              {group.items.map((item) => (
+                <PillLink
+                  key={item.to}
+                  to={item.to}
+                  label={item.label}
+                  activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+                />
+              ))}
+            </div>
           ))}
         </nav>
         <div className="flex-1 min-w-0">
-          <Outlet />
+          <SettingsHeader item={activeItem} />
+          {children ?? <Outlet />}
         </div>
       </div>
     );
@@ -120,46 +200,106 @@ export function SettingsLayout() {
         }}
       >
         <nav className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-          {visible.map((item) => (
-            <SidebarLink key={item.to} to={item.to} label={item.label} />
+          {ITEMS.map((item) => (
+            <SidebarLink
+              key={item.to}
+              to={item.to}
+              label={item.label}
+              attention={item === SETUP_ITEM && setupNeedsAttention}
+              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+            />
           ))}
         </nav>
       </aside>
 
       <div className="flex-1 min-w-0">
-        <Outlet />
+        <SettingsHeader item={activeItem} />
+        {children ?? <Outlet />}
       </div>
     </div>
   );
 }
 
-function SidebarLink({ to, label }: { to: string; label: string }) {
+/**
+ * Single per-page header owned by the layout. The `<h1>` is visually hidden
+ * (`sr-only`) — it exists for the document outline / screen readers, but the
+ * sidebar already tells a sighted user where they are, so a repeated visible
+ * title would be redundant chrome (and used to render smaller than the section
+ * titles below it). When the active item carries a `description`, it renders as
+ * a quiet one-line lead above the sub-page content.
+ */
+function SettingsHeader({ item }: { item: Item | undefined }) {
+  if (!item) return null;
+  return (
+    <>
+      <h1 className="sr-only">{item.label}</h1>
+      {item.description && (
+        <p
+          className="text-body"
+          style={{ margin: 0, color: "var(--fg-3)", padding: "var(--sp-4) var(--sp-5) var(--sp-1)" }}
+        >
+          {item.description}
+        </p>
+      )}
+    </>
+  );
+}
+
+function SidebarLink({
+  to,
+  label,
+  attention = false,
+  activeOverride,
+}: {
+  to: string;
+  label: string;
+  attention?: boolean;
+  activeOverride?: boolean;
+}) {
   return (
     <NavLink
       to={to}
+      aria-label={attention ? `${label} — Needs you` : undefined}
       className={cn(
         "block text-body transition-colors",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      {({ isActive }) => (
-        <span
-          className={cn("block", isActive && "font-medium")}
-          style={{
-            padding: "var(--sp-2) var(--sp-3)",
-            borderRadius: "var(--radius-input)",
-            color: isActive ? "var(--fg)" : "var(--fg-3)",
-            background: isActive ? "var(--bg-hover)" : "transparent",
-          }}
-        >
-          {label}
-        </span>
-      )}
+      {({ isActive }) => {
+        const active = activeOverride ?? isActive;
+        return (
+          <span
+            className={cn("flex items-center justify-between", active && "font-medium")}
+            style={{
+              padding: "var(--sp-2) var(--sp-3)",
+              borderRadius: "var(--radius-input)",
+              color: active ? "var(--fg)" : "var(--fg-3)",
+              background: active ? "var(--bg-hover)" : "transparent",
+            }}
+          >
+            <span>{label}</span>
+            {attention ? (
+              <span
+                aria-hidden
+                data-setup-attention
+                title="Needs you"
+                style={{
+                  width: "var(--sp-2)",
+                  height: "var(--sp-2)",
+                  flexShrink: 0,
+                  borderRadius: "var(--radius-full)",
+                  background: "var(--state-needs-you)",
+                }}
+              />
+            ) : null}
+          </span>
+        );
+      }}
     </NavLink>
   );
 }
 
-function PillLink({ to, label }: { to: string; label: string }) {
+function PillLink({ to, label, activeOverride }: { to: string; label: string; activeOverride?: boolean }) {
   return (
     <NavLink
       to={to}
@@ -168,19 +308,22 @@ function PillLink({ to, label }: { to: string; label: string }) {
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      {({ isActive }) => (
-        <span
-          className={cn("inline-block whitespace-nowrap", isActive && "font-medium")}
-          style={{
-            padding: "var(--sp-1_5) var(--sp-3)",
-            borderRadius: "var(--radius-input)",
-            color: isActive ? "var(--fg)" : "var(--fg-3)",
-            background: isActive ? "var(--bg-hover)" : "transparent",
-          }}
-        >
-          {label}
-        </span>
-      )}
+      {({ isActive }) => {
+        const active = activeOverride ?? isActive;
+        return (
+          <span
+            className={cn("inline-block whitespace-nowrap", active && "font-medium")}
+            style={{
+              padding: "var(--sp-1_5) var(--sp-3)",
+              borderRadius: "var(--radius-input)",
+              color: active ? "var(--fg)" : "var(--fg-3)",
+              background: active ? "var(--bg-hover)" : "transparent",
+            }}
+          >
+            {label}
+          </span>
+        );
+      }}
     </NavLink>
   );
 }

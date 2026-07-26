@@ -63,6 +63,18 @@ describe("agent config CLI registration (Step 8)", () => {
     expect(setEnv?.options.some((o) => o.long === "--sensitive")).toBe(true);
   });
 
+  it("documents Codex max and ultra reasoning effort", () => {
+    const root = new Command();
+    const agent = root.command("agent");
+    registerAgentConfigCommands(agent);
+    const reasoningEffort = agent.commands
+      .find((c) => c.name() === "config")
+      ?.commands.find((c) => c.name() === "set-reasoning-effort");
+
+    expect(reasoningEffort?.description()).toContain("xhigh | max | ultra");
+    expect(reasoningEffort?.description()).toContain("model-dependent");
+  });
+
   it("add-mcp accepts --transport / --command / --url / --args", () => {
     const root = new Command();
     const agent = root.command("agent");

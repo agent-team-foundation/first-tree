@@ -1,16 +1,19 @@
+import type { LandingCampaignActionContext } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
+import type { OnboardingFailureReason } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { CommunityChannels } from "../../../components/community-channels.js";
 import { Button } from "../../../components/ui/button.js";
-import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
+import { readCampaignActionHandoffFlag, writeCampaignActionHandoffFlag } from "../../../utils/onboarding-flags.js";
+import { getCampaign } from "../../quickstart/campaigns.js";
 import {
+  buildCampaignActionBootstrap,
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
-  buildScanFixBootstrap,
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
@@ -31,8 +34,8 @@ async function runStartChat(args: {
   topic: string;
   treeBindingPlan?: TreeBindingPlan | "none";
   joinPath?: "invite";
-  /** Production-scan fix conversion `owner/repo` — keys the launcher for dedup. */
-  scanFixRepoSlug?: string;
+  /** Campaign + repo pair used by both action entry paths for dedup. */
+  campaignAction?: LandingCampaignActionContext;
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
   const agent = await resolveOnboardingAgent(args.organizationId);
@@ -44,7 +47,7 @@ async function runStartChat(args: {
     topic: args.topic,
     treeBindingPlan: args.treeBindingPlan ?? "none",
     joinPath: args.joinPath,
-    ...(args.scanFixRepoSlug ? { scanFixRepoSlug: args.scanFixRepoSlug } : {}),
+    ...(args.campaignAction ? { campaignAction: args.campaignAction } : {}),
   });
   await args.complete(chatId);
 }
@@ -66,6 +69,7 @@ function AdminStartChat() {
     treeAutoDetectDone,
     markTreeAutoDetectDone,
     completeAndEnterChat,
+    reportStepFailure,
   } = useOnboardingFlow();
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
@@ -74,7 +78,8 @@ function AdminStartChat() {
   // Production-scan fix conversion captured by /quickstart (`action=fix`).
   // Read straight off the session flag; cleared once the chat exists so
   // `finishLater` keeps it for a resumed run.
-  const [scanFixHandoff] = useState(() => readScanFixHandoffFlag());
+  const [campaignActionHandoff] = useState(() => readCampaignActionHandoffFlag());
+  const campaignActionConfig = campaignActionHandoff ? getCampaign(campaignActionHandoff.campaign) : null;
 
   // `selectedRepoUrls` is only populated by StepConnectCode, which the
   // value-first redesign removed from the onboarding sequence (see steps.ts).
@@ -110,21 +115,31 @@ function AdminStartChat() {
   const handleStart = async (): Promise<void> => {
     setError(null);
     setPhase("starting");
+    let failureReason: OnboardingFailureReason = "start_chat_failed";
     try {
       if (!hasRepos) {
         await runStartChat({
           bootstrap: (agent) =>
-            scanFixHandoff
-              ? buildScanFixBootstrap(agent.displayName || "your agent", scanFixHandoff)
+            campaignActionHandoff && campaignActionConfig
+              ? buildCampaignActionBootstrap(
+                  agent.displayName || "your agent",
+                  campaignActionConfig.action,
+                  campaignActionHandoff,
+                )
               : buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
-          topic: scanFixHandoff ? "Fix production scan blockers" : "Get started with First Tree",
+          topic: campaignActionConfig?.action.topic ?? "Get started with First Tree",
           treeBindingPlan: "none",
-          // Key the fix launcher on the repo so it dedups with the direct path.
-          ...(scanFixHandoff?.repoSlug ? { scanFixRepoSlug: scanFixHandoff.repoSlug } : {}),
+          ...(campaignActionHandoff?.repoSlug
+            ? {
+                campaignAction: {
+                  campaign: campaignActionHandoff.campaign,
+                  repoSlug: campaignActionHandoff.repoSlug,
+                },
+              }
+            : {}),
           complete: async (chatId) => {
-            // The chat now exists with the fix bootstrap — the handoff is consumed.
-            writeScanFixHandoffFlag(null);
+            writeCampaignActionHandoffFlag(null);
             await completeAndEnterChat(chatId);
           },
         });
@@ -146,6 +161,7 @@ function AdminStartChat() {
       // clicking Start again retries.
       let repos = selectedRepoUrls;
       if (organizationId) {
+        failureReason = "repo_access_check_failed";
         const granted = await queryClient
           .fetchQuery({
             queryKey: ["onboarding", "org-github-repos", organizationId],
@@ -180,7 +196,7 @@ function AdminStartChat() {
             // Scan-fix handoffs are consumed by the admin fix path only — drop
             // any stale flag once a non-fix first chat exists, so a later
             // onboarding run in this tab cannot consume someone else's scan.
-            writeScanFixHandoffFlag(null);
+            writeCampaignActionHandoffFlag(null);
             await completeAndEnterChat(chatId);
           },
         });
@@ -190,8 +206,10 @@ function AdminStartChat() {
       const useBoundTree = treeBindingPlan === "useBoundTree";
       const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "none";
       const agent = await resolveOnboardingAgent(organizationId);
+      failureReason = "repo_resource_sync_failed";
       await ensureStartChatRepos(organizationId, repos);
 
+      failureReason = "start_chat_failed";
       const workChatId = await startOnboardingChat({
         agent,
         bootstrap: buildValueFirstBootstrap(repos, {
@@ -208,6 +226,7 @@ function AdminStartChat() {
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
+      reportStepFailure(failureReason, { step: "start-chat" });
     }
   };
 
@@ -353,7 +372,7 @@ function InviteeStartChat() {
  * pure launch into a real chat. An invitee never mutates team config.
  */
 function InviteeReady() {
-  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -374,13 +393,14 @@ function InviteeReady() {
           // Scan-fix handoffs are consumed by the admin fix path only — drop
           // any stale flag once a non-fix first chat exists, so a later
           // onboarding run in this tab cannot consume someone else's scan.
-          writeScanFixHandoffFlag(null);
+          writeCampaignActionHandoffFlag(null);
           await completeAndEnterChat(chatId);
         },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
+      reportStepFailure("start_chat_failed", { step: "start-chat" });
     }
   };
 
@@ -419,7 +439,7 @@ function InviteeReady() {
  * in a real chat WITH the agent, instead of dropping them into an empty workspace.
  */
 function InviteeNotReady() {
-  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -437,13 +457,14 @@ function InviteeNotReady() {
           // Scan-fix handoffs are consumed by the admin fix path only — drop
           // any stale flag once a non-fix first chat exists, so a later
           // onboarding run in this tab cannot consume someone else's scan.
-          writeScanFixHandoffFlag(null);
+          writeCampaignActionHandoffFlag(null);
           await completeAndEnterChat(chatId);
         },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
+      reportStepFailure("start_chat_failed", { step: "start-chat" });
     }
   };
 

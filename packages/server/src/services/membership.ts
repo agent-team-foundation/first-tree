@@ -10,6 +10,7 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { forceDisconnect } from "./connection-manager.js";
+import { suspendGitlabLinksForMembership } from "./gitlab-identities.js";
 import * as presenceService from "./presence.js";
 import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
 
@@ -32,11 +33,99 @@ export type MemberStatus = (typeof MEMBER_STATUSES)[keyof typeof MEMBER_STATUSES
 // biome-ignore lint/suspicious/noExplicitAny: needed for cross-schema compatibility with transaction clients.
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
+/**
+ * Persist the user-global display label and fan it out to every
+ * membership-backed human mirror. Call this inside the surrounding lifecycle
+ * transaction so no supported member write can leave user and agent identity
+ * projections at different values.
+ */
+export function syncUserDisplayName(db: DbLike, userId: string, displayName: string): Promise<void>;
+export function syncUserDisplayName<T>(
+  db: DbLike,
+  userId: string,
+  displayName: string,
+  mutateIdentityGraph: (effectiveDisplayName: string) => Promise<T>,
+): Promise<T>;
+export async function syncUserDisplayName<T>(
+  db: DbLike,
+  userId: string,
+  displayName: string,
+  mutateIdentityGraph?: (effectiveDisplayName: string) => Promise<T>,
+): Promise<T | undefined> {
+  if (mutateIdentityGraph) {
+    return syncUserDisplayNameInternal(db, userId, displayName, mutateIdentityGraph);
+  }
+  await syncUserDisplayNameInternal(db, userId, displayName);
+  return undefined;
+}
+
+/**
+ * Project the authoritative label already stored on the user into membership
+ * mirrors without treating a caller's pre-lock snapshot as a rename request.
+ */
+export function syncCurrentUserDisplayName<T>(
+  db: DbLike,
+  userId: string,
+  mutateIdentityGraph: (effectiveDisplayName: string) => Promise<T>,
+): Promise<T> {
+  return syncUserDisplayNameInternal(db, userId, undefined, mutateIdentityGraph);
+}
+
+async function syncUserDisplayNameInternal<T>(
+  db: DbLike,
+  userId: string,
+  requestedDisplayName: string | undefined,
+  mutateIdentityGraph: (effectiveDisplayName: string) => Promise<T>,
+): Promise<T>;
+async function syncUserDisplayNameInternal(
+  db: DbLike,
+  userId: string,
+  requestedDisplayName: string | undefined,
+): Promise<void>;
+async function syncUserDisplayNameInternal<T>(
+  db: DbLike,
+  userId: string,
+  requestedDisplayName: string | undefined,
+  mutateIdentityGraph?: (effectiveDisplayName: string) => Promise<T>,
+): Promise<T | undefined> {
+  // Serialize competing membership/name writes for the same global identity.
+  // NO KEY UPDATE remains compatible with the KEY SHARE lock taken by a
+  // concurrent membership FK insert, avoiding a lock-upgrade deadlock while
+  // still making the later contender observe and update the earlier row.
+  const [user] = await db
+    .select({ id: users.id, displayName: users.displayName })
+    .from(users)
+    .where(eq(users.id, userId))
+    .for("no key update")
+    .limit(1);
+  if (!user) throw new NotFoundError(`User "${userId}" not found`);
+  const effectiveDisplayName = requestedDisplayName ?? user.displayName;
+  if (requestedDisplayName !== undefined) {
+    await db.update(users).set({ displayName: effectiveDisplayName }).where(eq(users.id, userId));
+  }
+  // Membership lifecycle callers mutate their unique/member rows here, while
+  // the user lock is held and before any mirror agent lock is acquired. This
+  // gives every supported path one user -> members -> agents lock order.
+  const result = mutateIdentityGraph ? await mutateIdentityGraph(effectiveDisplayName) : undefined;
+  const memberRows = await db
+    .select({ agentId: members.agentId })
+    .from(members)
+    .where(eq(members.userId, userId))
+    .orderBy(asc(members.agentId));
+  for (const member of memberRows) {
+    await db.update(agents).set({ displayName: effectiveDisplayName }).where(eq(agents.uuid, member.agentId));
+  }
+  return result;
+}
+
 type CreateMembershipForUser = {
   userId: string;
   organizationId: string;
   role: "admin" | "member";
-  /** Display name for the human agent — falls back to user's displayName. */
+  /**
+   * Caller snapshot retained for API compatibility. Lifecycle writes ignore
+   * it and read the authoritative user label after taking the identity lock.
+   */
   displayName: string;
   /** Slugged username; used as the human agent's `name`. */
   username: string;
@@ -44,76 +133,68 @@ type CreateMembershipForUser = {
 
 /** Insert (or reactivate) a `members` row for `userId` in `organizationId`. */
 export async function ensureMembership(db: Database, data: CreateMembershipForUser) {
-  const [existing] = await db
-    .select()
-    .from(members)
-    .where(and(eq(members.userId, data.userId), eq(members.organizationId, data.organizationId)))
-    .limit(1);
-
-  if (existing) {
-    if (existing.status === MEMBER_STATUSES.LEFT) {
-      // Re-activate the prior soft-deleted row and its human-agent mirror.
-      //
-      // Rejoin starts a FRESH onboarding lifecycle for this membership: clear
-      // the prior suppress/completion stamps so the auto-entry gate treats
-      // the rejoined member as first-need again. A stale suppress stamp
-      // would otherwise hide setup for what is effectively a newly joined
-      // team — the exact failure mode the membership-scoped gate exists to
-      // prevent.
-      await db.transaction(async (tx) => {
-        await reactivateMembership(tx, existing, {
-          displayName: data.displayName,
-          username: data.username,
-          resetOnboarding: true,
-        });
-      });
-      return {
-        ...existing,
-        status: MEMBER_STATUSES.ACTIVE,
-        onboardingSuppressedAt: null,
-        onboardingSuppressedReason: null,
-        onboardingCompletedAt: null,
-      };
-    }
-    if (existing.status === MEMBER_STATUSES.REMOVED) {
-      throw new ConflictError(
-        `Membership for user "${data.userId}" was removed by an admin and must be restored by an admin.`,
-      );
-    }
-    return existing;
-  }
-
   return db.transaction(async (tx) => {
-    const memberId = uuidv7();
-    const agentName = sanitizeAgentName(data.username);
-    const inboxId = `inbox_${uuidv7()}`;
-    const agentUuid = uuidv7();
+    return syncCurrentUserDisplayName(tx, data.userId, async (effectiveDisplayName) => {
+      const [existing] = await tx
+        .select()
+        .from(members)
+        .where(and(eq(members.userId, data.userId), eq(members.organizationId, data.organizationId)))
+        .limit(1);
 
-    await tx.insert(agents).values({
-      uuid: agentUuid,
-      name: agentName,
-      organizationId: data.organizationId,
-      type: "human",
-      displayName: data.displayName,
-      inboxId,
-      source: "oauth",
-      visibility: "organization",
-      managerId: memberId,
-    });
+      if (existing) {
+        if (existing.status === MEMBER_STATUSES.LEFT) {
+          // Rejoin starts a fresh onboarding lifecycle for this stable row.
+          await reactivateMembershipRows(tx, existing, {
+            username: data.username,
+            resetOnboarding: true,
+          });
+          return {
+            ...existing,
+            status: MEMBER_STATUSES.ACTIVE,
+            onboardingSuppressedAt: null,
+            onboardingSuppressedReason: null,
+            onboardingCompletedAt: null,
+          };
+        }
+        if (existing.status === MEMBER_STATUSES.REMOVED) {
+          throw new ConflictError(
+            `Membership for user "${data.userId}" was removed by an admin and must be restored by an admin.`,
+          );
+        }
+        return existing;
+      }
 
-    const [row] = await tx
-      .insert(members)
-      .values({
-        id: memberId,
-        userId: data.userId,
+      const memberId = uuidv7();
+      const agentName = sanitizeAgentName(data.username);
+      const inboxId = `inbox_${uuidv7()}`;
+      const agentUuid = uuidv7();
+
+      await tx.insert(agents).values({
+        uuid: agentUuid,
+        name: agentName,
         organizationId: data.organizationId,
-        agentId: agentUuid,
-        role: data.role,
-        status: MEMBER_STATUSES.ACTIVE,
-      })
-      .returning();
-    if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return row;
+        type: "human",
+        displayName: effectiveDisplayName,
+        inboxId,
+        source: "oauth",
+        visibility: "organization",
+        managerId: memberId,
+      });
+
+      const [row] = await tx
+        .insert(members)
+        .values({
+          id: memberId,
+          userId: data.userId,
+          organizationId: data.organizationId,
+          agentId: agentUuid,
+          role: data.role,
+          status: MEMBER_STATUSES.ACTIVE,
+        })
+        .returning();
+      if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
+      return row;
+    });
   });
 }
 
@@ -135,7 +216,8 @@ type ExistingMembershipForLifecycle = {
 };
 
 type ReactivateMembershipOptions = {
-  displayName: string;
+  /** Present only for an explicit admin rename/restore request. */
+  displayName?: string;
   username: string;
   role?: "admin" | "member";
   resetOnboarding?: boolean;
@@ -147,6 +229,40 @@ type ReactivateMembershipOptions = {
  * same stable ids across leave/rejoin and admin restore.
  */
 export async function reactivateMembership(
+  db: DbLike,
+  existing: ExistingMembershipForLifecycle,
+  options: ReactivateMembershipOptions,
+): Promise<void> {
+  const [identity] = await db
+    .select({ userId: members.userId })
+    .from(members)
+    .where(eq(members.id, existing.id))
+    .limit(1);
+  if (!identity) throw new NotFoundError(`Membership "${existing.id}" not found`);
+
+  const mutateRows = async () => {
+    // The caller may have classified this membership before waiting on the
+    // user identity lock. Re-read and lock the lifecycle row now so a
+    // concurrently completed rejoin/restore is observed instead of being
+    // overwritten from that stale snapshot.
+    const [current] = await db.select().from(members).where(eq(members.id, existing.id)).for("update").limit(1);
+    if (!current) throw new NotFoundError(`Membership "${existing.id}" not found`);
+    if (current.status === MEMBER_STATUSES.ACTIVE) {
+      throw new ConflictError(`User "${options.username}" is already a member of this organization`);
+    }
+    if (current.status !== MEMBER_STATUSES.LEFT && current.status !== MEMBER_STATUSES.REMOVED) {
+      throw new ConflictError(`User "${options.username}" has an unsupported membership status`);
+    }
+    await reactivateMembershipRows(db, current, options);
+  };
+  if (options.displayName !== undefined) {
+    await syncUserDisplayName(db, identity.userId, options.displayName, mutateRows);
+  } else {
+    await syncCurrentUserDisplayName(db, identity.userId, mutateRows);
+  }
+}
+
+async function reactivateMembershipRows(
   db: DbLike,
   existing: ExistingMembershipForLifecycle,
   options: ReactivateMembershipOptions,
@@ -175,7 +291,6 @@ export async function reactivateMembership(
       .update(agents)
       .set({
         status: AGENT_STATUSES.ACTIVE,
-        displayName: options.displayName,
         name: restoredName,
         clientId: null,
         updatedAt: new Date(),
@@ -186,7 +301,6 @@ export async function reactivateMembership(
       .update(agents)
       .set({
         status: AGENT_STATUSES.ACTIVE,
-        displayName: options.displayName,
         clientId: null,
         updatedAt: new Date(),
       })
@@ -326,6 +440,7 @@ export async function deactivateMembership(
     if (existing.status !== status) {
       await tx.update(members).set({ status }).where(eq(members.id, memberId));
     }
+    await suspendGitlabLinksForMembership(tx as unknown as Database, memberId);
     await tx
       .update(agents)
       .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })
@@ -356,38 +471,60 @@ export type MembershipMirrorRepairResult = {
  * mirror; inactive memberships keep the mirror named but suspended.
  */
 export async function repairMembershipHumanMirrors(db: Database): Promise<MembershipMirrorRepairResult> {
-  return db.transaction(async (tx) => {
-    const rows = await tx
-      .select({
-        memberId: members.id,
-        memberStatus: members.status,
-        agentId: members.agentId,
-        organizationId: members.organizationId,
-        username: users.username,
-        mirrorType: agents.type,
-        mirrorStatus: agents.status,
-        mirrorName: agents.name,
-      })
-      .from(members)
-      .innerJoin(users, eq(users.id, members.userId))
-      .innerJoin(agents, eq(agents.uuid, members.agentId))
-      .for("update");
+  const rows = await db
+    .select({
+      memberId: members.id,
+      userId: members.userId,
+      agentId: members.agentId,
+    })
+    .from(members)
+    .orderBy(asc(members.userId), asc(members.id));
 
-    let activeMirrorsRepaired = 0;
-    let inactiveMirrorsRepaired = 0;
-    for (const row of rows) {
-      const desiredStatus =
-        row.memberStatus === MEMBER_STATUSES.ACTIVE ? AGENT_STATUSES.ACTIVE : AGENT_STATUSES.SUSPENDED;
+  let activeMirrorsRepaired = 0;
+  let inactiveMirrorsRepaired = 0;
+  for (const row of rows) {
+    // Keep repair transactions scoped to one membership. Accumulating member
+    // locks across users can deadlock with leave/removal, which locks an org's
+    // active admins before its target member. Per-row commits release the
+    // target before repair advances to another user's admin row.
+    const repairedStatus = await db.transaction(async (tx) => {
+      // Re-read each projection under the same user -> member -> agent order
+      // used by live identity writes. Separate READ COMMITTED statements avoid
+      // replaying a stale joined snapshot after waiting on a concurrent rename.
+      const [identity] = await tx
+        .select({ username: users.username, displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, row.userId))
+        .for("no key update")
+        .limit(1);
+      const [member] = await tx
+        .select({ status: members.status, organizationId: members.organizationId })
+        .from(members)
+        .where(eq(members.id, row.memberId))
+        .for("update")
+        .limit(1);
+      const [mirror] = await tx
+        .select({ type: agents.type, status: agents.status, name: agents.name, displayName: agents.displayName })
+        .from(agents)
+        .where(eq(agents.uuid, row.agentId))
+        .for("update")
+        .limit(1);
+      if (!identity || !member || !mirror) return null;
+
+      const desiredStatus = member.status === MEMBER_STATUSES.ACTIVE ? AGENT_STATUSES.ACTIVE : AGENT_STATUSES.SUSPENDED;
       const needsRepair =
-        row.mirrorType !== AGENT_TYPES.HUMAN || row.mirrorStatus !== desiredStatus || row.mirrorName === null;
-      if (!needsRepair) continue;
+        mirror.type !== AGENT_TYPES.HUMAN ||
+        mirror.status !== desiredStatus ||
+        mirror.name === null ||
+        mirror.displayName !== identity.displayName;
+      if (!needsRepair) return null;
 
       const restoredName =
-        row.mirrorName ??
+        mirror.name ??
         (await resolveRestoredAgentName(
           tx,
-          { agentId: row.agentId, organizationId: row.organizationId },
-          row.username,
+          { agentId: row.agentId, organizationId: member.organizationId },
+          identity.username,
         ));
       await tx
         .update(agents)
@@ -395,23 +532,26 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
           type: AGENT_TYPES.HUMAN,
           status: desiredStatus,
           name: restoredName,
+          displayName: identity.displayName,
           clientId: null,
           updatedAt: new Date(),
         })
         .where(eq(agents.uuid, row.agentId));
 
-      if (row.memberStatus === MEMBER_STATUSES.ACTIVE) activeMirrorsRepaired += 1;
-      else inactiveMirrorsRepaired += 1;
-    }
+      return member.status;
+    });
 
-    return { activeMirrorsRepaired, inactiveMirrorsRepaired };
-  });
+    if (repairedStatus === MEMBER_STATUSES.ACTIVE) activeMirrorsRepaired += 1;
+    else if (repairedStatus !== null) inactiveMirrorsRepaired += 1;
+  }
+
+  return { activeMirrorsRepaired, inactiveMirrorsRepaired };
 }
 
 type CreatePersonalTeamInput = {
   userId: string;
-  /** GitHub login slug, used as the seed for the team slug. */
-  loginSeed: string;
+  /** Final unique username, used as the seed for the team slug and human agent name. */
+  username: string;
   /** Display label for the personal team (e.g. `${login}'s team`). */
   teamDisplayName: string;
   /** Display label for the user's human agent. */
@@ -422,17 +562,17 @@ type CreatePersonalTeamInput = {
  * Create a fresh default team org for a brand-new user, plus the matching
  * admin membership + 1:1 human agent. Slug strategy:
  *
- *   - First try: `${login}` (lowercased, sanitized)
+ *   - First try: `${username}` (lowercased, sanitized)
  *   - On collision: append a 4-char hex disambiguator
  *
- * Default team display name is `${login}'s team` (set by the caller — see
+ * Default team display name is `${displayName}'s team` (set by the caller — see
  * first-tree-context:agent-hub/onboarding.md (was §5.5 in source design)). Reads as "this is a collective
  * space" from day one so a later teammate-invite doesn't surface a label
  * that looks like a private sandbox. Users can rename via Step 1 of the
  * onboarding flow or Settings.
  */
 export async function createPersonalTeam(db: Database, input: CreatePersonalTeamInput) {
-  const baseSlug = sanitizeOrgSlug(input.loginSeed);
+  const baseSlug = sanitizeOrgSlug(input.username);
   const displayName = input.teamDisplayName;
 
   const orgId = uuidv7();
@@ -443,7 +583,7 @@ export async function createPersonalTeam(db: Database, input: CreatePersonalTeam
     organizationId: orgId,
     role: "admin",
     displayName: input.userDisplayName,
-    username: input.loginSeed,
+    username: input.username,
   });
 
   return { organizationId: orgId, slug, displayName, memberId: member.id };
@@ -460,16 +600,12 @@ function sanitizeOrgSlug(raw: string): string {
   );
 }
 
-/** Postgres `unique_violation` SQLSTATE — `organizations.name` UNIQUE tripping. */
-const PG_UNIQUE_VIOLATION = "23505";
-
 /**
  * Attempt INSERT into `organizations` with `base` slug, retrying with a
- * disambiguator on UNIQUE constraint violations. Two concurrent OAuth
- * sign-ins for the same GitHub `login` would race here without retry —
- * pre-check `SELECT` followed by `INSERT` has a TOCTOU window the unique
- * constraint catches but the catch path needs to exist. Returns the slug
- * actually used.
+ * disambiguator when the unique slug is already occupied. `ON CONFLICT DO
+ * NOTHING` is intentional: this helper is also called inside the user-row
+ * transaction used by OAuth bootstrap, where catching a 23505 would leave
+ * the transaction aborted before the retry can run.
  */
 async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string, displayName: string): Promise<string> {
   const [existing] = await db
@@ -480,20 +616,27 @@ async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string,
   let candidate = existing ? `${base}-${randomBytes(2).toString("hex")}` : base;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-      return candidate;
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code !== PG_UNIQUE_VIOLATION) throw err;
-      candidate = `${base}-${randomBytes(2).toString("hex")}`;
-    }
+    const [inserted] = await db
+      .insert(organizations)
+      .values({ id: orgId, name: candidate, displayName })
+      .onConflictDoNothing({ target: organizations.name })
+      .returning({ name: organizations.name });
+    if (inserted) return inserted.name;
+    candidate = `${base}-${randomBytes(2).toString("hex")}`;
   }
 
   // Pathological collision storm — random suffix always wins.
   candidate = `${base}-${uuidv7().slice(0, 12)}`;
-  await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-  return candidate;
+  const [inserted] = await db
+    .insert(organizations)
+    .values({ id: orgId, name: candidate, displayName })
+    .onConflictDoNothing({ target: organizations.name })
+    .returning({ name: organizations.name });
+  if (inserted) return inserted.name;
+
+  // UUID fragments make this practically unreachable; retain a clear error
+  // rather than silently returning a slug whose organization was not created.
+  throw new Error("Unable to allocate a unique organization slug");
 }
 
 /** List ACTIVE memberships (omit soft-deleted "left"/"removed") for a user. */

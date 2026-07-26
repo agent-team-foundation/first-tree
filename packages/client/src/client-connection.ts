@@ -16,6 +16,10 @@ import {
   inboxDeliverFrameSchema,
   inboxRecoverAcceptedFrameSchema,
   inboxRecoverRejectedFrameSchema,
+  PROVIDER_MODELS_LIST_TYPE,
+  PROVIDER_MODELS_RESULT_TYPE,
+  type ProviderModelCatalog,
+  providerModelsListCommandSchema,
   RUNTIME_AUTH_START_TYPE,
   type RuntimeAuthMethod,
   type RuntimeProvider,
@@ -32,7 +36,7 @@ import {
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
+import { type AccessTokenProvider, FirstTreeHubSDK, type RuntimeSessionTokenProvider } from "./sdk.js";
 
 /**
  * Per-agent bind retry bookkeeping (Bug 5). A failed `agent:bind` no longer
@@ -164,6 +168,12 @@ export type RuntimeAuthCommand = {
   ref: string;
 };
 
+/** Server→client command to discover host-local provider models. */
+export type ProviderModelsListCommand = {
+  provider: RuntimeProvider;
+  ref: string;
+};
+
 /**
  * Welcome frame received after `auth:ok`. `isReconnect` is true for every
  * occurrence after the first welcome in the lifetime of this `ClientConnection`
@@ -199,6 +209,7 @@ type ClientConnectionEvents = {
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
   "runtime-auth:start": [command: RuntimeAuthCommand];
+  "provider-models:list": [command: ProviderModelsListCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
   /**
@@ -275,6 +286,19 @@ export class ClientUserMismatchError extends Error {
   constructor(message = "Client belongs to a different user") {
     super(message);
     this.name = "ClientUserMismatchError";
+  }
+}
+
+/**
+ * Thrown when the server refuses `client:register` because this local
+ * client identity was retired server-side. Retrying the same client id cannot
+ * recover; the operator must reset local identity and register a fresh client.
+ */
+export class ClientRetiredError extends Error {
+  readonly code = "CLIENT_RETIRED";
+  constructor(message = "Client has been retired") {
+    super(message);
+    this.name = "ClientRetiredError";
   }
 }
 
@@ -469,6 +493,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly authLogger: pino.Logger;
 
   private readonly boundAgents = new Map<string, BoundAgent>();
+  private readonly runtimeSessionTokenProviders = new Map<string, RuntimeSessionTokenProvider>();
 
   /** Agents scheduled to rebind automatically on every reconnect. */
   private readonly desiredBindings = new Map<
@@ -517,6 +542,27 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     // (AgentRuntime / ClientRuntime) attach their own listeners for logging —
     // this one is the fallback for raw-SDK users who don't.
     this.on("error", () => {});
+  }
+
+  setRuntimeSessionTokenProvider(agentId: string, provider: RuntimeSessionTokenProvider): void {
+    this.runtimeSessionTokenProviders.set(agentId, provider);
+  }
+
+  clearRuntimeSessionTokenProvider(agentId: string, provider?: RuntimeSessionTokenProvider): void {
+    if (provider && this.runtimeSessionTokenProviders.get(agentId) !== provider) return;
+    this.runtimeSessionTokenProviders.delete(agentId);
+  }
+
+  private resolveRuntimeSessionToken(agentId: string): string | undefined {
+    const provider = this.runtimeSessionTokenProviders.get(agentId);
+    if (!provider) return undefined;
+    try {
+      const token = provider()?.trim();
+      return token || undefined;
+    } catch (err) {
+      this.wsLogger.warn({ err, agentId }, "runtime session token provider failed");
+      return undefined;
+    }
   }
 
   get isConnected(): boolean {
@@ -1047,6 +1093,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "session:reconcile", agentId, chatIds }));
   }
 
+  /** Reply to a `provider-models:list` reverse command with the host catalog. */
+  sendProviderModelsResult(ref: string, catalog: ProviderModelCatalog): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: PROVIDER_MODELS_RESULT_TYPE, ref, catalog }));
+  }
+
   async disconnect(): Promise<void> {
     this.closing = true;
     this.connectAbort?.abort();
@@ -1376,9 +1428,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const err =
         code === "CLIENT_USER_MISMATCH"
           ? new ClientUserMismatchError(message)
-          : code === "CLIENT_ORG_MISMATCH"
-            ? new ClientOrgMismatchError(message)
-            : new Error(`client:register rejected: ${message}`);
+          : code === "CLIENT_RETIRED"
+            ? new ClientRetiredError(message)
+            : code === "CLIENT_ORG_MISMATCH"
+              ? new ClientOrgMismatchError(message)
+              : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);
@@ -1419,7 +1473,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           serverUrl: this.serverUrl,
           getAccessToken: this.getAccessToken,
           agentId,
-          runtimeSessionToken,
+          runtimeSessionToken: () =>
+            this.runtimeSessionTokenProviders.has(agentId)
+              ? this.resolveRuntimeSessionToken(agentId)
+              : runtimeSessionToken,
           userAgent: this.userAgent,
         });
         const agent: BoundAgent = {
@@ -1535,6 +1592,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (parsed.success) {
         const { provider, method, ref } = parsed.data;
         this.emit("runtime-auth:start", { provider, method, ref });
+      }
+      return;
+    }
+
+    if (type === PROVIDER_MODELS_LIST_TYPE) {
+      const parsed = providerModelsListCommandSchema.safeParse(msg);
+      if (parsed.success) {
+        const { provider, ref } = parsed.data;
+        this.emit("provider-models:list", { provider, ref });
       }
       return;
     }

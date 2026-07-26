@@ -154,7 +154,8 @@ describe("useAgentConfigSave", () => {
     });
     await flush();
 
-    expect(queryClient.getQueryData<AgentRuntimeConfig>(KEY)?.payload.reasoningEffort).toBe("medium");
+    const rolledBack = queryClient.getQueryData<AgentRuntimeConfig>(KEY)?.payload;
+    expect(rolledBack && "reasoningEffort" in rolledBack ? rolledBack.reasoningEffort : undefined).toBe("medium");
     expect(latest?.conflict).toBe(false);
     expect(latest?.saveError).toContain("boom");
     expect(latest?.errorField).toBe("effort");

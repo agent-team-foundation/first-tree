@@ -100,7 +100,7 @@ describe("runValidateNodes — non-personal files", () => {
     }
   });
 
-  it("ignores entries that disappear before stat", (ctx) => {
+  it("rejects dangling Markdown symlinks", (ctx) => {
     const root = makeTempDir("validate-nodes-");
     write(root, "NODE.md", ROOT_FRONTMATTER);
     try {
@@ -111,7 +111,10 @@ describe("runValidateNodes — non-personal files", () => {
 
     const result = runValidateNodes(root);
 
-    expect(result).toEqual({ exitCode: 0, errors: [] });
+    expect(result).toEqual({
+      exitCode: 1,
+      errors: ["[TREE_MARKDOWN_FILE_SYMLINK_BROKEN] broken.md: Markdown file symlink target cannot be resolved"],
+    });
   });
 });
 

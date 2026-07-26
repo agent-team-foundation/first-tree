@@ -1,7 +1,7 @@
 ---
 name: first-tree-welcome
-version: 1.2.1
-description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
+version: 1.2.3
+description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR/MR reviews, repo scans, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
@@ -11,7 +11,7 @@ description: Use for a First Tree onboarding first chat, especially natural open
 Use this skill only when the chat is clearly the onboarding first chat created by
 First Tree, including natural messages such as "welcome aboard", "Please help me
 get started with First Tree", or "Please help me get settled into this team on
-First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
+First Tree." Do not use it for ordinary chats, PR/MR reviews, repo scans, tree
 writes, or maintenance work.
 
 Two look-alikes that are NOT this launcher, and one that routes by shape:
@@ -82,12 +82,16 @@ available local files:
   — a mere binding does not imply a populated tree, and the tree you may have
   bound is not necessarily this team's; confirm state by reading the **target
   team's** tree (root `NODE.md`), not by trusting a binding;
-- **host `gh` / local credentials**: usable or not.
+- **detected source forge**: GitHub, GitLab, another host, or unknown — derive
+  it from the supplied URL or the repository's `origin` remote;
+- **matching host CLI / local credentials**: `gh` for GitHub, `glab` for
+  GitLab, or plain `git` for another host; usable or not.
 
 If state is unknown, first try to resolve it yourself (read the greeting for
-role, attempt the repo read, check `gh`); only if it stays genuinely
-unresolvable, name the one specific missing piece and ask for that. Do not
-invent repo access, GitHub authorization, or tree readiness.
+role, attempt the repo read, check the host CLI, `gh` or `glab`); only if it
+stays genuinely unresolvable, name the one specific missing piece and ask for
+that. Do not
+invent repo access, GitHub/GitLab authorization, or tree readiness.
 
 #### Reading role from the greeting
 
@@ -114,15 +118,16 @@ these examples are kept in sync by a test — do not paraphrase them loosely.
 
 ### Your first substantive reply
 
-- **No readable code yet** — no repo connected, no local path, no GitHub URL, and
+- **No readable code yet** — no repo connected, no local path, no GitHub/GitLab URL, and
   no readable team context. Make exactly one minimal ask: request one project
-  entry point — a local project folder path on this machine or a GitHub repo URL
+  entry point — a local project folder path on this machine or a GitHub/GitLab repo URL
   — without faking understanding. Recommended shape: "Share one project entry
-  point: a local project folder path on this machine, or a GitHub repo URL. I'll
+  point: a local project folder path on this machine, or a GitHub/GitLab repo URL. I'll
   inspect it first, then suggest a few concrete starter tasks." If they share a
-  GitHub URL, use host `gh` first. This ask is a legitimate first result. Do not
-  ask for GitHub App authorization first, do not offer the first-task menu yet,
-  and do not mention Context Tree setup yet.
+  GitHub URL, use host `gh` first; if they share a GitLab URL, use `glab` first.
+  This ask is a legitimate first result. Do not ask for GitHub App authorization
+  first, do not offer the first-task menu yet, and do not mention Context Tree
+  setup yet.
 - **Readable code available** — a repo is connected and you can read it, or a
   local path / URL was given and you can read it. (A repo that is connected but
   local credentials cannot read it is the "cannot read it" state below — report
@@ -194,21 +199,21 @@ When either shape matches:
    - **None eligible to autofix** (everything left is a judgment call or stale)
      → spawn nothing; go straight to surfacing them (below).
    Do not split one blocker into implementation-step chats: code change, tests,
-   verification, and PR for that blocker belong in the same spawned fix chat.
+   verification, and PR/MR for that blocker belong in the same spawned fix chat.
    **Never fan out — or autofix — a judgment call**: a finding that needs product, architecture, or security-design judgment (rate-limiting redesign,
    changing auth), lacks concrete evidence, no longer matches the current repo,
-   or is already covered by existing code or an already-open PR. Surface those
+   or is already covered by existing code or an already-open PR/MR. Surface those
    in this chat for the user to decide or acknowledge.
    Before any spawned fix starts changing code, verify the finding still applies
    against the current repo. If it is already fixed or covered by existing code
-   or an already-open PR, report that and move to the next queued eligible
+   or an already-open PR/MR, report that and move to the next queued eligible
    blocker rather than producing a duplicate fix. Whether a fix runs in a
    spawned chat or here, its brief/target is self-contained: the repository URL,
    the findings JSON URL (when present), the specific finding(s) with their
    evidence and recommended fix, the instruction to verify the finding still
    applies before changing code, what to do when access is missing (diagnose the
-   cause, then the single narrowest recovery — the narrowest GitHub access or a
-   local path), and the completion bar — a verified fix or PR for that blocker,
+   cause, then the single narrowest recovery — the narrowest forge access or a
+   local path), and the completion bar — a verified fix or PR/MR for that blocker,
    with evidence.
 4. If the repository is not readable from this machine, follow the normal
    cannot-read rule: state the exact failure and make the smallest access ask;
@@ -223,8 +228,8 @@ never fall through silently.
 
 | State | What to do |
 | --- | --- |
-| No project yet (no repo/path/URL) | Ask for one local project folder path or GitHub repo URL. For GitHub URLs try host `gh` / local credentials first. Do not ask for GitHub authorization first, and do not offer tree build (no code to draw it from). |
-| Repo/resource exists but local credentials cannot read it | **Diagnose why** (private repo needing access / `gh` not authenticated / wrong path / network), then give the one specific next step for that cause — `gh auth login` if gh isn't authenticated; for a private repo, the narrowest access, an accessible URL, or a local project folder path; the corrected path if it's mistyped (see **Handling snags**). Do not claim private repo contents, fake understanding, or send a menu; don't just report the read failure and ask for a path/URL/credential all at once. |
+| No project yet (no repo/path/URL) | Ask for one local project folder path or a GitHub/GitLab repo URL. For GitHub URLs try host `gh` / local credentials first; for GitLab URLs try `glab` / local credentials first. Do not ask for GitHub authorization first, and do not offer tree build (no code to draw it from). |
+| Repo/resource exists but local credentials cannot read it | **Diagnose why** (private repo needing access / `gh` or `glab` not authenticated / wrong path / network), then give the one specific next step for that cause — `gh auth login` or `glab auth login` if the matching CLI isn't authenticated; for a private repo, the narrowest access, an accessible URL, or a local project folder path; the corrected path if it's mistyped (see **Handling snags**). Do not claim private repo contents, fake understanding, or send a menu; don't just report the read failure and ask for a path/URL/credential all at once. |
 | Repo readable, tree missing or empty | Show code value, then offer the menu. **For a confirmed admin**, the menu carries BOTH the value-task bundle AND "Build your Context Tree"; otherwise value tasks only. On selection, fan out. |
 | Repo readable, tree already populated | Read both, cite concrete evidence, offer value-task options. Do NOT offer tree build (already built); do not seed the tree here. |
 | Repo readable, tree state unknown | Give repo-based value; do not invent tree readiness. Offer tree build only once you can confirm the tree is missing/empty AND the human is an admin. |
@@ -367,9 +372,16 @@ Key mechanics — read these carefully, they are easy to get wrong:
   own. Include: the task, the relevant repo/paths, and how "done" is verified. Do
   NOT write a terse pointer like "do task 1".
 - **For a value task**: the brief states the change and its verification (test,
-  lint, screenshot, doc diff). If the task's likely completion artifact is a PR,
-  include that the task should follow the PR and report whether live tracking is
-  active or blocked by missing GitHub App coverage.
+  lint, screenshot, doc diff). If the likely completion artifact is a PR/MR,
+  choose the review CLI from that repository's remote. For a GitHub PR, include
+  that the task should run `first-tree github follow` and report whether live
+  tracking is active or blocked by missing GitHub App coverage. For a GitLab MR,
+  include that the task should run `first-tree gitlab follow <url>` after
+  creation or reuse and report the returned pending or active attention state.
+  GitLab attention is inbound-only; only a pending declaration waits for the
+  next matching valid webhook. A follow failure does not invalidate the MR;
+  report only the First Tree chat attention gap. Never substitute `first-tree
+  github follow` or GitHub App setup guidance for GitLab.
 - **For "Build your Context Tree"**: the brief is user-visible, so write it in
   plain product language and **name no skill in it** — e.g. "Build our team's
   Context Tree from the connected code — propose an initial structure for me to
@@ -381,16 +393,26 @@ Key mechanics — read these carefully, they are easy to get wrong:
 
 Then, back in THIS launcher chat, post a short line naming the chats you opened
 so the user can see the parallel streams. As each spawned chat produces a result
-(a PR, a passing test, the seed PRs), note it here so the launcher stays the
+(a PR/MR, a passing test, the seed PRs/MRs), note it here so the launcher stays the
 map of what is in flight.
 
-### After a value PR opens: guide App install once
+### After a GitHub value PR opens: consume the task's Setup handoff
 
 A review-ready PR gives the admin a concrete reason to install or update First
 Tree GitHub App coverage: CI results, review comments, and merge state can flow
-back into chat. The welcome launcher owns one concise install/coverage guidance
-at this moment; do not rely only on the generic PR-following failure text that a
-spawned task may have shown.
+back into chat. The spawned task owns the one user-facing install/coverage
+handoff in its task chat. The welcome launcher consumes that result and must not
+send the same Setup prompt again.
+
+This section's App-install guidance is GitHub-only. For a GitLab MR, do not call
+`first-tree github follow`, send the user to **Settings → Setup** for GitHub App
+installation, or imply
+that the First Tree GitHub App is involved. Instead, consume the spawned task's
+`first-tree gitlab follow <url>` result and preserve its returned pending or
+active state. GitLab attention is inbound-only; explain the webhook wait only
+when the declaration is pending. If that follow fails, report only the First
+Tree chat attention gap; the failure does not invalidate the MR. Do not invent
+a GitLab integration URL or settings target.
 
 - The spawned value task owns following its PR in its own task chat
   (`first-tree github follow <url>`) and reporting whether live tracking is
@@ -401,18 +423,14 @@ spawned task may have shown.
   add App-install guidance.
 - If tracking is blocked because the First Tree GitHub App is not installed on,
   or does not cover, the GitHub account/repo that owns the PR, and the human is a
-  confirmed **admin**, include one launcher-level install/coverage line when you
-  report that PR result. Keep it tied to the win, for example: "PR is open. To
-  have CI, review comments, and merge updates flow back here, install or cover
-  this repo from Settings -> GitHub." Use a product link only when you have a
-  stable one; otherwise name **Settings -> GitHub**. Do not fabricate raw GitHub
-  App install URLs.
+  confirmed **admin**, summarize that live updates are waiting on the admin
+  action already surfaced in the task chat. Do not add a second destination or
+  repeat its setup explanation.
 - If the human is an invitee/member or role is unclear, do not route them into
   an admin-only install surface. Say an organization admin can enable live PR
   updates for this repo if useful.
-- Give this App-install guidance at most once in the onboarding launcher. If the
-  spawned task chat already mentioned the missing App, still include the short
-  launcher-level line; do not repeat a full setup explanation.
+- If the task result did not establish whether tracking is active or blocked,
+  report only the PR result. Do not infer App debt.
 
 ## After value lands: the one-time tree offer
 
@@ -429,8 +447,8 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   trusting a binding).
 - **Trigger on the first verified result** — the moment a value task returns
   something the user can see work, whether it ran in a spawned chat or was fixed
-  in place (a passing test, a review-ready PR, a
-  shipped doc), tie the offer to that win — not after everything finishes, and
+  in place (a passing test, a review-ready PR/MR, a shipped doc), tie the offer
+  to that win — not after everything finishes, and
   not before the first win.
 - **When the evidence warrants it** (per **Recommend, don't just list**), make
   this a reasoned recommendation, not a neutral question — e.g. "Test's green.
@@ -441,6 +459,38 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   tree is already populated.
 - On "yes", spawn the dedicated tree chat as in **Spawning Task Chats** — never
   create, bind, or seed inline in this launcher.
+
+## After a pre-existing Context Tree milestone: guide Review setup once
+
+Automatic Context Review is a Team capability, not an onboarding gate. After
+the user has seen value, check it here only when a populated tree was already
+readable and no dedicated tree task produced the milestone in this onboarding
+run. The dedicated tree task owns its own post-PR/MR handoff through
+`first-tree-seed`; consume that result and never repeat it in this launcher.
+
+- For a confirmed **admin**, read the current managed Agent's Team with
+  `first-tree org context-tree review-config --json`. Do not switch to
+  `--as-member`: its default Team can differ from this Agent/chat's Team.
+  Read only the JSON `enabled` and `agentUuid` fields. If `agentUuid` is null,
+  say once that **Settings → Setup** can select an eligible managed Review Agent
+  and enable Automatic Review. If `agentUuid` is present while `enabled` is
+  false, say only that Setup can enable Automatic Review; the Agent is already
+  selected. If both are present/enabled, add no Review setup handoff.
+- This is not a health or readiness check. Do not prompt a member, infer
+  Reviewer health, or infer debt when the read is invalid, fails, or is
+  ambiguous. None of these states blocks onboarding.
+- Setup owns provider prerequisites, Reviewer selection and health; this
+  launcher performs no Team mutation.
+
+The ownership matrix is intentionally small:
+
+| Observed milestone | State | This launcher's action |
+| --- | --- | --- |
+| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |
+| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |
+| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |
+| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |
+| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |
 
 ## Doing the Work & Talking to the User
 
@@ -475,28 +525,29 @@ stop. Find the real cause, take the smallest forward action yourself, and ask
 the user only for what only they can supply.
 
 - **Diagnose to the cause, not the symptom.** "Can't read the repo" is a
-  symptom; the cause is one of — a private repo needing access, `gh` not
+  symptom; the cause is one of — a private repo needing access, `gh` or `glab` not
   authenticated, a mistyped path, a network issue. Name the actual cause and act
   on *that*.
 - **Exhaust what you can safely do before asking.** Retry the specific safe
-  action, try the obvious alternative (host `gh`, a local path), read what you
+  action, try the obvious alternative (host `gh` or `glab`, a local path), read what you
   can. Escalate to the user only when you hit something only they can supply
   (access, a credential, a login, a repo) or a genuine decision.
 - **When you do ask, make it specific and small.** "`gh` isn't logged in — run
-  `gh auth login`, then tell me" beats "I couldn't read it; give me a path, URL,
-  or credentials." One concrete next step, not a menu of possibilities.
+  `gh auth login`, then tell me" or "`glab` isn't logged in — run `glab auth
+  login`, then tell me" beats "I couldn't read it; give me a path, URL, or
+  credentials." One concrete next step, not a menu of possibilities.
 - Never expose raw errors or internal mechanics; say the cause and the next step
   in plain terms, tight.
 
 This does **not** loosen consent: a consequential or irreversible action (repo
-creation, pushes, PRs, authorization) still needs the user's explicit yes. Being
+creation, pushes, PRs/MRs, authorization) still needs the user's explicit yes. Being
 a protagonist is about owning diagnosis, safe/reversible steps, and mechanism
 choices — not about acting on things that are genuinely the user's to allow.
 
 ## Guardrails, Consent & Setup Handoff
 
 **Consent gates.** Authorization, repo authorization, Context Tree
-creation/binding, `gh repo create`, pushes, PR creation, and destructive actions
+creation/binding, `gh` / `glab` repo create, pushes, PR/MR creation, and destructive actions
 all require explicit user consent. The user's pick in the menu IS that consent
 for tree build; other authorizations use a tracked ask.
 
@@ -513,32 +564,35 @@ for tree build; other authorizations use a tracked ask.
   admin owns setup rather than routing a possible non-admin into an admin
   surface, and don't lead with "who should be involved?".
 
-**GitHub / repo access.**
+**Forge / repo access.**
 
-- Prefer a local project folder path + host `gh` for ordinary GitHub work. A
-  GitHub URL alone is not a reason to ask for GitHub App installation — try host
-  `gh` first.
+- Prefer a local project folder path + the matching host CLI (`gh` for GitHub,
+  `glab` for GitLab) for ordinary forge work. A GitHub URL alone is not a reason
+  to ask for GitHub App installation — try host `gh` first; a GitLab URL should
+  try `glab` first.
 - Private repo access depends on the member's local credentials. Do not promise
   access to named private repos until reads actually succeed.
 - If First Tree says no repo is connected: (1) do not ask for GitHub App
-  authorization first; (2) ask for either a local project folder path or a GitHub
+  authorization first; (2) ask for either a local project folder path or a GitHub/GitLab
   repo URL; (3) local path → inspect it and give the evidence-backed menu;
-  (4) GitHub URL → use host `gh` or local git credentials when available; (5) if
-  `gh` is missing / unauthenticated / lacks access, explain that exact gap and
+  (4) GitHub URL → use host `gh` or local git credentials when available; GitLab
+  URL → use `glab` or local git credentials when available; (5) if `gh` or
+  `glab` is missing / unauthenticated / lacks access, explain that exact gap and
   give the single narrowest recovery for that diagnosed cause (e.g. `gh auth
-  login` when it's just unauthenticated; a local project folder path; GitHub CLI
-  install) — one concrete step, not the whole menu; (6) do not offer "Build your Context Tree"
-  until there is readable code and the human is a confirmed admin.
+  login` or `glab auth login` when it's just unauthenticated; a local project
+  folder path; the relevant CLI install) — one concrete step, not the whole menu;
+  (6) do not offer "Build your Context Tree" until there is readable code and
+  the human is a confirmed admin.
 
-**Setup handoff (steps you cannot perform — durable GitHub App install, repo
-authorization).** Raise them only when the chosen work genuinely needs them, then
+**Setup handoff (steps you cannot perform — durable provider authorization,
+repository coverage, Review Agent selection).** Raise them only when a real
+milestone makes the capability relevant, then
 guide that one step to completion — do not raise setup as an opening menu, and do
 not give brittle click-by-click paths. When you do hand off, give the most
-specific stable target available (product deep link; GitHub install URL only when
-the URL/App slug is known; otherwise the console base URL plus a durable area like
-Settings / Integrations). Do not guess slugs or URLs, and do not expose tokens or
-secrets. If the human is not an admin, do not send them into an admin-only
-surface; involve the responsible admin.
+specific stable target available (product deep link when authoritative;
+otherwise **Settings → Setup**). Do not guess slugs or URLs, and do not expose
+tokens or secrets. If the human is not an admin, do not send them into an
+admin-only surface; involve the responsible admin.
 
 ## Hard Rules
 
@@ -561,11 +615,27 @@ surface; involve the responsible admin.
 - If the admin did not pick the tree up front, re-offer it exactly once when the
   first value task delivers a verified result (see **After value lands**) — tied
   to that win, one line, no repeated nudging.
-- When the first value result is a PR, consume the task chat's follow/tracking
-  status and, only for a confirmed admin when App coverage is missing, surface
-  the one-time App-install guidance from **After a value PR opens** in this
-  launcher. This does not replace the tree offer; if both apply, keep each to a
-  short sentence and do not repeat either later.
+- When the first value result is a GitHub PR, consume the task chat's
+  follow/tracking status. When App coverage is missing, do not repeat the task
+  chat's Setup destination or explanation in this launcher. For a GitLab MR,
+  consume the task chat's
+  `first-tree gitlab follow <url>` result and report its returned pending or
+  active state. Attention is inbound-only; only pending waits for a matching
+  valid webhook. If follow failed, report only that chat attention gap and do
+  not treat the MR as invalid. Never substitute `first-tree github follow`,
+  **Settings → Setup** for GitHub App installation, or other GitHub App
+  guidance. This does not replace
+  the tree offer; if both apply, keep each to a short sentence and do not repeat
+  either later.
+- After value against a pre-existing populated tree, check Context Review
+  configuration and give a confirmed admin at most one **Settings → Setup**
+  handoff when no eligible Reviewer is selected or the retained selection is
+  disabled. Distinguish those states: do not tell an admin to select another
+  Agent when one is already retained. A dedicated tree task owns this handoff
+  for its own PR/MR; never repeat it in the launcher. Never make it an
+  onboarding gate, treat configuration as a health check, infer debt from an
+  ambiguous state, prompt a member to configure it, or perform the Team mutation
+  from this launcher.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the
   value tasks listed individually; never a one-option ask; no "Skip for now"
@@ -582,7 +652,7 @@ surface; involve the responsible admin.
   `first-tree-seed` owns that in the spawned tree chat.
 - Finish each task against its own check and show the evidence; never claim it
   works without verifying.
-- Do not perform authorization, repo creation, pushes, or PR creation without
+- Do not perform authorization, repo creation, pushes, or PR/MR creation without
   explicit consent.
 - Do not surface skill internals or jargon to the user.
 - Do not use retired onboarding skill names such as `first-tree-guide`,

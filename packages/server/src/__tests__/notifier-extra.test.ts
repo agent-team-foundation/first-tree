@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNotifier, notifyRecipients } from "../services/notifier.js";
+import { createNotifier, notifyRecipients, notifyRecipientsSettled } from "../services/notifier.js";
 
 type ListenHandler = (payload?: string) => void;
 
@@ -102,8 +102,16 @@ describe("createNotifier", () => {
     await notifier.notifyChatAudience("chat_1");
     await notifier.notifyChatUpdated("chat_1");
     await notifier.notifyAgentRouteChange(payload);
+    await notifier.notifyDaemonClientCommand({
+      type: "provider-models:list",
+      clientId: "client_1",
+      provider: "cursor",
+      ref: "ref_1",
+      targetInstanceId: "instance_1",
+    });
+    await notifier.notifyDaemonClientCommandResult({ clientId: "client_1", ref: "ref_1" });
 
-    expect(ok.calls).toHaveLength(10);
+    expect(ok.calls).toHaveLength(12);
     expect(ok.calls.map((values) => values[0])).toEqual([
       "inbox_notifications",
       "config_changes",
@@ -115,6 +123,8 @@ describe("createNotifier", () => {
       "chat_audience_events",
       "chat_updated_events",
       "agent_route_events",
+      "daemon_client_commands",
+      "daemon_client_command_results",
     ]);
 
     const failing = createNotifier(makeListenClient(true).client as never);
@@ -128,6 +138,18 @@ describe("createNotifier", () => {
     await expect(failing.notifyChatAudience("chat_1")).resolves.toBeUndefined();
     await expect(failing.notifyChatUpdated("chat_1")).resolves.toBeUndefined();
     await expect(failing.notifyAgentRouteChange(payload)).resolves.toBeUndefined();
+    await expect(
+      failing.notifyDaemonClientCommand({
+        type: "provider-models:list",
+        clientId: "client_1",
+        provider: "cursor",
+        ref: "ref_1",
+        targetInstanceId: "instance_1",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      failing.notifyDaemonClientCommandResult({ clientId: "client_1", ref: "ref_1" }),
+    ).resolves.toBeUndefined();
   });
 
   it("parses LISTEN payloads, ignores malformed data, swallows handler errors, and stops idempotently", async () => {
@@ -155,10 +177,19 @@ describe("createNotifier", () => {
       throw new Error("consumer failed");
     });
     const chatUpdatedSecond = vi.fn();
+    const meChatsChanged = vi.fn();
     const agentRoute = vi.fn(() => {
       throw new Error("consumer failed");
     });
     const agentRouteSecond = vi.fn();
+    const daemonCommand = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const daemonCommandSecond = vi.fn();
+    const daemonResult = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const daemonResultSecond = vi.fn();
 
     notifier.onConfigChange(config);
     notifier.onSessionStateChange(sessionState);
@@ -172,8 +203,13 @@ describe("createNotifier", () => {
     notifier.onChatAudience(chatAudienceSecond);
     notifier.onChatUpdated(chatUpdated);
     notifier.onChatUpdated(chatUpdatedSecond);
+    notifier.onMeChatsChanged(meChatsChanged);
     notifier.onAgentRouteChange(agentRoute);
     notifier.onAgentRouteChange(agentRouteSecond);
+    notifier.onDaemonClientCommand(daemonCommand);
+    notifier.onDaemonClientCommand(daemonCommandSecond);
+    notifier.onDaemonClientCommandResult(daemonResult);
+    notifier.onDaemonClientCommandResult(daemonResultSecond);
     await notifier.start();
 
     listeners.get("config_changes")?.("agent");
@@ -188,6 +224,8 @@ describe("createNotifier", () => {
     listeners.get("chat_message_events")?.("bad");
     listeners.get("chat_audience_events")?.("chat_1");
     listeners.get("chat_updated_events")?.("chat_1");
+    listeners.get("me_chats_changed")?.("human_1:org_1");
+    listeners.get("me_chats_changed")?.("bad");
     listeners.get("agent_route_events")?.(
       JSON.stringify({
         agentId: "agent_1",
@@ -202,6 +240,20 @@ describe("createNotifier", () => {
     );
     listeners.get("agent_route_events")?.("{not json");
     listeners.get("agent_route_events")?.(JSON.stringify({ agentId: "agent_1" }));
+    listeners.get("daemon_client_commands")?.(
+      JSON.stringify({
+        type: "provider-models:list",
+        clientId: "client_1",
+        provider: "cursor",
+        ref: "ref_1",
+        targetInstanceId: "instance_1",
+      }),
+    );
+    listeners.get("daemon_client_commands")?.("{not json");
+    listeners.get("daemon_client_commands")?.(JSON.stringify({ type: "provider-models:list" }));
+    listeners.get("daemon_client_command_results")?.(JSON.stringify({ clientId: "client_1", ref: "ref_1" }));
+    listeners.get("daemon_client_command_results")?.("{not json");
+    listeners.get("daemon_client_command_results")?.(JSON.stringify({ clientId: "client_1" }));
 
     expect(config).toHaveBeenCalledWith("agent");
     expect(sessionState).toHaveBeenCalledWith({
@@ -226,6 +278,9 @@ describe("createNotifier", () => {
     expect(chatMessage).toHaveBeenCalledWith({ chatId: "chat_1", messageId: "msg_1" });
     expect(chatAudienceSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
     expect(chatUpdatedSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(meChatsChanged).toHaveBeenCalledWith({ humanAgentId: "human_1", organizationId: "org_1" });
+    // The malformed "bad" payload (no colon) is dropped, not passed through.
+    expect(meChatsChanged).toHaveBeenCalledTimes(1);
     expect(agentRouteSecond).toHaveBeenCalledWith({
       agentId: "agent_1",
       agentType: "codex",
@@ -236,10 +291,18 @@ describe("createNotifier", () => {
       runtimeProvider: "codex",
       targetClientId: "client_1",
     });
+    expect(daemonCommandSecond).toHaveBeenCalledWith({
+      type: "provider-models:list",
+      clientId: "client_1",
+      provider: "cursor",
+      ref: "ref_1",
+      targetInstanceId: "instance_1",
+    });
+    expect(daemonResultSecond).toHaveBeenCalledWith({ clientId: "client_1", ref: "ref_1" });
 
     await notifier.stop();
     await notifier.stop();
-    expect(unlisteners).toHaveLength(10);
+    expect(unlisteners).toHaveLength(13);
     for (const unlisten of unlisteners) {
       expect(unlisten).toHaveBeenCalledTimes(1);
     }
@@ -248,6 +311,9 @@ describe("createNotifier", () => {
   it("notifies recipient inboxes without awaiting individual failures", async () => {
     const notifier = {
       notify: vi.fn((inboxId: string) => (inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve())),
+      notifyStrict: vi.fn((inboxId: string) =>
+        inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve(),
+      ),
     };
 
     notifyRecipients(notifier as never, ["ok", "bad"], "msg_1");
@@ -255,5 +321,34 @@ describe("createNotifier", () => {
 
     expect(notifier.notify).toHaveBeenCalledWith("ok", "msg_1");
     expect(notifier.notify).toHaveBeenCalledWith("bad", "msg_1");
+  });
+
+  it("settles recipient notifies and reports failures for observers", async () => {
+    const notifier = {
+      notify: vi.fn(async () => undefined),
+      notifyStrict: vi.fn((inboxId: string) =>
+        inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve(),
+      ),
+    };
+
+    const result = await notifyRecipientsSettled(notifier as never, ["ok", "bad"], "msg_1");
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(notifier.notifyStrict).toHaveBeenCalledWith("ok", "msg_1");
+    expect(notifier.notifyStrict).toHaveBeenCalledWith("bad", "msg_1");
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it("observes createNotifier pg_notify failures on the settled path only", async () => {
+    const rejecting = makeListenClient(true);
+    const swallowing = makeListenClient(true);
+    const strictNotifier = createNotifier(rejecting.client as never);
+    const softNotifier = createNotifier(swallowing.client as never);
+
+    await expect(softNotifier.notify("inbox_1", "msg_soft")).resolves.toBeUndefined();
+
+    const settled = await notifyRecipientsSettled(strictNotifier, ["inbox_1"], "msg_strict");
+    expect(settled.failed).toBe(1);
+    expect(String(settled.errors[0])).toMatch(/notify failed/);
   });
 });

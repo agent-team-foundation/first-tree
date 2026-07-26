@@ -143,19 +143,20 @@ async function flush(): Promise<void> {
   });
 }
 
-function seedIntent(campaign: CampaignIntent["campaign"] = "production-scan"): void {
+function seedIntent(campaign: CampaignIntent["campaign"] = "production-scan", attributed = false): void {
   writeCampaignIntent({
     campaign,
     owner: "acme",
     repo: "backend",
     repoSlug: "acme/backend",
     url: "https://github.com/acme/backend",
+    ...(attributed ? { attribution: { attemptId: "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf", variant: "control" } } : {}),
   });
 }
 
 describe("QuickstartPage — landing campaign trial flow", () => {
   it("starts the landing campaign trial from stored intent, refreshes /me, clears intent, and navigates", async () => {
-    seedIntent("production-scan");
+    seedIntent("production-scan", true);
     await renderPage();
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(1);
@@ -163,8 +164,22 @@ describe("QuickstartPage — landing campaign trial flow", () => {
       organizationId: "org-1",
       campaign: "production-scan",
       repoUrl: "https://github.com/acme/backend",
+      attribution: { attemptId: "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf", variant: "control" },
     });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
+    expect(readCampaignIntent()).toBeNull();
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-1", { replace: true });
+  });
+
+  it("starts the agent-readiness campaign through the same generic launcher", async () => {
+    seedIntent("agent-readiness");
+    await renderPage();
+
+    expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      campaign: "agent-readiness",
+      repoUrl: "https://github.com/acme/backend",
+    });
     expect(readCampaignIntent()).toBeNull();
     expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-1", { replace: true });
   });
@@ -181,7 +196,7 @@ describe("QuickstartPage — landing campaign trial flow", () => {
   it("shows the workspace (no dead-end) for an unsupported campaign handoff", async () => {
     seedIntent("production-scan");
     const container = await renderPage([
-      "/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+      "/quickstart?campaign=unsupported-campaign&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
     ]);
 
     expect(container.querySelector('[data-testid="quickstart-trial-chat"]')).not.toBeNull();
@@ -274,8 +289,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -305,7 +321,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       initialRecipientAgentIds: ["agent-dev-1"],
       // The key new hop: the direct path carries the repo slug so the server
       // keys this launcher for cross-path dedup.
-      scanFixRepoSlug: "acme/backend",
+      campaignAction: { campaign: "production-scan", repoSlug: "acme/backend" },
     });
     expect(body?.initialMessage).toMatchObject({ format: "text", source: "web" });
     expect(body?.initialMessage.content).toContain(
@@ -314,7 +330,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     // Direct path uses the greeting-free bootstrap: the agent isn't being onboarded.
     expect(body?.initialMessage.content).not.toContain("welcome aboard");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-fix-1", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBeNull();
   });
 
   it("waits for /me: with meLoaded=false a fix link routes nowhere and calls nothing", async () => {
@@ -350,8 +366,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     expect(agentsApiMock.getNewChatDefaultCandidates).not.toHaveBeenCalled();
     expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -389,8 +406,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(container.textContent).toContain("server unavailable");
     expect(navigateMock).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -416,8 +434,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
     expect(container.textContent).toContain("No connected agent yet");
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -433,7 +452,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     await renderPage(["/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend"]);
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(1);
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBeNull();
   });
 
   it("action=fix with an invalid report stores reportKey: null and still routes", async () => {
@@ -444,8 +463,13 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
-      JSON.stringify({ repoUrl: "https://github.com/acme/backend", reportKey: null, repoSlug: "acme/backend" }),
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
+      JSON.stringify({
+        campaign: "production-scan",
+        repoUrl: "https://github.com/acme/backend",
+        reportKey: null,
+        repoSlug: "acme/backend",
+      }),
     );
   });
 });

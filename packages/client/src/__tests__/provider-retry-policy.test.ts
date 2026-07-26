@@ -136,6 +136,21 @@ describe("classifyProviderFailure", () => {
     }
   });
 
+  it("classifies Kimi's stable SDK error codes without depending on prose", () => {
+    const classifyKimi = (code: string) =>
+      classifyProviderFailure(Object.assign(new Error("provider stopped"), { code }), {
+        provider: "kimi-code",
+        scope: "provider_turn",
+        source: "sdk",
+      });
+
+    expect(classifyKimi("auth.login_required")).toMatchObject({ category: "credential" });
+    expect(classifyKimi("provider.rate_limit")).toMatchObject({ category: "provider_capacity" });
+    expect(classifyKimi("provider.connection_error")).toMatchObject({ category: "transient_transport" });
+    expect(classifyKimi("model.not_configured")).toMatchObject({ category: "configuration" });
+    expect(classifyKimi("model.config_invalid")).toMatchObject({ category: "configuration" });
+  });
+
   it("a transient codex --version verify flake is retried at session start, NOT a terminal capability failure", () => {
     const err = new Error(
       "codex --version smoke check did not complete (transient host condition); will retry. Detail: `codex --version` timed out",
@@ -293,6 +308,15 @@ describe("decideProviderRetry", () => {
         retryAfterMs: 120_000,
       }),
     ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_rate_limited",
+        replaySafety: "user_visible",
+        attempt: 3,
+        retryAfterMs: 25_000,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
   });
 
   it("returns capacity_wait_required for provider-entered long capacity refusals", () => {
@@ -310,18 +334,59 @@ describe("decideProviderRetry", () => {
     });
   });
 
-  it("stops unsafe provider_turn replay before retrying", () => {
+  it("retries classified transient provider_turn failures after user-visible output", () => {
     expect(
       decide({
         category: "transient_transport",
         replaySafety: "user_visible",
         attempt: 1,
       }),
-    ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });
+    ).toMatchObject({ action: "retry", delayMs: 500, retryMode: "foreground" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded",
+        replaySafety: "user_visible",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "retry", delayMs: 500, retryMode: "foreground" });
+    expect(
+      decide({
+        category: "transient_transport",
+        replaySafety: "user_visible",
+        attempt: 3,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded",
+        replaySafety: "user_visible",
+        attempt: 3,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_usage_limit",
+        replaySafety: "user_visible",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "capacity_wait_required" });
+  });
+
+  it("stops provider_turn retry when replay custody is unknown", () => {
     expect(
       decide({
         category: "transient_transport",
         replaySafety: "unknown",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });
+    expect(
+      decide({
+        category: "unknown",
+        replaySafety: "user_visible",
         attempt: 1,
       }),
     ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });

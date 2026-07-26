@@ -39,6 +39,10 @@ function providerLabel(provider: RuntimeProvider): string {
     case "claude-code":
     case "claude-code-tui":
       return "Claude Code";
+    case "cursor":
+      return "Cursor";
+    case "kimi-code":
+      return "Kimi Code";
     default:
       return provider;
   }

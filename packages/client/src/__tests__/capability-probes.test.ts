@@ -733,21 +733,31 @@ describe("probeCapabilities (aggregator)", () => {
     vi.doMock("../runtime/capabilities/codex.js", () => ({
       probeCodexCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
     }));
+    vi.doMock("../runtime/capabilities/cursor.js", () => ({
+      probeCursorCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
+    }));
+    vi.doMock("../runtime/capabilities/kimi-code.js", () => ({
+      probeKimiCodeCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
+    }));
     const mod = await import("../runtime/capabilities/index.js");
 
     const caps = await mod.probeCapabilities();
 
     // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS — it is skipped, so it
     // gets no capability entry AND its probe is never called (no binary spawn).
-    expect(Object.keys(caps).sort()).toEqual(["claude-code", "codex"]);
+    expect(Object.keys(caps).sort()).toEqual(["claude-code", "codex", "cursor", "kimi-code"]);
     expect(caps["claude-code"]?.state).toBe("ok");
     expect(caps["claude-code-tui"]).toBeUndefined();
     expect(caps.codex?.state).toBe("ok");
+    expect(caps.cursor?.state).toBe("ok");
+    expect(caps["kimi-code"]?.state).toBe("ok");
     expect(tuiProbe).not.toHaveBeenCalled();
 
     vi.doUnmock("../runtime/capabilities/claude-code.js");
     vi.doUnmock("../runtime/capabilities/claude-code-tui.js");
     vi.doUnmock("../runtime/capabilities/codex.js");
+    vi.doUnmock("../runtime/capabilities/cursor.js");
+    vi.doUnmock("../runtime/capabilities/kimi-code.js");
     vi.resetModules();
   });
 
@@ -762,6 +772,12 @@ describe("probeCapabilities (aggregator)", () => {
     vi.doMock("../runtime/capabilities/claude-code-tui.js", () => ({
       probeClaudeCodeTuiCapability: vi.fn().mockRejectedValue("tui probe failed"),
     }));
+    vi.doMock("../runtime/capabilities/cursor.js", () => ({
+      probeCursorCapability: vi.fn().mockRejectedValue("cursor probe failed"),
+    }));
+    vi.doMock("../runtime/capabilities/kimi-code.js", () => ({
+      probeKimiCodeCapability: vi.fn().mockRejectedValue("kimi probe failed"),
+    }));
     const mod = await import("../runtime/capabilities/index.js");
 
     const caps = await mod.probeCapabilities();
@@ -772,12 +788,16 @@ describe("probeCapabilities (aggregator)", () => {
       error: "claude probe failed",
     });
     expect(caps.codex).toMatchObject({ state: "error", error: "codex probe failed" });
+    expect(caps.cursor).toMatchObject({ state: "error", error: "cursor probe failed" });
+    expect(caps["kimi-code"]).toMatchObject({ state: "error", error: "kimi probe failed" });
     // Disabled provider is never probed, so no entry (not even an error one).
     expect(caps["claude-code-tui"]).toBeUndefined();
 
     vi.doUnmock("../runtime/capabilities/claude-code.js");
     vi.doUnmock("../runtime/capabilities/codex.js");
     vi.doUnmock("../runtime/capabilities/claude-code-tui.js");
+    vi.doUnmock("../runtime/capabilities/cursor.js");
+    vi.doUnmock("../runtime/capabilities/kimi-code.js");
     vi.resetModules();
   });
 });

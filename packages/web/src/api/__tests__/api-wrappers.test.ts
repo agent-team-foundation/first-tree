@@ -74,6 +74,7 @@ describe("api wrapper paths", () => {
     await contextTree.getContextTreeSnapshot("org/id", "7d");
     await contextTree.initializeContextTree("org/id");
     await orgSettings.getContextTreeSetting("org/id");
+    await orgSettings.getRawContextTreeSetting("org/id");
     await orgSettings.putContextTreeSetting("org/id", { repo: "https://github.com/acme/tree", branch: "main" });
     await orgSettings.deleteContextTreeSetting("org/id");
     await orgSettings.getContextTreeFeaturesSetting("org/id");
@@ -120,6 +121,8 @@ describe("api wrapper paths", () => {
     expect(apiMock.post).toHaveBeenCalledWith("/me/connect-tokens");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/snapshot?window=7d");
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/initialize", {});
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree/raw");
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {
       repo: "https://github.com/acme/tree",
       branch: "main",
@@ -193,6 +196,8 @@ describe("api wrapper paths", () => {
     await chats.listChats({ limit: 3, cursor: "next" });
     await chats.getChat("chat/id");
     await chats.listChatGithubEntities("chat/id");
+    await chats.listChatGitlabEntities("chat/id");
+    await chats.unfollowChatGitlabEntity("chat/id", "https://gitlab.example/acme/api/-/merge_requests/42");
     await chats.renameChat("chat/id", "Topic");
     await chats.patchChatEngagement("chat/id", "archived");
     await chats.sendChatMessage("chat/id", "hello", ["agent-1"]);
@@ -212,7 +217,12 @@ describe("api wrapper paths", () => {
     await chats.createAgentChat("agent/id");
     await chats.listChatMessages("chat/id", { limit: 20, cursor: "older" });
 
-    await meChats.listMeChats({
+    // listMeChats now parses the response, so it needs a valid payload. Seed the
+    // shape an OLDER server (pre-priorityRows) would return and assert the schema
+    // fills the version-skew default — that both keeps this request-shape test
+    // reaching its assertion and proves the fallback the parse exists to provide.
+    apiMock.get.mockResolvedValueOnce({ rows: [], nextCursor: null });
+    const listed = await meChats.listMeChats({
       limit: 10,
       cursor: "next",
       filter: "unread",
@@ -221,7 +231,8 @@ describe("api wrapper paths", () => {
       with: ["agent-1", "agent-2"],
       watching: true,
     });
-    await meChats.listMeChatSourceCounts({ engagement: "archived" });
+    expect(listed.priorityRows).toEqual({ attention: [], pinned: [] });
+    await meChats.listMeChatSourceCounts({ engagement: "archived", watching: true });
     await meChats.createMeChat({ participantIds: ["agent-1"] });
     await meChats.createMeTaskChat({
       mode: "task",
@@ -245,6 +256,7 @@ describe("api wrapper paths", () => {
 
     expect(sessions.sessionQueryKey("agent-1", "chat-1")).toEqual(["session", "agent-1", "chat-1"]);
     expect(sessions.agentSessionsQueryKey("agent-1")).toEqual(["agent-sessions", "agent-1"]);
+    expect(sessions.chatSessionEventsQueryKey("chat-1")).toEqual(["chat-session-events", "chat-1"]);
     expect(sessions.asToolCallPayload({ toolUseId: "tool-1", name: "Bash", args: {}, status: "ok" })).toEqual({
       toolUseId: "tool-1",
       name: "Bash",
@@ -265,11 +277,13 @@ describe("api wrapper paths", () => {
     await sessions.listAgentSessions("agent/id", { state: "active", runtimeState: "working" });
     await sessions.getSession("agent/id", "chat/id");
     await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
+    await sessions.listChatSessionEvents("chat/id", { limit: 200, direction: "desc" });
     await sessions.suspendSession("agent/id", "chat/id");
     await sessions.resumeSession("agent/id", "chat/id");
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
+    expect(apiMock.get).toHaveBeenCalledWith("/chats/chat%2Fid/session-events?limit=200&direction=desc");
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova&addressableOnly=true",
@@ -277,6 +291,12 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");
+    expect(apiMock.get).toHaveBeenCalledWith("/chats/chat%2Fid/gitlab-entities");
+    expect(apiMock.delete).toHaveBeenCalledWith(
+      `/chats/chat%2Fid/gitlab-entities?entity=${encodeURIComponent(
+        "https://gitlab.example/acme/api/-/merge_requests/42",
+      )}`,
+    );
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",
@@ -288,6 +308,11 @@ describe("api wrapper paths", () => {
     });
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub%2Cagent&with=agent-1%2Cagent-2&watching=1",
+      undefined,
+    );
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/orgs/current/chats/source-counts?engagement=archived&watching=1",
+      undefined,
     );
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/chats", {
       mode: "task",

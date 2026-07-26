@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
-import { compareByPillPriority, deriveComputerStatus, PILL_PRIORITY } from "../derive-status.js";
+import {
+  compareByPillPriority,
+  deriveComputerStatus,
+  hasUpdateProblem,
+  PILL_PRIORITY,
+  partitionTeamComputers,
+  teamNeedsAttention,
+} from "../derive-status.js";
 
 /**
  * Pure-function unit tests for the 4-state Settings → Computers status
@@ -149,5 +156,150 @@ describe("compareByPillPriority", () => {
     const sorted = [b, a].sort(compareByPillPriority);
     expect(sorted[0]?.id).toBe("a");
     expect(sorted[1]?.id).toBe("b");
+  });
+});
+
+function updateAttempt(result: "ok" | "failed" | "blocked", target = "1.4.0") {
+  return { result, target, currentBefore: "1.3.2", installedVersion: null, reason: "npm E404", at: T };
+}
+
+describe("hasUpdateProblem", () => {
+  it("is false when there is no update attempt", () => {
+    expect(hasUpdateProblem(client({}))).toBe(false);
+  });
+
+  it("is false for a successful update", () => {
+    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("ok") }))).toBe(false);
+  });
+
+  it("is true for a failed/blocked update still behind the target, within one channel", () => {
+    // prod behind prod
+    expect(hasUpdateProblem(client({ sdkVersion: "1.3.2", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
+      true,
+    );
+    // same staging channel, older build
+    expect(
+      hasUpdateProblem(
+        client({ sdkVersion: "0.5.3-staging.20.1", lastUpdateAttempt: updateAttempt("blocked", "0.5.3-staging.49.1") }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false once a valid same-channel version reached/passed the target (stale record)", () => {
+    // Manual `first-tree upgrade` recovers without clearing the record: the
+    // client re-registers on the target version but keeps the old failure.
+    expect(
+      hasUpdateProblem(client({ sdkVersion: "1.4.0", lastUpdateAttempt: updateAttempt("blocked", "1.4.0") })),
+    ).toBe(false);
+    expect(hasUpdateProblem(client({ sdkVersion: "1.5.0", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
+      false,
+    );
+    // staging ahead by build number
+    expect(
+      hasUpdateProblem(
+        client({ sdkVersion: "0.5.3-staging.60.1", lastUpdateAttempt: updateAttempt("blocked", "0.5.3-staging.49.1") }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails closed (stays true) for malformed, unknown-channel, or channel-mismatched versions", () => {
+    const cases: Array<[string | null, string]> = [
+      // digit-bearing garbage must not outrank a valid target
+      ["garbage999", "1.4.0"],
+      // partial version is not a valid release
+      ["1.4", "1.4.0"],
+      // unknown prerelease channels fail closed even if numerically "ahead"
+      ["1.4.0-alpha.999.1", "1.4.0-staging.49.1"],
+      ["1.4.0-beta.1", "1.4.0-staging.1.1"],
+      ["1.4.0-rc.1", "1.4.0"],
+      // channel mismatch: a staging prerelease has NOT reached a stable prod target
+      ["1.4.0-staging.5.1", "1.4.0"],
+      ["1.4.0", "1.4.0-staging.49.1"],
+      // leading-zero numeric identifiers are invalid SemVer → fail closed
+      ["01.4.0", "1.4.0"],
+      ["1.4.0-staging.049.1", "1.4.0-staging.49.1"],
+      // missing / non-numeric current
+      [null, "1.4.0"],
+      ["dev", "1.4.0"],
+      // malformed target also fails closed
+      ["1.5.0", "not-a-version"],
+    ];
+    for (const [sdkVersion, target] of cases) {
+      expect(hasUpdateProblem(client({ sdkVersion, lastUpdateAttempt: updateAttempt("blocked", target) }))).toBe(true);
+    }
+  });
+
+  it("compares numeric identifiers exactly past 2^53 (no IEEE-754 collapse)", () => {
+    // These differ by 1 but round to the same JS double; string compare keeps them apart.
+    const lower = "9007199254740992.0.0";
+    const higher = "9007199254740993.0.0";
+    // current one build behind target → still unresolved
+    expect(hasUpdateProblem(client({ sdkVersion: lower, lastUpdateAttempt: updateAttempt("blocked", higher) }))).toBe(
+      true,
+    );
+    // current at/beyond target → resolved
+    expect(hasUpdateProblem(client({ sdkVersion: higher, lastUpdateAttempt: updateAttempt("failed", lower) }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("teamNeedsAttention", () => {
+  it("is false for a healthy Ready machine with no update problem", () => {
+    const c = client({ capabilities: { "claude-code": capability("ok") } });
+    expect(deriveComputerStatus(c).pill).toBe("ready");
+    expect(teamNeedsAttention(c)).toBe(false);
+  });
+
+  it("is true for any non-ready pill", () => {
+    expect(teamNeedsAttention(client({ status: "disconnected", authState: "ok" }))).toBe(true);
+    expect(teamNeedsAttention(client({ status: "disconnected", authState: "expired" }))).toBe(true);
+    expect(teamNeedsAttention(client({ capabilities: {} }))).toBe(true);
+  });
+
+  it("is true for a Ready machine whose self-update failed/blocked (never hidden under Ready)", () => {
+    const stuck = client({
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("failed"),
+    });
+    expect(deriveComputerStatus(stuck).pill).toBe("ready");
+    expect(teamNeedsAttention(stuck)).toBe(true);
+  });
+});
+
+describe("partitionTeamComputers", () => {
+  it("splits attention (non-ready OR update-stuck) from the ready fleet", () => {
+    const offline = client({ id: "offline", hostname: "z-off", status: "disconnected", authState: "ok" });
+    const readyClean = client({ id: "ready", hostname: "a-ready", capabilities: { "claude-code": capability("ok") } });
+    const updateStuck = client({
+      id: "stuck",
+      hostname: "m-stuck",
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("failed"),
+    });
+    const { attention, ready } = partitionTeamComputers([readyClean, updateStuck, offline]);
+    // offline (pill priority 2) sorts ahead of the update-stuck Ready machine (pill 3).
+    expect(attention.map((c) => c.id)).toEqual(["offline", "stuck"]);
+    expect(ready.map((c) => c.id)).toEqual(["ready"]);
+  });
+
+  it("orders the attention group by pill priority, with update-stuck Ready machines last", () => {
+    const authExpired = client({ id: "auth", status: "disconnected", authState: "expired" });
+    const offline = client({ id: "offline", status: "disconnected", authState: "ok" });
+    const updateStuck = client({
+      id: "stuck",
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("blocked"),
+    });
+    const { attention } = partitionTeamComputers([updateStuck, offline, authExpired]);
+    expect(attention.map((c) => c.id)).toEqual(["auth", "offline", "stuck"]);
+  });
+
+  it("returns an empty attention group for an all-healthy fleet", () => {
+    const a = client({ id: "a", hostname: "a", capabilities: { "claude-code": capability("ok") } });
+    const b = client({ id: "b", hostname: "b", capabilities: { "claude-code": capability("ok") } });
+    const { attention, ready } = partitionTeamComputers([a, b]);
+    expect(attention).toEqual([]);
+    expect(ready.map((c) => c.id)).toEqual(["a", "b"]);
   });
 });

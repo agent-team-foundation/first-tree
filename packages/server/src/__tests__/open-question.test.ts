@@ -786,6 +786,21 @@ describe("open-question (format=request) + open_request_count", () => {
     await expect(
       editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "PLACEHOLDER" }),
     ).rejects.toThrow(BadRequestError);
+    await expect(
+      editMessage(app.db, chat.id, question.id, asker.agent.uuid, {
+        content: {
+          caption: "ratio?",
+          attachments: [
+            {
+              imageId: "11111111-1111-4111-8111-111111111111",
+              mimeType: "image/png",
+              filename: "ratio.png",
+              size: 42,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow(BadRequestError);
   });
 });
 
@@ -817,12 +832,17 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
       metadata: { mentions: [admin.humanAgentUuid], request: { question: "ship today?" } },
     });
 
+    // An open request routes the chat into the attention group (not ordinary
+    // `rows`), so search every group for it.
+    const findChat = (res: Awaited<ReturnType<typeof listMeChats>>) =>
+      [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].find((r) => r.chatId === chat.id);
+
     const listAfterRaise = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
     });
-    expect(listAfterRaise.rows.find((r) => r.chatId === chat.id)?.openRequestCount).toBe(1);
+    expect(findChat(listAfterRaise)?.openRequestCount).toBe(1);
 
     // Human answers explicitly (metadata.resolves) → counter clears.
     await sendMessage(
@@ -844,6 +864,6 @@ describe("open_request_count surfaces in the listMeChats projection (needs_you r
       filter: "all",
       engagement: "all",
     });
-    expect(listAfterAnswer.rows.find((r) => r.chatId === chat.id)?.openRequestCount).toBe(0);
+    expect(findChat(listAfterAnswer)?.openRequestCount).toBe(0);
   });
 });

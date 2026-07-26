@@ -108,7 +108,7 @@ describe("CLI command registration", () => {
       "supervise",
     ]);
     expect(subcommands(root, "config")).toEqual(["get", "set", "show"]);
-    expect(subcommands(root, "org")).toEqual(["bind-tree"]);
+    expect(subcommands(root, "org")).toEqual(["bind-tree", "context-tree"]);
   });
 
   it("registers nested agent and tree command groups", () => {
@@ -124,8 +124,33 @@ describe("CLI command registration", () => {
     const tree = command(root, "tree");
     // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
     // browser added back for agents and scripted consumers, and `init` was
-    // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path.
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "tree", "verify"]);
+    // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path;
+    // `review` is the narrow App-backed verdict publisher.
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
+      "init",
+      "read",
+      "review",
+      "seed",
+      "tree",
+      "verify",
+      "write",
+    ]);
+  });
+
+  it("registers Context Tree set and review-config without changing the parent read options", () => {
+    const root = new Command();
+    registerOrgCommands(root);
+
+    const contextTree = command(command(root, "org"), "context-tree");
+    const set = command(contextTree, "set");
+    const reviewConfig = command(contextTree, "review-config");
+    const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
+
+    expect(contextTree.commands.map((entry) => entry.name())).toEqual(["set", "review-config"]);
+    expect(optionNames(contextTree)).toEqual(["--agent"]);
+    expect(optionNames(set)).toEqual(["--agent", "--branch"]);
+    expect(optionNames(reviewConfig)).toEqual(["--agent", "--as-member", "--org"]);
+    expect(set.registeredArguments.map((argument) => argument.name())).toEqual(["repo"]);
   });
 
   it("keeps important options on high-risk commands", () => {
@@ -133,6 +158,7 @@ describe("CLI command registration", () => {
     registerLoginCommand(root);
     registerAgentCommands(root);
     registerDaemonCommands(root);
+    registerOrgCommands(root);
     registerTreeCommands(root);
 
     const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
@@ -147,7 +173,11 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
+    expect(optionNames(command(command(root, "org"), "bind-tree"))).toEqual(["--branch", "--org"]);
+    expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
+    expect(optionNames(command(command(root, "tree"), "read"))).toEqual(["--snapshot", "--team"]);
     expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
+    expect(optionNames(command(command(root, "tree"), "write"))).toEqual(["--github-login", "--snapshot", "--team"]);
   });
 
   it("exposes help for the Context Tree browser command", () => {
@@ -159,5 +189,26 @@ describe("CLI command registration", () => {
     expect(help).toContain("Browse Context Tree nodes as a hierarchy.");
     expect(help).toContain("--level <depth>");
     expect(help).toContain("--pattern <pattern>");
+  });
+
+  it("exposes read-only help for strict task-scoped Read activation", () => {
+    const root = new Command();
+    registerTreeCommands(root);
+
+    const help = command(command(root, "tree"), "read").helpInformation();
+
+    expect(help).toContain("Activate a strict task-scoped Context Tree read snapshot.");
+    expect(help).toContain("--team <team-id>");
+    expect(help).toContain("--snapshot <directory>");
+  });
+
+  it("exposes stateless help for clean source-backed Write preflight", () => {
+    const root = new Command();
+    registerTreeCommands(root);
+
+    const help = command(command(root, "tree"), "write").helpInformation();
+
+    expect(help).toContain("Preflight a clean source-backed Context Tree Write against one exact snapshot.");
+    expect(help).toContain("--github-login <login>");
   });
 });

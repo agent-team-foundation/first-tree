@@ -90,6 +90,22 @@ export class ServiceUnavailableError extends AppError {
   }
 }
 
+/** Upstream/computer unreachable — web model-catalog picker treats 502 as silent degrade. */
+export class BadGatewayError extends AppError {
+  constructor(message = "Bad gateway", attrs?: AppErrorAttrs) {
+    super(502, message, attrs);
+    this.name = "BadGatewayError";
+  }
+}
+
+/** Upstream/computer reply timed out — web model-catalog picker treats 504 as silent degrade. */
+export class GatewayTimeoutError extends AppError {
+  constructor(message = "Gateway timeout", attrs?: AppErrorAttrs) {
+    super(504, message, attrs);
+    this.name = "GatewayTimeoutError";
+  }
+}
+
 export class GoneError extends AppError {
   constructor(message = "Gone", attrs?: AppErrorAttrs) {
     super(410, message, attrs);

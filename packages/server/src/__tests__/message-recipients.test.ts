@@ -118,4 +118,35 @@ describe("sendMessage returns recipients", () => {
     const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.inboxId, suspended.inboxId));
     expect(rows).toHaveLength(0);
   });
+
+  it("lets a trusted internal send drop an inactive mention while preserving active recipients", async () => {
+    const app = getApp();
+    const suffix = crypto.randomUUID().slice(0, 6);
+    const { agent: sender } = await createTestAgent(app, { name: `trusted-src-${suffix}` });
+    const { agent: active } = await createTestAgent(app, { name: `trusted-active-${suffix}` });
+    const { agent: suspended } = await createTestAgent(app, { name: `trusted-suspended-${suffix}` });
+    const chat = await createChat(app.db, sender.uuid, {
+      type: "group",
+      participantIds: [active.uuid, suspended.uuid],
+    });
+    await suspendAgent(app.db, suspended.uuid);
+
+    const result = await sendMessage(
+      app.db,
+      chat.id,
+      sender.uuid,
+      {
+        source: "github",
+        format: "card",
+        content: { type: "github_event" },
+        metadata: { mentions: [active.uuid, suspended.uuid] },
+      },
+      { allowRecipientlessSend: true, dropInactiveMentionTargets: true },
+    );
+
+    expect(result.message.metadata.mentions).toEqual([active.uuid]);
+    expect(result.recipients).toEqual([active.inboxId]);
+    const suspendedRows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.inboxId, suspended.inboxId));
+    expect(suspendedRows).toHaveLength(0);
+  });
 });

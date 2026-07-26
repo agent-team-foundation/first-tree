@@ -17,8 +17,8 @@ import type { InstallationRow } from "./github-app-installations.js";
  *                 (username `x-access-token`).
  * - `ok: false` — caller falls back to unauthenticated git fetch. Public
  *                 repos still resolve; private repos surface as an
- *                 unavailable snapshot. The route layer uses `reason` to
- *                 pick a user-facing remediation message.
+ *                 unavailable snapshot. `reason` remains a structured
+ *                 compatibility/diagnostic signal; setup guidance stays in chat.
  */
 export type ContextTreeInstallationTokenResult =
   | {
@@ -39,8 +39,8 @@ export type MintContextTreeInstallationTokenOptions = {
  * Returns `ok: false` (with a precise reason) when the org has no App
  * configured, no installation row, the installation is suspended, or GitHub
  * rejects the mint — callers fall back to unauthenticated git fetch (public
- * repos still resolve; private repos surface as an unavailable snapshot
- * with a remediation message).
+ * repos still resolve; private repos surface as an unavailable snapshot with
+ * a structured recovery diagnosis for API compatibility.
  *
  * Takes the `installation` row directly so the helper has no DB dependency
  * — route handlers do the `findInstallationByOrg` lookup themselves. Keeps
@@ -84,47 +84,6 @@ export async function mintContextTreeInstallationToken(
         : "First Tree could not mint a GitHub App installation token.";
     return { ok: false, reason: "mint-failed", detail };
   }
-}
-
-/**
- * Append a remediation hint to an unavailable snapshot's `contextStatus.detail`
- * when the underlying cause is a missing / suspended / failed GitHub App token
- * mint. Public-repo snapshots (mint reason `no-app-config`) are left untouched
- * — the deployment may legitimately have no App configured.
- *
- * Gated on `isGithubRemoteBinding(binding)` so unrelated unavailable
- * reasons (no repo configured, localPath missing, illegal branch name,
- * public-repo fetch error) don't get a misleading "install the GitHub
- * App" hint appended.
- *
- * Lives next to `mintContextTreeInstallationToken` so the two routes that
- * call mint share one shaping function; the snapshot service itself stays
- * token-agnostic.
- */
-export function decorateSnapshotWithMintGuidance(
-  snapshot: ContextTreeSnapshot,
-  binding: ContextTreeBinding,
-  mintResult: ContextTreeInstallationTokenResult,
-): ContextTreeSnapshot {
-  if (mintResult.ok) return snapshot;
-  if (snapshot.snapshotStatus !== "unavailable") return snapshot;
-  if (mintResult.reason === "no-app-config") return snapshot;
-  if (!isGithubRemoteBinding(binding)) return snapshot;
-
-  const guidance =
-    mintResult.reason === "no-installation"
-      ? "Install the First Tree GitHub App from Team Settings and grant it access to this repo."
-      : mintResult.reason === "suspended"
-        ? "The GitHub App installation is suspended — unsuspend it from your GitHub account settings."
-        : `First Tree could not mint a GitHub App installation token.${mintResult.detail ? ` ${mintResult.detail}` : ""}`;
-
-  return {
-    ...snapshot,
-    contextStatus: {
-      ...snapshot.contextStatus,
-      detail: `${snapshot.contextStatus.detail} ${guidance}`,
-    },
-  };
 }
 
 /**

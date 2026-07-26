@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree QA"
+  short_description: "Build complete QA harnesses and validate real products"
+  default_prompt: "Use $first-tree-qa to establish complete QA readiness, then answer the requested quality question with real product evidence."

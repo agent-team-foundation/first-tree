@@ -5,8 +5,11 @@ import {
   type ChatParticipantDetail,
   extractCaption,
   type ImageRefContent,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
+  resolveTrustedSystemSender,
+  TRUSTED_SYSTEM_SENDER_NAMES,
 } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { findAttachmentFile } from "./attachment-store.js";
@@ -84,11 +87,12 @@ export function buildAgentEnv(
   },
 ): NodeJS.ProcessEnv {
   const env = withExplicitCliBinDirOnPath(parentEnv, ctx.log);
+  delete env.FIRST_TREE_RUNTIME_SESSION_TOKEN;
+  delete env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
   return {
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
-    ...(ctx.sdk.runtimeSessionToken ? { FIRST_TREE_RUNTIME_SESSION_TOKEN: ctx.sdk.runtimeSessionToken } : {}),
     ...(ctx.runtimeSessionTokenFile ? { FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: ctx.runtimeSessionTokenFile } : {}),
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
@@ -264,6 +268,29 @@ export function formatFromHeaderLine(
   return `[From: ${parts.join(" · ")}]`;
 }
 
+type AttributedMessage = {
+  senderId: string;
+  source?: string | null;
+  format: string;
+  content: unknown;
+  metadata: Record<string, unknown> | null;
+  createdAt?: string;
+};
+
+/**
+ * Format one inbound sender header using the shared trusted-system gate.
+ * The persisted participant `senderId` remains the delivery carrier; only
+ * the agent-visible attribution changes for server-authored SCM messages.
+ */
+export function formatMessageFromHeaderLine(message: AttributedMessage, participants: ChatParticipantDetail[]): string {
+  const systemSender = resolveTrustedSystemSender(message);
+  if (!systemSender) return formatFromHeaderLine(message.senderId, message.createdAt, participants);
+
+  const parts = [TRUSTED_SYSTEM_SENDER_NAMES[systemSender], "type=system"];
+  if (message.createdAt) parts.push(`sent=${message.createdAt}`);
+  return `[From: ${parts.join(" · ")}]`;
+}
+
 /**
  * SessionContext-facing wrapper: resolve the participant cache and build the
  * `[From: …]` header for `message`, or `""` when it has no sender. Shared by
@@ -272,7 +299,7 @@ export function formatFromHeaderLine(
  */
 export async function buildFromHeader(message: SessionMessage, participants: ParticipantCache): Promise<string> {
   if (!message.senderId) return "";
-  return formatFromHeaderLine(message.senderId, message.createdAt, await participants.get());
+  return formatMessageFromHeaderLine(message, await participants.get());
 }
 
 /**
@@ -295,12 +322,9 @@ export async function buildFromHeader(message: SessionMessage, participants: Par
  * payloads are stringified so the resumed turn still sees readable text.
  *
  * `format: "file"` image messages (single-ref or batched caption + N refs)
- * get a human-readable rendering — caption text plus the on-disk path of
- * each image so a shell-capable LLM (codex CLI, claude-code) can read it,
- * or a "[Image … not available on this device]" placeholder when the bytes
- * never arrived on this client. Without this, codex / future handlers that
- * delegate to `formatInboundContent` would see the raw `{caption,
- * attachments}` JSON.
+ * get a human-readable rendering. Generic image attachments on a textual
+ * request are appended through the same path-based note without changing the
+ * request body shape.
  */
 function renderForLLM(message: SessionMessage): string {
   let base: string;
@@ -311,18 +335,22 @@ function renderForLLM(message: SessionMessage): string {
   } else {
     base = JSON.stringify(message.content);
   }
+  const imageNote = renderImageAttachmentsForLLM(message);
+  if (imageNote) base = base.length > 0 ? `${base}\n\n${imageNote}` : imageNote;
   // Document/file attachments ride metadata.attachments on any format — append
   // their on-disk paths so a shell-capable agent can open them.
   const docNote = renderDocumentAttachmentsForLLM(message);
-  if (!docNote) return base;
-  return base.length > 0 ? `${base}\n\n${docNote}` : docNote;
+  if (docNote) base = base.length > 0 ? `${base}\n\n${docNote}` : docNote;
+
+  return base;
 }
 
 /**
  * A text note listing the on-disk paths of any document/file attachments on
  * this message (`metadata.attachments`, non-image), so a shell-capable agent
- * can open them. Returns null when there are none. Images are handled
- * separately — they ride `content`.
+ * can open them. Returns null when there are none. Generic image refs are
+ * handled separately by `renderImageAttachmentsForLLM`; legacy image messages
+ * remain content-backed.
  */
 export function renderDocumentAttachmentsForLLM(message: SessionMessage): string | null {
   const refs = attachmentRefsFromMetadata(message.metadata ?? undefined).filter((ref) => ref.kind !== "image");
@@ -336,6 +364,24 @@ export function renderDocumentAttachmentsForLLM(message: SessionMessage): string
     const path = findAttachmentFile(message.chatId, ref.attachmentId, ref.filename);
     lines.push(
       path ? `\nFilename: ${ref.filename}\nPath: ${path}` : `\n[File "${ref.filename}" not available on this device]`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Render generic image attachments as local paths for the receiving agent. */
+export function renderImageAttachmentsForLLM(message: Pick<SessionMessage, "chatId" | "metadata">): string | null {
+  const refs = imageAttachmentRefsFromMetadata(message.metadata ?? undefined);
+  if (refs.length === 0) return null;
+  const lines: string[] = [
+    refs.length === 1
+      ? "An image was shared in this chat. Use the Read tool / shell to open it before responding."
+      : `${refs.length} images were shared in this chat. Use the Read tool / shell to open each before responding.`,
+  ];
+  for (const ref of refs) {
+    const path = findImagePath(message.chatId, ref.attachmentId, ref.mimeType);
+    lines.push(
+      path ? `\nFilename: ${ref.filename}\nPath: ${path}` : `\n[Image "${ref.filename}" not available on this device]`,
     );
   }
   return lines.join("\n");
@@ -388,16 +434,23 @@ export async function formatInboundContent(message: SessionMessage, participants
     const ps = await participants.get();
     const lines: string[] = ["[Earlier in chat — context you missed]"];
     for (const p of preceding) {
-      const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
-      lines.push(`${formatFromHeaderLine(p.senderId, p.createdAt, ps)} ${text}`);
+      let text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
+      const imageNote =
+        p.format === "request"
+          ? renderImageAttachmentsForLLM({
+              chatId: message.chatId,
+              metadata: p.metadata,
+            })
+          : null;
+      if (imageNote) text = `${text}\n\n${imageNote}`;
+      lines.push(`${formatMessageFromHeaderLine(p, ps)} ${text}`);
     }
     lines.push("", "[Now — message that woke you]");
     header = `${lines.join("\n")}\n\n`;
   }
 
-  const base = message.senderId
-    ? `${header}${formatFromHeaderLine(message.senderId, message.createdAt, await participants.get())}\n\n${rawContent}`
-    : `${header}${rawContent}`;
+  const currentHeader = await buildFromHeader(message, participants);
+  const base = currentHeader ? `${header}${currentHeader}\n\n${rawContent}` : `${header}${rawContent}`;
 
   return base;
 }

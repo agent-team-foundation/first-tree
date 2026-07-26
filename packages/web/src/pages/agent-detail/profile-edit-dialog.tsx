@@ -28,11 +28,13 @@ import { useJustSaved } from "./save-semantics.js";
  * One "Edit profile" dialog merging the former Identity and Appearance dialogs.
  * Every field saves on its own commit (immediate-save, like the rest of the
  * agent-detail page) — there is no Save button:
- *   - Identity / visibility / fallback color → a partial PATCH /agents/:uuid per
- *     field (`onSave`): display name on blur / Enter, the rest on change. Saves
- *     serialize — controls + Done disable while one is in flight — so partial
- *     PATCHes never race and the dialog never closes mid-save; a rejected save
- *     surfaces inline. Done just commits any pending name, then closes.
+ *   - Identity / visibility / fallback color → a partial mutation per field
+ *     (`onSave`): non-human display name on blur / Enter, the rest on change.
+ *     Human display names belong to Settings / Team member management and are
+ *     not editable from this agent-mirror surface. Saves serialize — controls +
+ *     Done disable while one is in flight — so partial PATCHes never race and
+ *     the dialog never closes mid-save; a rejected save surfaces inline. Done
+ *     just commits any pending non-human name, then closes.
  *   - Avatar image → eager PUT/DELETE /agents/:uuid/avatar on pick/remove
  *     (raw bytes don't share the JSON envelope); never closes the dialog.
  */
@@ -210,8 +212,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   // Every field saves on its own commit (text on blur / Enter, selects + colour
   // on change) — consistent with the rest of the agent-detail page, which has no
-  // Save button. Each save is a partial PATCH /agents/:uuid; the avatar image is
-  // handled eagerly below, separately.
+  // Save button. Each save is a partial agent mutation. Human display names are
+  // intentionally absent here because the human agent is a projection of the
+  // user/member identity. The avatar image is handled eagerly below.
   async function saveField(patch: UpdateAgent): Promise<boolean> {
     // Serialize: ignore a new save while one is in flight, so overlapping partial
     // PATCHes can't race and leave the server with a stale value.
@@ -237,6 +240,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   // empty → inline error and no save; changed + valid → save. `savedNameRef`
   // dedupes so a blur immediately followed by Done doesn't fire the PATCH twice.
   async function commitName(): Promise<boolean> {
+    // Human names are globally authoritative user/member identity and have no
+    // editor in this dialog. Keep Done a pure close for that projection.
+    if (isHuman) return true;
     const trimmed = displayName.trim();
     if (!trimmed) {
       setNameError("Display name is required.");
@@ -337,9 +343,20 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   const previewAgent: Agent = { ...agent, avatarColorToken: picked };
   const hasImage = !!agent.avatarImageUrl;
+  // The runtime/plan consequence must always be disclosed for a non-human
+  // agent — org-visible means teammates can spend the OWNER's computer and
+  // plan — but phrased for who actually pays: "your" only when the viewer owns
+  // the agent, owner-relative wording when an admin edits another member's
+  // agent. Human identities have no runtime, so they get the plain visibility
+  // effect.
+  const orgVisibleHelp = isHuman
+    ? "Anyone on your team can @mention it and work with it."
+    : agent.managerId === memberId
+      ? "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan."
+      : "Anyone on your team can @mention it and start work with it — it runs on its owner's computer and uses their plan.";
   const visibilityHelp = canChangeVisibility
     ? visibility === AGENT_VISIBILITY.ORGANIZATION
-      ? "Anyone on your team can @mention and chat with it."
+      ? orgVisibleHelp
       : "Only this agent's owner can see and chat with it."
     : "Only the owner or an admin can change this agent's visibility.";
 
@@ -364,19 +381,21 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               Agent name is permanent after creation — used in @mentions and CLI commands.
             </p>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="profile-display">Display name</Label>
-            <Input
-              id="profile-display"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              onBlur={() => void commitName()}
-              disabled={editsDisabled}
-              placeholder="How teammates see this agent"
-              maxLength={200}
-            />
-            {nameError && <p className="text-caption text-destructive">{nameError}</p>}
-          </div>
+          {!isHuman && (
+            <div className="space-y-2">
+              <Label htmlFor="profile-display">Display name</Label>
+              <Input
+                id="profile-display"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                onBlur={() => void commitName()}
+                disabled={editsDisabled}
+                placeholder="How teammates see this agent"
+                maxLength={200}
+              />
+              {nameError && <p className="text-caption text-destructive">{nameError}</p>}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="profile-visibility">Visibility</Label>
             <Select

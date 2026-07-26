@@ -143,6 +143,7 @@ function providerRetryPayloads(emitted: readonly SessionEvent[]): ProviderRetryE
 
 describe("claude-code handler — auto-resume failure surfacing", () => {
   it("emits error + turn_end:error and finishes the in-flight entry when respawnQuery throws", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
 
     const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -174,12 +175,19 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       },
     };
 
-    await handler.start(
-      { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
-      ctx,
-    );
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+    try {
+      await handler.start(
+        { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
+        ctx,
+      );
+      await waitForCondition("scheduled retry", () => providerRetryPayloads(emitted).length === 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForCondition("auto-resume failure settlement", () => providerRetryPayloads(emitted).length === 2);
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      vi.useRealTimers();
+    }
 
     const errors = emitted.filter(
       (e) => e.kind === "error" && parseProviderRetryEventMessage(e.payload.message) === null,
@@ -226,6 +234,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
   });
 
   it("redacts and truncates auto-resume terminal provider previews", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
     initialCrashMessage = `initial sdk transport crash Authorization: Bearer ${RAW_TOKEN} ${"x".repeat(1200)}`;
     respawnFailureMessage = `respawn build failed: sdk module unavailable api_key=${RAW_TOKEN} ${"y".repeat(1200)}`;
@@ -256,12 +265,19 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       finishTurn: async () => {},
     };
 
-    await handler.start(
-      { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
-      ctx,
-    );
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+    try {
+      await handler.start(
+        { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
+        ctx,
+      );
+      await waitForCondition("scheduled retry", () => providerRetryPayloads(emitted).length === 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForCondition("auto-resume failure settlement", () => providerRetryPayloads(emitted).length === 2);
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      vi.useRealTimers();
+    }
 
     const errorMessages = emitted.filter((event) => event.kind === "error").map((event) => event.payload.message);
     expect(errorMessages.every((message) => !message.includes(RAW_TOKEN))).toBe(true);
@@ -286,6 +302,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
   });
 
   it("retries an unentered tail after auto-resume failure settles the provider-entered prefix", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
     requiredInputsBeforeThrowByAttempt.set(1, 1);
     let releaseAttempt1!: () => void;
@@ -344,25 +361,31 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       failSessionForRecovery,
     };
 
-    await handler.start(
-      { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
-      ctx,
-    );
-    await waitForObservedInputs(1, 1);
-    handler.inject({
-      id: "m2",
-      chatId: "chat-resume-fail",
-      senderId: "u",
-      format: "text",
-      content: SECOND_PROMPT,
-      metadata: null,
-    });
-    await m2Pushed;
-    releaseAttempt1();
+    try {
+      await handler.start(
+        { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
+        ctx,
+      );
+      await waitForObservedInputs(1, 1);
+      handler.inject({
+        id: "m2",
+        chatId: "chat-resume-fail",
+        senderId: "u",
+        format: "text",
+        content: SECOND_PROMPT,
+        metadata: null,
+      });
+      await m2Pushed;
+      releaseAttempt1();
 
-    await waitForCondition("auto-resume failed tail recovery", () => retriedBatches.length > 0);
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+      await waitForCondition("scheduled retry", () => providerRetryPayloads(emitted).length === 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForCondition("auto-resume failed tail recovery", () => retriedBatches.length > 0);
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(logs.some((l) => l.includes("Auto-resume failed: respawn build failed"))).toBe(true);
     const providerPayloads = providerRetryPayloads(emitted);

@@ -60,6 +60,7 @@ const authMock = vi.hoisted(() => ({
     role: "admin" as "admin" | "member",
     memberId: "member-self" as string | null,
   },
+  refreshMe: vi.fn(),
 }));
 
 const routerMocks = vi.hoisted(() => ({
@@ -75,7 +76,7 @@ vi.mock("../../../api/members.js", () => memberMocks);
 vi.mock("../../../api/usage.js", () => usageMocks);
 
 vi.mock("../../../auth/auth-context.js", () => ({
-  useAuth: () => authMock.value,
+  useAuth: () => ({ ...authMock.value, refreshMe: authMock.refreshMe }),
 }));
 
 vi.mock("../../../lib/use-member-name-map.js", () => ({
@@ -395,19 +396,23 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderDom(element: ReactElement): Promise<{ container: HTMLElement; root: Root }> {
+async function renderDom(
+  element: ReactElement,
+): Promise<{ container: HTMLElement; queryClient: QueryClient; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  const queryClient = createClient();
+  queryClient.setQueryData(["chat-detail", "chat-1"], { id: "chat-1", participants: [] });
   await act(async () => {
     root.render(
       <MemoryRouter>
-        <QueryClientProvider client={createClient()}>{element}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>{element}</QueryClientProvider>
       </MemoryRouter>,
     );
   });
   await flush();
-  return { container, root };
+  return { container, queryClient, root };
 }
 
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
@@ -484,6 +489,7 @@ function seedDefaultMocks(): void {
     ...patch,
   }));
   memberMocks.deleteMember.mockResolvedValue(undefined);
+  authMock.refreshMe.mockResolvedValue(undefined);
   usageMocks.getOrgUsageByAgent.mockImplementation(async () => ({
     rows: [usage("agent-1"), usage("agent-private", { turns: 1 }), usage("agent-2", { turns: 2 })],
   }));
@@ -596,7 +602,7 @@ describe("TeamPage", () => {
   it("edits and removes human members through the profile dialog", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const { TeamPage } = await import("../index.js");
-    const { container, root } = await renderDom(<TeamPage />);
+    const { container, queryClient, root } = await renderDom(<TeamPage />);
 
     await waitForText(container, "Alice");
     await click(container.querySelector('[aria-label="Open Alice"]'));
@@ -613,12 +619,40 @@ describe("TeamPage", () => {
       displayName: "Alice Updated",
       role: "admin",
     });
+    expect(queryClient.getQueryState(["chat-detail", "chat-1"])?.isInvalidated).toBe(true);
 
     await click(container.querySelector('button[aria-label="Actions for Alice"]'));
     await click(exactButton(container, "Remove from org"));
     await waitForCondition(() => memberMocks.deleteMember.mock.calls.length > 0, "Expected member removal");
     expect(confirmSpy).toHaveBeenCalledWith("Remove Alice from the org? The human agent will be deactivated.");
     expect(memberMocks.deleteMember.mock.calls[0]?.[0]).toBe("member-alice");
+
+    await act(async () => root.unmount());
+  });
+
+  it("refreshes AuthProvider after a combined self rename and role edit", async () => {
+    memberMocks.listMembers.mockResolvedValueOnce([MEMBERS[0], member({ ...MEMBERS[1], role: "admin" })]);
+    const { TeamPage } = await import("../index.js");
+    const { container, queryClient, root } = await renderDom(<TeamPage />);
+
+    await waitForText(container, "Gandy");
+    await click(container.querySelector('[aria-label="Open Gandy"]'));
+    await waitForText(document.body, "Edit profile");
+
+    const displayName = document.body.querySelector<HTMLInputElement>("#member-display");
+    const role = document.body.querySelector<HTMLSelectElement>("#member-role");
+    if (!displayName || !role) throw new Error("Self member form missing");
+    await setInputValue(displayName, "Gandy Updated");
+    await setSelectValue(role, "member");
+    await click(exactButton(document.body, "Save"));
+
+    await waitForCondition(() => memberMocks.updateMember.mock.calls.length > 0, "Expected self member update");
+    expect(memberMocks.updateMember).toHaveBeenCalledWith("member-self", {
+      displayName: "Gandy Updated",
+      role: "member",
+    });
+    expect(authMock.refreshMe).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryState(["chat-detail", "chat-1"])?.isInvalidated).toBe(true);
 
     await act(async () => root.unmount());
   });

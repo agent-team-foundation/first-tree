@@ -43,6 +43,12 @@ describe("findAssembledBriefingFingerprint", () => {
         "## Current Chat Context (First Tree Managed, per-chat)",
         "## Current Chat Context (First Tree Managed, per-chat)",
       ],
+      // The legacy-fallback prompt heading marks a merged blob that embeds
+      // team-shared content; copying it back would freeze team prompts.
+      [
+        "# Agent Prompt (legacy merged — may include team-shared content)",
+        "# Agent Prompt (legacy merged — may include team-shared content)",
+      ],
     ];
     for (const [heading, expectedMatch] of cases) {
       const result = findAssembledBriefingFingerprint(`Some intro.\n\n${heading}\n\nBody.`);
@@ -58,5 +64,11 @@ describe("findAssembledBriefingFingerprint", () => {
     expect(findAssembledBriefingFingerprint("# Working in First Trees\n")).toBeNull();
     // …but a colon/suffix after the exact phrase is still the briefing shape.
     expect(findAssembledBriefingFingerprint("# Required Reading: extras\n")?.kind).toBe("briefing-heading");
+  });
+
+  it("does not flag the structured editable agent-prompt heading", () => {
+    // The structured heading's body is the agent's own fragment — copying it
+    // back is harmless duplication, unlike the legacy merged blob.
+    expect(findAssembledBriefingFingerprint("# Agent Prompt (this agent only — editable)\n")).toBeNull();
   });
 });

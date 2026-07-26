@@ -17,6 +17,21 @@ describe("Agent Messages API", () => {
     return { a1, a2, chatId: chat.id };
   }
 
+  it("rejects browser-only campaign action context on the agent task-chat endpoint", async () => {
+    const app = getApp();
+    const a1 = await createTestAgent(app, { name: `action-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const a2 = await createTestAgent(app, { name: `action-a2-${crypto.randomUUID().slice(0, 6)}` });
+
+    const response = await a1.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [a2.agent.uuid],
+      campaignAction: { campaign: "production-scan", repoSlug: "acme/app" },
+      initialMessage: { format: "text", content: "Start the campaign action.", source: "agent" },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
   it("sends and retrieves messages", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);
@@ -55,6 +70,26 @@ describe("Agent Messages API", () => {
     expect(editRes.statusCode).toBe(200);
     expect(editRes.json().content).toBe("Edited");
     expect(editRes.json().createdAt).toEqual(expect.any(String));
+  });
+
+  it("strips caller-supplied edit timestamps and lets only editMessage create them", async () => {
+    const app = getApp();
+    const { a1, a2, chatId } = await setupChat(app);
+
+    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: "Original",
+      metadata: { mentions: [a2.agent.uuid], editedAt: "2099-01-01T00:00:00.000Z" },
+    });
+    expect(sendRes.statusCode).toBe(201);
+    expect(sendRes.json().metadata.editedAt).toBeUndefined();
+
+    const editRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}/messages/${sendRes.json().id}`, {
+      content: "Edited",
+    });
+    expect(editRes.statusCode).toBe(200);
+    expect(editRes.json().metadata.editedAt).toEqual(expect.any(String));
+    expect(editRes.json().metadata.editedAt).not.toBe("2099-01-01T00:00:00.000Z");
   });
 
   it("rejects agent edits that would persist escaped multiline markdown", async () => {

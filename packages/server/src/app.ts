@@ -13,7 +13,9 @@ import postgres from "postgres";
 import { ZodError } from "zod";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
+import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
+import { agentCronJobRoutes } from "./api/agent/cron-jobs.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
@@ -26,28 +28,37 @@ import { agentConfigRoutes } from "./api/agents-config.js";
 import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
+import { googleOauthRoutes } from "./api/auth/google.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
+import { chatCronJobRoutes, cronJobRoutes } from "./api/cron-jobs.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
+import { gitlabConnectionRoutes } from "./api/gitlab-connections.js";
+import { gitlabIdentityLinkRoutes } from "./api/gitlab-identity-links.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
+import { meAuthProviderRoutes } from "./api/me-auth-providers.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgAttachmentRoutes } from "./api/orgs/attachments.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
+import { orgContextReviewerRoutes } from "./api/orgs/context-reviewer.js";
 import { orgContextTreeRoutes } from "./api/orgs/context-tree.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
 import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
+import { orgGitlabConnectionRoutes } from "./api/orgs/gitlab-connections.js";
+import { orgGitlabIdentityLinkRoutes } from "./api/orgs/gitlab-identity-links.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -55,6 +66,7 @@ import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgResourceRoutes } from "./api/orgs/resources.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
+import { orgSetupCapabilitiesRoutes } from "./api/orgs/setup-capabilities.js";
 import { orgUsageRoutes } from "./api/orgs/usage.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { readyzRoutes } from "./api/readyz.js";
@@ -62,6 +74,7 @@ import { resourceRoutes } from "./api/resources.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
+import { gitlabWebhookRoutes } from "./api/webhooks/gitlab.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
@@ -86,6 +99,7 @@ import { invalidateChatAudienceLocal, registerChatAudienceDispatcher } from "./s
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
+import { backfillGitlabAttentionPairs } from "./services/gitlab-attention-backfill.js";
 import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
@@ -218,17 +232,11 @@ export async function buildApp(config: Config) {
   const captureClientIp = config.observability.tracing?.captureClientIp ?? false;
   await app.register(fastifyOpenTelemetry, {
     wrapRoutes: true,
-    formatSpanName: (request) => {
-      const route = request.routeOptions?.url;
-      const method = request.method ?? "GET";
-      if (route) return `${method} ${route}`;
-      const pathOnly = request.url.split("?")[0] ?? request.url;
-      return `${method} ${pathOnly}`;
-    },
+    formatSpanName: formatHttpSpanName,
     formatSpanAttributes: {
       request: (request) => {
         const route = request.routeOptions?.url;
-        const target = request.url.split("?")[0] ?? request.url;
+        const target = redactUrl(request.url.split("?")[0] ?? request.url);
         // `http.url` retains the query string for debugability but is run
         // through `redactUrl` so JWTs in `?token=…` (admin WS upgrade) never
         // reach the trace exporter — same vocabulary as the fastify logger's
@@ -443,7 +451,11 @@ export async function buildApp(config: Config) {
         [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
-      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
+      return reply.status(error.statusCode).send({
+        error: error.message,
+        ...(typeof error.attrs?.code === "string" ? { code: error.attrs.code } : {}),
+        ...traceField,
+      });
     }
 
     if (error instanceof ZodError) {
@@ -494,8 +506,10 @@ export async function buildApp(config: Config) {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
       await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
+      await api.register(gitlabWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
+      await api.register(googleOauthRoutes, { prefix: "/auth/google" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
       // Public read for manager-uploaded agent avatars — `<img src>` cannot
@@ -515,6 +529,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meAuthProviderRoutes);
           await scope.register(landingCampaignRoutes, { prefix: "/me/landing-campaigns" });
           await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
@@ -530,6 +545,13 @@ export async function buildApp(config: Config) {
           await scope.register(attachmentRoutes);
         }),
         { prefix: "/attachments" },
+      );
+
+      await api.register(
+        userScope("internalAnalyticsScope", async (scope) => {
+          await scope.register(scanCampaignExportRoutes, { prefix: "/analytics/scan-campaign-exports" });
+        }),
+        { prefix: "/internal" },
       );
 
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
@@ -548,8 +570,12 @@ export async function buildApp(config: Config) {
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
           await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
+          await scope.register(orgGitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(orgGitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
+          await scope.register(orgContextReviewerRoutes, { prefix: "/context-reviewer" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
+          await scope.register(orgSetupCapabilitiesRoutes, { prefix: "/setup-capabilities" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
           if (config.docs.enabled) {
             await scope.register(orgDocumentRoutes, { prefix: "/documents" });
@@ -571,8 +597,12 @@ export async function buildApp(config: Config) {
           await scope.register(agentUsageRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
+          await scope.register(chatCronJobRoutes, { prefix: "/chats" });
+          await scope.register(cronJobRoutes, { prefix: "/cron-jobs" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
+          await scope.register(gitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(gitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           if (config.docs.enabled) {
             await scope.register(documentRoutes, { prefix: "/documents" });
             await scope.register(documentCommentRoutes, { prefix: "/document-comments" });
@@ -586,7 +616,9 @@ export async function buildApp(config: Config) {
         agentScope("agentRuntimeScope", async (scope) => {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
+          await scope.register(agentContextReviewRunRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
+          await scope.register(agentCronJobRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
@@ -675,6 +707,10 @@ export async function buildApp(config: Config) {
     await backfillResourcesPhase1(db).catch((err) => {
       app.log.warn({ err }, "resources phase1 backfill failed");
     });
+    const gitlabAttentionBackfill = await backfillGitlabAttentionPairs(db);
+    if (gitlabAttentionBackfill.paired > 0 || gitlabAttentionBackfill.legacyRouteOnly > 0) {
+      app.log.info(gitlabAttentionBackfill, "gitlab attention pair backfill complete");
+    }
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();
@@ -685,11 +721,19 @@ export async function buildApp(config: Config) {
   app.addHook("onClose", async () => {
     commandVersionPoller.stop();
     pulseAggregator.stop();
-    backgroundTasks.stop();
+    await backgroundTasks.stop();
     await notifier.stop();
     await listenClient.end();
     await db.end();
   });
 
   return app;
+}
+
+export function formatHttpSpanName(request: { method?: string; url: string; routeOptions?: { url?: string } }): string {
+  const route = request.routeOptions?.url;
+  const method = request.method ?? "GET";
+  if (route) return `${method} ${route}`;
+  const pathOnly = request.url.split("?")[0] ?? request.url;
+  return `${method} ${redactUrl(pathOnly)}`;
 }

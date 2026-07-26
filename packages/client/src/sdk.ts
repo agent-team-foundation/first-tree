@@ -10,26 +10,52 @@ import {
   type Chat,
   type ChatDetail,
   type ChatGithubEntityListResponse,
+  type ChatGitlabEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type ContextReviewSubmitRequest,
+  type ContextReviewSubmitResponse,
+  type ContextTreeSeedPreflightRequest,
+  type ContextTreeSeedPreflightResponse,
+  type ContextTreeWritePreflightRequest,
+  type ContextTreeWritePreflightResponse,
+  type CreateCronJobRequest,
   type CreateDocCommentRequest,
   type CreateTaskChat,
+  type CronJob,
+  type CronPreviewRequest,
+  type CronPreviewResponse,
+  contextTreeSeedPreflightRequestSchema,
+  contextTreeSeedPreflightResponseSchema,
+  contextTreeWritePreflightRequestSchema,
+  contextTreeWritePreflightResponseSchema,
+  type DeleteCronJobResponse,
   type DocComment,
   type DocCommentStatus,
   type DocStatus,
   type DocSummary,
   type DocWithVersion,
+  type FollowChatGitlabEntityRequest,
+  type FollowChatGitlabEntityResponse,
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
+  type ListCronJobsResponse,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
+  type OrgContextTreeFeaturesOutput,
+  type OrgContextTreeFeaturesStorage,
+  type OrgContextTreeOutput,
+  orgContextTreeFeaturesOutputSchema,
+  orgContextTreeOutputSchema,
   type PublishDocRequest,
   type PublishDocResponse,
   type RuntimeProvider,
   type SendMessage,
+  type UnfollowChatGitlabEntityResponse,
   type UnfollowGithubEntityResponse,
+  type UpdateCronJobRequest,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
@@ -45,6 +71,7 @@ import { createLogger } from "./observability/logger.js";
  * and immediately get kicked off with `auth:expired`.
  */
 export type AccessTokenProvider = (opts?: { minValidityMs?: number }) => string | Promise<string>;
+export type RuntimeSessionTokenProvider = () => string | undefined;
 
 export type SdkConfig = {
   serverUrl: string;
@@ -62,11 +89,11 @@ export type SdkConfig = {
    */
   agentId?: string;
   /**
-   * Ephemeral token returned by the current successful WS `agent:bind`.
+   * Token or token provider for the current runtime session.
    * Agent-scoped HTTP includes it to prove the request comes from the active
-   * runtime binding, not merely from a user JWT that knows `X-Agent-Id`.
+   * runtime owner, not merely from a user JWT that knows `X-Agent-Id`.
    */
-  runtimeSessionToken?: string;
+  runtimeSessionToken?: string | RuntimeSessionTokenProvider;
   /**
    * Optional `User-Agent` header sent on every request. Without it Node's
    * default `User-Agent: node` lands in trace backends — useless for forensics
@@ -101,8 +128,18 @@ export type RegisterResult = {
 };
 
 export type ContextTreeConfig = {
+  provider?: "github" | "gitlab";
   repo: string | null;
   branch: string | null;
+};
+
+export type ContextReviewRuntimeConfig = ContextTreeConfig & {
+  contextReviewer: OrgContextTreeFeaturesStorage["contextReviewer"];
+};
+
+export type MemberProfile = {
+  memberships: Array<{ organizationId: string }>;
+  defaultOrganizationId: string | null;
 };
 
 export type PaginatedResult<T> = {
@@ -128,7 +165,7 @@ const STARTUP_FETCH_TIMEOUT_MS = 5_000;
  * `sendMessage` / `listMessages` paths); startup-critical GETs override
  * with `STARTUP_FETCH_TIMEOUT_MS`.
  */
-type SdkCallOptions = { timeoutMs?: number; retry?: boolean };
+type SdkCallOptions = { timeoutMs?: number; retry?: boolean; logRetries?: boolean };
 
 /**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
@@ -236,7 +273,7 @@ export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
-  private readonly _runtimeSessionToken: string | undefined;
+  private readonly resolveRuntimeSessionToken: RuntimeSessionTokenProvider;
   private readonly _userAgent: string | undefined;
   private readonly logger = createLogger("sdk");
 
@@ -244,7 +281,9 @@ export class FirstTreeHubSDK {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
     this._agentId = config.agentId;
-    this._runtimeSessionToken = config.runtimeSessionToken;
+    const runtimeSessionToken = config.runtimeSessionToken;
+    this.resolveRuntimeSessionToken =
+      typeof runtimeSessionToken === "function" ? runtimeSessionToken : () => runtimeSessionToken;
     this._userAgent = config.userAgent;
   }
 
@@ -258,9 +297,9 @@ export class FirstTreeHubSDK {
     return this._agentId;
   }
 
-  /** Ephemeral runtime-session token scoped to the current WS bind, if any. */
+  /** Runtime-session token scoped to the current bind, if any. */
   get runtimeSessionToken(): string | undefined {
-    return this._runtimeSessionToken;
+    return this.resolveRuntimeSessionToken();
   }
 
   /** Validate current JWT + X-Agent-Id, return agent identity. */
@@ -358,6 +397,105 @@ export class FirstTreeHubSDK {
     );
   }
 
+  /**
+   * Member-scoped, stateless admission check for a clean Context Tree Write.
+   * The explicit Team stays in the URL; Server live state supplies the
+   * binding and Reviewer. This call creates no task, Chat, PR, or review.
+   */
+  async preflightMemberContextTreeWrite(
+    organizationId: string,
+    data: ContextTreeWritePreflightRequest,
+    options: { retry?: boolean } = {},
+  ): Promise<ContextTreeWritePreflightResponse> {
+    const body = contextTreeWritePreflightRequestSchema.parse(data);
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/context-tree/write-preflight`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: options.retry ?? true },
+    );
+    return contextTreeWritePreflightResponseSchema.parse(response);
+  }
+
+  /**
+   * Member-scoped, stateless admission check for Context Tree Seed. The
+   * Server resolves the explicit Team's current role and binding on every
+   * call; this creates no repository, binding, branch, pull request, or Chat.
+   */
+  async preflightMemberContextTreeSeed(
+    organizationId: string,
+    data: ContextTreeSeedPreflightRequest,
+    options: { retry?: boolean } = {},
+  ): Promise<ContextTreeSeedPreflightResponse> {
+    const body = contextTreeSeedPreflightRequestSchema.parse(data);
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/context-tree/seed-preflight`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: options.retry ?? true },
+    );
+    return contextTreeSeedPreflightResponseSchema.parse(response);
+  }
+
+  /** Read the signed-in member's Team memberships for explicit org selection. */
+  async getMemberProfile(): Promise<MemberProfile> {
+    const response = await this.requestJson<unknown>("/api/v1/me");
+    if (typeof response !== "object" || response === null) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me");
+    }
+    const value = response as { memberships?: unknown; defaultOrganizationId?: unknown };
+    if (!Array.isArray(value.memberships)) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: memberships must be an array");
+    }
+    const memberships = value.memberships;
+    if (
+      !memberships.every(
+        (membership) =>
+          typeof membership === "object" &&
+          membership !== null &&
+          typeof (membership as { organizationId?: unknown }).organizationId === "string",
+      )
+    ) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: membership organizationId is required");
+    }
+    if (
+      value.defaultOrganizationId !== undefined &&
+      value.defaultOrganizationId !== null &&
+      typeof value.defaultOrganizationId !== "string"
+    ) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: defaultOrganizationId must be a string or null");
+    }
+    return {
+      memberships,
+      defaultOrganizationId: value.defaultOrganizationId ?? null,
+    };
+  }
+
+  /** Member-readable Context Tree binding from the existing generic settings API. */
+  async getMemberContextTreeSetting(
+    organizationId: string,
+    options: { retry?: boolean } = {},
+  ): Promise<OrgContextTreeOutput> {
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree`,
+      undefined,
+      { retry: options.retry ?? true },
+    );
+    return orgContextTreeOutputSchema.parse(response);
+  }
+
+  /** Member-readable Reviewer assignment from the existing generic settings API. */
+  async getMemberContextTreeFeatures(organizationId: string): Promise<OrgContextTreeFeaturesOutput> {
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree_features`,
+    );
+    return orgContextTreeFeaturesOutputSchema.parse(response);
+  }
+
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
@@ -442,6 +580,92 @@ export class FirstTreeHubSDK {
     return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
 
+  /** Record a local, pending-capable GitLab Issue/MR declaration without provider egress. */
+  async followGitlabEntity(
+    chatId: string,
+    body: FollowChatGitlabEntityRequest,
+  ): Promise<FollowChatGitlabEntityResponse> {
+    return this.requestJson<FollowChatGitlabEntityResponse>(`/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** List automatic and manual GitLab bindings for this chat from the local webhook projection. */
+  async listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntityListResponse> {
+    return this.requestJson<ChatGitlabEntityListResponse>(`/api/v1/agent/chats/${chatId}/gitlab-entities`);
+  }
+
+  /** Remove every automatic or manual binding for this entity in this chat. Idempotent. */
+  async unfollowGitlabEntity(chatId: string, entityUrl: string): Promise<UnfollowChatGitlabEntityResponse> {
+    return this.requestJson<UnfollowChatGitlabEntityResponse>(
+      `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /** Preview a five-field cron schedule without side effects. */
+  async previewCronJob(chatId: string, body: CronPreviewRequest): Promise<CronPreviewResponse> {
+    return this.requestJson<CronPreviewResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs/preview`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async listCronJobs(chatId: string): Promise<ListCronJobsResponse> {
+    return this.requestJson<ListCronJobsResponse>(`/api/v1/agent/chats/${chatId}/cron-jobs`);
+  }
+
+  async createCronJob(chatId: string, body: CreateCronJobRequest): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getCronJob(chatId: string, jobId: string): Promise<CronJob> {
+    return this.requestJson<CronJob>(`/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async updateCronJob(chatId: string, jobId: string, body: UpdateCronJobRequest, revision: number): Promise<CronJob> {
+    return this.requestJson<CronJob>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+        headers: { "If-Match": String(revision) },
+      },
+      // Revisioned mutations are not safe to replay after a lost response.
+      { retry: false },
+    );
+  }
+
+  async deleteCronJob(chatId: string, jobId: string, revision: number): Promise<DeleteCronJobResponse> {
+    return this.requestJson<DeleteCronJobResponse>(
+      `/api/v1/agent/chats/${chatId}/cron-jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+        headers: { "If-Match": String(revision) },
+      },
+      { retry: false },
+    );
+  }
+
+  /** Submit one server-authored Context Reviewer run for App publication. */
+  async submitContextReview(
+    chatId: string,
+    runId: string,
+    body: ContextReviewSubmitRequest,
+  ): Promise<ContextReviewSubmitResponse> {
+    return this.requestJson<ContextReviewSubmitResponse>(
+      `/api/v1/agent/chats/${encodeURIComponent(chatId)}/context-review-runs/${encodeURIComponent(runId)}/submit`,
+      { method: "POST", body: JSON.stringify(body) },
+      // The server reconciles an unknown GitHub mutation. The client must not
+      // replay a possibly committed submission after a transient response.
+      { retry: false },
+    );
+  }
+
   /**
    * Update chat metadata. Mutable fields are `topic` and/or `description`
    * (pass at least one):
@@ -490,7 +714,54 @@ export class FirstTreeHubSDK {
 
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+    const info = await this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
+    return { repo: info.repo, branch: info.branch };
+  }
+
+  /** Read the live bound Tree plus Reviewer assignment as one runtime tuple. */
+  async getAgentContextReviewConfig(): Promise<ContextReviewRuntimeConfig> {
+    return this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
+  }
+
+  /** Bind Context Tree configuration for this SDK's authenticated agent organization. */
+  public async setAgentContextTreeConfig(input: { repo: string; branch?: string }): Promise<ContextTreeConfig> {
+    this.logger.debug(
+      { agentId: this._agentId, stage: "resolve_agent_organization" },
+      "context tree binding update started",
+    );
+    const agent = await this.requestJson<unknown>("/api/v1/agent/me", { redirect: "manual" }, { logRetries: false });
+    const organizationId =
+      typeof agent === "object" &&
+      agent !== null &&
+      "organizationId" in agent &&
+      typeof agent.organizationId === "string"
+        ? agent.organizationId
+        : undefined;
+    if (!organizationId || organizationId.trim() !== organizationId) {
+      throw new SyntaxError(
+        "Invalid response from GET /api/v1/agent/me: organizationId must be a non-empty, unpadded string",
+      );
+    }
+
+    this.logger.debug(
+      { agentId: this._agentId, organizationId, stage: "update_org_setting" },
+      "context tree binding organization resolved",
+    );
+    const body = input.branch === undefined ? { repo: input.repo } : { repo: input.repo, branch: input.branch };
+    const config = await this.requestJson<ContextTreeConfig>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+        redirect: "manual",
+      },
+      { retry: false },
+    );
+    this.logger.debug(
+      { agentId: this._agentId, organizationId, stage: "complete" },
+      "context tree binding update completed",
+    );
+    return config;
   }
 
   /**
@@ -681,7 +952,9 @@ export class FirstTreeHubSDK {
         const response = await this.doFetchOnce(path, init, opts);
         const isLastAttempt = attempt === delays.length - 1;
         if (response.status >= 500 && !isLastAttempt) {
-          this.logger.warn(`retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          if (opts?.logRetries !== false) {
+            this.logger.warn(`retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          }
           lastErr = new Error(`HTTP ${response.status}`);
           continue;
         }
@@ -690,7 +963,7 @@ export class FirstTreeHubSDK {
         lastErr = err;
         if (!isTransientNetworkError(err)) throw err;
         const isLastAttempt = attempt === delays.length - 1;
-        if (!isLastAttempt) {
+        if (!isLastAttempt && opts?.logRetries !== false) {
           this.logger.warn(`retry attempt=${attempt + 1} reason=${classifyRetryReason(err)} path=${path}`);
         }
       }
@@ -706,8 +979,9 @@ export class FirstTreeHubSDK {
     };
     if (this._agentId) {
       headers[AGENT_SELECTOR_HEADER] = this._agentId;
-      if (this._runtimeSessionToken) {
-        headers[AGENT_RUNTIME_SESSION_HEADER] = this._runtimeSessionToken;
+      const runtimeSessionToken = this.resolveRuntimeSessionToken();
+      if (runtimeSessionToken) {
+        headers[AGENT_RUNTIME_SESSION_HEADER] = runtimeSessionToken;
       }
     }
     if (this._userAgent) {
@@ -732,14 +1006,17 @@ export class FirstTreeHubSDK {
   private async toSdkError(response: Response): Promise<SdkError> {
     const body = await response.text();
     let message: string;
+    let code: string | undefined;
     try {
-      const json = JSON.parse(body) as { error?: string };
+      const json = JSON.parse(body) as { error?: string; code?: string };
       message = json.error ?? body;
+      code = json.code;
     } catch {
       message = body;
     }
     const retryAfter = response.headers.get("retry-after") ?? undefined;
     return new SdkError(response.status, message, {
+      code,
       retryAfter,
       retryAfterMs: parseRetryAfterMs(retryAfter),
     });
@@ -750,16 +1027,18 @@ export class SdkError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
-    opts: { retryAfter?: string; retryAfterMs?: number } = {},
+    opts: { code?: string; retryAfter?: string; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "SdkError";
+    this.code = opts.code;
     this.retryAfter = opts.retryAfter;
     this.retryAfterMs = opts.retryAfterMs;
   }
 
   public readonly retryAfter?: string;
   public readonly retryAfterMs?: number;
+  public readonly code?: string;
 }
 
 function parseRetryAfterMs(value: string | undefined): number | undefined {

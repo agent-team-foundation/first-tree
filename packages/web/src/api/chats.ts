@@ -4,6 +4,7 @@ import type {
   ChatDetail,
   ChatEngagementStatus,
   ChatGithubEntityListResponse,
+  ChatGitlabEntityListResponse,
   ChatTokenUsage,
   Message,
   RequestResolution,
@@ -50,6 +51,21 @@ export function getChatTokenUsage(chatId: string): Promise<ChatTokenUsage> {
  */
 export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
   return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);
+}
+
+/**
+ * List every GitLab entity bound to this chat, including an automatic
+ * personnel-routing binding on a webhook-created chat.
+ */
+export function listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntityListResponse> {
+  return api.get<ChatGitlabEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/gitlab-entities`);
+}
+
+/** Canonical human/Web unfollow contract; legacy mapping-id deletion stays server-only. */
+export function unfollowChatGitlabEntity(chatId: string, entityUrl: string): Promise<{ removed: number }> {
+  return api.delete<{ removed: number }>(
+    `/chats/${encodeURIComponent(chatId)}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
+  );
 }
 
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
@@ -160,10 +176,11 @@ export type ImageBatchRefContent = {
  *   the send. Without this, the message arrives with no addressees and is
  *   rejected before the text reaches anyone (issue 387).
  * - `attachments` carries generic {@link AttachmentRef}s (documents / files
- *   uploaded in the composer) in `message.metadata.attachments[]`. Images stay
- *   in `content` as `ImageRefContent`; a mixed send (images + documents) rides
- *   one `format: "file"` message carrying both. The server validates each ref
- *   against its stored blob (`validateMessageAttachmentRefs`).
+ *   uploaded in the composer) in `message.metadata.attachments[]`. Ordinary
+ *   composer image sends stay in `content` as `ImageRefContent`; tracked
+ *   requests may carry generic image refs in metadata while keeping their
+ *   question body textual. The server validates each generic ref against its
+ *   stored blob (`validateMessageAttachmentRefs`).
  */
 export type SendFileMessageMetadata = { mentions?: string[]; attachments?: AttachmentRef[] };
 

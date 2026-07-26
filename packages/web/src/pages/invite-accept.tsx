@@ -3,17 +3,19 @@ import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client.js";
+import { type AuthProvider, beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
+import { useAuthProviderAvailabilityState } from "../hooks/use-server-channel.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Public landing for `/invite/:token`. Two cases:
  *
- *   - Visitor not signed in: "Continue with GitHub" round-trips through OAuth
- *     and lands them inside the team.
+ *   - Visitor not signed in: a configured Google or GitHub provider round-trips
+ *     through OAuth and lands them inside the team.
  *   - Visitor already signed in: "Join now" POSTs `/me/organizations/join`
  *     and switches their token over.
  *
@@ -30,6 +32,7 @@ export function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, selectOrganization, teamDisplayName } = useAuth();
+  const { providers, settled: providersSettled } = useAuthProviderAvailabilityState();
   const [preview, setPreview] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -100,6 +103,7 @@ export function InviteAcceptPage() {
   };
 
   const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
+  const continueGoogleOauthHref = `/api/v1/auth/google/start?next=${encodeURIComponent(`/invite/${token}`)}`;
 
   return (
     <InviteAcceptShell>
@@ -110,6 +114,11 @@ export function InviteAcceptPage() {
         busy={busy}
         onJoin={handleJoin}
         oauthHref={continueOauthHref}
+        googleOauthHref={continueGoogleOauthHref}
+        googleAvailable={providers.google}
+        githubAvailable={providers.github}
+        providersSettled={providersSettled}
+        onAuthStart={(provider) => beginAuthAttempt(provider, `/invite/${token}`)}
       />
     </InviteAcceptShell>
   );
@@ -141,6 +150,11 @@ export function InviteAcceptCard({
   busy,
   onJoin,
   oauthHref,
+  googleOauthHref,
+  googleAvailable = true,
+  githubAvailable = true,
+  providersSettled = true,
+  onAuthStart,
 }: {
   preview: InvitationPreview;
   isAuthenticated: boolean;
@@ -148,6 +162,11 @@ export function InviteAcceptCard({
   busy: boolean;
   onJoin: () => void;
   oauthHref: string;
+  googleOauthHref?: string;
+  googleAvailable?: boolean;
+  githubAvailable?: boolean;
+  providersSettled?: boolean;
+  onAuthStart?: (provider: AuthProvider) => void;
 }) {
   const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
   const expiresHint = formatExpiresHint(preview.expiresAt);
@@ -185,12 +204,35 @@ export function InviteAcceptCard({
             {busy ? "Joining…" : `Join ${preview.organizationDisplayName}`}
           </Button>
         ) : (
-          <Button asChild className="w-full">
-            <a href={oauthHref}>
-              <Github className="h-4 w-4" />
-              Continue with GitHub to join
-            </a>
-          </Button>
+          <div className="space-y-2">
+            {!providersSettled ? (
+              <p className="text-center text-label text-muted-foreground">Loading sign-in options…</p>
+            ) : (
+              <>
+                {googleAvailable && (
+                  <Button asChild className="w-full">
+                    <a href={googleOauthHref ?? oauthHref} onClick={() => onAuthStart?.("google")}>
+                      <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
+                      Continue with Google to join
+                    </a>
+                  </Button>
+                )}
+                {githubAvailable && (
+                  <Button asChild variant="outline" className="w-full">
+                    <a href={oauthHref} onClick={() => onAuthStart?.("github")}>
+                      <Github className="h-4 w-4" />
+                      Continue with GitHub to join
+                    </a>
+                  </Button>
+                )}
+                {!googleAvailable && !githubAvailable && (
+                  <p className="text-center text-label text-muted-foreground">
+                    No sign-in providers are configured. Contact your administrator.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         )}
         {expiresHint && (
           <p

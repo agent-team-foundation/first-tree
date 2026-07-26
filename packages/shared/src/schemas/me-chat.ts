@@ -295,15 +295,13 @@ export const meChatRowSchema = z.object({
    */
   liveActivity: liveActivitySchema.nullable(),
   /**
-   * Speakers in this chat whose composite status is `failed` — i.e. reachable
-   * and either their per-(agent,chat) session is `errored` OR their global
-   * runtime is in `error` (the same `errored` input `getChatAgentStatuses`
-   * folds into `failed`; an unreachable agent is `offline`, not `failed`, so
-   * those are excluded). Drives the chat-list "failed" attention signal
-   * (red `!` badge) without opening the chat. Per-chat, derived at query
-   * time (no schema migration). `.default([])` for version skew: an older
-   * server build that predates this field would otherwise blank the row on a
-   * web-ahead deploy.
+   * Speakers in this chat whose per-(agent,chat) status is errored, independent
+   * of reachability. An errored unreachable agent displays as `offline`, but
+   * remains in this set so disconnects do not clear or repeatedly re-add the
+   * chat-list recovery signal (red `!` badge). Per-chat, derived at query time
+   * (no schema migration). `.default([])` for version skew: an older server
+   * build that predates this field would otherwise blank the row on a web-ahead
+   * deploy.
    */
   failedAgentIds: z.array(z.string()).default([]),
   /**
@@ -349,12 +347,64 @@ export const meChatRowSchema = z.object({
    * new web during a web-ahead-of-server rollout. R1 (failed) keeps firing.
    */
   chatHasExplicitMentionToMe: z.boolean().default(false),
+  /**
+   * Per-user pin timestamp (ISO), or null when not pinned. Private per-user
+   * state from `chat_user_state.pinned_at` — one user pinning a chat never
+   * affects another. `.default(null)` for version skew: a server build that
+   * predates this column returns no value, which must read as "not pinned"
+   * rather than `undefined`.
+   */
+  pinnedAt: z.string().nullable().default(null),
+  /**
+   * Work-activity timestamp (ISO) — the conversation list's recency sort key.
+   * `max(last_message_at, description_updated_at, created_at)`, advanced only by
+   * real work (a new message or a genuine description change), never by topic
+   * rename / read / pin / archive / participant / runtime busy. `.default(null)`
+   * for version skew; the server always populates it once the column ships.
+   */
+  activityAt: z.string().nullable().default(null),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
+/**
+ * Priority groups extracted server-side across the *full matching set* (the same
+ * engagement / origin / participant / unread / watch filters as the ordinary
+ * list, just without the loaded-page boundary), rendered above the ordinary
+ * list. Populated on the FIRST page only (a request with no `cursor`); empty on
+ * load-more pages, which the client reads from page 0.
+ *   - `attention`: chats needing the viewer now — a *caller-managed* non-human
+ *     speaker in `failed`, or an open request addressed to the viewer — ordered
+ *     failed-first, then by `activityAt` DESC. (A peer's failed agent / another
+ *     human's request stays in the ordinary stream.)
+ *   - `pinned`: the viewer's pinned chats (private per-user state), ordered by
+ *     `pinnedAt` DESC, excluding any already surfaced in `attention`.
+ *
+ * `attention` and `pinned` are server-DISJOINT (a chat is in at most one of the
+ * two). The ordinary `rows`, however, are ADDITIVE: a priority chat is NOT
+ * removed from `rows` (that keeps the response backward-compatible with a client
+ * that ignores these groups). A client that renders the groups must therefore
+ * de-duplicate `rows` against the priority chat ids so each chat shows once
+ * (attention > pinned > recency).
+ *
+ * `.default({...})` for version skew: a web bundle ahead of a server that
+ * predates these groups reads them as empty rather than `undefined`.
+ */
+export const meChatPriorityRowsSchema = z
+  .object({
+    attention: z.array(meChatRowSchema),
+    pinned: z.array(meChatRowSchema),
+  })
+  .default({ attention: [], pinned: [] });
+export type MeChatPriorityRows = z.infer<typeof meChatPriorityRowsSchema>;
+
 export const listMeChatsResponseSchema = z.object({
+  priorityRows: meChatPriorityRowsSchema,
   rows: z.array(meChatRowSchema),
   nextCursor: z.string().nullable(),
+  // NOTE: a global unread `counts` aggregate is intentionally NOT part of this
+  // response yet — its scope (global vs the active engagement view) is a product
+  // decision that belongs with the unread badge that consumes it, landing in the
+  // desktop-rail PR. Adding it here first would publish an unsettled contract.
 });
 export type ListMeChatsResponse = z.infer<typeof listMeChatsResponseSchema>;
 
@@ -381,6 +431,19 @@ export const meChatUnreadResponseSchema = z.object({
   unreadMentionCount: z.number().int(),
 });
 export type MeChatUnreadResponse = z.infer<typeof meChatUnreadResponseSchema>;
+
+/** Body for `POST /chats/:chatId/pin` — pin (`true`) or unpin (`false`). */
+export const pinMeChatSchema = z.object({
+  pinned: z.boolean(),
+});
+export type PinMeChat = z.infer<typeof pinMeChatSchema>;
+
+export const meChatPinResponseSchema = z.object({
+  chatId: z.string(),
+  /** ISO pin timestamp when pinned, null when unpinned. */
+  pinnedAt: z.string().nullable(),
+});
+export type MeChatPinResponse = z.infer<typeof meChatPinResponseSchema>;
 
 export const meChatLeaveResponseSchema = z.object({
   chatId: z.string(),
@@ -420,6 +483,17 @@ export type ChatSourceCount = z.infer<typeof chatSourceCountSchema>;
 
 export const listMeChatSourceCountsQuerySchema = z.object({
   engagement: chatEngagementViewSchema.default("active"),
+  /**
+   * Keep aggregate badges in the same membership projection as a
+   * `listMeChats({ watching: true })` result.
+   */
+  watching: z.preprocess((v) => {
+    if (typeof v === "string") {
+      if (v === "1" || v.toLowerCase() === "true") return true;
+      if (v === "0" || v.toLowerCase() === "false" || v === "") return false;
+    }
+    return v;
+  }, z.boolean().optional()),
 });
 export type ListMeChatSourceCountsQuery = z.infer<typeof listMeChatSourceCountsQuerySchema>;
 

@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteTracker } from "./analytics.js";
 import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
+import { Button } from "./components/ui/button.js";
 import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
+import { useContextTreeSetupPreviewBootstrapState, useServerChannelState } from "./hooks/use-server-channel.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { RepositoriesTab } from "./pages/agent-detail/repositories-tab.js";
@@ -19,15 +21,23 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { MobileMePage } from "./pages/mobile/me.js";
+import { MobileShell } from "./pages/mobile/shell.js";
+import { MobileTeamPage } from "./pages/mobile/team.js";
+import { MobileWorkPage } from "./pages/mobile/work.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
+import { SettingsAccountPage } from "./pages/settings/account.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
-import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
+import { SettingsGitlabPage } from "./pages/settings/gitlab.js";
+import { SettingsIntegrationsLayout } from "./pages/settings/integrations.js";
+import { SettingsRepositoriesPage } from "./pages/settings/repositories.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
+import { SettingsSetupPage } from "./pages/settings/setup.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
@@ -121,6 +131,16 @@ const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
   : null;
 
+const MobilePreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/mobile-preview.js").then((module) => ({ default: module.MobilePreviewPage })))
+  : null;
+
+const InstallGuidePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/install-guide-preview.js").then((module) => ({ default: module.InstallGuidePreviewPage })),
+    )
+  : null;
+
 const TeamSwitcherPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/team-switcher-preview.js").then((module) => ({ default: module.TeamSwitcherPreviewPage })),
@@ -132,6 +152,19 @@ const SettingsGithubPreviewPage = import.meta.env.DEV
       import("./pages/settings-github-preview.js").then((module) => ({ default: module.SettingsGithubPreviewPage })),
     )
   : null;
+
+const SetupPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/setup-preview.js").then((module) => ({ default: module.SetupPreviewPage })))
+  : null;
+
+// Public fixture preview for the BYO Context Tree handoff. It is compiled into
+// hosted builds so staging can expose it, but the route gate below fails closed
+// on production and unknown channels. It has no auth or backend mutations.
+const ContextTreeSetupPreviewPage = lazy(() =>
+  import("./pages/context-tree-setup-preview.js").then((module) => ({
+    default: module.ContextTreeSetupPreviewPage,
+  })),
+);
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
@@ -146,6 +179,7 @@ export function App() {
       <AuthProvider>
         <ToastProvider>
           <BrowserRouter>
+            <MobileExperienceHead />
             <RouteTracker />
             <Routes>
               {/* Public routes — no auth required */}
@@ -153,9 +187,11 @@ export function App() {
               {/* /signup retired — Continue with GitHub on /login covers signup. */}
               <Route path="/signup" element={<Navigate to="/login" replace />} />
               <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
+              <Route path="/auth/complete" element={<OAuthCompletePage />} />
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
+              <Route path="/preview/context-tree-setup" element={<ContextTreeSetupPreviewRoute />} />
               {ContextPreviewPage ? (
                 <Route
                   path="/preview/context"
@@ -168,7 +204,7 @@ export function App() {
               ) : null}
               {ContextTreePreviewPage ? (
                 <Route
-                  path="/preview/context-tree"
+                  path="/preview/context-tree/*"
                   element={
                     <Suspense fallback={null}>
                       <ContextTreePreviewPage />
@@ -276,12 +312,42 @@ export function App() {
                   }
                 />
               ) : null}
+              {MobilePreviewPage ? (
+                <Route
+                  path="/preview/mobile"
+                  element={
+                    <Suspense fallback={null}>
+                      <MobilePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {InstallGuidePreviewPage ? (
+                <Route
+                  path="/preview/install-guide"
+                  element={
+                    <Suspense fallback={null}>
+                      <InstallGuidePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {SettingsGithubPreviewPage ? (
                 <Route
                   path="/preview/settings-github"
                   element={
                     <Suspense fallback={null}>
                       <SettingsGithubPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {SetupPreviewPage ? (
+                <Route
+                  path="/preview/setup"
+                  element={
+                    <Suspense fallback={null}>
+                      <SetupPreviewPage />
                     </Suspense>
                   }
                 />
@@ -342,6 +408,15 @@ export function App() {
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                <Route element={<MobileExperienceGate />}>
+                  <Route path="m" element={<Navigate to="/m/work" replace />} />
+                  <Route path="m/work" element={<MobileWorkPage />} />
+                  <Route path="m/now" element={<LegacyMobileWorkRedirect />} />
+                  <Route path="m/chat" element={<LegacyMobileWorkRedirect />} />
+                  <Route path="m/team" element={<MobileTeamPage />} />
+                  <Route path="m/me" element={<MobileMePage />} />
+                  <Route path="m/*" element={<Navigate to="/m/work" replace />} />
+                </Route>
                 <Route
                   element={
                     <PulseProvider>
@@ -349,7 +424,7 @@ export function App() {
                     </PulseProvider>
                   }
                 >
-                  <Route index element={<WorkspacePage />} />
+                  <Route index element={<WorkspaceEntry />} />
                   {/* Growth quickstart (landing-campaign trial). Lives INSIDE
                       the Layout group so the trial chat renders with full
                       workspace chrome — but as its own route, NOT the gated
@@ -379,28 +454,33 @@ export function App() {
                       lives under /settings, not as a peer of the
                       people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
+                  <Route path="user-settings" element={<LegacyUserSettingsRedirect />} />
 
-                  {/* Settings master-detail. Team name editing lives in the
-                      header-left TeamSwitcher, so settings only hosts setup
-                      and integration/resource surfaces. */}
+                  {/* Settings master-detail. Setup is the permanent role-aware
+                      overview; /onboarding remains the standalone first-run flow. */}
                   <Route path="settings" element={<SettingsLayout />}>
-                    <Route index element={<Navigate to="computers" replace />} />
+                    <Route index element={<Navigate to="account" replace />} />
                     <Route path="team" element={<Navigate to="/settings/computers" replace />} />
+                    <Route path="account" element={<SettingsAccountPage />} />
+                    <Route path="repositories" element={<SettingsRepositoriesPage />} />
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
-                    <Route path="github" element={<SettingsGithubPage />} />
-                    <Route path="onboarding" element={<SettingsOnboardingPage />} />
-                    {/* Old name was "setup" — keep the redirect so existing
-                        in-app links / saved bookmarks keep working. */}
-                    <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
-                    <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
+                    <Route path="github" element={<Navigate to="/settings/integrations/github" replace />} />
+                    <Route path="integrations" element={<SettingsIntegrationsLayout />}>
+                      <Route index element={<Navigate to="github" replace />} />
+                      <Route path="github" element={<SettingsGithubPage />} />
+                      <Route path="gitlab" element={<SettingsGitlabPage />} />
+                    </Route>
+                    <Route path="setup" element={<SettingsSetupPage />} />
+                    {/* Compatibility only. Setup is now the canonical route. */}
+                    <Route path="onboarding" element={<Navigate to="/settings/setup" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}
                   <Route path="agents" element={<Navigate to="/team" replace />} />
                   <Route path="clients" element={<Navigate to="/settings/computers" replace />} />
-                  <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
+                  <Route path="integrations" element={<Navigate to="/settings/integrations/github" replace />} />
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />
@@ -416,7 +496,132 @@ export function App() {
   );
 }
 
+type MobileExperienceState = {
+  enabled: boolean;
+  settled: boolean;
+};
+
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
+}
+
+function ContextTreeSetupPreviewRoute() {
+  const { channel, commandTemplate, settled } = useContextTreeSetupPreviewBootstrapState();
+  if (!settled) return null;
+  if (!import.meta.env.DEV && channel !== "staging") return <Navigate to="/" replace />;
+  if (!commandTemplate) return <ContextTreeSetupPreviewUnavailable />;
+  return (
+    <Suspense fallback={null}>
+      <ContextTreeSetupPreviewPage bootstrapCommandTemplate={commandTemplate} />
+    </Suspense>
+  );
+}
+
+function ContextTreeSetupPreviewUnavailable() {
+  return (
+    <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+      <section className="w-full max-w-lg rounded-[var(--radius-panel)] border border-border bg-card p-6 text-center sm:p-8">
+        <p className="text-label font-semibold uppercase tracking-wide text-fg-3">Context Tree setup preview</p>
+        <h1 className="mt-2 text-title font-semibold">Preview unavailable</h1>
+        <p className="mx-auto mt-3 max-w-md text-body text-fg-2">
+          This deployment has not published its setup command yet. Reload after the staging update completes.
+        </p>
+        <Button type="button" className="mt-5" onClick={() => window.location.reload()}>
+          Reload preview
+        </Button>
+      </section>
+    </main>
+  );
+}
+
+function LegacyUserSettingsRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/settings/account", search: location.search, hash: location.hash }} replace />;
+}
+
+function LegacyMobileWorkRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/m/work", search: location.search, hash: location.hash }} replace />;
+}
+
+function WorkspaceEntry() {
+  const location = useLocation();
+  const mobileExperience = useMobileExperienceState();
+  if (!mobileExperience.settled) return null;
+  if (mobileExperience.enabled && shouldOpenMobileRoot(location)) {
+    return <Navigate to="/m/work" replace />;
+  }
+  return <WorkspacePage />;
+}
+
+function shouldOpenMobileRoot(location: ReturnType<typeof useLocation>): boolean {
+  if (location.pathname !== "/" || location.search || location.hash) return false;
+  if (typeof window === "undefined") return false;
+
+  const mediaQuery = window.matchMedia?.("(max-width: 47.999rem)");
+  if (mediaQuery) return mediaQuery.matches;
+
+  return window.innerWidth > 0 && window.innerWidth < 768;
+}
+
+function useMobileExperienceState(): MobileExperienceState {
+  const { channel, settled: channelSettled } = useServerChannelState();
+  if (!channelSettled) {
+    return { enabled: false, settled: false };
+  }
+  return {
+    enabled: channel === "dev" || channel === "staging" || channel === "prod",
+    settled: true,
+  };
+}
+
+function MobileExperienceGate() {
+  const mobileExperience = useMobileExperienceState();
+  if (!mobileExperience.settled) return null;
+  if (!mobileExperience.enabled) return <Navigate to="/" replace />;
+
+  return (
+    <PulseProvider>
+      <MobileShell />
+    </PulseProvider>
+  );
+}
+
+function MobileExperienceHead() {
+  const { enabled } = useMobileExperienceState();
+
+  useEffect(() => {
+    if (!enabled || typeof document === "undefined") return;
+
+    const elements = [
+      createHeadElement("link", { rel: "manifest", href: "/manifest.webmanifest" }),
+      createHeadElement("link", { rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" }),
+      createHeadElement("meta", { name: "mobile-web-app-capable", content: "yes" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-capable", content: "yes" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-title", content: "First Tree" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" }),
+    ];
+
+    for (const element of elements) {
+      document.head.appendChild(element);
+    }
+
+    return () => {
+      for (const element of elements) {
+        element.remove();
+      }
+    };
+  }, [enabled]);
+
+  return null;
+}
+
+function createHeadElement(tagName: "link" | "meta", attributes: Record<string, string>): HTMLElement {
+  const element = document.createElement(tagName);
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, value);
+  }
+  element.dataset.mobileExperience = "true";
+  return element;
 }

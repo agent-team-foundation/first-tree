@@ -224,6 +224,7 @@ describe("inbox WS data-plane claim helpers", () => {
       "second silent",
       "third silent",
     ]);
+    expect(entry.message.precedingMessages.map((p) => p.source)).toEqual(["api", "api", "api"]);
 
     // Bundling is not consumption: same-socket recovery can still rebuild
     // the preceding block until the notify trigger is ACKed.

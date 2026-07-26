@@ -84,11 +84,12 @@ Node line, update an older staging portable install to it, then verify:
 - `<prefix>/current/INSTALL.json` records the candidate `nodeVersion`.
 - `first-tree-staging status` reports the target CLI version after restart.
 
-## npm-Mode Runtime Policy
+## Legacy npm-Mode Runtime Policy
 
-The npm global install path remains supported for operators and fallback
-installs, but npm mode uses the user's system Node.js runtime. It does not and
-cannot replace Node.js during `first-tree upgrade`.
+New prod and staging installations use the channel-aware shell installer.
+Existing npm-mode installations remain upgrade-compatible during migration,
+but they use the user's system Node.js runtime. They do not and cannot replace
+Node.js during `first-tree upgrade`.
 
 Before npm-mode self-update runs `npm install -g`, the CLI performs a
 best-effort metadata preflight against the target package's `engines.node`.
@@ -96,7 +97,7 @@ When the current process Node.js version does not satisfy the target package's
 range, the update fails before install with guidance to either:
 
 - upgrade the system Node.js runtime and rerun `first-tree upgrade`; or
-- migrate to the portable install path from the web console.
+- migrate by running the shell-installer command from the web console.
 
 If npm metadata cannot be read, the CLI falls back to the existing npm install
 path and classifies npm's own error output. `EBADENGINE` remains a permanent

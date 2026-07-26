@@ -6,6 +6,7 @@ import {
   clearCampaignIntent,
   normalizeGitHubRepoUrl,
   normalizeReportKey,
+  readCampaignActionHandoff,
   readCampaignHandoff,
   readCampaignIntent,
   readScanFixHandoff,
@@ -37,6 +38,7 @@ beforeEach(() => {
 });
 
 const REPO_ENC = encodeURIComponent("https://github.com/acme/backend");
+const ATTEMPT_ID = "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf";
 const INTENT: CampaignIntent = {
   campaign: "production-scan",
   owner: "acme",
@@ -79,6 +81,27 @@ describe("readCampaignHandoff", () => {
     expect(readCampaignHandoff({ search: `?campaign=production-scan&repo=${REPO_ENC}`, hash: "" })).toEqual(INTENT);
   });
 
+  it("keeps valid anonymous attempt attribution and ignores incomplete or invalid values", () => {
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=${ATTEMPT_ID}&variant=control`,
+        hash: "",
+      }),
+    ).toEqual({ ...INTENT, attribution: { attemptId: ATTEMPT_ID, variant: "control" } });
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=not-a-uuid&variant=control`,
+        hash: "",
+      }),
+    ).toEqual(INTENT);
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=${ATTEMPT_ID}`,
+        hash: "",
+      }),
+    ).toEqual(INTENT);
+  });
+
   it("supports the legacy intent= alias for production scan", () => {
     expect(readCampaignHandoff({ search: `?intent=production-scan&repo=${REPO_ENC}`, hash: "" })?.campaign).toBe(
       "production-scan",
@@ -93,18 +116,25 @@ describe("readCampaignHandoff", () => {
 
   it("returns null for an unknown campaign or a missing/invalid repo", () => {
     expect(readCampaignHandoff({ search: `?campaign=nope&repo=${REPO_ENC}`, hash: "" })).toBeNull();
-    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })).toBeNull();
     expect(readCampaignHandoff({ search: "?campaign=production-scan", hash: "" })).toBeNull();
     expect(
       readCampaignHandoff({ search: "?campaign=production-scan&repo=https://gitlab.com/x/y", hash: "" }),
     ).toBeNull();
   });
+
+  it("reads the agent-readiness campaign from the shared active registry", () => {
+    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })).toEqual({
+      ...INTENT,
+      campaign: "agent-readiness",
+    });
+  });
 });
 
 describe("campaign intent sessionStorage", () => {
   it("round-trips a valid intent in sessionStorage only (never localStorage)", () => {
-    writeCampaignIntent(INTENT);
-    expect(readCampaignIntent()).toEqual(INTENT);
+    const attributed = { ...INTENT, attribution: { attemptId: ATTEMPT_ID, variant: "control" } };
+    writeCampaignIntent(attributed);
+    expect(readCampaignIntent()).toEqual(attributed);
     expect(window.localStorage?.getItem?.("first-tree:quickstart:intent") ?? null).toBeNull();
   });
 
@@ -118,6 +148,14 @@ describe("campaign intent sessionStorage", () => {
     window.sessionStorage.setItem(
       "first-tree:quickstart:intent",
       JSON.stringify({ ...INTENT, campaign: "retired-campaign" }),
+    );
+    expect(readCampaignIntent()).toBeNull();
+  });
+
+  it("rejects a stored intent with malformed attribution", () => {
+    window.sessionStorage.setItem(
+      "first-tree:quickstart:intent",
+      JSON.stringify({ ...INTENT, attribution: { attemptId: "bad", variant: "control" } }),
     );
     expect(readCampaignIntent()).toBeNull();
   });
@@ -184,11 +222,48 @@ describe("readScanFixHandoff", () => {
   });
 });
 
+describe("readCampaignActionHandoff", () => {
+  it("reads only the action configured for the known campaign", () => {
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=fix&report=report-1`,
+        hash: "",
+      }),
+    ).toMatchObject({ campaign: "production-scan", action: "fix", repoSlug: "acme/backend" });
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=agent-readiness&repo=${REPO_ENC}&action=fix&report=acme-backend-20260716-abcdef12`,
+        hash: "",
+      }),
+    ).toMatchObject({
+      campaign: "agent-readiness",
+      action: "fix",
+      repoSlug: "acme/backend",
+      reportKey: "acme-backend-20260716-abcdef12",
+    });
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=unknown`,
+        hash: "",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("readCampaignHandoff vs action=fix", () => {
   it("does NOT treat a fix link as a trial handoff", () => {
     expect(
       readCampaignHandoff({
         search: "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=k1",
+        hash: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("does NOT treat any unknown non-empty action as a trial handoff", () => {
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=unknown`,
         hash: "",
       }),
     ).toBeNull();

@@ -28,13 +28,61 @@ const SYSTEMD_UNIT = channelConfig.serviceUnitFile;
 // launchd label uses the same identifier convention (bare name), so we
 // reuse it for both.
 const SYSLOG_IDENT = channelConfig.launchdLabel;
+type SystemdScope = "user" | "system";
 
-function systemdUnitPath(): string {
+function systemdScope(): SystemdScope {
+  return userInfo().uid === 0 ? "system" : "user";
+}
+
+function systemctlArgs(scope: SystemdScope, args: string[]): string[] {
+  return scope === "user" ? ["--user", ...args] : args;
+}
+
+function systemdUserUnitPath(): string {
   const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
   return join(xdg, "systemd", "user", SYSTEMD_UNIT);
 }
 
-export function renderSystemdUnit(invocation: ResolvedBinary): string {
+function rootSystemdUserUnitPath(): string {
+  const info = userInfo();
+  const rootHome = info.uid === 0 && info.homedir ? info.homedir : "/root";
+  return join(rootHome, ".config", "systemd", "user", SYSTEMD_UNIT);
+}
+
+function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
+  if (scope === "system") {
+    return join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "/etc/systemd/system", SYSTEMD_UNIT);
+  }
+  return systemdUserUnitPath();
+}
+
+function rootUserSystemctlEnv(): NodeJS.ProcessEnv {
+  const runtimeDir = "/run/user/0";
+  return {
+    ...process.env,
+    XDG_RUNTIME_DIR: runtimeDir,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtimeDir}/bus`,
+  };
+}
+
+function isUserBusUnavailable(reason: string): boolean {
+  return /failed to connect to bus|dbus_session_bus_address|xdg_runtime_dir|no medium found|no such file or directory/i.test(
+    reason,
+  );
+}
+
+function legacyRootUserMigrationDetail(unitPath: string): string {
+  return `legacy root systemd user unit requires out-of-service migration: ${unitPath}`;
+}
+
+function blockingLegacyRootUserUnitPath(scope: SystemdScope = systemdScope()): string | null {
+  if (scope !== "system") return null;
+  if (existsSync(systemdUnitPath("system"))) return null;
+  const legacyUnitPath = rootSystemdUserUnitPath();
+  return existsSync(legacyUnitPath) ? legacyUnitPath : null;
+}
+
+export function renderSystemdUnit(invocation: ResolvedBinary, scope: SystemdScope = "user"): string {
   const execStart: string =
     invocation.kind === "bin"
       ? `${shellQuote(invocation.program)} daemon start --no-interactive`
@@ -51,6 +99,7 @@ export function renderSystemdUnit(invocation: ResolvedBinary): string {
   // Put this CLI's Node directory first so npm/nvm-installed shebangs and
   // self-update use the same Node toolchain when supervised.
   const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv())}\n`;
+  const wantedBy = scope === "system" ? "multi-user.target" : "default.target";
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -82,30 +131,54 @@ StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 ${pathEnv}Environment=FIRST_TREE_SERVICE_MODE=1
 ${homeEnv}[Install]
-WantedBy=default.target
+WantedBy=${wantedBy}
 `;
 }
 
-function systemdState(): { state: ServiceState; pid?: number; detail?: string } {
-  const unitPath = systemdUnitPath();
-  if (!existsSync(unitPath)) return { state: "not-installed" };
+function systemdState(): {
+  state: ServiceState;
+  pid?: number;
+  detail?: string;
+  managerScope?: SystemdScope;
+  migrationRequired?: ServiceInfo["migrationRequired"];
+  unitPath?: string;
+} {
+  const scope = systemdScope();
+  const unitPath = systemdUnitPath(scope);
+  if (!existsSync(unitPath)) {
+    const legacyUnitPath = blockingLegacyRootUserUnitPath(scope);
+    if (legacyUnitPath) {
+      return {
+        state: "unknown",
+        detail: legacyRootUserMigrationDetail(legacyUnitPath),
+        managerScope: "user",
+        migrationRequired: "root-systemd-user-to-system",
+        unitPath: legacyUnitPath,
+      };
+    }
+    return { state: "not-installed" };
+  }
   // Mirror the launchctl fix: keep stderr piped so systemctl's error text
   // ("Failed to connect to bus..." etc.) doesn't leak to the user's terminal.
-  const res = spawnSync("systemctl", ["--user", "is-active", SYSTEMD_UNIT], {
+  const res = spawnSync("systemctl", systemctlArgs(scope, ["is-active", SYSTEMD_UNIT]), {
     encoding: "utf-8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "pipe"],
   });
   const out = (res.stdout ?? "").trim();
   if (res.status === 0 && out === "active") {
-    const pid = readSystemdMainPid();
+    const pid = readSystemdMainPid(scope);
     return { state: "active", pid, detail: pid ? `pid ${pid}` : "running" };
   }
   return { state: "inactive", detail: out || "unit present but not active" };
 }
 
-function readSystemdMainPid(): number | undefined {
-  const res = runCaptureOut("systemctl", ["--user", "show", SYSTEMD_UNIT, "-p", "MainPID", "--value"], 5000);
+function readSystemdMainPid(scope: SystemdScope): number | undefined {
+  const res = runCaptureOut(
+    "systemctl",
+    systemctlArgs(scope, ["show", SYSTEMD_UNIT, "-p", "MainPID", "--value"]),
+    5000,
+  );
   if (!res.ok) return undefined;
   const n = Number(res.stdout);
   return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -142,16 +215,50 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
-function installSystemd(): ServiceInfo {
-  // Legacy unit auto-cleanup deliberately not done here — same reason
-  // as `installLaunchd` above. A blanket `disable --now` + `rm` of
-  // a retired or sibling channel service unit would silently wipe a peer
-  // staging/prod install that the
-  // operator hasn't migrated yet. MIGRATION.md Phase 2 documents the
-  // operator-driven `systemctl --user stop` + `rm` snippet instead.
+function migrateLegacyRootUserUnitToSystemScope(): void {
+  const legacyUnitPath = rootSystemdUserUnitPath();
+  if (!existsSync(legacyUnitPath)) return;
+
+  migrateBakedProxyEnv(extractProxyFromSystemd(readFileSync(legacyUnitPath, "utf-8")));
+
+  const env = rootUserSystemctlEnv();
+  const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000, env);
+  if (!disableRes.ok) {
+    const reason = disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`;
+    if (isUserBusUnavailable(reason)) {
+      throw new Error(`legacy root systemd user service state is ambiguous: ${reason}`);
+    }
+    if (!/not found|no such|not loaded/i.test(reason)) {
+      throw new Error(`legacy root systemd user service migration failed: ${reason}`);
+    }
+  }
+
+  rmSync(legacyUnitPath);
+
+  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000, env);
+  if (!reloadRes.ok) {
+    const reason = reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`;
+    if (isUserBusUnavailable(reason)) {
+      throw new Error(`legacy root systemd user daemon-reload state is ambiguous: ${reason}`);
+    }
+    if (!/not found|no such|not loaded/i.test(reason)) {
+      throw new Error(`legacy root systemd user daemon-reload failed: ${reason}`);
+    }
+  }
+}
+
+function assertNoLegacyRootUserUnitDuringRefresh(): void {
+  const legacyUnitPath = rootSystemdUserUnitPath();
+  if (!existsSync(legacyUnitPath)) return;
+  throw new Error(
+    `legacy root systemd user unit requires an out-of-service migration before refresh: ${legacyUnitPath}`,
+  );
+}
+
+function writeAndEnableSystemd(scope: SystemdScope): ServiceInfo {
   const invocation = resolveCliInvocation();
   ensureLogDir();
-  const unitPath = systemdUnitPath();
+  const unitPath = systemdUnitPath(scope);
   // Upgrade buffer: lift any proxy env a prior version baked into the unit into
   // the user-owned daemon.env before we re-render a proxy-free unit (no-op when
   // there is no prior unit, no baked proxy, or a daemon.env already exists).
@@ -159,48 +266,81 @@ function installSystemd(): ServiceInfo {
     migrateBakedProxyEnv(extractProxyFromSystemd(readFileSync(unitPath, "utf-8")));
   }
   mkdirSync(dirname(unitPath), { recursive: true });
-  writeFileSync(unitPath, renderSystemdUnit(invocation), { mode: 0o644 });
+  writeFileSync(unitPath, renderSystemdUnit(invocation, scope), { mode: 0o644 });
 
-  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  const reloadRes = runCapture("systemctl", systemctlArgs(scope, ["daemon-reload"]), 5_000);
   if (!reloadRes.ok) {
     throw new Error(
-      `systemctl --user daemon-reload failed: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}`,
+      `systemctl ${scope === "user" ? "--user " : ""}daemon-reload failed: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}`,
     );
   }
 
   // Enable linger BEFORE enable --now so the unit can survive logout from
   // the very first session. Best-effort: if polkit denies it, surface a
   // warning with the manual recovery command rather than failing install.
-  const lingerRes = tryEnableLinger();
-  if (!lingerRes.ok) {
-    print.line(
-      `    warning: loginctl enable-linger failed: ${lingerRes.reason}\n` +
-        `    The service will stop when you log out. Run manually: sudo loginctl enable-linger ${userInfo().username}\n`,
-    );
+  if (scope === "user") {
+    const lingerRes = tryEnableLinger();
+    if (!lingerRes.ok) {
+      print.line(
+        `    warning: loginctl enable-linger failed: ${lingerRes.reason}\n` +
+          `    The service will stop when you log out. Run manually: sudo loginctl enable-linger ${userInfo().username}\n`,
+      );
+    }
   }
 
-  const enableRes = runCapture("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], 10_000);
+  const enableRes = runCapture("systemctl", systemctlArgs(scope, ["enable", "--now", SYSTEMD_UNIT]), 10_000);
   if (!enableRes.ok) {
+    const systemctlPrefix = scope === "user" ? "systemctl --user" : "systemctl";
     throw new Error(
-      `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <code>\`.`,
+      `${systemctlPrefix} enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
+        `    Recovery: \`${systemctlPrefix} stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <code>\`.`,
     );
   }
 
   const { state, pid, detail } = systemdState();
-  return systemdInfo(unitPath, state, pid, detail);
+  return systemdInfo(unitPath, scope, state, pid, detail);
+}
+
+function refreshSystemdForUpdate(): ServiceInfo {
+  const scope = systemdScope();
+  if (scope === "system") assertNoLegacyRootUserUnitDuringRefresh();
+  return writeAndEnableSystemd(scope);
+}
+
+function installSystemd(): ServiceInfo {
+  const scope = systemdScope();
+  if (scope === "system") migrateLegacyRootUserUnitToSystemScope();
+  // Cross-channel legacy cleanup is deliberately not done here — same reason
+  // as `installLaunchd` above. A blanket `disable --now` + `rm` of a retired
+  // or sibling channel service unit would silently wipe a peer staging/prod
+  // install that the operator hasn't migrated yet. Root's same-channel user
+  // unit is the one exception, handled above before the replacement system
+  // unit is enabled.
+  return writeAndEnableSystemd(scope);
 }
 
 function uninstallSystemd(): ServiceInfo {
-  const unitPath = systemdUnitPath();
-  const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000);
+  const scope = systemdScope();
+  const blockedLegacyUnitPath = blockingLegacyRootUserUnitPath(scope);
+  if (blockedLegacyUnitPath) {
+    return systemdInfo(
+      blockedLegacyUnitPath,
+      "user",
+      "unknown",
+      undefined,
+      legacyRootUserMigrationDetail(blockedLegacyUnitPath),
+      "root-systemd-user-to-system",
+    );
+  }
+  const unitPath = systemdUnitPath(scope);
+  const disableRes = runCapture("systemctl", systemctlArgs(scope, ["disable", "--now", SYSTEMD_UNIT]), 10_000);
   if (!disableRes.ok && !/not found|no such|not loaded/i.test(disableRes.stderr)) {
     print.line(
       `    warning: systemctl disable during uninstall: ${disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`}\n`,
     );
   }
   if (existsSync(unitPath)) rmSync(unitPath);
-  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  const reloadRes = runCapture("systemctl", systemctlArgs(scope, ["daemon-reload"]), 5_000);
   if (!reloadRes.ok) {
     print.line(
       `    warning: systemctl daemon-reload during uninstall: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}\n`,
@@ -212,27 +352,40 @@ function uninstallSystemd(): ServiceInfo {
     unitPath,
     logDir: logDir(),
     state: "not-installed",
+    managerScope: scope,
   };
 }
 
 function systemdUnitDriftDetected(): boolean {
+  const scope = systemdScope();
+  if (blockingLegacyRootUserUnitPath(scope)) return true;
   const invocation = resolveCliInvocation();
-  const expected = renderSystemdUnit(invocation);
-  return readFileOrFlagDrift(systemdUnitPath(), expected);
+  const expected = renderSystemdUnit(invocation, scope);
+  return readFileOrFlagDrift(systemdUnitPath(scope), expected);
 }
 
 function getSystemdServiceStatus(): ServiceInfo {
-  const { state, pid, detail } = systemdState();
-  return systemdInfo(systemdUnitPath(), state, pid, detail);
+  const scope = systemdScope();
+  const { state, pid, detail, managerScope, migrationRequired, unitPath } = systemdState();
+  return systemdInfo(unitPath ?? systemdUnitPath(scope), managerScope ?? scope, state, pid, detail, migrationRequired);
 }
 
-function systemdInfo(unitPath: string, state: ServiceState, pid?: number, detail?: string): ServiceInfo {
+function systemdInfo(
+  unitPath: string,
+  managerScope: SystemdScope,
+  state: ServiceState,
+  pid?: number,
+  detail?: string,
+  migrationRequired?: ServiceInfo["migrationRequired"],
+): ServiceInfo {
   return {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
     logDir: logDir(),
     state,
+    managerScope,
+    migrationRequired,
     pid,
     detail,
   };
@@ -240,7 +393,10 @@ function systemdInfo(unitPath: string, state: ServiceState, pid?: number, detail
 
 /** Start the service. No-op + ok if already running. */
 function startSystemdService(): ServiceOpResult {
-  const res = runCapture("systemctl", ["--user", "start", SYSTEMD_UNIT], 15_000);
+  const scope = systemdScope();
+  const legacyUnitPath = blockingLegacyRootUserUnitPath(scope);
+  if (legacyUnitPath) return { ok: false, reason: legacyRootUserMigrationDetail(legacyUnitPath) };
+  const res = runCapture("systemctl", systemctlArgs(scope, ["start", SYSTEMD_UNIT]), 15_000);
   if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
   return { ok: true };
 }
@@ -254,7 +410,10 @@ function startSystemdService(): ServiceOpResult {
  * (the bug `Restart=always` had: stop would be immediately undone).
  */
 function stopSystemdService(): ServiceOpResult {
-  const res = runCapture("systemctl", ["--user", "stop", SYSTEMD_UNIT], 35_000);
+  const scope = systemdScope();
+  const legacyUnitPath = blockingLegacyRootUserUnitPath(scope);
+  if (legacyUnitPath) return { ok: false, reason: legacyRootUserMigrationDetail(legacyUnitPath) };
+  const res = runCapture("systemctl", systemctlArgs(scope, ["stop", SYSTEMD_UNIT]), 35_000);
   if (!res.ok) {
     // Mirror the launchd "stop on missing unit = ok" semantics below: a
     // concurrent `daemon stop` or a manual `systemctl --user disable` can
@@ -268,7 +427,10 @@ function stopSystemdService(): ServiceOpResult {
 
 /** Restart the service. Equivalent to stop + start, but uses the manager's atomic primitive. */
 function restartSystemdService(): ServiceOpResult {
-  const res = runCapture("systemctl", ["--user", "restart", SYSTEMD_UNIT], 45_000);
+  const scope = systemdScope();
+  const legacyUnitPath = blockingLegacyRootUserUnitPath(scope);
+  if (legacyUnitPath) return { ok: false, reason: legacyRootUserMigrationDetail(legacyUnitPath) };
+  const res = runCapture("systemctl", systemctlArgs(scope, ["restart", SYSTEMD_UNIT]), 45_000);
   if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
   return { ok: true };
 }
@@ -277,7 +439,7 @@ export const systemdBackend: SupervisorBackend = {
   platform: "systemd",
   isSupported: () => true,
   install: installSystemd,
-  refreshForUpdate: installSystemd,
+  refreshForUpdate: refreshSystemdForUpdate,
   isUnitDriftDetected: systemdUnitDriftDetected,
   status: getSystemdServiceStatus,
   start: startSystemdService,

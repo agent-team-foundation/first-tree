@@ -416,6 +416,7 @@ describe("client switch platform drain scanning", () => {
   });
 
   it("classifies cross-device preflight failures as client-switch EXDEV", async () => {
+    setPlatform("linux");
     fsState.mode = "exdev";
 
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_EXDEV" });

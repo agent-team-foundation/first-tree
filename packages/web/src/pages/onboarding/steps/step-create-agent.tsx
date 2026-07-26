@@ -16,7 +16,11 @@ const VISIBILITY_OPTIONS: ReadonlyArray<{ value: AgentVisibility; title: string;
   {
     value: "organization",
     title: "Visible to your team",
-    description: "Anyone on your team can @mention and chat with it.",
+    // Full-consequence disclosure: org-visible means teammates can start work
+    // with this agent directly — on the owner's computer and plan. Kept in
+    // sync with new-agent-dialog.tsx and profile-edit-dialog.tsx.
+    description:
+      "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan.",
   },
   {
     value: "private",

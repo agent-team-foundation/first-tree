@@ -52,3 +52,20 @@ validation question.
 A good case gives the executing agent better judgment. It should not force the case author to predict months in advance
 which exact screen, table, log line, or provider state will be available in a future run. Put those live choices in the
 run-local plan.
+
+## Run Feedback And Maintenance
+
+Every formal run records one case disposition in its final report:
+
+- `no-change` when selected cases remained useful and no durable gap emerged;
+- `candidate-new-case` or `candidate-case-update` for reusable live or judgment-dependent risk;
+- `move-to-product-test` for stable deterministic behavior;
+- `move-to-skill-eval` for recurring agent behavior;
+- `merge-or-retire` for redundant, obsolete, or fully automated cases.
+
+Record the relevant case ID, target ref, evidence, affected surfaces, and why the disposition fits. Candidate prose may
+live in the temporary run artifacts, but formal QA never edits the committed library.
+
+Add, update, merge, or retire committed cases only in a separate maintenance task. Preserve the ID while the primary
+validation question remains stable; create a new ID when that identity changes. Rewrite cases to current truth rather
+than appending run history.

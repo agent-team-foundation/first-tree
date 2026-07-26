@@ -199,7 +199,7 @@ describe("task scheduler service operations", () => {
   });
 
   it("reports residual supervisor cleanup timeouts after a missing task stop", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(6000);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(71_000);
     queueTaskQueries([taskMissing()]);
     sharedMocks.runCaptureOut.mockImplementation((_program, args) => {
       const script = String(args.at(-1) ?? "");

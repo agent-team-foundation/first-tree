@@ -11,24 +11,21 @@ import { chatAgentStatusQueryKey } from "../api/agent-status.js";
 import { ComposeStatusBar } from "../components/chat/compose-status-bar.js";
 
 /**
- * DEV-only visual review for `ComposeStatusBar` — the working / failed rail
- * above the composer.
+ * DEV-only visual review for the current-output surface connected to the
+ * composer.
  *
  * The rail is `useQuery`-driven (the shared `/agent-status` query), so each
  * variant primes its own entry in a local `QueryClient` cache keyed by a unique
  * `chatId`; the production component is then rendered against it inside a box
  * that mimics the real composer column width, so spacing, truncation, and the
- * goal → means → ticker order are faithful to prod. No backend / no auth — same
+ * collapsed → current-output structure is faithful to prod. No backend / no auth — same
  * gating as `/preview/chat-row-avatar` (DEV-only in `app.tsx`).
  *
- * Covers the spec acceptance: goal-first working line, live-action means with a
- * per-kind icon, markdown stripped, long goal truncates while means + ticker
- * survive, no-prose fallback (means leads), path-arg basename, failed, and the
- * multi-agent +N fold.
+ * Covers concise narration, tool-only fallback, markdown stripping, long
+ * narration, failure/reason priority, and multiple agents inside one panel.
  */
 
-/** ISO timestamp `secondsAgo` in the past — drives the live elapsed ticker so a
- *  screenshot reads e.g. "· 12s" instead of "· 0s". */
+/** ISO timestamp `secondsAgo` in the past — keeps multi-agent priority realistic. */
 function ago(secondsAgo: number): string {
   return new Date(Date.now() - secondsAgo * 1000).toISOString();
 }
@@ -77,8 +74,8 @@ type Variant = {
 
 const VARIANTS: Variant[] = [
   {
-    name: "working · goal + tool (the ideal line)",
-    subtitle: "goal leads, live tool follows with a 🔧 icon, ticker last",
+    name: "working · narration + tool",
+    subtitle: "collapsed row shows narration; expanded output avoids repeating the tool when text exists",
     chatId: "v-goal-tool",
     agents: [DEV],
     statuses: [
@@ -92,8 +89,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · markdown in goal (stripped)",
-    subtitle: "raw turnText `issue 669` / **hex-color** renders as plain text",
+    name: "working · markdown narration",
+    subtitle: "collapsed text is plain; expanded output preserves Markdown",
     chatId: "v-markdown",
     agents: [DEV],
     statuses: [
@@ -107,9 +104,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long goal, clipped by width (offers expand)",
-    subtitle:
-      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and clicking anywhere on the row shows the full line",
+    name: "working · long narration",
+    subtitle: "the collapsed row truncates; expanded output keeps the available text without a line clamp",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -124,8 +120,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long multi-line goal (expand card)",
-    subtitle: "server sent turnTextFull; click anywhere on the row (⇕) opens the full multi-line card (click to test)",
+    name: "working · full narration in composer",
+    subtitle: "expanded output uses the existing turnTextFull field and preserves its multi-line structure",
     chatId: "v-expand",
     agents: [DEV],
     statuses: [
@@ -135,21 +131,21 @@ const VARIANTS: Variant[] = [
         detail: "pnpm typecheck",
         turnText: "Reworking the compose status bar so a long narration can expand to its full multi-line form",
         turnTextFull:
-          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\nPlan:\n1. Server derives a newline-preserving turnTextFull (capped at 2000), only when it carries more than the one-line goal.\n2. The rail keeps its single line; a dedicated ⌃ chevron opens a floating card.\n3. The card floats over the stream (absolute, out of flow) so the live ~1s refresh never reflows the conversation.",
+          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\n**Plan**\n\n1. Keep token usage above the live status.\n2. Connect the current output directly to the composer.\n3. Preserve Markdown and remove the two-line clamp.",
         startedAt: ago(23),
       }),
     ],
   },
   {
-    name: "working · no prose yet (means leads)",
-    subtitle: "turnText absent (opened with a tool) → tool leads, line not blank",
+    name: "working · no narration yet",
+    subtitle: "when a turn opens with a tool, the tool becomes the concise fallback summary",
     chatId: "v-no-goal",
     agents: [DEV],
     statuses: [working("agent-dev", { kind: "tool_call", label: "Read", detail: "src/app.tsx", startedAt: ago(2) })],
   },
   {
     name: "working · thinking",
-    subtitle: "goal + 🧠 Thinking",
+    subtitle: "narration is enough context, so the redundant Thinking label stays hidden",
     chatId: "v-thinking",
     agents: [NOVA],
     statuses: [
@@ -163,7 +159,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · writing prose (no redundant 'Writing')",
-    subtitle: "the prose IS the goal — the means segment is suppressed",
+    subtitle: "the prose is already the update, so a redundant Writing row is suppressed",
     chatId: "v-writing",
     agents: [NOVA],
     statuses: [
@@ -193,14 +189,14 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "failed",
-    subtitle: "red dot + 'failed'; the row jumps to the timeline ErrorRow",
+    subtitle: "failure leads the row; expanded output can jump to timeline evidence",
     chatId: "v-failed",
     agents: [RESEARCH],
     statuses: [build({ agentId: "agent-res", errored: true })],
   },
   {
-    name: "multi-agent · failed lead + working others (+N)",
-    subtitle: "failure preempts the lead; others fold behind +N",
+    name: "multi-agent · one connected output",
+    subtitle: "failure leads the stable row; expanding shows all actionable agents in one connected section",
     chatId: "v-multi",
     agents: [DEV, NOVA, RESEARCH],
     statuses: [
@@ -254,7 +250,7 @@ export function ComposeStatusBarPreviewPage() {
       <div style={{ background: "var(--bg)", minHeight: "100vh", padding: "var(--sp-6)" }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
           <h1 className="text-title" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
-            ComposeStatusBar — working / failed rail
+            ComposeStatusBar — connected composer
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-6)" }}>
             DEV preview. Each card mimics the composer column; the real component renders against a primed status
@@ -271,21 +267,28 @@ export function ComposeStatusBarPreviewPage() {
                     {v.subtitle}
                   </div>
                 </div>
-                {/* Composer-column mimic: same max-width + raised surface as the
-                    real chat-bottom composer card. */}
+                {/* Composer-column mimic: same token → status → composer order,
+                    width, connected seam and raised surface as the real footer. */}
                 <div
                   style={{
                     maxWidth: "clamp(55rem, 75%, 70rem)",
-                    background: "var(--bg-raised)",
-                    border: "var(--hairline) solid var(--border)",
-                    borderRadius: 6,
-                    padding: "var(--sp-2) var(--sp-3)",
                   }}
                 >
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                  >
+                    18.4K processed tokens in this chat
+                  </div>
                   <ComposeStatusBar chatId={v.chatId} agents={v.agents} />
                   <div
-                    className="text-caption"
-                    style={{ color: "var(--fg-4)", paddingTop: "var(--sp-1)" }}
+                    className="composer-card text-caption"
+                    style={{
+                      color: "var(--fg-4)",
+                      padding: "var(--sp-3)",
+                      background: "var(--bg-raised)",
+                      border: "var(--hairline) solid var(--border)",
+                    }}
                     aria-hidden="true"
                   >
                     Message {v.agents[0]?.displayName ?? "the team"}…

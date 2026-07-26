@@ -6,7 +6,6 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
-  treeSetupKickoffSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
@@ -27,6 +26,7 @@ import {
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
+import { buildServerConnectBootstrapCommand } from "../services/connect-bootstrap-command.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../services/github-user-token.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
@@ -40,7 +40,13 @@ import {
   selfCreateOrganization,
 } from "../services/membership.js";
 import { notifyRecipients } from "../services/notifier.js";
-import { hasTreeSetupKickoffMessage, kickoffOnboarding, scanFixKickoffKey } from "../services/onboarding-kickoff.js";
+import {
+  campaignActionKickoffKey,
+  hasTreeSetupKickoffMessage,
+  kickoffOnboarding,
+  recordCampaignActionConversion,
+  resolveCampaignActionContext,
+} from "../services/onboarding-kickoff.js";
 import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
@@ -49,55 +55,6 @@ import { clientCommandVersionHint } from "./client-command-version.js";
 const onboardingTreeSetupStatusQuerySchema = z.object({
   organizationId: z.string().optional(),
 });
-
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function normalizeCommandServerUrl(value: string): string {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return value.replace(/\/+$/, "");
-  }
-}
-
-function buildLoginCommand(options: {
-  executable: string;
-  tokenArg: string;
-  serverUrl: string;
-  defaultServerUrl: string;
-}): string {
-  const serverUrl = normalizeCommandServerUrl(options.serverUrl);
-  const prefix = serverUrl === options.defaultServerUrl ? "" : `FIRST_TREE_SERVER_URL=${shellQuote(serverUrl)} `;
-  return `${prefix}${options.executable} login ${options.tokenArg}`;
-}
-
-function buildPortableBootstrapCommand(options: {
-  installerUrl: string;
-  portableDownloadBaseUrl: string;
-  binName: string;
-  token: string;
-  serverUrl: string;
-  defaultServerUrl: string;
-}): string {
-  return [
-    `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
-    `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
-    `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
-    `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
-    buildLoginCommand({
-      executable: `"$HOME/.local/bin/${options.binName}"`,
-      tokenArg: shellQuote(options.token),
-      serverUrl: options.serverUrl,
-      defaultServerUrl: options.defaultServerUrl,
-    }),
-  ].join(" && \\\n");
-}
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -312,7 +269,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * POST /me/onboarding/kickoff — idempotent server-side tail of onboarding.
    * Folds the three steps the browser used to orchestrate sequentially (create
    * the first chat → send the bootstrap message → stamp completion) into one
-   * resumable request. Re-running it (reopened tab, network retry, build-tree
+   * resumable request. Re-running it (reopened tab, network retry, Context setup
    * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
@@ -341,6 +298,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const campaignAction = resolveCampaignActionContext(body.campaignAction, body.scanFixRepoSlug);
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
@@ -348,14 +306,30 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
       topic: body.topic ?? "Get started with First Tree",
-      // A production-scan fix conversion keys on the repo so this launcher
-      // dedups with the already-onboarded direct path; a normal onboarding
-      // kickoff keeps the per-(human, agent) onboarding key.
-      kickoffKey: body.scanFixRepoSlug
-        ? scanFixKickoffKey(humanAgentId, body.scanFixRepoSlug)
+      // Campaign actions key on campaign + repo so the direct and onboarding
+      // launchers converge; a normal kickoff remains per-(human, agent).
+      kickoffKey: campaignAction
+        ? campaignActionKickoffKey(humanAgentId, campaignAction)
         : `${humanAgentId}:${body.agentUuid}:onboarding`,
-      complete: body.complete ?? true,
+      // `stamp` supersedes the older boolean; stale clients that still send
+      // `complete` keep their exact previous semantics.
+      stamp: body.stamp ?? ((body.complete ?? true) ? "completed" : "none"),
     });
+    if (campaignAction) {
+      try {
+        await recordCampaignActionConversion(app.db, {
+          humanAgentId,
+          organizationId,
+          action: campaignAction,
+          actionChatId: result.chatId,
+        });
+      } catch (err) {
+        app.log.warn(
+          { err, campaign: campaignAction.campaign, actionChatId: result.chatId },
+          "landing campaign action conversion could not be recorded",
+        );
+      }
+    }
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
       app.log.info({ event: "onboarding.kickoff", userId, chatId: result.chatId }, "onboarding funnel: kickoff");
@@ -363,33 +337,22 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ chatId: result.chatId });
   });
 
+  /**
+   * Retired browser contract. Keep an authenticated, non-mutating boundary so
+   * a tab loaded before the setup-chat migration receives a controlled answer
+   * instead of an ambiguous route-level 404.
+   */
   app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const body = treeSetupKickoffSchema.parse(request.body);
-    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
-    const result = await kickoffOnboarding(app.db, {
-      memberId,
-      humanAgentId,
-      organizationId,
-      targetAgentId: body.agentUuid,
-      bootstrap: body.bootstrap,
-      topic: body.topic ?? "Set up shared context",
-      kickoffKey: `${organizationId}:tree-setup`,
-      complete: body.complete ?? true,
+    requireUser(request);
+    return reply.status(410).send({
+      error: "Context Tree setup moved to the team-scoped setup-chat endpoint. Refresh First Tree and try again.",
+      code: "tree_setup_kickoff_moved",
     });
-    if (result.sent) {
-      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
-      app.log.info(
-        { event: "onboarding.tree_setup_kickoff", userId, chatId: result.chatId },
-        "onboarding funnel: tree setup kickoff",
-      );
-    }
-    return reply.status(200).send({ chatId: result.chatId });
   });
 
   /**
-   * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
-   * `/build-tree` surface and Settings nav. A missing tree binding still needs
+   * GET /me/onboarding/tree-setup-status — recovery probe for the Context
+   * setup surface and Settings nav. A missing tree binding still needs
    * setup. A binding created after the org's value-first first chat completed
    * also needs setup until a tree setup bootstrap message exists; this covers
    * the recoverable edge where Cloud wrote `context_tree` but the background
@@ -420,7 +383,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const tree = await getOrgContextTreeWithMeta(app.db, member.organizationId);
-    const hasTreeBinding = !!tree.repo;
+    const hasTreeBinding = tree.binding !== null;
     const hasTreeSetupKickoff = await hasTreeSetupKickoffMessage(app.db, member.organizationId);
     const [firstCompletedMembership] = await app.db
       .select({ onboardingCompletedAt: members.onboardingCompletedAt })
@@ -546,81 +509,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
     const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
-    // Channel-aware npm spec + bin name. Web onboarding renders the
-    // returned `bootstrapCommand` / `binName` directly so a fresh-machine
-    // install lands on the right package without web needing to know
-    // about channels.
-    //
-    // Multi-env: each channel is its own npm package, so the spec is
-    // always the bare package name (no `@<dist-tag>` suffix — each
-    // package has exactly one `latest`). dev servers have
-    // `packageName=null`: the bootstrap line skips the `npm install -g`
-    // step entirely because the operator builds from source.
-    const ch = getChannelConfig(app.config.channel);
-    const command = buildLoginCommand({
-      executable: ch.binName,
-      tokenArg: token,
-      serverUrl: issuer,
-      defaultServerUrl: ch.defaultServerUrl,
-    });
-    if (ch.packageName === null) {
-      return {
-        token,
-        expiresIn,
-        command,
-        bootstrapCommand: command,
-        npmSpec: null,
-        installMethod: "source",
-        installerUrl: null,
-        binName: ch.binName,
-      };
-    }
-    const npmSpec = ch.packageName;
-    if (app.config.connectBootstrap.method === "portable") {
-      const installerPath = ch.portable.publicInstallerPath;
-      if (installerPath === null) {
-        return {
-          token,
-          expiresIn,
-          command,
-          bootstrapCommand: command,
-          npmSpec,
-          installMethod: "source",
-          installerUrl: null,
-          binName: ch.binName,
-        };
-      }
-      const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
-      const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
-      const bootstrapCommand = buildPortableBootstrapCommand({
-        installerUrl,
-        portableDownloadBaseUrl,
-        binName: ch.binName,
-        token,
-        serverUrl: issuer,
-        defaultServerUrl: ch.defaultServerUrl,
-      });
-      return {
-        token,
-        expiresIn,
-        command,
-        bootstrapCommand,
-        npmSpec,
-        installMethod: "portable",
-        installerUrl,
-        binName: ch.binName,
-      };
-    }
-    const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
+    // Web surfaces render the server-provided command directly. Dev is
+    // source-only; hosted channels always use their public shell installer.
+    const bootstrap = buildServerConnectBootstrapCommand({ app, request, token });
     return {
       token,
       expiresIn,
-      command,
-      bootstrapCommand,
-      npmSpec,
-      installMethod: "npm",
-      installerUrl: null,
-      binName: ch.binName,
+      ...bootstrap,
     };
   });
 

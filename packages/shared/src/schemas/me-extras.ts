@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { landingCampaignActionContextSchema, landingCampaignRepoSlugSchema } from "./landing-campaign.js";
 
 /**
  * Inferred onboarding step returned by `GET /me`. The server derives this
@@ -64,15 +65,22 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
-    // Production-scan fix conversion: when present, the kickoff chat is keyed
-    // `<humanAgent>:scan-fix:<repoSlug>` instead of the default onboarding key,
-    // so the fix launcher created here dedups with the already-onboarded direct
-    // path (`POST /orgs/:orgId/chats`) that reuses the same key. `owner/repo`.
-    scanFixRepoSlug: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
-      .optional(),
+    // How the membership's onboarding state is stamped once the kickoff chat
+    // exists. Takes precedence over the older boolean `complete` when both are
+    // present:
+    //   - "completed"    — terminal completion (same as `complete: true`).
+    //   - "invitee_skip" — team-agent start: the member begins in a teammate's
+    //     org-visible agent chat WITHOUT their own runtime. Writes only the
+    //     auto-open suppressor (reason="invitee_skip"), never the completion
+    //     stamp, so the standard connect-computer → create-agent journey stays
+    //     pending and resumable from the workspace.
+    //   - "none"         — stamp nothing (same as `complete: false`).
+    stamp: z.enum(["completed", "invitee_skip", "none"]).optional(),
+    // Trusted landing-campaign action context. Direct and onboarding paths use
+    // the same server-composed idempotency key for this campaign + repo.
+    campaignAction: landingCampaignActionContextSchema.optional(),
+    // Compatibility for already-deployed production-scan clients.
+    scanFixRepoSlug: landingCampaignRepoSlugSchema.optional(),
     // Retained only so stale quickstart clients receive a controlled
     // moved/disabled response from /me/onboarding/kickoff. Current campaign
     // quickstart uses /me/landing-campaigns/start; this field must not create an
@@ -83,22 +91,22 @@ export const kickoffOnboardingSchema = z
       .max(50)
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.campaignAction && value.scanFixRepoSlug) {
+      ctx.addIssue({ code: "custom", message: "Use campaignAction or scanFixRepoSlug, not both." });
+    }
+  });
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 
 /**
- * Body for `POST /me/onboarding/tree-setup/kickoff` — the dedicated Context
- * Tree setup chat. Kept separate from the first-chat kickoff so that tree setup
- * has an org-level idempotency key and no intro/work/tree discriminator leaks
- * into the general onboarding chat contract.
+ * Body for `POST /orgs/:orgId/context-tree/setup-chat` — the dedicated Context
+ * Tree setup chat. Organization scope comes from the route, and tree setup
+ * never changes onboarding completion state.
  */
 export const treeSetupKickoffSchema = z
   .object({
-    organizationId: z.string().min(1),
     agentUuid: z.string().min(1),
-    bootstrap: z.string().min(1),
-    topic: z.string().trim().min(1).max(120).optional(),
-    complete: z.boolean().optional(),
   })
   .strict();
 export type TreeSetupKickoff = z.infer<typeof treeSetupKickoffSchema>;
@@ -119,6 +127,11 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `dismissed`              — when PATCH /me/onboarding flips dismissed
  *
  * Web reports:
+ *   - `step_viewed`            — a visible standalone onboarding step mounted
+ *   - `step_completed`         — the user satisfied a visible step and advanced
+ *   - `step_failed`            — a visible step hit a classified, user-impacting failure
+ *   - `step_paused`            — the user chose "finish later" from a step
+ *   - `resumed`                — the user resumed guided setup from Settings
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
  *   - `kickoff_chat_started`   — a first-chat or tree-setup kickoff was created
@@ -126,6 +139,11 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */
 export const onboardingEventNameSchema = z.enum([
+  "step_viewed",
+  "step_completed",
+  "step_failed",
+  "step_paused",
+  "resumed",
   "team_renamed",
   "agent_created",
   "kickoff_chat_started",

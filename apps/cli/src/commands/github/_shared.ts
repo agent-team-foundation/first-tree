@@ -3,23 +3,7 @@ import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { handleSdkError } from "../_shared/local-agent.js";
 
-/**
- * Resolve the chat the github command acts on: explicit `--chat` wins,
- * otherwise the agent session's `FIRST_TREE_CHAT_ID`. Follow/unfollow are
- * chat-scoped by design (S1: the chat, not the person, is what follows),
- * so a shell invocation without either has nothing to act on.
- */
-export function resolveTargetChatId(chatOption: string | undefined): string {
-  const chatId = chatOption ?? process.env.FIRST_TREE_CHAT_ID;
-  if (!chatId) {
-    fail(
-      "NO_CHAT_CONTEXT",
-      "Following is chat-scoped: run from within an agent session (FIRST_TREE_CHAT_ID) or pass --chat <chatId>.",
-      2,
-    );
-  }
-  return chatId;
-}
+export { resolveTargetChatId } from "../_shared/chat-target.js";
 
 /**
  * Map follow/unfollow SdkErrors to next-step teaching — the error message IS

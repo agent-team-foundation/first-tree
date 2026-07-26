@@ -262,6 +262,27 @@ describe("Admin Agents API", () => {
     expect(res.json().displayName).toBe("New Name");
   });
 
+  it("rejects display-name PATCHes that bypass membership-backed human identity", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+    const [before] = await app.db
+      .select({ displayName: agents.displayName })
+      .from(agents)
+      .where(eq(agents.uuid, ctx.humanAgentUuid));
+
+    const res = await req("PATCH", `/api/v1/agents/${ctx.humanAgentUuid}`, {
+      displayName: "Drifted Human",
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toMatch(/member or profile endpoint/i);
+    const [after] = await app.db
+      .select({ displayName: agents.displayName })
+      .from(agents)
+      .where(eq(agents.uuid, ctx.humanAgentUuid));
+    expect(after?.displayName).toBe(before?.displayName);
+  });
+
   it("rejects user-supplied internal runtime metadata on PATCH", async () => {
     const app = getApp();
     const { req } = await authedRequest(app);

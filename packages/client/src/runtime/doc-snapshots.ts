@@ -94,7 +94,9 @@ export type SelfFence = {
   singleRepoLocalPath?: string;
 };
 
-type ResolvedRoots = {
+/** Exported for reuse by the sibling image-capture builder (`image-snapshots.ts`),
+ *  which resolves outbound image mentions against the exact same self-fence. */
+export type ResolvedRoots = {
   agentHomeReal: string;
   docBaseReal: string;
   promotePrefix: string | null;
@@ -113,6 +115,8 @@ type ResolvedOccurrence = DocPathOccurrence & {
 export type BuildDocAttachmentsOptions = {
   uploader: AttachmentUploader;
   orgId: string;
+  /** Caller-specific share of the per-message attachment budget. */
+  maxAttachments?: number;
 };
 
 export async function buildMessageDocumentSnapshots(
@@ -145,6 +149,11 @@ export async function buildMessageDocumentSnapshots(
   if (!roots) return { ...empty, skipped: occurrences.length };
 
   const workspacesRootReal = fence ? await safeRealpath(fence.workspacesRoot) : null;
+  const requestedLimit = opts.maxAttachments;
+  const attachmentLimit =
+    requestedLimit === undefined || !Number.isFinite(requestedLimit)
+      ? MAX_MESSAGE_ATTACHMENT_REFS
+      : Math.min(MAX_MESSAGE_ATTACHMENT_REFS, Math.max(0, Math.trunc(requestedLimit)));
 
   // Pass 1 — resolve every occurrence to a readable file + canonical source
   // path, or attach a failure reason. Same provenance fence as before.
@@ -183,7 +192,7 @@ export async function buildMessageDocumentSnapshots(
     if (attempted.has(sourcePath)) continue;
     attempted.add(sourcePath);
 
-    if (refsByPath.size + uploadTasks.length >= MAX_MESSAGE_ATTACHMENT_REFS) {
+    if (refsByPath.size + uploadTasks.length >= attachmentLimit) {
       occ.failReason = "budget-exceeded";
       skipped += 1;
       continue;
@@ -447,7 +456,7 @@ function scanInlineMarkdownLinks(text: string): InlineLinkMatch[] {
   return out;
 }
 
-async function resolveSelfRoots(self: SelfFence): Promise<ResolvedRoots | null> {
+export async function resolveSelfRoots(self: SelfFence): Promise<ResolvedRoots | null> {
   const agentHomeReal = await safeRealpath(self.agentHome);
   if (!agentHomeReal) return null;
   const localPath = self.singleRepoLocalPath?.trim();
@@ -470,7 +479,7 @@ async function resolveSelfRoots(self: SelfFence): Promise<ResolvedRoots | null> 
   };
 }
 
-async function canonicalizeWorkspacePath(roots: ResolvedRoots, writtenPath: string): Promise<string | null> {
+export async function canonicalizeWorkspacePath(roots: ResolvedRoots, writtenPath: string): Promise<string | null> {
   if (isAbsolute(writtenPath)) {
     const real = await safeRealpath(writtenPath);
     if (!real) return null;
@@ -530,7 +539,7 @@ async function resolveCrossWorkspaceDoc(
   return { file: real, shortForm: `${ownerSlug}/${rel}` };
 }
 
-async function resolveWorkspaceFile(rootReal: string, canonicalPath: string): Promise<string | null> {
+export async function resolveWorkspaceFile(rootReal: string, canonicalPath: string): Promise<string | null> {
   if (!canonicalPath || isAbsolute(canonicalPath)) return null;
 
   const candidate = resolve(rootReal, canonicalPath);

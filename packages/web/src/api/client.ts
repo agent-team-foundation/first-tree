@@ -168,8 +168,11 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
   return refreshPromise;
 }
 
-async function request<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
-  const { method = "GET", body } = options ?? {};
+async function request<T>(
+  path: string,
+  options?: { method?: string; body?: unknown; signal?: AbortSignal; headers?: Record<string, string> },
+): Promise<T> {
+  const { method = "GET", body, signal, headers: extraHeaders } = options ?? {};
 
   // No path rewriting here — callers prefix org-scoped paths with `withOrg` /
   // `withOrgAt` before passing in; everything else (`/me/...`, `/auth/...`,
@@ -177,13 +180,16 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
   // preview, bootstrap probe) bypass this wrapper entirely and call
   // `fetch()` directly without an Authorization header.
   const doFetch = (token?: string) => {
-    const headers: Record<string, string> = {};
+    // Caller-supplied headers (e.g. the cron-job `If-Match` revision guard)
+    // are applied on every attempt, including the 401-refresh retry.
+    const headers: Record<string, string> = { ...(extraHeaders ?? {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(`${BASE_URL}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
   };
 
@@ -274,9 +280,11 @@ export async function apiFetchRaw(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, options?: { signal?: AbortSignal }) => request<T>(path, options),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
+  patch: <T>(path: string, body?: unknown, options?: { headers?: Record<string, string> }) =>
+    request<T>(path, { method: "PATCH", body, headers: options?.headers }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T>(path: string, options?: { headers?: Record<string, string> }) =>
+    request<T>(path, { method: "DELETE", headers: options?.headers }),
 };

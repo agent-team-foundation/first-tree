@@ -237,14 +237,15 @@ function broadcast(msg: WsMessage) {
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
       patchOrInvalidateAgentStatus(latestQc, msg);
-      // Frame carries `agentId` + `chatId` (api/orgs/ws.ts:82 spreads the
-      // notifier payload), so we can target the exact session-events query
-      // ChatView reads (`["session-events", agentId, chatId]`) rather than
-      // fanning out a prefix invalidate.
+      // Frame carries `chatId` (api/orgs/ws.ts:82 spreads the notifier
+      // payload), so target the single chat-scoped batch ChatView reads.
       const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
       if (agentId && chatId) {
         latestQc.invalidateQueries({ queryKey: ["session-events", agentId, chatId] });
+      }
+      if (chatId) {
+        latestQc.invalidateQueries({ queryKey: ["chat-session-events", chatId] });
       }
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
@@ -264,6 +265,10 @@ function broadcast(msg: WsMessage) {
         // refresh them on the same kick so a new (or just-resolved) ask flips
         // the takeover without waiting for its own 5s poll.
         latestQc.invalidateQueries({ queryKey: ["chat-open-requests", chatId] });
+        // The new message may be an accepted cron trigger (or its result),
+        // which flips the schedule's outstanding state. The WS frame carries
+        // no metadata, so conservatively refresh the chat's schedule list.
+        latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", chatId] });
       }
     } else if (msg.type === "chat:updated") {
       // A chat's metadata changed (e.g. an agent ran `chat update --description`).
@@ -275,7 +280,18 @@ function broadcast(msg: WsMessage) {
       meChatsInvalidator.invalidate(latestQc);
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+        // Cron CRUD (create/update/pause/resume/delete, by the agent or the
+        // owner) reuses this same notifier, so the sidebar schedule list
+        // rides the same frame.
+        latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs", chatId] });
       }
+    } else if (msg.type === "me-chats:changed") {
+      // The viewer's OWN private me-chats projection changed on another device
+      // (a pin / unpin). The server sends this frame only to this user's own
+      // sockets (never broadcast — pin state is private), so a bare list
+      // invalidation regroups the rail across their devices in realtime. No
+      // chatId; nothing chat-specific to touch.
+      meChatsInvalidator.invalidate(latestQc);
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
       // The composite `offline` (client_id → null) and runtime-`error` → failed
@@ -340,7 +356,11 @@ function connect() {
       // self-poll, so reconnect must refresh them too.
       latestQc.invalidateQueries({ queryKey: ["session"] });
       latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
+      // Schedule facts can move via `chat:updated` / `chat:message` frames
+      // that fired during the WS gap; catch the sidebar list up too.
+      latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "cron-jobs"] });
       latestQc.invalidateQueries({ queryKey: ["session-events"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
       latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
       // `["chat-messages"]` used to recover from a WS gap via the 5s
       // refetchInterval in ChatView; now that the poll is gone, reconnect

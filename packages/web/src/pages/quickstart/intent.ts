@@ -1,4 +1,5 @@
-import { type CampaignSlug, isKnownCampaign } from "./campaigns.js";
+import { type LandingCampaignAttribution, landingCampaignAttributionSchema } from "@first-tree/shared";
+import { type CampaignSlug, getCampaign, isKnownCampaign } from "./campaigns.js";
 
 /**
  * Parsing for the landing-page → quickstart handoff. The landing CTA points the
@@ -20,13 +21,17 @@ export type RepoIntent = {
 };
 
 /** A campaign handoff: a known campaign slug + the repo it targets. */
-export type CampaignIntent = RepoIntent & { campaign: CampaignSlug };
+export type CampaignIntent = RepoIntent & { campaign: CampaignSlug; attribution?: LandingCampaignAttribution };
 
-/** A production-scan fix conversion: the trial's "fix these" CTA landing back on Cloud. */
-export type ScanFixHandoff = CampaignIntent & {
+/** A campaign result CTA landing back on Cloud for work by the user's agent. */
+export type CampaignActionHandoff = CampaignIntent & {
+  action: string;
   /** Hosted-report key stem (no extension), or null when the link carried none or an invalid one. */
   reportKey: string | null;
 };
+
+/** Compatibility shape for the deployed production-scan action. */
+export type ScanFixHandoff = CampaignIntent & { campaign: "production-scan"; reportKey: string | null };
 
 const NAME_RE = /^[A-Za-z0-9_.-]+$/u;
 
@@ -80,35 +85,66 @@ function paramsFromHash(hash: string): URLSearchParams {
   return new URLSearchParams(raw.startsWith("?") ? raw.slice(1) : raw);
 }
 
-function isFixAction(params: URLSearchParams): boolean {
-  return (params.get("action") ?? "").trim().toLowerCase() === "fix";
+function normalizeAction(params: URLSearchParams): string | null {
+  const action = (params.get("action") ?? "").trim().toLowerCase();
+  return action || null;
 }
 
-/** Read a production-scan fix handoff off the current location (query first, then hash). */
-export function readScanFixHandoff(location: Pick<Location, "search" | "hash">): ScanFixHandoff | null {
+function normalizeAttribution(params: URLSearchParams): LandingCampaignAttribution | undefined {
+  const parsed = landingCampaignAttributionSchema.safeParse({
+    attemptId: params.get("attempt"),
+    variant: params.get("variant"),
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Read a configured campaign action handoff (query first, then hash). */
+export function readCampaignActionHandoff(location: Pick<Location, "search" | "hash">): CampaignActionHandoff | null {
   for (const params of [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")]) {
-    if (!isFixAction(params)) continue;
     const campaign = normalizeCampaign(params.get("campaign") ?? params.get("intent"));
-    if (campaign !== "production-scan") continue;
+    if (!campaign) continue;
+    const config = getCampaign(campaign);
+    const action = normalizeAction(params);
+    if (!config || action !== config.action.queryValue) continue;
     const repoRaw = params.get("repo");
     if (!repoRaw) continue;
     const repo = normalizeGitHubRepoUrl(repoRaw);
-    if (repo) return { campaign, ...repo, reportKey: normalizeReportKey(params.get("report")) };
+    if (repo) {
+      const attribution = normalizeAttribution(params);
+      return {
+        campaign,
+        action,
+        ...repo,
+        reportKey: normalizeReportKey(params.get("report")),
+        ...(attribution ? { attribution } : {}),
+      };
+    }
   }
   return null;
+}
+
+/** Read the deployed production-scan fix action (compatibility wrapper). */
+export function readScanFixHandoff(location: Pick<Location, "search" | "hash">): ScanFixHandoff | null {
+  const handoff = readCampaignActionHandoff(location);
+  if (handoff?.campaign !== "production-scan" || handoff.action !== "fix") return null;
+  const { action: _action, ...scanFix } = handoff;
+  return { ...scanFix, campaign: "production-scan" };
 }
 
 /** Read a campaign handoff off the current location (query first, then hash). */
 export function readCampaignHandoff(location: Pick<Location, "search" | "hash">): CampaignIntent | null {
   for (const params of [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")]) {
-    // A fix conversion is not a trial launch — see readScanFixHandoff.
-    if (isFixAction(params)) continue;
+    // Any explicit action is never a trial launch, even if it is unknown.
+    if (normalizeAction(params)) continue;
     const campaign = normalizeCampaign(params.get("campaign") ?? params.get("intent"));
     if (!campaign) continue;
     const repoRaw = params.get("repo");
     if (!repoRaw) continue;
     const repo = normalizeGitHubRepoUrl(repoRaw);
-    if (repo) return { campaign, ...repo };
+    if (repo) {
+      const attribution = normalizeAttribution(params);
+      return { campaign, ...repo, ...(attribution ? { attribution } : {}) };
+    }
   }
   return null;
 }
@@ -145,7 +181,18 @@ export function readCampaignIntent(): CampaignIntent | null {
     ) {
       throw new Error("invalid quickstart intent");
     }
-    return { campaign: o.campaign, owner: o.owner, repo: o.repo, repoSlug: o.repoSlug, url: o.url };
+    const parsedAttribution =
+      o.attribution === undefined ? null : landingCampaignAttributionSchema.safeParse(o.attribution);
+    if (parsedAttribution && !parsedAttribution.success) throw new Error("invalid quickstart attribution");
+    const attribution = parsedAttribution?.data;
+    return {
+      campaign: o.campaign,
+      owner: o.owner,
+      repo: o.repo,
+      repoSlug: o.repoSlug,
+      url: o.url,
+      ...(attribution ? { attribution } : {}),
+    };
   } catch {
     clearCampaignIntent();
     return null;

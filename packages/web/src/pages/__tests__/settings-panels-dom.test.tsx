@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { OrgContextTreeFeaturesOutput, OrgContextTreeOutput, OrgSourceReposOutput } from "@first-tree/shared";
+import type {
+  OrgContextTreeFeaturesOutput,
+  OrgContextTreeOutput,
+  OrgSourceReposOutput,
+  TeamSetupCapabilities,
+} from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -13,6 +18,8 @@ const authMock = vi.hoisted(() => ({
   value: {
     role: "admin" as "admin" | "member",
     organizationId: "org-1" as string | null,
+    currentOrgHasUsableAgent: true,
+    onboardingDismissedAt: null as string | null,
     onboardingCompletedAt: null as string | null,
     meLoaded: true,
   },
@@ -21,6 +28,7 @@ const authMock = vi.hoisted(() => ({
 const settingsMocks = vi.hoisted(() => ({
   getContextTreeFeaturesSetting: vi.fn(),
   getContextTreeSetting: vi.fn(),
+  getRawContextTreeSetting: vi.fn(),
   putContextTreeFeaturesSetting: vi.fn(),
   getSourceReposSetting: vi.fn(),
   putContextTreeSetting: vi.fn(),
@@ -36,11 +44,26 @@ const onboardingEventMocks = vi.hoisted(() => ({
 }));
 
 const contextApiMocks = vi.hoisted(() => ({
+  getContextTreeSnapshot: vi.fn(),
   initializeContextTree: vi.fn(),
+}));
+
+const githubAppMocks = vi.hoisted(() => ({
+  getGithubAppInstallation: vi.fn(),
+}));
+
+const gitlabConnectionMocks = vi.hoisted(() => ({
+  gitlabConnectionsQueryKey: (organizationId: string | null) => ["gitlab-connections", organizationId] as const,
+  listGitlabConnectionsAt: vi.fn(),
 }));
 
 const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
+}));
+
+const setupCapabilitiesMocks = vi.hoisted(() => ({
+  setupCapabilitiesQueryKey: (organizationId: string | null) => ["setup-capabilities", organizationId] as const,
+  getTeamSetupCapabilitiesAt: vi.fn(),
 }));
 
 vi.mock("../../auth/auth-context.js", () => ({
@@ -55,14 +78,61 @@ vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
 
 vi.mock("../../api/context-tree.js", () => contextApiMocks);
 
+vi.mock("../../api/github-app.js", () => githubAppMocks);
+
+vi.mock("../../api/gitlab-connections.js", () => gitlabConnectionMocks);
+
+vi.mock("../../api/setup-capabilities.js", () => setupCapabilitiesMocks);
+
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
 
+function teamSetupCapabilities(): TeamSetupCapabilities {
+  return {
+    organizationId: "org-1",
+    repositoryAutomation: {
+      providers: [
+        {
+          provider: "github",
+          adoption: "enabled",
+          health: "ready",
+          blockers: [],
+          observedAt: NOW,
+        },
+        {
+          provider: "gitlab",
+          adoption: "available",
+          health: "not_observed",
+          blockers: [],
+          observedAt: NOW,
+        },
+      ],
+    },
+    contextTree: {
+      binding: {
+        state: "bound",
+        provider: "github",
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+      },
+      blockers: [],
+      automaticReview: {
+        adoption: "disabled",
+        health: "not_observed",
+        reviewerAgent: null,
+        blockers: [],
+        observedAt: NOW,
+      },
+    },
+  };
+}
+
 function contextTree(overrides: Partial<OrgContextTreeOutput> = {}): OrgContextTreeOutput {
   return {
+    ...(overrides.provider ? { provider: overrides.provider } : {}),
     repo: overrides.repo ?? "https://github.com/acme/context",
     branch: overrides.branch ?? "main",
   };
@@ -134,6 +204,7 @@ async function flush(): Promise<void> {
 async function renderDom(
   element: ReactElement,
   route = "/settings/context",
+  queryClient = createClient(),
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -141,11 +212,13 @@ async function renderDom(
   await act(async () => {
     root.render(
       <MemoryRouter initialEntries={[route]}>
-        <QueryClientProvider client={createClient()}>
+        <QueryClientProvider client={queryClient}>
           <Routes>
             <Route path="/settings/*" element={element}>
+              <Route path="account" element={<div>Account child</div>} />
               <Route path="context" element={<div>Settings child</div>} />
-              <Route path="github" element={<div>GitHub child</div>} />
+              <Route path="repositories" element={<div>Repositories child</div>} />
+              <Route path="integrations/*" element={<div>Integrations child</div>} />
             </Route>
           </Routes>
         </QueryClientProvider>
@@ -188,7 +261,7 @@ async function click(element: Element | null): Promise<void> {
 }
 
 async function selectOption(container: ParentNode, label: string): Promise<void> {
-  await click(container.querySelector('[aria-label="Context Reviewer agent"]'));
+  await click(container.querySelector('[aria-label="Automatic PR review agent"]'));
   await waitForCondition(
     () => [...document.body.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes(label)),
     `Expected select option "${label}"`,
@@ -257,10 +330,33 @@ function reviewerSwitch(container: ParentNode): HTMLButtonElement | null {
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  authMock.value = { role: "admin", organizationId: "org-1", onboardingCompletedAt: null, meLoaded: true };
+  authMock.value = {
+    role: "admin",
+    organizationId: "org-1",
+    currentOrgHasUsableAgent: true,
+    onboardingDismissedAt: null,
+    onboardingCompletedAt: null,
+    meLoaded: true,
+  };
   viewportMock.value = "xl";
+  setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValue(teamSetupCapabilities());
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
+  settingsMocks.getRawContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
+  gitlabConnectionMocks.listGitlabConnectionsAt.mockResolvedValue([]);
+  githubAppMocks.getGithubAppInstallation.mockResolvedValue({
+    installationId: 42,
+    accountLogin: "acme",
+    accountType: "Organization",
+    accountGithubId: 12345,
+    repositorySelection: "selected",
+    permissions: { metadata: "read", pull_requests: "write" },
+    events: ["pull_request"],
+    suspended: false,
+    manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
   );
@@ -282,6 +378,9 @@ beforeEach(() => {
     branch: "main",
     nodePath: "NODE.md",
   });
+  contextApiMocks.getContextTreeSnapshot.mockResolvedValue({
+    snapshotStatus: "active",
+  });
   settingsMocks.getSourceReposSetting.mockResolvedValue(sourceRepos());
   settingsMocks.putSourceReposSetting.mockImplementation(async (_id: string, body: Partial<OrgSourceReposOutput>) =>
     sourceRepos(body),
@@ -299,41 +398,259 @@ afterEach(() => {
 });
 
 describe("settings panels", () => {
-  it("renders settings layout variants and filters admin/onboarding nav entries", async () => {
+  it("renders the flat desktop IA and preserves the narrow navigation shape", async () => {
     const { SettingsLayout } = await import("../settings.js");
 
-    const desktop = await renderDom(<SettingsLayout />, "/settings/github");
-    expect(desktop.container.textContent).toContain("Computers");
-    expect(desktop.container.textContent).toContain("GitHub");
-    expect(desktop.container.textContent).toContain("Onboarding");
-    expect(desktop.container.textContent).toContain("GitHub child");
+    const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
+    expect(desktop.container.textContent).not.toContain("PERSONAL");
+    expect(desktop.container.textContent).not.toContain("TEAM");
+    const desktopLinks = [...desktop.container.querySelectorAll<HTMLAnchorElement>("aside a")].map(
+      (link) => link.textContent,
+    );
+    expect(desktopLinks).toEqual(["Account", "Setup", "Computers", "Repositories", "Resources", "Integrations"]);
+    expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
+
+    const account = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(account.container.textContent).toContain("Manage your profile and sign-in methods.");
+    expect(account.container.textContent).toContain("Account child");
+    await act(async () => account.root.unmount());
 
     authMock.value = { ...authMock.value, role: "member", onboardingCompletedAt: NOW };
     viewportMock.value = "narrow";
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
+    expect(narrow.container.textContent).toContain("PERSONAL");
     expect(narrow.container.textContent).toContain("Computers");
-    expect(narrow.container.textContent).toContain("GitHub");
-    expect(narrow.container.textContent).not.toContain("Onboarding");
+    expect(narrow.container.textContent).toContain("Repositories");
+    expect(narrow.container.textContent).toContain("TEAM");
+    expect(narrow.container.textContent).toContain("Integrations");
+    expect(narrow.container.textContent).not.toContain("Setup");
+    expect(narrow.container.querySelector('a[href="/settings/setup"]')).toBeNull();
     await act(async () => narrow.root.unmount());
+
+    viewportMock.value = "xl";
+    const completedDesktop = await renderDom(<SettingsLayout />, "/settings/setup");
+    expect(completedDesktop.container.querySelector('aside a[href="/settings/setup"]')).not.toBeNull();
+    expect(completedDesktop.container.textContent).toContain("Setup");
+    const setupHeading = completedDesktop.container.querySelector("h1");
+    expect(setupHeading?.textContent).toBe("Setup");
+    expect(setupHeading?.classList.contains("sr-only")).toBe(true);
+    await act(async () => completedDesktop.root.unmount());
 
     authMock.value = { ...authMock.value, meLoaded: false };
     const unloaded = await renderDom(<SettingsLayout />);
     expect(unloaded.container.textContent).toBe("");
     await act(async () => unloaded.root.unmount());
+
+    authMock.value = { ...authMock.value, meLoaded: true };
+    viewportMock.value = "xl";
+    const repositories = await renderDom(<SettingsLayout />, "/settings/repositories");
+    const pageHeading = repositories.container.querySelector("h1");
+    expect(pageHeading?.textContent).toBe("Repositories");
+    expect(pageHeading?.classList.contains("sr-only")).toBe(true);
+    expect(repositories.container.textContent).toContain("Repositories child");
+    await act(async () => repositories.root.unmount());
+  });
+
+  it("marks desktop Setup only for role-actionable Team or personal attention", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const blocked = teamSetupCapabilities();
+    const blockedGithub = blocked.repositoryAutomation.providers[0];
+    if (!blockedGithub) throw new Error("Expected GitHub capability");
+    blockedGithub.health = "degraded";
+    blockedGithub.blockers = [
+      {
+        code: "github_app_suspended",
+        resolutionOwner: "admin",
+        actionKind: "manage_github_installation",
+      },
+    ];
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(blocked);
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => admin.container.querySelector("[data-setup-attention]") !== null,
+      "Expected Setup attention after the Team projection loads",
+    );
+    const adminSetupLink = admin.container.querySelector<HTMLAnchorElement>('aside a[href="/settings/setup"]');
+    expect(adminSetupLink?.getAttribute("aria-label")).toBe("Setup — Needs you");
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledWith("org-1");
+    await act(async () => admin.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "member" };
+    const member = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(member.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(member.container.querySelector('aside a[href="/settings/setup"]')?.getAttribute("aria-label")).toBeNull();
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledTimes(1);
+    await act(async () => member.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "admin" };
+    const optional = teamSetupCapabilities();
+    const optionalGitlab = optional.repositoryAutomation.providers[1];
+    if (!optionalGitlab) throw new Error("Expected GitLab capability");
+    optionalGitlab.blockers = [
+      {
+        code: "gitlab_webhook_not_seen",
+        resolutionOwner: "admin",
+        actionKind: "configure_gitlab_webhook",
+      },
+    ];
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(optional);
+    const optionalAdmin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 2,
+      "Expected optional Team projection to load",
+    );
+    expect(optionalAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => optionalAdmin.root.unmount());
+
+    authMock.value = { ...authMock.value, role: "member", currentOrgHasUsableAgent: false };
+    const personal = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(personal.container.querySelector("[data-setup-attention]")).not.toBeNull();
+    expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledTimes(2);
+    await act(async () => personal.root.unmount());
+  });
+
+  it("marks desktop Setup for an unavailable bound Context Tree snapshot without another blocker", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValueOnce({
+      snapshotStatus: "unavailable",
+    });
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => admin.container.querySelector("[data-setup-attention]") !== null,
+      "Expected Setup attention after the bound Context Tree snapshot becomes unavailable",
+    );
+
+    expect(contextApiMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
+    expect(admin.container.querySelector('aside a[href="/settings/setup"]')?.getAttribute("aria-label")).toBe(
+      "Setup — Needs you",
+    );
+    await act(async () => admin.root.unmount());
+  });
+
+  it("ignores cached unavailable snapshots when the current owner facts are unbound or failed", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const snapshotKey = ["context-tree-snapshot", "org-1", "7d", false] as const;
+    const unbound = teamSetupCapabilities();
+    unbound.contextTree.binding = { state: "unbound" };
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(unbound);
+    const unboundClient = createClient();
+    unboundClient.setQueryData(snapshotKey, { snapshotStatus: "unavailable" });
+
+    const unboundAdmin = await renderDom(<SettingsLayout />, "/settings/account", unboundClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 1,
+      "Expected the unbound Team projection to load",
+    );
+    expect(unboundAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    await act(async () => unboundAdmin.root.unmount());
+
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockRejectedValueOnce(new Error("projection failed"));
+    const failedProjectionClient = createClient();
+    failedProjectionClient.setQueryData(snapshotKey, { snapshotStatus: "unavailable" });
+    const failedProjectionAdmin = await renderDom(<SettingsLayout />, "/settings/account", failedProjectionClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 2,
+      "Expected the failed Team projection read",
+    );
+    expect(failedProjectionAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    expect(contextApiMocks.getContextTreeSnapshot).not.toHaveBeenCalled();
+    await act(async () => failedProjectionAdmin.root.unmount());
+
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockResolvedValueOnce(teamSetupCapabilities());
+    contextApiMocks.getContextTreeSnapshot.mockRejectedValueOnce(new Error("snapshot failed"));
+    const failedSnapshotAdmin = await renderDom(<SettingsLayout />, "/settings/account");
+    await waitForCondition(
+      () => contextApiMocks.getContextTreeSnapshot.mock.calls.length === 1,
+      "Expected the failed Context Tree snapshot read",
+    );
+    expect(failedSnapshotAdmin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => failedSnapshotAdmin.root.unmount());
+  });
+
+  it("ignores cached Team attention after the current projection read fails", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+    const cached = teamSetupCapabilities();
+    const cachedGithub = cached.repositoryAutomation.providers[0];
+    if (!cachedGithub) throw new Error("Expected GitHub capability");
+    cachedGithub.health = "degraded";
+    cachedGithub.blockers = [
+      {
+        code: "github_app_suspended",
+        resolutionOwner: "admin",
+        actionKind: "manage_github_installation",
+      },
+    ];
+    const queryClient = createClient();
+    queryClient.setQueryData(["setup-capabilities", "org-1"], cached);
+    setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mockRejectedValueOnce(new Error("projection failed"));
+
+    const admin = await renderDom(<SettingsLayout />, "/settings/account", queryClient);
+    await waitForCondition(
+      () => setupCapabilitiesMocks.getTeamSetupCapabilitiesAt.mock.calls.length === 1,
+      "Expected the cached Team projection to be rechecked",
+    );
+    await flush();
+
+    expect(admin.container.querySelector("[data-setup-attention]")).toBeNull();
+    await act(async () => admin.root.unmount());
+  });
+
+  it("uses the preview pathname override for desktop and narrow navigation state", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+
+    const desktop = await renderDom(
+      <SettingsLayout activePathname="/settings/repositories" />,
+      "/settings/integrations",
+    );
+    const desktopRepositories = desktop.container.querySelector<HTMLSpanElement>(
+      'aside a[href="/settings/repositories"] span',
+    );
+    const desktopIntegrations = desktop.container.querySelector<HTMLSpanElement>(
+      'aside a[href="/settings/integrations"] span',
+    );
+    expect(desktopRepositories?.classList.contains("font-medium")).toBe(true);
+    expect(desktopRepositories?.style.background).toBe("var(--bg-hover)");
+    expect(desktopIntegrations?.classList.contains("font-medium")).toBe(false);
+    expect(desktopIntegrations?.style.background).toBe("transparent");
+    await act(async () => desktop.root.unmount());
+
+    viewportMock.value = "narrow";
+    const narrow = await renderDom(
+      <SettingsLayout activePathname="/settings/repositories" />,
+      "/settings/integrations",
+    );
+    const narrowRepositories = narrow.container.querySelector<HTMLSpanElement>(
+      'nav a[href="/settings/repositories"] span',
+    );
+    const narrowIntegrations = narrow.container.querySelector<HTMLSpanElement>(
+      'nav a[href="/settings/integrations"] span',
+    );
+    expect(narrowRepositories?.classList.contains("font-medium")).toBe(true);
+    expect(narrowRepositories?.style.background).toBe("var(--bg-hover)");
+    expect(narrowIntegrations?.classList.contains("font-medium")).toBe(false);
+    expect(narrowIntegrations?.style.background).toBe("transparent");
+    await act(async () => narrow.root.unmount());
   });
 
   it("renders Context Tree binding configuration and keeps manual editing hidden by default", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "Repository");
-    expect(container.textContent).toContain("Your team's Context Tree");
+    await waitForText(container, "Context Tree");
+    const headings = [...container.querySelectorAll("h2")].map((heading) => heading.textContent);
+    expect(headings).toEqual(["Context Tree"]);
+    expect(headings).not.toContain("Repository");
+    expect(headings).not.toContain("Context Reviewer");
+    expect(container.textContent).not.toContain("Your team's Context Tree");
     expect(container.textContent).toContain("https://github.com/acme/context");
-    expect(container.textContent).toContain("branch main");
-    expect(container.textContent).toContain("View on the Context page");
-    expect(container.textContent).toContain("Context Reviewer");
+    expect(container.textContent).toContain("main branch");
+    expect(container.textContent).toContain("Open Context");
+    expect(container.textContent).toContain("Automatic PR review");
     expect(container.querySelectorAll<HTMLButtonElement>('[role="tab"]').length).toBe(0);
     expect(container.textContent).not.toContain("Connect your code & build your Context Tree");
     expect(container.textContent).not.toContain("Repo URL");
@@ -342,10 +659,63 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
+  it("uses the Server-resolved provider for a legacy GitLab binding and keeps the repo form editable", async () => {
+    settingsMocks.getRawContextTreeSetting.mockResolvedValueOnce(
+      contextTree({
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      }),
+    );
+    settingsMocks.getContextTreeSetting.mockResolvedValueOnce(
+      contextTree({
+        provider: "gitlab",
+        repo: "https://gitlab.internal/acme/platform/context-tree.git",
+      }),
+    );
+    gitlabConnectionMocks.listGitlabConnectionsAt.mockResolvedValueOnce([
+      {
+        id: "connection-1",
+        organizationId: "org-1",
+        displayName: "Private GitLab",
+        instanceOrigin: "https://gitlab.internal",
+        endpointSeen: true,
+        stableDeliveryObserved: true,
+        reviewerCapability: {
+          mode: "assignee",
+          lastObservedVersion: "13.12",
+          lastSchemaAnomalyAt: null,
+          lastSchemaAnomalyCode: null,
+        },
+        health: {
+          readiness: "routing_verified",
+          lastValidInboundAt: "2026-05-28T11:00:00.000Z",
+          lastSystemHookMergeRequestInboundAt: "2026-05-28T11:00:00.000Z",
+          lastProcessingFailureAt: "2026-05-28T11:00:00.000Z",
+          lastProcessingFailureCode: "processing_failed",
+        },
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Healthy · MR routing observed");
+
+    expect(container.textContent).toContain("gitlab");
+    expect(container.textContent).not.toContain("Provider unresolved");
+    expect(container.textContent).toContain("GitLab Webhook");
+    expect(container.textContent).toContain("Automatic MR review");
+    expect(container.textContent).toContain("last valid inbound 2026-05-28T11:00:00.000Z");
+    expect(container.textContent).toContain("last System Hook MR event 2026-05-28T11:00:00.000Z");
+    await click(buttonByText(container, "Edit"));
+    expect(inputByLabel(container, "Repo URL")?.value).toBe("https://gitlab.internal/acme/platform/context-tree.git");
+    await act(async () => root.unmount());
+  });
+
   it("shows and saves manual context tree settings with blank values normalized to null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "Open Context");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -372,14 +742,14 @@ describe("settings panels", () => {
 
     await act(async () => root.unmount());
 
-    settingsMocks.getContextTreeSetting.mockRejectedValueOnce(new Error("context load failed"));
+    settingsMocks.getRawContextTreeSetting.mockRejectedValueOnce(new Error("context load failed"));
     const failed = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(failed.container, "context load failed");
     await act(async () => failed.root.unmount());
   });
 
   it("points a no-tree admin to the Context page and keeps manual binding as an escape hatch", async () => {
-    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+    settingsMocks.getRawContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
 
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
@@ -407,12 +777,11 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "Open Context");
 
     expect(container.textContent).toContain("https://github.com/acme/context");
-    expect(container.textContent).toContain("branch main");
+    expect(container.textContent).toContain("main branch");
     expect(buttonByText(container, "Edit")).toBeNull();
-    expect(container.textContent).toContain("Context Reviewer");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("Off");
     expect(reviewerSwitch(container)).toBeNull();
@@ -434,7 +803,7 @@ describe("settings panels", () => {
   it("renders Context Reviewer settings without resetting manual binding draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "Open Context");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -442,11 +811,24 @@ describe("settings panels", () => {
     if (!repoInput) throw new Error("Expected repo input");
     await setInputValue(repoInput, "https://github.com/acme/draft-context");
 
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("false");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
+
+    await act(async () => root.unmount());
+  });
+
+  it("allows configuring the Reviewer without a GitHub App installation", async () => {
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "Automatic PR review");
+    expect(reviewerSwitch(container)?.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Action required");
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
@@ -457,7 +839,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
     await waitForText(container, "Alpha Reviewer");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
 
@@ -473,7 +855,7 @@ describe("settings panels", () => {
   it("does not save when flipping the Switch on (no agent) and back off", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
@@ -488,12 +870,12 @@ describe("settings panels", () => {
   it("enables Context Reviewer, filters eligible agents, and saves the selected agent", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
     await waitForCondition(() => agentApiMocks.listAllAgents.mock.calls.length > 0, "Expected agents to load");
-    await waitForText(container, "Select an agent to enable Context Reviewer.");
+    await waitForText(container, "Select an agent to enable automatic PR review.");
 
     await selectOption(container, "Alpha Reviewer");
     expect(document.body.textContent).not.toContain("Human User");
@@ -514,11 +896,20 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Beta Reviewer");
+    expect(container.textContent).toContain("does not move open PRs immediately");
+    expect(container.textContent).toContain("Re-run the Context Tree write task");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
-    expect(container.textContent).toContain("Beta Reviewer");
+    const reviewerMetadata = buttonByText(container, "Reviewer agent · Beta Reviewer");
+    expect(reviewerMetadata).not.toBeNull();
+    expect(reviewerMetadata?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
+
+    await click(reviewerMetadata);
+    expect(reviewerMetadata?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });
@@ -544,7 +935,7 @@ describe("settings panels", () => {
       );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Late Page Reviewer");
     expect(agentApiMocks.listAllAgents).toHaveBeenNthCalledWith(1, { limit: 100 });
@@ -565,11 +956,29 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "No active non-human agents are available.");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps an unavailable saved reviewer actionable when no replacement agents exist", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-deleted" }),
+    );
+    agentApiMocks.listAllAgents.mockResolvedValueOnce(
+      paginatedAgents([managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" })]),
+    );
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "No active non-human agents are available.");
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).not.toContain("agent-deleted");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -590,7 +999,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Other Admin Reviewer");
     expect(container.textContent).not.toContain("Current reviewer is not your active agent.");
@@ -611,15 +1020,16 @@ describe("settings panels", () => {
     );
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "Open Context");
     await waitForText(container, "Context Reviewer Bot");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("On");
+    expect(container.textContent).toContain("does not move open PRs immediately");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(reviewerSwitch(container)).toBeNull();
-    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
 
     await act(async () => root.unmount());
   });
@@ -638,7 +1048,7 @@ describe("settings panels", () => {
     expect(container.textContent).not.toContain("agent-deleted");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(reviewerSwitch(container)).toBeNull();
-    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

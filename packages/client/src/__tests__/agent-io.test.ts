@@ -38,6 +38,41 @@ function mkSdk(listImpl?: () => Promise<ChatParticipantDetail[]>): FirstTreeHubS
   return sdk;
 }
 
+const githubCard = {
+  type: "github_event",
+  reason: "subscribed",
+  event: "issues",
+  action: "opened",
+  kind: "opened",
+  repository: "acme/widgets",
+  sender: "octocat",
+  title: "Issue #42: Broken widget",
+  body: "Please investigate",
+  url: "https://github.com/acme/widgets/issues/42",
+  entity: {
+    type: "issue",
+    key: "acme/widgets#42",
+    url: "https://github.com/acme/widgets/issues/42",
+  },
+};
+
+const gitlabCard = {
+  type: "gitlab_event",
+  event: "issue",
+  action: "open",
+  kind: "opened",
+  project: "acme/widgets",
+  sender: "alice",
+  title: "Broken widget",
+  body: "Please investigate",
+  url: "https://gitlab.example/acme/widgets/-/issues/42",
+  entity: {
+    type: "issue",
+    key: "501:issue:42",
+    url: "https://gitlab.example/acme/widgets/-/issues/42",
+  },
+};
+
 afterEach(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
@@ -165,6 +200,152 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nPR opened");
   });
 
+  it.each([
+    ["GitHub", "github", githubCard],
+    ["GitLab", "gitlab", gitlabCard],
+  ])("attributes a trusted %s dispatcher card as system", async (name, source, content) => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source,
+      format: "card",
+      content,
+      metadata: { systemSender: source },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(`[From: ${name} · type=system]\n\n${JSON.stringify(content)}`);
+  });
+
+  it.each([
+    { state: "pending" },
+    {
+      state: "submitting",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      claimedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "unknown",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "COMMENT",
+      failedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "failed",
+      payloadHash: "hash",
+      code: "CONTEXT_REVIEW_GITHUB_REJECTED",
+      failedAt: "2026-07-21T00:00:00.000Z",
+    },
+    {
+      state: "submitted",
+      payloadHash: "hash",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      reviewId: 42,
+      reviewUrl: "https://github.com/acme/context-tree/pull/42#pullrequestreview-42",
+      appActor: "first-tree[bot]",
+      submittedAt: "2026-07-21T00:00:00.000Z",
+      reviewerAgentUuid: "reviewer-1",
+      reviewerManagerHumanAgentId: "human-1",
+      reviewerClientId: "client-1",
+      reviewerManagerGithubLogin: null,
+    },
+  ])("keeps a trusted Context Reviewer run attributed to GitHub in $state", async (contextReviewSubmission) => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "github",
+      format: "markdown",
+      content: "Review this exact Context Tree head.",
+      metadata: {
+        source: "github",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-1",
+        contextReviewRepository: "acme/context-tree",
+        contextReviewPrNumber: 42,
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+        contextReviewSubmission,
+      },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: GitHub · type=system]\n\nReview this exact Context Tree head.",
+    );
+  });
+
+  it("keeps a trusted Context Reviewer run attributed to GitLab", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "gitlab",
+      format: "markdown",
+      content: "Review this exact GitLab Merge Request head.",
+      metadata: {
+        source: "gitlab",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-1",
+        contextReviewRepository: "gitlab.example/acme/context-tree",
+        contextReviewConnectionId: "connection-1",
+        contextReviewInstanceOrigin: "https://gitlab.example",
+        contextReviewProjectId: 501,
+        contextReviewMrIid: 42,
+        contextReviewEntityUrl: "https://gitlab.example/acme/context-tree/-/merge_requests/42",
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+      },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: GitLab · type=system]\n\nReview this exact GitLab Merge Request head.",
+    );
+  });
+
+  it("does not trust a caller-provided systemSender marker", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "api",
+      format: "card",
+      content: githubCard,
+      metadata: { systemSender: "github" },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(`[From: alice · type=agent]\n\n${JSON.stringify(githubCard)}`);
+  });
+
   it("annotates the header with the sender type and send time when both are known", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
@@ -253,6 +434,61 @@ describe("formatInboundContent", () => {
     expect(out).toContain("a.png");
     expect(out).toContain("b.png");
     expect(out).not.toContain('{"caption"');
+  });
+
+  it("renders generic request image attachments without changing the textual body", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "request",
+      content: "Which layout should ship?",
+      metadata: {
+        request: {},
+        attachments: [
+          {
+            attachmentId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "decision.png",
+            size: 42,
+          },
+        ],
+      },
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain("Which layout should ship?");
+    expect(out).toContain("An image was shared");
+    expect(out).toContain("decision.png");
+    expect(out).not.toContain('{"attachments"');
+  });
+
+  it("does not reinterpret a batch-shaped card as an image message", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const content = {
+      caption: "card payload",
+      attachments: [
+        {
+          imageId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
+          mimeType: "image/png",
+          filename: "not-an-image-message.png",
+        },
+      ],
+    };
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "card",
+      content,
+      metadata: null,
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain(JSON.stringify(content));
+    expect(out).not.toContain("An image was shared");
   });
 
   it("renders a single image ref (pre-batch shape) as filename + placeholder", async () => {
@@ -367,7 +603,7 @@ describe("formatInboundContent", () => {
     expect(out).not.toContain("file was shared");
   });
 
-  it("does not render image metadata attachments as document files", async () => {
+  it("renders image metadata attachments through the image path, not as document files", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -391,8 +627,9 @@ describe("formatInboundContent", () => {
 
     const out = await formatInboundContent(msg, cache);
 
-    expect(out).toBe("[From: alice · type=agent]\n\nImage metadata only.");
-    expect(out).not.toContain("chart.png");
+    expect(out).toContain("[From: alice · type=agent]\n\nImage metadata only.");
+    expect(out).toContain("An image was shared in this chat");
+    expect(out).toContain('Image "chart.png" not available on this device');
     expect(out).not.toContain("file was shared");
   });
 
@@ -539,6 +776,50 @@ describe("formatInboundContent", () => {
     );
   });
 
+  it("preserves trusted SCM system attribution in preceding silent context", async () => {
+    const ps = [mkParticipant("agent-a", "alice"), mkParticipant("agent-b", "bob")];
+    const cache = createParticipantCache(
+      mkSdk(async () => ps),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m3",
+      chatId: "chat-1",
+      senderId: "agent-b",
+      source: "api",
+      format: "text",
+      content: "please review",
+      metadata: null,
+      precedingMessages: [
+        {
+          id: "m1",
+          senderId: "agent-a",
+          source: "github",
+          format: "card",
+          content: githubCard,
+          metadata: { systemSender: "github" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "m2",
+          senderId: "agent-a",
+          source: "gitlab",
+          format: "card",
+          content: gitlabCard,
+          metadata: { systemSender: "gitlab" },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toContain("[From: GitHub · type=system · sent=2026-01-01T00:00:00.000Z]");
+    expect(out).toContain("[From: GitLab · type=system · sent=2026-01-01T00:00:01.000Z]");
+    expect(out).toContain("[From: bob · type=agent]\n\nplease review");
+  });
+
   it("omits the [Earlier in chat] block when precedingMessages is empty / absent", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
@@ -581,41 +862,56 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
-  it("injects the runtime session token without persisting it in agent config", () => {
-    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
-      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
-      agent: {
-        agentId: "agent-a",
-        inboxId: "inbox-a",
-        displayName: "agent-a",
-        type: "agent",
-        visibility: "organization",
-        delegateMention: null,
-        metadata: {},
+  it("scrubs inherited runtime session token values and stale file paths", () => {
+    const env = buildAgentEnv(
+      {
+        PATH: "/usr/bin",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN: "stale-runtime-token",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: "/tmp/stale-runtime-session-token",
+      } as NodeJS.ProcessEnv,
+      {
+        sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+        agent: {
+          agentId: "agent-a",
+          inboxId: "inbox-a",
+          displayName: "agent-a",
+          type: "agent",
+          visibility: "organization",
+          delegateMention: null,
+          metadata: {},
+        },
+        chatId: "chat-1",
       },
-      chatId: "chat-1",
-    });
+    );
 
-    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBeUndefined();
   });
 
-  it("injects a stable runtime session token file for long-lived child CLI calls", () => {
-    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
-      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
-      agent: {
-        agentId: "agent-a",
-        inboxId: "inbox-a",
-        displayName: "agent-a",
-        type: "agent",
-        visibility: "organization",
-        delegateMention: null,
-        metadata: {},
+  it("replaces inherited runtime session env with the current token file", () => {
+    const env = buildAgentEnv(
+      {
+        PATH: "/usr/bin",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN: "stale-runtime-token",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: "/tmp/stale-runtime-session-token",
+      } as NodeJS.ProcessEnv,
+      {
+        sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+        agent: {
+          agentId: "agent-a",
+          inboxId: "inbox-a",
+          displayName: "agent-a",
+          type: "agent",
+          visibility: "organization",
+          delegateMention: null,
+          metadata: {},
+        },
+        chatId: "chat-1",
+        runtimeSessionTokenFile: "/tmp/runtime-session-token",
       },
-      chatId: "chat-1",
-      runtimeSessionTokenFile: "/tmp/runtime-session-token",
-    });
+    );
 
-    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
     expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
   });
 

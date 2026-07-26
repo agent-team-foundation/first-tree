@@ -8,6 +8,7 @@ import {
   getChildProcessRegistry,
   getHandlerFactory,
   hasHandler,
+  type ProviderModelsListCommand,
   type RuntimeAuthCommand,
   registerBuiltinHandlers,
   type UpdateHooks,
@@ -17,6 +18,7 @@ import {
   AGENT_BIND_REJECT_REASONS,
   type AgentPinnedMessage,
   type ClientPausedReason,
+  type ProviderModelCatalog,
   type RuntimeProvider,
   runtimeProviderSchema,
 } from "@first-tree/shared";
@@ -282,6 +284,20 @@ export class ClientRuntime {
    */
   onRuntimeAuthStart(callback: (command: RuntimeAuthCommand) => void): void {
     this.connection.on("runtime-auth:start", callback);
+  }
+
+  /**
+   * Register a handler for the server→client `provider-models:list` command.
+   * The daemon discovers models from the host-local provider and replies with
+   * `provider-models:result` on the same connection.
+   */
+  onProviderModelsList(callback: (command: ProviderModelsListCommand) => void): void {
+    this.connection.on("provider-models:list", callback);
+  }
+
+  /** Reply to a correlated `provider-models:list` with the discovered catalog. */
+  sendProviderModelsResult(ref: string, catalog: ProviderModelCatalog): void {
+    this.connection.sendProviderModelsResult(ref, catalog);
   }
 
   addAgent(name: string, config: AgentConfig): void {

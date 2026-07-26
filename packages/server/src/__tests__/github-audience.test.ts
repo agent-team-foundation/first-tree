@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { NormalizedEvent } from "@first-tree/shared";
+import type { NormalizedScmEvent } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { resolveActorHumanId, resolveAudience as resolveAudienceResolution } from "../services/github-audience.js";
+import {
+  resolveGithubAudience as resolveAudienceResolution,
+  resolveGithubActorHumanId,
+} from "../services/github-audience.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -77,12 +80,12 @@ async function seedMapping(
   });
 }
 
-// Default `(rawEventType, rawAction)` per normalized `kind`, so a test's wire
+// Default `(eventType, action)` per normalized `kind`, so a test's wire
 // fields stay coherent with the scenario it describes. The #766 subscribed-
-// suppression keys off `(rawEventType === "pull_request", rawAction ===
+// suppression keys off `(eventType === "pull_request", action ===
 // "opened")`, so a test that means "synchronize" must NOT leak a stray
-// `rawAction: "opened"`. Callers can still override either field explicitly.
-const KIND_TO_ACTION: Record<NormalizedEvent["kind"], string> = {
+// `action: "opened"`. Callers can still override either field explicitly.
+const KIND_TO_ACTION: Record<NormalizedScmEvent["kind"], string> = {
   opened: "opened",
   edited: "edited",
   closed: "closed",
@@ -112,37 +115,38 @@ function makeEvent(opts: {
   entityKey: string;
   actorLogin: string;
   actorIsBot?: boolean;
-  involves?: Array<{ githubLogin: string; reason: "mentioned" | "review_requested" | "assigned" }>;
-  kind?: NormalizedEvent["kind"];
-  rawEventType?: string;
-  rawAction?: string;
-}): NormalizedEvent {
+  targets?: Array<{ externalUsername: string; reason: "mentioned" | "review_requested" | "assigned" }>;
+  kind?: NormalizedScmEvent["kind"];
+  eventType?: string;
+  action?: string;
+}): NormalizedScmEvent {
   const kind = opts.kind ?? "opened";
   return {
+    provider: "github",
     source: {
-      kind: "github-app-installation",
-      installationId: opts.installationId ?? 1,
       organizationId: opts.orgId,
+      externalId: `installation:${opts.installationId ?? 1}`,
     },
-    deliveryId: "delivery-1",
-    rawEventType: opts.rawEventType ?? ENTITY_TO_EVENT_TYPE[opts.entityType],
-    rawAction: opts.rawAction ?? KIND_TO_ACTION[kind],
+    stableDeliveryId: "delivery-1",
+    ingressAuthority: "verified_signature",
+    eventType: opts.eventType ?? ENTITY_TO_EVENT_TYPE[opts.entityType],
+    action: opts.action ?? KIND_TO_ACTION[kind],
     entity: {
       type: opts.entityType,
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: opts.entityKey,
       title: "X",
       url: "https://github.com/owner/repo",
     },
-    actor: { githubLogin: opts.actorLogin, isBot: opts.actorIsBot ?? false },
+    actor: { externalUsername: opts.actorLogin, isBot: opts.actorIsBot ?? false },
     kind,
-    involves: opts.involves ?? [],
+    targets: opts.targets ?? [],
     surface: { title: "X", body: "", url: "" },
     relatedRefs: [],
   };
 }
 
-describe("resolveActorHumanId", () => {
+describe("resolveGithubActorHumanId", () => {
   const getApp = useTestApp();
 
   it("returns the human agent id when the sender login matches an org human (case-insensitive)", async () => {
@@ -156,7 +160,9 @@ describe("resolveActorHumanId", () => {
     });
     const [row] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, humanId)).limit(1);
     if (!row?.name) throw new Error("seeded agent has no name");
-    const id = await resolveActorHumanId(app.db, admin.organizationId, { githubLogin: row.name.toUpperCase() });
+    const id = await resolveGithubActorHumanId(app.db, admin.organizationId, {
+      externalUsername: row.name.toUpperCase(),
+    });
     expect(id).toBe(humanId);
   });
 
@@ -170,16 +176,18 @@ describe("resolveActorHumanId", () => {
     });
     const [row] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, agentId)).limit(1);
     if (!row?.name) throw new Error("seeded agent has no name");
-    const id = await resolveActorHumanId(app.db, admin.organizationId, { githubLogin: row.name });
+    const id = await resolveGithubActorHumanId(app.db, admin.organizationId, { externalUsername: row.name });
     expect(id).toBeNull();
   });
 
   it("returns null for unknown senders and bots", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    await expect(resolveActorHumanId(app.db, admin.organizationId, { githubLogin: "stranger" })).resolves.toBeNull();
     await expect(
-      resolveActorHumanId(app.db, admin.organizationId, { githubLogin: "first-tree[bot]" }),
+      resolveGithubActorHumanId(app.db, admin.organizationId, { externalUsername: "stranger" }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGithubActorHumanId(app.db, admin.organizationId, { externalUsername: "first-tree[bot]" }),
     ).resolves.toBeNull();
   });
 });
@@ -231,6 +239,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        provenance: "identity_target",
       },
     ]);
   });
@@ -268,7 +277,7 @@ describe("resolveAudience", () => {
         entityKey: "owner/repo#7",
         actorLogin: "outsider",
         kind: "commented",
-        rawEventType: "discussion_comment",
+        eventType: "discussion_comment",
       }),
     );
 
@@ -280,6 +289,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        provenance: "identity_target",
       },
     ]);
   });
@@ -308,7 +318,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#101",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanName, reason: "review_requested" }],
+        targets: [{ externalUsername: humanName, reason: "review_requested" }],
         kind: "review_requested",
       }),
     );
@@ -358,7 +368,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#102",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
     );
@@ -371,13 +381,10 @@ describe("resolveAudience", () => {
     expect(audience[0]?.involveLogin).toBe(humanName.toLowerCase());
   });
 
-  it("collapses subscribed rows by human (sibling mappings on same chat → one audience target)", async () => {
-    // Once `resolveTargetChat` step (a.5) lands sibling mapping rows
-    // (same chat, different delegate under the same human), naive subscribed
-    // expansion would post the same card to the chat N times. Subscribed
-    // dedup collapses by humanAgentId; sibling rows always share chatId by
-    // construction, so we keep the earliest bound_at row as the
-    // representative.
+  it("preserves distinct wake agents carried by the same human in one chat", async () => {
+    // Each (human, delegate) mapping is a distinct wake line. The audience
+    // must preserve both; the delivery planner, not this resolver, owns
+    // collapsing them into one card for the shared chat.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegateOriginal = await seedAgent(app, {
@@ -397,11 +404,6 @@ describe("resolveAudience", () => {
     });
     const chatId = await seedChat(app, admin.organizationId, human);
 
-    // Original row first (earlier bound_at), then sibling — simulates the
-    // (a.5) write order. We do not control bound_at directly; the default
-    // `now()` clock + serial insert order suffices because the assertions
-    // only require the representative to be one of the two rows sharing
-    // chatId, and both point at the same chat.
     await seedMapping(app, {
       orgId: admin.organizationId,
       humanId: human,
@@ -430,10 +432,12 @@ describe("resolveAudience", () => {
       }),
     );
 
-    expect(audience).toHaveLength(1);
-    expect(audience[0]?.kind).toBe("existing");
-    expect(audience[0]?.humanAgentId).toBe(human);
-    expect(audience[0]?.chatId).toBe(chatId);
+    expect(audience).toHaveLength(2);
+    expect(audience.every((target) => target.kind === "existing")).toBe(true);
+    expect(audience.every((target) => target.humanAgentId === human && target.chatId === chatId)).toBe(true);
+    expect(new Set(audience.map((target) => target.delegateAgentId))).toEqual(
+      new Set([delegateOriginal, delegateSibling]),
+    );
   });
 
   it("M2: does NOT collapse subscribed rows across different chats for the same human", async () => {
@@ -442,8 +446,9 @@ describe("resolveAudience", () => {
     // `human_fallback` row in chat A under delegateA plus an explicit follow
     // row in chat B under delegateB). Deduping by `humanAgentId` alone kept
     // only the earliest chat and silently dropped the *other* followed chat
-    // from the audience. Dedup is keyed by `(human, chat)`, so BOTH chats
-    // receive the event.
+    // from the audience. Dedup is keyed by `(human, delegate, chat)`, so BOTH
+    // chats receive the event while distinct wake lines inside either chat are
+    // preserved for the delivery planner.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegateA = await seedAgent(app, {
@@ -540,7 +545,7 @@ describe("resolveAudience", () => {
         entityType: "issue",
         entityKey: "owner/repo#202",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanName, reason: "assigned" }],
+        targets: [{ externalUsername: humanName, reason: "assigned" }],
         kind: "assigned",
       }),
     );
@@ -620,7 +625,7 @@ describe("resolveAudience", () => {
         entityKey: "owner/repo#104",
         actorLogin: "first-tree[bot]",
         actorIsBot: true,
-        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
     );
@@ -722,7 +727,7 @@ describe("resolveAudience", () => {
         entityType: "issue",
         entityKey: "owner/repo#108",
         actorLogin: humanName,
-        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
     );
@@ -770,7 +775,7 @@ describe("resolveAudience", () => {
         entityType: "issue",
         entityKey: "owner/repo#110",
         actorLogin: humanName,
-        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
     );
@@ -810,7 +815,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#600",
         actorLogin: creatorName,
-        involves: [{ githubLogin: creatorName, reason: "assigned" }],
+        targets: [{ externalUsername: creatorName, reason: "assigned" }],
         kind: "opened",
       }),
     );
@@ -861,9 +866,9 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#601",
         actorLogin: creatorName,
-        involves: [
-          { githubLogin: creatorName, reason: "assigned" },
-          { githubLogin: otherName, reason: "mentioned" },
+        targets: [
+          { externalUsername: creatorName, reason: "assigned" },
+          { externalUsername: otherName, reason: "mentioned" },
         ],
         kind: "opened",
       }),
@@ -909,7 +914,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#602",
         actorLogin: creatorName,
-        involves: [{ githubLogin: creatorName, reason: "assigned" }],
+        targets: [{ externalUsername: creatorName, reason: "assigned" }],
         kind: "opened",
       }),
     );
@@ -948,7 +953,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#105",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanInactiveName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanInactiveName, reason: "mentioned" }],
         kind: "opened",
       }),
     );
@@ -974,7 +979,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#106",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        targets: [{ externalUsername: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
     );
@@ -1019,9 +1024,9 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#107",
         actorLogin: "outsider",
-        involves: [
-          { githubLogin: bobName, reason: "mentioned" },
-          { githubLogin: carolName, reason: "mentioned" },
+        targets: [
+          { externalUsername: bobName, reason: "mentioned" },
+          { externalUsername: carolName, reason: "mentioned" },
         ],
         kind: "opened",
       }),
@@ -1167,7 +1172,7 @@ describe("resolveAudience", () => {
         entityType: "pull_request",
         entityKey: "owner/repo#502",
         actorLogin: "outsider",
-        involves: [{ githubLogin: humanName, reason: "assigned" }],
+        targets: [{ externalUsername: humanName, reason: "assigned" }],
         kind: "opened",
       }),
     );

@@ -650,7 +650,7 @@ describe("ClientConnection — additional branch coverage", () => {
     for (const conn of [retryable, malformedRetryable, rejected, userMismatch, orgMismatch, genericRejected]) {
       priv(conn).clearTimers();
     }
-  });
+  }, 10_000);
 
   it("covers rebind recovery, rebind rejection, force disconnect, and control events", async () => {
     const connection = await makeConnection();

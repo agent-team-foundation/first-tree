@@ -1,10 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@first-tree/shared";
+import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
-import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
+import { handleContextReviewerPrEvent, isContextReviewerCandidateEvent } from "../../services/context-reviewer-pr.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -13,11 +12,12 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
-import { resolveAudience } from "../../services/github-audience.js";
-import { deliverNormalizedEvent } from "../../services/github-delivery.js";
-import { type EntityStateSeed, setEntityState } from "../../services/github-entity-state.js";
-import { normalizeGithubEvent } from "../../services/github-normalize.js";
-import { isRecord, readNumber, readString } from "./github-entity.js";
+import { resolveGithubAudience } from "../../services/github-audience.js";
+import { deliverGithubEvent } from "../../services/github-delivery.js";
+import { setEntityState, setEntityTitle } from "../../services/github-entity-state.js";
+import { normalizeGithubWebhook } from "../../services/github-normalize.js";
+import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
+import { isRecord, readString } from "./github-entity.js";
 
 const log = createLogger("GithubAppWebhook");
 
@@ -89,120 +89,6 @@ function parseInstallationMetadata(installation: Record<string, unknown>): AppIn
   };
 }
 
-function pullRequestStateFromPayload(pr: Record<string, unknown>, action: string): EntityStateSeed["state"] {
-  const state = readString(pr.state);
-  if (action === "closed" || state === "closed") {
-    return pr.merged === true ? "merged" : "closed";
-  }
-  return pr.draft === true ? "draft" : "open";
-}
-
-function issueStateFromPayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
-  const state = readString(issue.state);
-  return action === "closed" || state === "closed" ? "closed" : "open";
-}
-
-function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action: string): EntityStateSeed["state"] {
-  const state = readString(issue.state);
-  if (action === "closed" || state === "closed") {
-    const pr = isRecord(issue.pull_request) ? issue.pull_request : null;
-    return readString(pr?.merged_at) ? "merged" : "closed";
-  }
-  return issue.draft === true ? "draft" : "open";
-}
-
-function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
-  if (eventType === "pull_request") {
-    return action === "opened" || action === "synchronize" || action === "ready_for_review";
-  }
-  if (eventType === "issue_comment") return action === "created";
-  if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
-  return false;
-}
-
-/**
- * Derive the current PR/Issue state from any payload that carries the entity.
- * This is used only as an INSERT seed for mappings created by the same
- * webhook delivery; it must not update existing rows for non-transition
- * events such as late `opened` deliveries.
- */
-function resolveEntityStateSeed(
-  eventType: string,
-  action: string,
-  payload: Record<string, unknown>,
-  repoFullName: string,
-): EntityStateSeed | null {
-  if (
-    eventType === "pull_request" ||
-    eventType === "pull_request_review" ||
-    eventType === "pull_request_review_comment"
-  ) {
-    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
-    const number = readNumber(pr?.number);
-    if (!pr || number === null) return null;
-    return {
-      entityType: "pull_request",
-      entityKey: `${repoFullName}#${number}`,
-      state: pullRequestStateFromPayload(pr, action),
-    };
-  }
-  if (eventType === "issues" || eventType === "issue_comment") {
-    const issue = isRecord(payload.issue) ? payload.issue : null;
-    const number = readNumber(issue?.number);
-    if (!issue || number === null) return null;
-    if (isRecord(issue.pull_request)) {
-      return {
-        entityType: "pull_request",
-        entityKey: `${repoFullName}#${number}`,
-        state: pullRequestStateFromIssuePayload(issue, action),
-      };
-    }
-    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
-  }
-  return null;
-}
-
-/**
- * Map lifecycle transitions to persisted `entity_state` updates for rows
- * that already exist. Initial `opened` events are excluded on purpose: a
- * retry or delayed opened delivery must not overwrite a newer draft/closed/
- * merged state.
- */
-function resolveEntityStateUpdate(
-  eventType: string,
-  action: string,
-  payload: Record<string, unknown>,
-  repoFullName: string,
-): EntityStateSeed | null {
-  if (eventType === "pull_request") {
-    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
-    const number = readNumber(pr?.number);
-    if (!pr || number === null) return null;
-    if (action === "closed" || action === "reopened") {
-      return {
-        entityType: "pull_request",
-        entityKey: `${repoFullName}#${number}`,
-        state: pullRequestStateFromPayload(pr, action),
-      };
-    }
-    if (action === "converted_to_draft") {
-      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "draft" };
-    }
-    if (action === "ready_for_review") {
-      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "open" };
-    }
-    return null;
-  }
-  if (eventType === "issues") {
-    const issue = isRecord(payload.issue) ? payload.issue : null;
-    const number = readNumber(issue?.number);
-    if (!issue || number === null) return null;
-    if (action !== "closed" && action !== "reopened") return null;
-    return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: issueStateFromPayload(issue, action) };
-  }
-  return null;
-}
-
 async function handleInstallationLifecycle(app: FastifyInstance, eventType: string, payload: unknown): Promise<string> {
   if (!isRecord(payload)) return "ignored:malformed";
   // installation_repositories events carry repo add/remove deltas — we do
@@ -270,9 +156,9 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
  *   3. installation / installation_repositories → lifecycle handler, NOT
  *      the normalize pipeline (these events shouldn't fan out as cards)
  *   4. other events → installation.id → hub_organization_id reverse-lookup,
- *      then Stage 1 normalize → claimEvent → Stage 2 audience → Stage 3
- *      deliver. unclaimEvent on handler failure so GitHub's retry has a
- *      chance to clear.
+ *      then GitHub normalize → provider-neutral SCM processing seam →
+ *      GitHub audience/delivery adapters. The seam best-effort unclaims on
+ *      uncaught handler failure so GitHub's retry has a chance to clear.
  *
  * Routes return 200 for "ignored" cases (no installation context, not
  * bound, suspended, duplicate delivery) so GitHub doesn't accumulate
@@ -345,120 +231,96 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     if (installation.suspendedAt !== null) {
       return reply.status(200).send({ ok: true, event: eventType, ignored: "suspended" });
     }
-
-    const source: WebhookSource = {
-      kind: "github-app-installation",
-      installationId,
-      organizationId: installation.hubOrganizationId,
-    };
+    const organizationId = installation.hubOrganizationId;
 
     const deliveryHeader = request.headers["x-github-delivery"];
     const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
-
-    // Bypass: sync the upstream PR/Issue lifecycle onto
-    // `github_entity_chat_mappings.entity_state`. Runs independently of
-    // the normalize/audience/deliver pipeline so this branch never
-    // produces an inbox message. The chat-archive sweeper
-    // (services/chat-archive.ts) reads this column to decide when to
-    // archive. Idempotent under retries — sits before claimEvent on
-    // purpose so a retry whose normalized event was already claimed
-    // still gets its state column updated.
-    let entityStateSeed: EntityStateSeed | null = null;
-    if (isRecord(payload)) {
-      const repo = isRecord(payload.repository) ? payload.repository : null;
-      const repoFullName = readString(repo?.full_name);
-      const action = typeof payload.action === "string" ? payload.action : null;
-      if (repoFullName && action) {
-        entityStateSeed = resolveEntityStateSeed(eventType, action, payload, repoFullName);
-        const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
-        if (stateUpdate) {
-          try {
-            const stats = await setEntityState(app.db, {
-              organizationId: installation.hubOrganizationId,
-              entityType: stateUpdate.entityType,
-              entityKey: stateUpdate.entityKey,
-              state: stateUpdate.state,
-            });
-            if (stats.updated > 0) {
-              log.info(
-                { entityKey: stateUpdate.entityKey, state: stateUpdate.state, rows: stats.updated },
-                "synced github entity state",
-              );
-            }
-          } catch (err) {
-            // Best-effort: state-sync failure must not block normalize/deliver.
-            log.error(
-              { err, entityKey: stateUpdate.entityKey, state: stateUpdate.state },
-              "failed to sync github entity state",
-            );
-          }
-        }
-      }
-    }
+    const ingress: ScmIngressContext = {
+      provider: "github",
+      source: {
+        organizationId,
+        externalId: `installation:${installationId}`,
+      },
+      stableDeliveryId: deliveryId,
+      ingressAuthority: "verified_signature",
+    };
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
-    const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
-    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction);
-    if (!event && !shouldRunContextReviewer) {
+    const normalized = normalizeGithubWebhook(eventType, payload, ingress);
+    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
+    if (!normalized.event && !shouldRunContextReviewer && !normalized.observation) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
     }
 
-    if (deliveryId) {
-      const claimed = await claimEvent(app.db, deliveryId, "github");
-      if (!claimed) {
-        log.info({ deliveryId, eventType }, "duplicate delivery, skipping");
+    const result = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: normalized.observation,
+      event: normalized.event,
+      applyObservation: async (current) => {
+        if (current.state) {
+          await setEntityState(app.db, {
+            organizationId,
+            entityType: current.entity.type,
+            entityKey: current.entity.key,
+            state: current.state,
+          });
+        }
+        if (current.entity.title) {
+          await setEntityTitle(app.db, {
+            organizationId,
+            entityType: current.entity.type,
+            entityKey: current.entity.key,
+            title: current.entity.title,
+          });
+        }
+      },
+      runProviderWork: () =>
+        shouldRunContextReviewer
+          ? handleContextReviewerPrEvent(app, {
+              eventType,
+              payload,
+              organizationId,
+              installationId,
+            })
+          : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
+      resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),
+      deliver: (normalizedEvent, audience) =>
+        deliverGithubEvent(app, normalizedEvent, audience.targets, {
+          entityStateSeed: normalized.entityStateSeed,
+          actorHumanId: audience.actorHumanId,
+        }),
+    });
+
+    switch (result.outcome) {
+      case "duplicate":
         return reply.status(200).send({ ok: true, event: eventType, deduped: true });
-      }
-    }
-
-    try {
-      const contextReviewer = shouldRunContextReviewer
-        ? await handleContextReviewerPrEvent(app, {
-            eventType,
-            payload,
-            organizationId: installation.hubOrganizationId,
-          })
-        : ({ handled: false, reason: "unsupported_event" } as const);
-      if (!event) {
+      case "provider_only":
         log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
-        return reply.status(200).send({ ok: true, event: eventType, handled: false, contextReviewer });
-      }
-
-      const audience = await resolveAudience(app.db, event);
-      if (audience.targets.length === 0) {
-        // Distinguish "expected nobody" (no involves, no subscription)
-        // from "had explicit involves but resolved to zero agents" — the
-        // latter usually means a mentioned GitHub login has no
-        // `delegateMention`-configured agent in this org, which is a
-        // potential mis-configuration worth surfacing on a dashboard.
-        // See #507.
-        const reason: "audience_empty_no_involves" | "audience_empty_with_involves" =
-          event.involves.length > 0 ? "audience_empty_with_involves" : "audience_empty_no_involves";
-        log.info(
-          {
-            entityType: event.entity.type,
-            entityKey: event.entity.key,
-            actor: event.actor.githubLogin,
-            involvesCount: event.involves.length,
-            reason,
-          },
-          "audience empty, skipping",
-        );
-        return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason, contextReviewer });
-      }
-      const stats = await deliverNormalizedEvent(app, event, audience.targets, {
-        entityStateSeed,
-        actorHumanId: audience.actorHumanId,
-      });
-      return reply.status(200).send({ ok: true, event: eventType, ...stats, contextReviewer });
-    } catch (err) {
-      if (deliveryId) {
-        await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
-          log.error({ err: unclaimErr, deliveryId }, "failed to unclaim delivery after handler error");
+        return reply
+          .status(200)
+          .send({ ok: true, event: eventType, handled: false, contextReviewer: result.providerResult });
+      case "audience_empty": {
+        const reason =
+          result.reason === "audience_empty_with_targets"
+            ? "audience_empty_with_involves"
+            : "audience_empty_no_involves";
+        return reply.status(200).send({
+          ok: true,
+          event: eventType,
+          audience: 0,
+          reason,
+          contextReviewer: result.providerResult,
         });
       }
-      throw err;
+      case "delivered":
+        return reply.status(200).send({
+          ok: true,
+          event: eventType,
+          ...result.deliveryStats,
+          contextReviewer: result.providerResult,
+        });
     }
   });
 }

@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
+import { resolveNpmInvocation } from "./npm-invocation.js";
 import { print } from "./output.js";
 
 /**
@@ -25,14 +25,6 @@ function isSafeInstallSpec(spec: string): boolean {
   if (typeof spec !== "string" || spec.length === 0 || spec.length > 128) return false;
   if (spec.startsWith("-")) return false;
   return /^[A-Za-z0-9.+-]+$/.test(spec);
-}
-
-/** Pick the `npm` binary, preferring the sibling of the launching Node. */
-function resolveNpmCommand(): string {
-  const binName = process.platform === "win32" ? "npm.cmd" : "npm";
-  const sibling = join(dirname(process.execPath), binName);
-  if (existsSync(sibling)) return sibling;
-  return "npm";
 }
 
 function parseInstalledVersion(stdout: string): string | null {
@@ -62,14 +54,27 @@ export async function installClaudeRuntime(spec = "latest"): Promise<InstallClau
   }
 
   return new Promise((resolvePromise) => {
-    const npmCmd = resolveNpmCommand();
-    const npmArgs = ["install", "-g", `${CLAUDE_RUNTIME_PACKAGE}@${spec}`];
-    const { child } = getChildProcessRegistry().spawn(npmCmd, npmArgs, {
-      category: "npm-install",
-      label: `npm install -g ${CLAUDE_RUNTIME_PACKAGE}@${spec}`,
-      timeoutMs: CLAUDE_INSTALL_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const npm = resolveNpmInvocation(["install", "-g", `${CLAUDE_RUNTIME_PACKAGE}@${spec}`]);
+    let child: ChildProcess;
+    try {
+      ({ child } = getChildProcessRegistry().spawn(npm.command, npm.args, {
+        category: "npm-install",
+        label: `npm install -g ${CLAUDE_RUNTIME_PACKAGE}@${spec}`,
+        timeoutMs: CLAUDE_INSTALL_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: npm.shell,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const classification = classify(err, { source: "update" });
+      resolvePromise({
+        ok: false,
+        reason: message,
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
+        reasonCode: classification.reasonCode,
+      });
+      return;
+    }
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];

@@ -13,10 +13,12 @@ import { ChatSummaryPreviewPage } from "../chat-summary-preview.js";
 import { CommandPalettePreviewPage } from "../command-palette-preview.js";
 import { ContextTreePreviewPage } from "../context-tree-preview.js";
 import { ConversationListPreviewPage } from "../conversation-list-preview.js";
+import { MobilePreviewPage } from "../mobile-preview.js";
 import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "../onboarding-team-steps-mocks.js";
 import { RequestDockPreviewPage } from "../request-dock-preview.js";
 import { ResourcesPreviewPage } from "../resources-preview.js";
 import { SettingsGithubPreviewPage } from "../settings-github-preview.js";
+import { SetupPreviewPage } from "../setup-preview.js";
 import { SupportMenuPreviewPage } from "../support-menu-preview.js";
 import { TeamSwitcherPreviewPage } from "../team-switcher-preview.js";
 import { UserMenuPreviewPage } from "../user-menu-preview.js";
@@ -228,6 +230,32 @@ afterEach(() => {
 });
 
 describe("extra preview pages", () => {
+  it("renders the seeded Admin Setup preview without calling real APIs", async () => {
+    const rendered = await renderPreview(<SetupPreviewPage />, "/preview/setup?role=admin&state=ready");
+
+    expect(rendered.container.querySelector('[data-setup-preview="admin-ready"]')).not.toBeNull();
+    expect(text(rendered.container)).toContain("Context Tree");
+    const treeRow = rendered.container.querySelector<HTMLElement>('[data-setup-row="context-tree"]');
+    if (!treeRow) throw new Error("Missing Context Tree row");
+    await click(buttonByText(treeRow, "Manage"));
+    const treeControls = treeRow.querySelector<HTMLElement>('[data-setup-owner-controls="context-tree"]');
+    expect(treeControls).not.toBeNull();
+    const reviewerControls = treeControls?.querySelector<HTMLElement>('[data-setup-owner-controls="automatic-review"]');
+    expect(reviewerControls).not.toBeNull();
+    expect(rendered.container.querySelector('[data-setup-row="automatic-review"]')).toBeNull();
+    expect(text(reviewerControls ?? treeRow)).toContain("Context Reviewer");
+    const enablement = reviewerControls?.querySelector<HTMLButtonElement>('[role="switch"]');
+    expect(enablement?.getAttribute("aria-checked")).toBe("true");
+    if (!enablement) throw new Error("Missing preview Reviewer enablement switch");
+    await click(enablement);
+    expect(enablement.getAttribute("aria-checked")).toBe("false");
+    await click(buttonByText(treeRow, "Manage"));
+    expect(treeRow.querySelector('[data-setup-owner-controls="context-tree"]')).toBeNull();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+
+    await cleanupRendered(rendered);
+  });
+
   it("renders the seeded agent-detail preview sections", async () => {
     const rendered = await renderPreview(<AgentDetailPreviewPage />);
 
@@ -297,14 +325,40 @@ describe("extra preview pages", () => {
   it("renders the context-tree preview gallery", async () => {
     const rendered = await renderPreview(<ContextTreePreviewPage />);
 
-    expect(text(rendered.container)).toContain("Context tree");
+    expect(text(rendered.container)).toContain("Repositories");
     expect(text(rendered.container)).toContain("preview");
     expect(text(rendered.container)).toContain("admin, team HAS a tree");
     expect(text(rendered.container)).toContain("member (read-only)");
-    expect(text(rendered.container)).toContain("Context Reviewer");
-    expect(text(rendered.container)).toContain("repo connected");
-    expect(text(rendered.container)).toContain("no repo");
-    expect(text(rendered.container)).toContain("acme/acme-api");
+    expect(text(rendered.container)).toContain("Automatic PR review");
+    expect(text(rendered.container)).toContain("build · 2 agents");
+    expect(text(rendered.container)).toContain("bound tree recovery");
+    expect(text(rendered.container)).toContain("Work on this in chat");
+
+    await cleanupRendered(rendered);
+  });
+
+  it("renders the mobile mock preview and opens a chat detail without auth", async () => {
+    const rendered = await renderPreview(<MobilePreviewPage />, "/preview/mobile");
+
+    expect(text(rendered.container)).toContain("Work");
+    expect(rendered.container.querySelector("h1")?.textContent).toBe("Work");
+    expect(text(rendered.container)).toContain("Release readiness");
+    expect(text(rendered.container)).toContain("Needs your answer");
+    expect(text(rendered.container)).toContain("Pinned");
+    expect([...rendered.container.querySelectorAll("h2")]).toEqual([]);
+    expect(rendered.container.querySelector("[data-mobile-work-list]")).not.toBeNull();
+    expect(rendered.container.querySelector('[data-mobile-card="action"]')).not.toBeNull();
+    expect(rendered.container.querySelector('[data-mobile-card="work"]')).not.toBeNull();
+    expect(rendered.container.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
+
+    expect(
+      [...rendered.container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Chat"),
+    ).toBe(false);
+    expect(buttonByText(rendered.container, "Team")).not.toBeNull();
+
+    await click(buttonByLabel(rendered.container, /^Open Release readiness$/));
+    expect(text(rendered.container)).toContain("Current state");
+    expect(text(rendered.container)).toContain("Staging is green");
 
     await cleanupRendered(rendered);
   });

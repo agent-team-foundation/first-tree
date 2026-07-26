@@ -49,12 +49,17 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     organizationId: string,
   ): Promise<number> {
     const app = getApp();
-    const { rows } = await listMeChats(app.db, agentUuid, memberId, organizationId, {
+    const { priorityRows, rows } = await listMeChats(app.db, agentUuid, memberId, organizationId, {
       limit: 10,
       filter: "all",
       engagement: "all",
     });
-    return rows.find((r) => r.chatId === chatId)?.unreadMentionCount ?? 0;
+    // A `request` DM opens a request, routing the chat into the attention group
+    // rather than ordinary `rows` — search all groups for the unread counter.
+    return (
+      [...priorityRows.attention, ...priorityRows.pinned, ...rows].find((r) => r.chatId === chatId)
+        ?.unreadMentionCount ?? 0
+    );
   }
 
   async function notifyInboxRows(chatId: string, agentUuid: string) {

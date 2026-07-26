@@ -1,4 +1,6 @@
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { messages } from "../db/schema/messages.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -109,12 +111,21 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     const chatId = chatRes.json().id as string;
 
     if (!a2.name) throw new Error("a2 name missing");
+    const messageIds: string[] = [];
     for (const text of ["msg-1", "msg-2", "msg-3"]) {
-      await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      const sent = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
         content: `@${a2.name} ${text}`,
         receiverNames: [a2.name],
       });
+      messageIds.push(sent.json().id);
+    }
+    for (const [index, id] of messageIds.entries()) {
+      const timestamp = `2026-07-17T09:00:00.123${9 - index}00Z`;
+      await app.db
+        .update(messages)
+        .set({ createdAt: sql`${timestamp}::timestamptz` })
+        .where(eq(messages.id, id));
     }
 
     const page1 = await a1.request("GET", `/api/v1/agent/chats/${chatId}/messages?limit=2`);
@@ -122,10 +133,20 @@ describe("Agent Messaging Flow (create → send → chats → history)", () => {
     const p1 = page1.json();
     expect(p1.items).toHaveLength(2);
     expect(p1.nextCursor).toBeTruthy();
+    expect(p1.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
 
     const page2 = await a1.request("GET", `/api/v1/agent/chats/${chatId}/messages?limit=2&cursor=${p1.nextCursor}`);
     expect(page2.statusCode).toBe(200);
-    expect(page2.json().items).toHaveLength(1);
+    const p2 = page2.json();
+    expect(p2.items).toHaveLength(1);
+    const ids = [...p1.items, ...p2.items].map((message: { id: string }) => message.id);
+    expect(new Set(ids).size).toBe(3);
+
+    const invalidCursor = await a1.request(
+      "GET",
+      `/api/v1/agent/chats/${chatId}/messages?limit=2&cursor=${encodeURIComponent("2026-07-17T09:00:00.123Z")}`,
+    );
+    expect(invalidCursor.statusCode).toBe(400);
   });
 
   it("non-participant cannot view history", async () => {

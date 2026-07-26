@@ -31,17 +31,50 @@ describe("bootstrap edge coverage", () => {
     rmSync(tmpBase, { recursive: true, force: true });
   });
 
-  it("resolves context tree binding success, unconfigured, and fetch-failure cases", async () => {
+  it("resolves valid context tree bindings and normalizes missing branches", async () => {
     const logs: string[] = [];
-    const successSdk = {
-      getAgentContextTreeConfig: vi.fn(async () => ({ repo: "git@example/context-tree.git", branch: null })),
+    const defaultBranchSdk = {
+      getAgentContextTreeConfig: vi.fn(async () => ({ repo: "git@github.com:acme/context-tree.git", branch: null })),
     } as unknown as FirstTreeHubSDK;
 
-    await expect(resolveAgentContextTreeBinding(successSdk, "/workspace", (msg) => logs.push(msg))).resolves.toEqual({
+    await expect(
+      resolveAgentContextTreeBinding(defaultBranchSdk, "/workspace", (msg) => logs.push(msg)),
+    ).resolves.toEqual({
       path: join("/workspace", "context-tree"),
-      repoUrl: "git@example/context-tree.git",
+      repoUrl: "git@github.com:acme/context-tree.git",
       branch: "main",
     });
+
+    const missingBranchSdk = {
+      getAgentContextTreeConfig: vi.fn(async () => ({ repo: "ssh://git@github.com/acme/context-tree.git" })),
+    } as unknown as FirstTreeHubSDK;
+    await expect(
+      resolveAgentContextTreeBinding(missingBranchSdk, "/workspace", (msg) => logs.push(msg)),
+    ).resolves.toEqual({
+      path: join("/workspace", "context-tree"),
+      repoUrl: "ssh://git@github.com/acme/context-tree.git",
+      branch: "main",
+    });
+
+    const namedBranchSdk = {
+      getAgentContextTreeConfig: vi.fn(async () => ({
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "release/2026-07",
+      })),
+    } as unknown as FirstTreeHubSDK;
+    await expect(
+      resolveAgentContextTreeBinding(namedBranchSdk, "/workspace", (msg) => logs.push(msg)),
+    ).resolves.toEqual({
+      path: join("/workspace", "context-tree"),
+      repoUrl: "https://github.com/acme/context-tree.git",
+      branch: "release/2026-07",
+    });
+
+    expect(logs).toEqual([]);
+  });
+
+  it("skips unconfigured, invalid, and unreachable context tree bindings without logging raw values", async () => {
+    const logs: string[] = [];
 
     const unconfiguredSdk = {
       getAgentContextTreeConfig: vi.fn(async () => ({ repo: null, branch: null })),
@@ -50,15 +83,40 @@ describe("bootstrap edge coverage", () => {
       resolveAgentContextTreeBinding(unconfiguredSdk, "/workspace", (msg) => logs.push(msg)),
     ).resolves.toBeNull();
 
+    const invalidRepo = "http://private.example.invalid/secret-tree.git";
+    const invalidRepoSdk = {
+      getAgentContextTreeConfig: vi.fn(async () => ({ repo: invalidRepo, branch: "main" })),
+    } as unknown as FirstTreeHubSDK;
+    await expect(
+      resolveAgentContextTreeBinding(invalidRepoSdk, "/workspace", (msg) => logs.push(msg)),
+    ).resolves.toBeNull();
+
+    const invalidBranch = "private..branch";
+    const invalidBranchSdk = {
+      getAgentContextTreeConfig: vi.fn(async () => ({
+        repo: "git@github.com:acme/context-tree.git",
+        branch: invalidBranch,
+      })),
+    } as unknown as FirstTreeHubSDK;
+    await expect(
+      resolveAgentContextTreeBinding(invalidBranchSdk, "/workspace", (msg) => logs.push(msg)),
+    ).resolves.toBeNull();
+
     const failingSdk = {
       getAgentContextTreeConfig: vi.fn(async () => {
-        throw new Error("server offline");
+        throw new Error(`server returned ${invalidRepo} on ${invalidBranch}`);
       }),
     } as unknown as FirstTreeHubSDK;
     await expect(resolveAgentContextTreeBinding(failingSdk, "/workspace", (msg) => logs.push(msg))).resolves.toBeNull();
 
-    expect(logs).toContain("Context Tree binding skipped: not configured on server");
-    expect(logs).toContain("Context Tree binding skipped: failed to fetch config from server (server offline)");
+    expect(logs).toEqual([
+      "Context Tree binding skipped: not configured on server",
+      "Context Tree binding skipped: server returned an invalid binding",
+      "Context Tree binding skipped: server returned an invalid binding",
+      "Context Tree binding skipped: failed to fetch config from server",
+    ]);
+    expect(logs.join("\n")).not.toContain(invalidRepo);
+    expect(logs.join("\n")).not.toContain(invalidBranch);
   });
 
   it("merges legacy runtime directories recursively without overwriting newer target files", () => {
@@ -176,7 +234,7 @@ describe("bootstrap edge coverage", () => {
 
     expect(logs).toEqual([
       "First-tree skills install skipped: tree installer unavailable",
-      "Core skill install skipped: core installer unavailable",
+      "First-tree skill install skipped: core installer unavailable",
     ]);
   });
 
@@ -189,7 +247,7 @@ describe("bootstrap edge coverage", () => {
         bundledSkillsRoot: join(tmpBase, "missing-skills"),
         log: (msg) => logs.push(msg),
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       installCoreSkills({
         workspacePath: tmpBase,
@@ -197,7 +255,8 @@ describe("bootstrap edge coverage", () => {
         log: (msg) => logs.push(msg),
       }),
     ).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-read");
-    expect(logs.join("\n")).toContain("failed first-tree-welcome");
+    expect(logs.join("\n")).toContain("First-tree skills: no skills configured");
+    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-read)");
+    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-welcome)");
   });
 });

@@ -26,7 +26,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "empty-tree-source-present",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, then propose only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, leave the managed source read worktree in place for final eval provenance, then propose only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -111,6 +111,58 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
   {
     briefingMode: "generated-fixture",
     expected: {
+      action: "create_tree_via_init",
+      requireGithubGovernanceBootstrap: true,
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["tree init", "ruleset", "pull request"],
+    },
+    fixture: {
+      sourceRepoState: "bare-readable",
+      treeState: "unbound",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase1_skeleton", "phase2_leaf_content_before_approval"],
+      sideEffects: ["tree_write", "tree_pr", "source_write"],
+    },
+    id: "unbound-github-tree-governance-bootstrap",
+    prompt:
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run the state check, create and bind the tree with tree init --dir context-tree, then configure the repository-local default-branch ruleset. Require pull requests, at least one current approval, dismiss stale approvals on push, and block force pushes, but require no Code Owner review. Do not create or push CODEOWNERS, and do not proceed to Phase 1 skeleton work in this gate.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["unbound-tree", "github-governance", "pr-only"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "create_tree_via_init",
+      requireGithubGovernanceRecovery: true,
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["tree init", "ruleset", "pull request", "force push"],
+    },
+    fixture: {
+      sourceRepoState: "bare-readable",
+      treeState: "unbound",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase1_skeleton", "phase2_leaf_content_before_approval"],
+      sideEffects: ["tree_write", "tree_pr", "source_write"],
+    },
+    id: "unbound-github-governance-fail-closed",
+    prompt:
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run tree init --dir context-tree. If the existing repository ruleset cannot be inspected, do not POST or PUT a replacement blindly; continue the seed flow and tell the user the manual branch-rules recovery checklist: require pull requests, at least one current approval, dismiss stale approvals on push, block force pushes, and require no Code Owner review.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["unbound-tree", "github-governance", "fail-closed"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
       action: "materialize_bare_worktree",
       approvalHints: ["approve", "reply", "confirm", "ON"],
       requireSourceRead: true,
@@ -128,11 +180,267 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "bare-source-worktree-protocol",
     prompt:
-      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Stop after proposing the Phase 1 skeleton for approval.",
+      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
     tags: ["bare-source", "worktree-protocol"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "materialize_bare_worktree",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["worktree", "Phase 1", "skeleton"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      sourceDeclaredRef: "trunk",
+      sourceDefaultBranch: "trunk",
+      sourceForge: "gitlab",
+      sourceLocalBranchState: "stale",
+      sourceRepoState: "bare-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase2_leaf_content_before_approval", "skip_user_confirmation"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "gitlab-non-main-source-worktree-protocol",
+    prompt:
+      "Use first-tree-seed to inspect the bound GitLab source repo. The source under source-repos/source-repo is a bare clone whose runtime declaration pins ref=trunk. The local trunk branch is intentionally stale while origin/trunk is current, so follow the Worktrees protocol without hard-coding origin/main or using the stale local branch. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["gitlab", "bare-source", "declared-ref", "non-main-default", "stale-local", "worktree-protocol"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: false,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      sourceRepoState: "chat-local-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["phase2_leaf_content_before_approval", "skip_user_confirmation", "require_github_app"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "empty-manifest-chat-source",
+    prompt:
+      "Use first-tree-seed to bootstrap the empty Context Tree. The workspace manifest intentionally declares no sources; in this setup chat I have provided the readable local checkout at ./provided-source. Use that source directly, do not require a GitHub App or team resource registration, and stop after the Phase 1 skeleton proposal for approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["chat-source", "empty-manifest", "no-app-gate"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "continue_phase2",
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 2", "durable", "leaf"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      progressState: "matching-phase1",
+      seedAuthority: "admin",
+      sourceAdvancesAfterPhase1: true,
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["refuse_nonempty_tree", "restart_phase1", "require_github_app", "require_chat_history"],
+      sideEffects: ["tree_pr", "source_write", "github"],
+    },
+    id: "durable-phase2-new-process-continuation",
+    prompt:
+      "This is a new process with no Workspace manifest, managed briefing, prior setup-chat transcript, or private cache. Resume first-tree-seed Phase 2 for selected Team `team-seed-eval`, task-local Tree path `./context-tree`, and explicit source `./source-repos/source-repo`. Run the explicit-Team Seed preflight, strictly fetch the returned binding branch, materialize its exact commit at `./worktrees/seed-tree-recovery`, and run `cat worktrees/seed-tree-recovery/.first-tree/progress.md` as a separate successful durable-progress read. Validate that merged Team/source ledger, then materialize `./worktrees/seed-source-repo` at the recorded exact source commit. For unambiguous eval evidence, leave both worktrees in place and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate successful source read before broader exploration. Route to Phase 2 leaf drafting only when every durable check passes. Do not write, push, or open a PR in this eval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "new-process", "durable-progress", "phase2", "continuation"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_nonempty_tree",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["durable", "marker", "first-tree-write", "cannot continue"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      progressState: "no-marker",
+      seedAuthority: "admin",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "phase1_skeleton"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "phase1-shaped-tree-without-durable-progress-refuses",
+    prompt:
+      "This is a clean process with selected Team `team-seed-eval`, Tree path `./context-tree`, and source `./source-repos/source-repo`. I claim Phase 1 merged, but the populated Tree has no valid durable Seed marker. Run the explicit-Team preflight, strictly fetch the returned binding branch, materialize its exact commit at `./worktrees/seed-tree-recovery`, and run `cat worktrees/seed-tree-recovery/.first-tree/progress.md` as a separate successful durable-progress read. Do not treat my claim or the familiar domain shape as continuation authority. Refuse without reading source content or writing anything.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "phase2", "missing-progress", "negative"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      seedAuthority: "admin",
+      sourceRepoState: "bare-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["phase2_leaf_content_before_approval", "skip_user_confirmation", "require_github_app"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "portable-clean-explicit-team-phase1",
+    prompt:
+      "Use first-tree-seed from this clean process with no Workspace manifest or managed briefing. The explicit inputs are selected Team `team-seed-eval`, task-local Tree path `./context-tree`, and source `./source-repos/source-repo`. Run `first-tree tree seed --team team-seed-eval --json`, strictly fetch its bound branch, and materialize `./worktrees/seed-source-repo` at the exact source commit. For unambiguous eval evidence, leave that worktree in place and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate successful source read before broader exploration. Stop after proposing the Phase 1 skeleton for approval. Do not write, push, or open a PR in this eval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "clean-process", "explicit-team", "phase1"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "report_needs_admin",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["Needs Admin", "Team Admin", "team-seed-eval"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      seedAuthority: "member",
+      sourceRepoState: "bare-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["continue_seed", "phase1_skeleton", "continue_phase2"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "portable-ordinary-member-needs-admin",
+    prompt:
+      "Use first-tree-seed for selected Team `team-seed-eval`, Tree path `./context-tree`, and source `./source-repos/source-repo` in a process with no Workspace manifest. Run the explicit-Team Seed preflight. If the Server returns stable Needs Admin, report that exact Team and the Admin recovery action without inspecting source, creating a Tree, changing a binding, or falling back to another Team.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "ordinary-member", "needs-admin", "negative"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_phase2_recovery",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["source", "identity", "mismatch", "cannot continue"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      progressState: "source-mismatch",
+      seedAuthority: "admin",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "restart_phase1"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "durable-phase2-source-identity-mismatch-refuses",
+    prompt:
+      "Resume first-tree-seed Phase 2 in a new process for Team `team-seed-eval`, Tree `./context-tree`, and source `./source-repos/source-repo`. Run the explicit-Team preflight, strictly fetch the returned binding branch, materialize its exact commit at `./worktrees/seed-tree-recovery`, and run `cat worktrees/seed-tree-recovery/.first-tree/progress.md` as a separate successful durable-progress read. The recorded source identity intentionally differs from the explicit source; fail closed before source content reads, source-worktree materialization, or remote mutation.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "phase2", "source-mismatch", "negative"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_phase2_recovery",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["exact commit", "unreadable", "cannot continue"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      progressState: "unreadable-commit",
+      seedAuthority: "admin",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "restart_phase1"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "durable-phase2-unreadable-source-commit-refuses",
+    prompt:
+      "Resume first-tree-seed Phase 2 in a new process for Team `team-seed-eval`, Tree `./context-tree`, and source `./source-repos/source-repo`. Run the explicit-Team preflight, strictly fetch the returned binding branch, materialize its exact commit at `./worktrees/seed-tree-recovery`, and run `cat worktrees/seed-tree-recovery/.first-tree/progress.md` as a separate successful durable-progress read. Then verify the ledger's recorded exact source commit remains readable. It intentionally does not exist; fail closed without substituting the current source head or performing any mutation.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "phase2", "unreadable-commit", "negative"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_phase2_recovery",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["binding", "mismatch", "cannot continue"],
+    },
+    fixture: {
+      invocationMode: "portable",
+      progressState: "matching-phase1",
+      seedAuthority: "admin",
+      seedBindingState: "different",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "restart_phase1"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "durable-phase2-binding-mismatch-refuses",
+    prompt:
+      "Resume first-tree-seed Phase 2 for Team `team-seed-eval`, Tree `./context-tree`, and source `./source-repos/source-repo`. Run the explicit-Team preflight first. Its current binding intentionally differs from this task-local Tree, so fail closed before reading durable progress or source content and do not fall back to local or managed state.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["portable", "phase2", "binding-change", "negative"],
     tier: "gate",
   },
 ];
@@ -158,7 +466,7 @@ export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = 
     },
     id: "first-tree-seed-real-first-tree-source-periodic",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol, inspect source evidence, and stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol. For unambiguous eval evidence, make the managed worktree add a standalone successful command, leave that worktree in place for final provenance, and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate source read before any broader exploration. Stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -175,8 +483,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
       validator: "case schema and lifecycle fixture shape",
     },
     fixture: {
-      sourceRepoStates: ["bare-readable", "missing", "real-first-tree-bare-readable"],
-      treeStates: ["empty", "nonempty", "unbound"],
+      sourceRepoStates: ["bare-readable", "chat-local-readable", "missing", "real-first-tree-bare-readable"],
+      treeStates: ["empty", "nonempty", "phase1-approved", "unbound"],
     },
     id: FLOOR_CASE_ID,
     skill: "first-tree-seed",
@@ -191,8 +499,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 5) {
-    errors.push(`seed suite must declare 5 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 16) {
+    errors.push(`seed suite must declare 16 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",
@@ -206,12 +514,32 @@ function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly s
       errors.push(`${evalCase.id}: fixture must be an object.`);
       continue;
     }
-    const fixture = evalCase.fixture as { sourceRepoState?: unknown; treeState?: unknown };
+    const fixture = evalCase.fixture as {
+      chatHistoryState?: unknown;
+      invocationMode?: unknown;
+      progressState?: unknown;
+      seedAuthority?: unknown;
+      sourceRepoState?: unknown;
+      treeState?: unknown;
+    };
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.sourceRepoState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare sourceRepoState.`);
     }
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.treeState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare treeState.`);
+    }
+    if (fixture.invocationMode === "portable" && typeof fixture.seedAuthority !== "string") {
+      errors.push(`${evalCase.id}: portable fixture must declare seedAuthority.`);
+    }
+    if (fixture.invocationMode === "portable" && fixture.chatHistoryState !== undefined) {
+      errors.push(`${evalCase.id}: portable fixture must not declare chatHistoryState.`);
+    }
+    if (
+      fixture.invocationMode === "portable" &&
+      fixture.treeState === "phase1-approved" &&
+      typeof fixture.progressState !== "string"
+    ) {
+      errors.push(`${evalCase.id}: portable Phase 2 fixture must declare progressState.`);
     }
   }
   return errors;
@@ -230,7 +558,8 @@ export const FIRST_TREE_SEED_SUITE: SkillEvalSuiteDefinition = {
       },
       {
         caseIds: FIRST_TREE_SEED_GATE_CASES.map((evalCase) => evalCase.id),
-        description: "Implemented seed lifecycle, source, and bare-worktree protocol live gate cases.",
+        description:
+          "Implemented managed and portable Seed lifecycle, durable Phase 2 recovery, source, authority, binding, GitHub governance, and bare-worktree protocol live gate cases.",
         status: "implemented",
         tier: "gate",
       },

@@ -5,18 +5,18 @@
  * lived in the GitHub App webhook. Run from `background-tasks.ts` on a
  * configurable interval.
  *
- * Only GitHub-originated chats (`chats.metadata.source = 'github'`) are
- * eligible for automatic archive. The sweep has two GitHub-source branches,
+ * Only SCM-originated chats (`chats.metadata.source IN ('github','gitlab')`) are
+ * eligible for automatic archive. The sweep has two provider-neutral branches,
  * both keyed off `chats.last_message_at` as the idleness anchor:
  *
- *   Mapped branch — chats with at least one `github_entity_chat_mappings` row.
- *     Archive (for every mapped human) once *all* bound entities are
- *     terminal (`entity_state` in `('closed','merged')`) AND the chat has
- *     been silent for `mappedIdleSeconds` (default 1h).
+ *   Mapped branch — chats with at least one complete SCM attention line.
+ *     Archive (for every mapped human) once *all* GitHub mappings and active
+ *     GitLab mappings are terminal (`entity_state` in `('closed','merged')`)
+ *     AND the chat has been silent for `mappedIdleSeconds` (default 1h).
  *
- *   No-mapping branch — GitHub-originated chats with no mapping rows. Archive
+ *   No-mapping branch — SCM-originated chats with no mapping rows. Archive
  *     only acknowledged human views once the chat has been silent for the same
- *     idle threshold. This is an explicit GitHub orphan/no-binding cleanup,
+ *     idle threshold. This is an explicit SCM orphan/no-binding cleanup,
  *     not the old generic operational-chat idle sweep.
  *
  * A chat with any open structured request (`open_request_count > 0`) is never
@@ -40,7 +40,7 @@ export const DEFAULT_MAPPED_IDLE_SECONDS = 60 * 60; // 1 hour
 export const DEFAULT_SWEEP_BATCH_SIZE = 1000;
 
 export type SweepChatArchiveOptions = {
-  /** Idle threshold for GitHub-originated archive branches. Default 1h. */
+  /** Idle threshold for SCM-originated archive branches. Default 1h. */
   mappedIdleSeconds?: number;
   /** Max candidate rows per route per tick. Default 1000. */
   batchSize?: number;
@@ -64,10 +64,15 @@ export async function sweepChatArchive(
 }
 
 /**
- * Mapped branch: GitHub-originated chats whose every GitHub-mapped entity is
- * terminal AND have been silent for at least `idleSeconds`. Archives every
- * (chat, human) pair from the mapping table, minus per-user unread and
- * chat-level open-request guards.
+ * Mapped branch: SCM-originated chats whose every active provider-mapped
+ * entity is terminal AND have been silent for at least `idleSeconds`.
+ * Archives every (chat, human) pair from complete attention lines, minus
+ * per-user unread and chat-level open-request guards.
+ *
+ * Chat origin is only the eligibility gate. Once eligible, entity state and
+ * archive targets are projected across both providers. Active GitLab legacy
+ * route-only rows participate in the entity-state guard but never create an
+ * archive target because they do not identify a human/wake pair.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
  *  - The CTE enumerates only archivable (chat, human) rows, then applies the
@@ -86,14 +91,41 @@ export async function sweepChatArchive(
  */
 async function sweepMapped(db: Database, idleSeconds: number, batchSize: number): Promise<number> {
   const rows = await db.execute<{ chat_id: string }>(sql`
-    WITH archivable_rows AS (
-      SELECT DISTINCT m.chat_id, m.human_agent_id
+    WITH scm_chats AS (
+      SELECT c.id AS chat_id
+        FROM chats c
+       WHERE c.metadata->>'source' IN ('github', 'gitlab')
+         AND c.parent_chat_id IS NULL
+    ),
+    scm_entity_states AS (
+      SELECT m.chat_id, m.entity_state
         FROM github_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+      UNION ALL
+      SELECT m.chat_id, m.entity_state
+        FROM gitlab_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+       WHERE m.active
+    ),
+    scm_archive_targets AS (
+      SELECT m.chat_id, m.human_agent_id
+        FROM github_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+      UNION ALL
+      SELECT m.chat_id, m.human_agent_id
+        FROM gitlab_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+       WHERE m.active
+         AND m.human_agent_id IS NOT NULL
+         AND m.delegate_agent_id IS NOT NULL
+    ),
+    archivable_rows AS (
+      SELECT DISTINCT m.chat_id, m.human_agent_id
+        FROM scm_archive_targets m
         JOIN chats c ON c.id = m.chat_id
         LEFT JOIN chat_user_state cus
                ON cus.chat_id = m.chat_id AND cus.agent_id = m.human_agent_id
        WHERE c.parent_chat_id IS NULL
-         AND c.metadata->>'source' = 'github'
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
          AND NOT EXISTS (
@@ -104,7 +136,13 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
          )
          AND NOT EXISTS (
            SELECT 1
-             FROM github_entity_chat_mappings open_m
+             FROM agent_chat_sessions running
+            WHERE running.chat_id = c.id
+              AND running.runtime_state IN ('working', 'blocked')
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM scm_entity_states open_m
             WHERE open_m.chat_id = m.chat_id
               AND open_m.entity_state NOT IN ('closed', 'merged')
          )
@@ -125,7 +163,7 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
 }
 
 /**
- * No-mapping branch: GitHub-originated chats with no mapping rows that have
+ * No-mapping branch: SCM-originated chats with no mapping rows that have
  * been silent past `idleSeconds`, restricted to per-(chat, user) rows that all
  * of:
  *
@@ -139,7 +177,7 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
  *
  * Like the mapped branch, any open request in the chat blocks archive for the
  * entire chat. Unlike the retired generic Route B, this branch does not require
- * "no human owner": GitHub-originated chats are normally human-owned.
+ * "no human owner": SCM-originated chats are normally human-owned.
  *
  * The `last_read_at IS NOT NULL` condition implies `cus` is materialised,
  * so the `COALESCE(cus.engagement_status, 'active') = 'active'` clause
@@ -162,11 +200,17 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
       JOIN agents a ON a.uuid = cm.agent_id
       JOIN chat_user_state cus
              ON cus.chat_id = cm.chat_id AND cus.agent_id = cm.agent_id
-     WHERE c.metadata->>'source' = 'github'
+     WHERE c.metadata->>'source' IN ('github', 'gitlab')
        AND NOT EXISTS (
          SELECT 1
            FROM github_entity_chat_mappings m
           WHERE m.chat_id = c.id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM gitlab_entity_chat_mappings m
+          WHERE m.chat_id = c.id
+            AND m.active
        )
        AND a.type = 'human'
        AND c.parent_chat_id IS NULL
@@ -177,6 +221,12 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
            FROM chat_user_state req
           WHERE req.chat_id = c.id
             AND req.open_request_count > 0
+       )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM agent_chat_sessions running
+          WHERE running.chat_id = c.id
+            AND running.runtime_state IN ('working', 'blocked')
        )
        AND cus.last_read_at IS NOT NULL
        AND cus.unread_mention_count = 0

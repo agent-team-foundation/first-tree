@@ -13,7 +13,7 @@
  * CLI. The hint reframes the message so the next step is obvious.
  */
 
-type Runtime = "codex" | "claude-code";
+type Runtime = "codex" | "claude-code" | "cursor" | "kimi-code";
 
 /**
  * Substring keywords used to detect codex's auth-refresh failures. Codex's
@@ -51,6 +51,36 @@ export function isCodexAuthError(message: string): boolean {
 }
 
 /**
+ * Cursor Agent CLI auth-failure phrases. The CLI exposes no typed error code
+ * in headless mode — a logged-out turn exits 1 with stderr like
+ * "Error: Authentication required. Please run 'agent login' first, or set
+ * CURSOR_API_KEY environment variable." (captured verbatim in Phase 0).
+ */
+const CURSOR_AUTH_KEYWORDS: readonly string[] = [
+  "authentication required",
+  "not logged in",
+  "please run 'agent login'",
+  "cursor_api_key",
+];
+
+export function isCursorAuthError(message: string): boolean {
+  if (message.length === 0) return false;
+  const lower = message.toLowerCase();
+  return CURSOR_AUTH_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+export function isKimiCodeAuthError(codeOrMessage: string): boolean {
+  const lower = codeOrMessage.toLowerCase();
+  return (
+    lower.startsWith("auth.") ||
+    lower.includes(" auth.") ||
+    lower.includes("provider.auth_error") ||
+    lower.includes("login required") ||
+    lower.includes("not authenticated")
+  );
+}
+
+/**
  * The single auth-failure code claude-code's SDK reports (out of the
  * `SDKAssistantMessageError` union). Centralised here so both the assistant-
  * message path and the api_retry path can share one check.
@@ -72,8 +102,16 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // hint matches what the Setup-incomplete card already prints. Keeping them
   // textually identical is intentional — if the provider's canonical command
   // ever changes, update both call sites together.
-  const reauth = runtime === "codex" ? "`codex login`" : "`claude auth login`";
-  const provider = runtime === "codex" ? "OpenAI" : "Anthropic";
+  const reauth =
+    runtime === "codex"
+      ? "`codex login`"
+      : runtime === "cursor"
+        ? "`cursor-agent login`"
+        : runtime === "kimi-code"
+          ? "`kimi` and then `/login`"
+          : "`claude auth login`";
+  const provider =
+    runtime === "codex" ? "OpenAI" : runtime === "cursor" ? "Cursor" : runtime === "kimi-code" ? "Kimi" : "Anthropic";
   // Cap the appended raw message so an upstream stack-trace envelope (codex
   // wraps its `event.error.message` in surprising ways) doesn't bloat the
   // hint into a wall of text on the chat timeline.

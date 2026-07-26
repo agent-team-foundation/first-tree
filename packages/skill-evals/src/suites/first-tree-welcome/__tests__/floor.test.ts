@@ -109,8 +109,53 @@ describe("first-tree-welcome floor invariants", () => {
     expect(description).not.toContain("local project folder path");
     expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
     expect(skillMarkdown).toContain("local project folder path");
-    expect(skillMarkdown).toContain("GitHub repo URL");
+    expect(skillMarkdown).toContain("GitHub/GitLab repo URL");
+    expect(skillMarkdown).toContain("`gh auth login` or `glab auth login`");
     expect(skillMarkdown).not.toContain("First Tree sent it");
+  });
+
+  it("keeps GitLab MR attention provider-native and independent of the GitHub App", () => {
+    expect(skillMarkdown).toContain("`first-tree gitlab follow <url>`");
+    expect(skillMarkdown).toContain("returned pending or active attention state");
+    expect(skillMarkdown).toContain("only a pending declaration waits");
+    expect(skillMarkdown).toContain("preserve its returned pending or\nactive state");
+    expect(skillMarkdown).toMatch(/A follow failure does not\s+invalidate the MR/u);
+    expect(skillMarkdown).toMatch(/report\s+only the First Tree chat attention gap/u);
+    expect(skillMarkdown).toContain(
+      "do not call\n`first-tree github follow`, send the user to **Settings → Setup** for GitHub App",
+    );
+    expect(skillMarkdown).toContain("Never substitute `first-tree github follow`");
+    expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
+  });
+
+  it("keeps capability setup milestone-gated, role-aware, and owned by Setup", () => {
+    expect(skillMarkdown).toContain("After a pre-existing Context Tree milestone: guide Review setup once");
+    expect(skillMarkdown).toContain("first-tree org context-tree review-config --json");
+    expect(skillMarkdown).toContain("its default Team can differ from this Agent/chat's Team");
+    expect(skillMarkdown).toContain("JSON `enabled` and `agentUuid` fields");
+    expect(skillMarkdown).toMatch(
+      /\*\*Settings → Setup\*\* can select an eligible managed Review Agent\s+and enable Automatic Review/u,
+    );
+    expect(skillMarkdown).toContain("the Agent is already\n  selected");
+    expect(skillMarkdown).toContain("launcher performs no Team mutation");
+    expect(skillMarkdown).toContain("This is not a health or readiness check");
+    expect(skillMarkdown).toMatch(/infer debt when the read is invalid, fails, or is\s+ambiguous/u);
+    expect(skillMarkdown).toContain("dedicated tree task owns its own post-PR/MR handoff");
+    expect(skillMarkdown).toContain("consume that result and never repeat it");
+    expect(skillMarkdown).toContain("must not\nsend the same Setup prompt again");
+    expect(skillMarkdown).toMatch(/Never make it an\s+onboarding gate/u);
+    expect(skillMarkdown).not.toContain("Settings -> GitHub");
+
+    const handoffRows = [
+      "| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |",
+      "| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |",
+      "| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |",
+      "| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |",
+      "| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |",
+    ];
+    for (const row of handoffRows) {
+      expect(skillMarkdown).toContain(row);
+    }
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
@@ -148,23 +193,48 @@ describe("first-tree-welcome floor invariants", () => {
 
     expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
     expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    expect(skillDescription).toContain("PR/MR reviews");
+    expect(yamlDescription).toContain("PR/MR reviews");
+    expect(skillDescription).not.toContain("PR reviews");
+    expect(yamlDescription).not.toContain("PR reviews");
     // Guard the specific retired trigger the drift-guard exists to catch.
     expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
     expect(yamlDescription).toContain("repo scans");
   });
 
   it("hardens both agent-briefing welcome skill-map rows with the scan / tree-setup exclusion", () => {
-    // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
+    // agent-briefing.ejs ships TWO `first-tree-welcome` "Load when" rows (the
     // tree-less and tree-bound briefing variants) — routing hints the agent
     // reads. If either omits the scan / tree-setup exclusion it can misroute a
     // scan-first chat into the welcome launcher. Bind both so neither drifts back
     // to an un-hardened hint.
-    const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
-    const hardenedRows = briefing.match(/first-tree-welcome.*not a repo scan or tree setup chat/g) ?? [];
-    expect(hardenedRows.length, "both welcome skill-map rows must carry the scan/tree-setup exclusion").toBe(2);
+    const briefingTemplate = readFileSync(
+      join(process.cwd(), "../client/src/runtime/templates/agent-briefing.ejs"),
+      "utf8",
+    );
+    const welcomeRows = briefingTemplate.match(/^\|[ \t]*`first-tree-welcome`[ \t]*\|[^\n]*$/gm) ?? [];
+    expect(welcomeRows, "template must contain both tree-bound and tree-less welcome rows").toHaveLength(2);
+    for (const row of welcomeRows) {
+      expect(row, "both welcome rows must carry the scan/tree-setup exclusion").toContain(
+        "not a repo scan or tree setup chat",
+      );
+    }
     // The retired un-hardened hints must be gone.
-    expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
-    expect(briefing).not.toContain("onboarding system messages ask for welcome");
+    expect(briefingTemplate).not.toContain("onboarding welcome / intro / value-first first chat");
+    expect(briefingTemplate).not.toContain("onboarding system messages ask for welcome");
+  });
+
+  it("keeps the Context Tree launcher brief user-visible and leaves implementation to seed", () => {
+    expect(skillMarkdown).toContain("Build our team's\n  Context Tree from the connected code");
+    expect(skillMarkdown).toContain("load `first-tree-seed` from the task itself");
+    expect(skillMarkdown).toContain("this launcher does none of\n  that");
+    expect(skillMarkdown).not.toContain("working Code Owner mapping");
+    expect(skillMarkdown).not.toContain("GitHub governance setup");
+    expect(skillMarkdown).not.toContain("default-branch rules");
+    expect(skillMarkdown).not.toContain("required_approving_review_count");
+    expect(skillMarkdown).not.toContain("dismiss_stale_reviews_on_push");
+    expect(skillMarkdown).not.toContain("require_last_push_approval");
+    expect(skillMarkdown).not.toContain("required_review_thread_resolution");
   });
 
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {

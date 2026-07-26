@@ -6,9 +6,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The GitHub round-trip return is the only logic under test here; stub the heavy
-// children (the installation panel and the repo resource sections) so the test
-// stays focused on the `?from=context` return affordance.
+// The GitHub round-trip return is the only logic under test here; stub the
+// installation panel so the test stays focused on the `?from=context` return
+// affordance. Team code access now belongs to the parent Integrations layout.
 const githubAppMocks = vi.hoisted(() => ({ getGithubAppInstallation: vi.fn() }));
 const authMock = vi.hoisted(() => ({
   value: { role: "admin" as string | null, organizationId: "org-1" as string | null },
@@ -18,9 +18,6 @@ vi.mock("../../../api/github-app.js", () => githubAppMocks);
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../github-app-installation-panel.js", () => ({
   GithubAppInstallationPanel: () => <div data-testid="panel-stub">panel</div>,
-}));
-vi.mock("../resource-sections.js", () => ({
-  ResourceTypeSections: () => <div data-testid="resources-stub">resources</div>,
 }));
 
 function createClient(): QueryClient {

@@ -1,7 +1,13 @@
-import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
+import {
+  isOrgSettingNamespace,
+  ORG_SETTINGS_NAMESPACES,
+  type OrgSettingNamespace,
+  orgContextTreeFinalizeInputSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError, GoneError } from "../../errors.js";
+import { BadRequestError, ConflictError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import { putLegacyContextReviewerSetting } from "../../services/context-reviewer-settings.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
 /**
@@ -18,29 +24,85 @@ import * as orgSettingsService from "../../services/org-settings.js";
  * team is bound to before joining the chat. PUT and DELETE are always
  * admin-only regardless of namespace — non-admins must never mutate
  * org-wide config.
+ *
+ * `context_tree` has two read surfaces: the generic namespace URL is always
+ * runtime-safe, while `/context_tree/raw` is an admin-only repair view for
+ * loose historical rows.
  */
 export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { orgId: string } }>("/context_tree/raw", async (request, reply) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const value = await orgSettingsService.getRawOrgContextTreeSetting(app.db, scope.organizationId);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new Error("Context Tree raw setting could not be serialized as JSON");
+    }
+    return reply.type("application/json").send(serialized);
+  });
+
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/context_tree/initialize",
+    { config: { otelRecordBody: false } },
+    async (request) => {
+      const scope = await requireOrgAdmin(request, app.db);
+      const input = orgContextTreeFinalizeInputSchema.parse(request.body);
+      return orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        scope.organizationId,
+        { provider: input.provider, repo: input.repo, branch: input.branch },
+        {
+          updatedBy: scope.userId,
+          expectedUnboundBranch: input.expectedUnboundBranch,
+          gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+        },
+      );
+    },
+  );
+
   app.get<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request) => {
     const namespace = parseNamespace(request.params.namespace);
     const scope =
       ORG_SETTINGS_NAMESPACES[namespace].readPolicy === "member"
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
+    if (namespace === "context_tree") {
+      const runtime = await orgSettingsService.getOrgContextReviewRuntime(app.db, scope.organizationId);
+      if (runtime.bindingState === "bound" && runtime.repo && runtime.branch) {
+        return {
+          repo: runtime.repo,
+          branch: runtime.branch,
+          ...(runtime.provider && runtime.providerMatchesRepository ? { provider: runtime.provider } : {}),
+        };
+      }
+      if (runtime.bindingState === "unbound") return { branch: runtime.branch ?? "main" };
+      throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
+    }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
   });
 
   app.put<{ Params: { orgId: string; namespace: string } }>(
     "/:namespace",
-    { config: { otelRecordBody: true } },
+    // Context Tree settings can contain private repository coordinates, and
+    // rejected legacy values can contain embedded credentials. Do not attach
+    // this generic settings body to failure spans.
+    { config: { otelRecordBody: false } },
     async (request) => {
       const scope = await requireOrgAdmin(request, app.db);
       const namespace = parseNamespace(request.params.namespace);
       if (namespace === "source_repos") {
         throw new GoneError("source_repos is read-only; use Team Resources instead");
       }
+      if (namespace === "context_tree_features") {
+        return putLegacyContextReviewerSetting(app.db, scope.organizationId, request.body, {
+          updatedBy: scope.userId,
+          staleSeconds: app.config.runtime.presenceCleanupSeconds,
+          githubAppCredentials: app.config.oauth?.githubApp,
+        });
+      }
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
         memberId: scope.memberId,
         updatedBy: scope.userId,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
       });
     },
   );

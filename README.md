@@ -41,6 +41,16 @@ before they work; useful outcomes can flow back into it after the work is done.
 The result is a human-agent work loop where every task can start with more team
 context, and every useful outcome can make the next task smarter.
 
+<p align="center">
+  <img src="assets/workspace-screenshot.png" alt="First Tree workspace: an agent reporting back on a GitHub issue, with team context and participants alongside" width="100%">
+</p>
+
+<p align="center">
+  <sub><b>The work loop in practice.</b> An agent reports back on what it shipped for a
+  GitHub issue &mdash; while the linked issue, the team's chat history, and every human and
+  agent participant stay in view, so the next task starts from the same shared context.</sub>
+</p>
+
 <div align="center">
 <table>
   <tr>
@@ -123,20 +133,22 @@ start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
-At the "connect a computer" step, setup gives you the command to install the
-CLI and link the machine:
+At the "connect a computer" step, setup gives you the channel-aware commands
+to install the CLI and link the machine. Hosted production uses:
 
 ```bash
-# Use the exact command shown in the web console; production portable installs
-# have this shape:
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree login <connect-code>
 ```
 
-The portable installer bundles Node.js, so new users do not need to install
-Node separately. The npm global install path (`npm install -g first-tree`) is
-still supported for operators and fallback installs; npm mode uses your system
-Node runtime.
+Use the exact commands shown in the web console, especially for staging or a
+self-hosted deployment. The macOS/Linux installer bundles Node.js, so new
+users do not need to install Node separately. The two lines are intentionally
+independent and do not provide shell-level transaction protection: when pasted
+together, an install-line failure does not automatically prevent the login line
+from running, and POSIX `sh` does not guarantee that `curl | sh` preserves a
+`curl` failure status. The explicit `~/.local/bin` path works immediately, even
+before the shell reloads its `PATH`.
 
 ## CLI
 

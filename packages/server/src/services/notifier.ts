@@ -38,6 +38,27 @@ const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
  */
 const CHAT_UPDATED_CHANNEL = "chat_updated_events";
 const AGENT_ROUTE_CHANNEL = "agent_route_events";
+/**
+ * Cross-replica reverse command to a connected daemon (e.g. provider-models:list).
+ * Payload is small JSON: `{ type, clientId, provider, ref }`. The replica that
+ * owns the client's WebSocket delivers it via `sendToClient`; others no-op.
+ */
+const DAEMON_CLIENT_COMMAND_CHANNEL = "daemon_client_commands";
+/**
+ * Cross-replica wake that a daemon command result is ready. Payload is
+ * `{ clientId, ref }` only — the catalog lives in `clients.metadata` so large
+ * Cursor lists stay under the PG NOTIFY 8KB limit.
+ */
+const DAEMON_CLIENT_COMMAND_RESULT_CHANNEL = "daemon_client_command_results";
+/**
+ * A viewer's PRIVATE me-chats projection changed (currently: they pinned or
+ * unpinned a chat). Carries `<humanAgentId>:<organizationId>` so the WS layer
+ * can fan a bare `me-chats:changed` invalidation to ONLY that user's own
+ * sockets in that org. Pin state is private per-user and must never reach
+ * another member's devices — so unlike `chat_updated_events` (audience-scoped
+ * to every chat member), this channel is user-scoped.
+ */
+const ME_CHATS_CHANNEL = "me_chats_changed";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -89,6 +110,25 @@ export type AgentRouteChangePayload = {
 };
 export type AgentRouteChangeHandler = (payload: AgentRouteChangePayload) => void;
 
+/** Small reverse-command frame fan-out for host-local daemon RPCs. */
+export type DaemonClientCommandPayload = {
+  type: string;
+  clientId: string;
+  provider: string;
+  ref: string;
+  /** DB-authoritative `clients.instance_id` — only that replica may deliver. */
+  targetInstanceId: string;
+};
+export type DaemonClientCommandHandler = (payload: DaemonClientCommandPayload) => void;
+
+/** Wake waiters that a correlated daemon RPC result is stored in client metadata. */
+export type DaemonClientCommandResultPayload = {
+  clientId: string;
+  ref: string;
+};
+export type DaemonClientCommandResultHandler = (payload: DaemonClientCommandResultPayload) => void;
+export type MeChatsChangedHandler = (payload: { humanAgentId: string; organizationId: string }) => void;
+
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
  * `inbox_notifications` for a subscribed inbox, the notifier hands the
@@ -111,6 +151,12 @@ export type Notifier = {
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
   notify(inboxId: string, messageId: string): Promise<void>;
+  /**
+   * Same NOTIFY as `notify`, but rejects when the underlying `pg_notify` fails.
+   * Ordinary callers keep using fire-and-forget `notify`; cron post-commit
+   * observability uses this so delivery-hint failures are countable.
+   */
+  notifyStrict(inboxId: string, messageId: string): Promise<void>;
   /** Notify that a config has changed */
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
@@ -127,8 +173,26 @@ export type Notifier = {
   notifyChatAudience(chatId: string): Promise<void>;
   /** Chat metadata changed (description / topic): kick admin WS sockets to invalidate `["chat-detail", chatId]` + `["me","chats"]`. */
   notifyChatUpdated(chatId: string): Promise<void>;
+  /**
+   * A viewer's private me-chats list changed (pin / unpin). Kicks ONLY that
+   * user's own admin WS sockets (in `organizationId`) to invalidate
+   * `["me","chats"]`, so the change syncs across their devices without ever
+   * touching another member's sockets.
+   */
+  notifyMeChatsChanged(humanAgentId: string, organizationId: string): Promise<void>;
   /** Agent runtime route changed: fan local WS detach/pin handling to every server replica. */
   notifyAgentRouteChange(payload: AgentRouteChangePayload): Promise<void>;
+  /**
+   * Fan a small reverse-command frame to every replica so the process that
+   * owns the daemon WebSocket can `sendToClient`. Payload must stay tiny
+   * (no catalog bodies).
+   */
+  notifyDaemonClientCommand(payload: DaemonClientCommandPayload): Promise<void>;
+  /**
+   * Wake waiters that a correlated daemon RPC result is durable in
+   * `clients.metadata` (catalog bodies are too large for NOTIFY).
+   */
+  notifyDaemonClientCommandResult(payload: DaemonClientCommandResultPayload): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -153,8 +217,14 @@ export type Notifier = {
   onChatAudience(handler: ChatAudienceChangeHandler): void;
   /** Register a handler for chat:updated (metadata change) notifications. */
   onChatUpdated(handler: ChatUpdatedChangeHandler): void;
+  /** Register a handler for per-user me-chats invalidations (pin / unpin). */
+  onMeChatsChanged(handler: MeChatsChangedHandler): void;
   /** Register a handler for agent runtime route changes. */
   onAgentRouteChange(handler: AgentRouteChangeHandler): void;
+  /** Register a handler for cross-replica daemon reverse commands. */
+  onDaemonClientCommand(handler: DaemonClientCommandHandler): void;
+  /** Register a handler for cross-replica daemon RPC result wakes. */
+  onDaemonClientCommandResult(handler: DaemonClientCommandResultHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -171,7 +241,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
   const chatUpdatedHandlers: ChatUpdatedChangeHandler[] = [];
+  const meChatsChangedHandlers: MeChatsChangedHandler[] = [];
   const agentRouteHandlers: AgentRouteChangeHandler[] = [];
+  const daemonClientCommandHandlers: DaemonClientCommandHandler[] = [];
+  const daemonClientCommandResultHandlers: DaemonClientCommandResultHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -181,7 +254,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
   let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
   let unlistenChatUpdatedFn: (() => Promise<void>) | null = null;
+  let unlistenMeChatsChangedFn: (() => Promise<void>) | null = null;
   let unlistenAgentRouteFn: (() => Promise<void>) | null = null;
+  let unlistenDaemonClientCommandFn: (() => Promise<void>) | null = null;
+  let unlistenDaemonClientCommandResultFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -206,6 +282,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     }
   }
 
+  async function notifyStrict(inboxId: string, messageId: string) {
+    await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+  }
+
   return {
     subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler) {
       let map = subscriptions.get(inboxId);
@@ -226,9 +306,11 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    notifyStrict,
+
     async notify(inboxId: string, messageId: string) {
       try {
-        await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
+        await notifyStrict(inboxId, messageId);
       } catch {
         // Fire-and-forget: durable inbox rows are repaired by bound WS backlog
         // drains if this volatile NOTIFY hint is missed.
@@ -306,11 +388,36 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyMeChatsChanged(humanAgentId: string, organizationId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${ME_CHATS_CHANNEL}, ${`${humanAgentId}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget — realtime is best-effort; the 30s me-chats poll and
+        // web reconnect refetch are the durable fallback.
+      }
+    },
+
     async notifyAgentRouteChange(payload: AgentRouteChangePayload) {
       try {
         await listenClient`SELECT pg_notify(${AGENT_ROUTE_CHANNEL}, ${JSON.stringify(payload)})`;
       } catch {
         // fire-and-forget — DB route/token checks are the durable fallback.
+      }
+    },
+
+    async notifyDaemonClientCommand(payload: DaemonClientCommandPayload) {
+      try {
+        await listenClient`SELECT pg_notify(${DAEMON_CLIENT_COMMAND_CHANNEL}, ${JSON.stringify(payload)})`;
+      } catch {
+        // fire-and-forget — HTTP waiter timeout is the durable fallback.
+      }
+    },
+
+    async notifyDaemonClientCommandResult(payload: DaemonClientCommandResultPayload) {
+      try {
+        await listenClient`SELECT pg_notify(${DAEMON_CLIENT_COMMAND_RESULT_CHANNEL}, ${JSON.stringify(payload)})`;
+      } catch {
+        // fire-and-forget — HTTP waiter timeout is the durable fallback.
       }
     },
 
@@ -366,8 +473,20 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       chatUpdatedHandlers.push(handler);
     },
 
+    onMeChatsChanged(handler: MeChatsChangedHandler) {
+      meChatsChangedHandlers.push(handler);
+    },
+
     onAgentRouteChange(handler: AgentRouteChangeHandler) {
       agentRouteHandlers.push(handler);
+    },
+
+    onDaemonClientCommand(handler: DaemonClientCommandHandler) {
+      daemonClientCommandHandlers.push(handler);
+    },
+
+    onDaemonClientCommandResult(handler: DaemonClientCommandResultHandler) {
+      daemonClientCommandResultHandlers.push(handler);
     },
 
     async start() {
@@ -515,6 +634,24 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       });
       unlistenChatUpdatedFn = chatUpdatedResult.unlisten;
 
+      const meChatsChangedResult = await listenClient.listen(ME_CHATS_CHANNEL, (payload) => {
+        if (!payload) return;
+        // payload format: "humanAgentId:organizationId" — both are UUIDs (no
+        // colons), so the first separator wins.
+        const sep = payload.indexOf(":");
+        if (sep <= 0) return;
+        const humanAgentId = payload.slice(0, sep);
+        const organizationId = payload.slice(sep + 1);
+        for (const handler of meChatsChangedHandlers) {
+          try {
+            handler({ humanAgentId, organizationId });
+          } catch {
+            // swallow — handler errors must not poison fan-out
+          }
+        }
+      });
+      unlistenMeChatsChangedFn = meChatsChangedResult.unlisten;
+
       const agentRouteResult = await listenClient.listen(AGENT_ROUTE_CHANNEL, (payload) => {
         if (!payload) return;
         try {
@@ -543,6 +680,55 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenAgentRouteFn = agentRouteResult.unlisten;
+
+      const daemonClientCommandResult = await listenClient.listen(DAEMON_CLIENT_COMMAND_CHANNEL, (payload) => {
+        if (!payload) return;
+        try {
+          const parsed = JSON.parse(payload) as Partial<DaemonClientCommandPayload>;
+          if (
+            typeof parsed.type !== "string" ||
+            typeof parsed.clientId !== "string" ||
+            typeof parsed.provider !== "string" ||
+            typeof parsed.ref !== "string" ||
+            typeof parsed.targetInstanceId !== "string"
+          ) {
+            return;
+          }
+          for (const handler of daemonClientCommandHandlers) {
+            try {
+              handler(parsed as DaemonClientCommandPayload);
+            } catch {
+              // swallow — handler errors must not poison fan-out
+            }
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      });
+      unlistenDaemonClientCommandFn = daemonClientCommandResult.unlisten;
+
+      const daemonClientCommandResultWake = await listenClient.listen(
+        DAEMON_CLIENT_COMMAND_RESULT_CHANNEL,
+        (payload) => {
+          if (!payload) return;
+          try {
+            const parsed = JSON.parse(payload) as Partial<DaemonClientCommandResultPayload>;
+            if (typeof parsed.clientId !== "string" || typeof parsed.ref !== "string") {
+              return;
+            }
+            for (const handler of daemonClientCommandResultHandlers) {
+              try {
+                handler(parsed as DaemonClientCommandResultPayload);
+              } catch {
+                // swallow — handler errors must not poison fan-out
+              }
+            }
+          } catch {
+            // ignore malformed payloads
+          }
+        },
+      );
+      unlistenDaemonClientCommandResultFn = daemonClientCommandResultWake.unlisten;
     },
 
     async stop() {
@@ -582,9 +768,21 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         await unlistenChatUpdatedFn();
         unlistenChatUpdatedFn = null;
       }
+      if (unlistenMeChatsChangedFn) {
+        await unlistenMeChatsChangedFn();
+        unlistenMeChatsChangedFn = null;
+      }
       if (unlistenAgentRouteFn) {
         await unlistenAgentRouteFn();
         unlistenAgentRouteFn = null;
+      }
+      if (unlistenDaemonClientCommandFn) {
+        await unlistenDaemonClientCommandFn();
+        unlistenDaemonClientCommandFn = null;
+      }
+      if (unlistenDaemonClientCommandResultFn) {
+        await unlistenDaemonClientCommandResultFn();
+        unlistenDaemonClientCommandResultFn = null;
       }
     },
   };
@@ -595,4 +793,22 @@ export function notifyRecipients(notifier: Notifier, recipients: string[], messa
   for (const inboxId of recipients) {
     notifier.notify(inboxId, messageId).catch(() => {});
   }
+}
+
+/**
+ * Await every recipient notify via `notifyStrict` and report failures.
+ * Ordinary callers keep using fire-and-forget `notifyRecipients`, which goes
+ * through swallowing `notify()`. Cron sweeps use this so production
+ * `pg_notify` failures increment post-commit failure telemetry.
+ */
+export async function notifyRecipientsSettled(
+  notifier: Notifier,
+  recipients: string[],
+  messageId: string,
+): Promise<{ failed: number; errors: unknown[] }> {
+  const results = await Promise.allSettled(recipients.map((inboxId) => notifier.notifyStrict(inboxId, messageId)));
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  return { failed: errors.length, errors };
 }

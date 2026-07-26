@@ -3,6 +3,7 @@ import type { ExecuteUpdateFn, RefreshUpdateTargetFn, UpdateLogger, UpdatePrompt
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
+import { getChannelInstallCommand } from "./install-guidance.js";
 import { print } from "./output.js";
 import {
   detectInstallMode,
@@ -111,10 +112,9 @@ export function createExecuteUpdate({
       return { installed: false };
     }
     if (mode === "npx") {
-      const installHint = PACKAGE_NAME ?? channelConfig.binName;
       emit(
         "warn",
-        `Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}\` manually.`,
+        `Cannot self-update — not launched from an installed CLI.\n  Run \`${getChannelInstallCommand()}\` manually.`,
       );
       return { installed: false };
     }

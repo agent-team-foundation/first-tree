@@ -73,7 +73,7 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
-  if (isCredential(text, base, status)) {
+  if (isCredential(text, base, status, context.provider)) {
     return {
       category: "credential",
       reasonCode: credentialReason(base),
@@ -91,7 +91,7 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
-  if (isConfiguration(text, base)) {
+  if (isConfiguration(text, base, context.provider)) {
     return {
       category: "configuration",
       reasonCode: configurationReason(base),
@@ -150,7 +150,11 @@ export function decideProviderRetry(input: {
   const attempt = Math.max(1, Math.floor(input.attempt));
   const retryAfterMs = input.retryAfterMs ?? input.classification.retryAfterMs;
 
-  if (input.scope === "provider_turn" && isUnsafeReplay(input.replaySafety)) {
+  if (
+    input.scope === "provider_turn" &&
+    isUnsafeReplay(input.replaySafety) &&
+    !isRetryableUserVisibleFailure(input.classification.category, input.replaySafety)
+  ) {
     return stop("unsafe_replay", "unsafe_replay", input.replaySafety, "warning");
   }
 
@@ -242,23 +246,25 @@ function decideProviderTurnCapacity(
   if (replaySafety === "pre_provider") {
     return decideProviderTurnTransient(reasonCode, attempt, replaySafety);
   }
-  if (reasonCode === "provider_overloaded" && retryAfterMs === undefined && attempt <= PROVIDER_TURN_MAX_RETRIES) {
-    return retry(
-      reasonCode,
-      attempt,
-      PROVIDER_TURN_MAX_RETRIES,
-      PROVIDER_TURN_DELAYS_MS[attempt - 1] ?? 1500,
-      "foreground",
-      replaySafety,
-      "warning",
-    );
+  if (reasonCode === "provider_overloaded" && retryAfterMs === undefined) {
+    if (attempt <= PROVIDER_TURN_MAX_RETRIES) {
+      return retry(
+        reasonCode,
+        attempt,
+        PROVIDER_TURN_MAX_RETRIES,
+        PROVIDER_TURN_DELAYS_MS[attempt - 1] ?? 1500,
+        "foreground",
+        replaySafety,
+        "warning",
+      );
+    }
+    return stop(`${reasonCode}_exhausted`, "exhausted", replaySafety, "error");
   }
-  if (
-    retryAfterMs !== undefined &&
-    retryAfterMs <= PROVIDER_TURN_CAPACITY_SHORT_WAIT_MS &&
-    attempt <= PROVIDER_TURN_MAX_RETRIES
-  ) {
-    return retry(reasonCode, attempt, PROVIDER_TURN_MAX_RETRIES, retryAfterMs, "foreground", replaySafety, "warning");
+  if (retryAfterMs !== undefined && retryAfterMs <= PROVIDER_TURN_CAPACITY_SHORT_WAIT_MS) {
+    if (attempt <= PROVIDER_TURN_MAX_RETRIES) {
+      return retry(reasonCode, attempt, PROVIDER_TURN_MAX_RETRIES, retryAfterMs, "foreground", replaySafety, "warning");
+    }
+    return stop(`${reasonCode}_exhausted`, "exhausted", replaySafety, "error");
   }
   return stop("capacity_wait_required", "capacity_wait_required", replaySafety, "warning");
 }
@@ -339,6 +345,10 @@ function isUnsafeReplay(replaySafety: ReplaySafety): boolean {
   return replaySafety === "user_visible" || replaySafety === "unsafe" || replaySafety === "unknown";
 }
 
+function isRetryableUserVisibleFailure(category: ProviderFailureCategory, replaySafety: ReplaySafety): boolean {
+  return replaySafety === "user_visible" && (category === "provider_capacity" || category === "transient_transport");
+}
+
 type ErrorShape = {
   name?: string;
   message?: string;
@@ -397,17 +407,30 @@ function readRetryAfterMs(shape: ErrorShape): number | undefined {
   return undefined;
 }
 
-function isCredential(text: string, base: Classification, status: number | undefined): boolean {
-  return (
+function isCredential(
+  text: string,
+  base: Classification,
+  status: number | undefined,
+  provider: RuntimeProvider,
+): boolean {
+  if (
     status === 401 ||
     status === 403 ||
     base.reasonCode.includes("auth") ||
     base.reasonCode.includes("unauthorized") ||
     AUTH_HTTP_CODE_RE.test(text) ||
-    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed/.test(
+    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed|auth\.(?:login_required|provisioning_required|token_missing|token_unauthorized|model_not_resolved)|provider\.auth_error/.test(
       text,
     )
-  );
+  ) {
+    return true;
+  }
+  // Cursor CLI logged-out phrasings (kept in sync with isCursorAuthError in
+  // handlers/auth-error-hint.ts). Provider-gated: the in-chat "Log in to
+  // Cursor" CTA renders only for category=credential, so a wording variant
+  // that drops the word "authentication" must still classify credential —
+  // without leaking these generic phrases into other providers' traffic.
+  return provider === "cursor" && /not logged in|agent login|cursor_api_key/.test(text);
 }
 
 function credentialReason(base: Classification): string {
@@ -418,10 +441,21 @@ function isCapability(text: string, base: Classification): boolean {
   return base.reasonCode.includes("binary_missing") || /binary missing|executable missing|unable to locate/.test(text);
 }
 
-function isConfiguration(text: string, base: Classification): boolean {
-  return (
+function isConfiguration(text: string, base: Classification, provider: RuntimeProvider): boolean {
+  if (
     base.reasonCode.includes("mismatch") ||
     /provider mismatch|runtime_provider_mismatch|bad config|sandbox|approval|model_not_found|model not found/.test(text)
+  ) {
+    return true;
+  }
+  if (provider === "kimi-code" && /model\.not_configured|model\.config_invalid/.test(text)) return true;
+  // Cursor CLI literal invalid-model / explicit-deny / trust-wall phrasings
+  // (captured in Phase 0). Gated to the cursor provider: this classifier is
+  // shared and configuration wins over capacity in the classify chain, so an
+  // ungated generic English phrase like "cannot use this model" could turn
+  // another provider's retryable capacity message into a terminal stop.
+  return (
+    provider === "cursor" && /cannot use this model|blocked by permissions configuration|workspace trust/.test(text)
   );
 }
 
@@ -454,7 +488,7 @@ function isCapacity(text: string, base: Classification, retryAfterMs: number | u
 function isTransportText(text: string): boolean {
   return (
     TRANSIENT_HTTP_CODE_RE.test(text) ||
-    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|unable to connect|connection refused|connectionrefused|econnreset|econnrefused|etimedout|epipe/.test(
+    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|unable to connect|provider\.connection_error|connection refused|connectionrefused|econnreset|econnrefused|etimedout|epipe/.test(
       text,
     )
   );

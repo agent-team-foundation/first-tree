@@ -1,7 +1,6 @@
 import type { MeMembership, OrgBrief } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { trackEvent } from "../analytics.js";
 import { login as loginApi } from "../api/auth.js";
 import {
   ADMIN_WS_ORG_CHANGED_EVENT,
@@ -32,8 +31,8 @@ type MeResponse = {
     /**
      * ISO timestamp when the user finished the kickoff (Context Tree) step.
      * Distinct from `dismissedAt` (which only hides onboarding, leaving it
-     * resumable). Once set, the Settings → Onboarding entry point disappears
-     * permanently.
+     * resumable). This completes first-run routing but does not hide the
+     * permanent Settings → Setup overview.
      */
     completedAt?: string | null;
   };
@@ -106,12 +105,10 @@ type AuthContextValue = {
    */
   onboardingDismissedAt: string | null;
   /**
-   * ISO timestamp when the user finished the kickoff (Context Tree) step. Once
-   * non-null, the Settings → Onboarding sidebar entry and Resume button
-   * disappear permanently — subsequent team-name edits go through the
-   * header-left TeamSwitcher and per-agent edits go through agent settings
-   * pages. `null` while setup is still incomplete OR while the user has only
-   * dismissed (not finished) onboarding.
+   * ISO timestamp when the user finished the first-run flow. This controls
+   * onboarding redirects only; the permanent Settings → Setup overview remains
+   * available after completion. `null` while onboarding is incomplete or only
+   * dismissed.
    */
   onboardingCompletedAt: string | null;
   /**
@@ -127,10 +124,9 @@ type AuthContextValue = {
   restoreOnboarding: () => Promise<void>;
   /**
    * POST `/me/onboarding-completed`. Optimistically stamps
-   * `onboardingCompletedAt` so the Settings → Onboarding sidebar entry
-   * unmounts immediately and `/settings/onboarding` redirects on the next
-   * render. Idempotent server-side. Called at Step 3 terminal-success
-   * points (admin Continue, invitee Confirm / Continue).
+   * `onboardingCompletedAt` so first-run routing can settle immediately.
+   * Idempotent server-side. Called at Step 3 terminal-success points (admin
+   * Continue, invitee Confirm / Continue).
    */
   markOnboardingCompleted: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -453,27 +449,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [currentMembership?.onboardingSuppressedReason, currentMembership?.organizationId, patchMembershipOnboarding]);
 
   const markOnboardingCompleted = useCallback(async () => {
-    // Optimistic: stamp immediately so the Settings sidebar gate and the
-    // /settings/onboarding redirect read the new state on the very next
-    // render. Server stamp is canonical but it's not echoed back — the next
-    // /me fetch will reconcile if the value somehow drifts (e.g. /me was
-    // refetched mid-flight before the optimistic write landed). We don't
-    // roll back on error: the user has already finished Step 3 and is
-    // navigating away, so a network blip here just means the sidebar entry
-    // lingers until the next /me — strictly less wrong than briefly
-    // un-completing the user.
+    // Optimistic: stamp immediately so first-run routing reads the new state
+    // on the very next render. Server stamp is canonical but isn't echoed
+    // back; the next /me fetch reconciles any drift. We don't roll back on
+    // error because the user has already finished Step 3 and is navigating
+    // away.
     const organizationId = currentMembership?.organizationId;
     const optimistic = new Date().toISOString();
-    // Fire the GA `sign_up` conversion exactly once per *account*, on the
-    // user's first ever onboarding completion. Completion is stamped per
-    // membership (a user can belong to several orgs), so a per-membership gate
-    // would re-fire every time the same person finishes onboarding in a new
-    // team — that's not a new signup. The account-level "never completed
-    // anywhere" signal is: no membership carries a completion stamp AND the
-    // legacy top-level stamp is empty (older /me payloads). trackEvent
-    // self-gates to the production host, so dev / StrictMode re-invokes can't
-    // pollute GA either way.
-    const firstCompletion = !onboardingCompletedAt && memberships.every((m) => !m.onboardingCompletedAt);
     setOnboardingCompletedAt((prev) => prev ?? optimistic);
     setOnboardingDismissedAt((prev) => prev ?? optimistic);
     patchMembershipOnboarding({
@@ -481,11 +463,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       onboardingSuppressedAt: currentMembership?.onboardingSuppressedAt ?? optimistic,
       onboardingSuppressedReason: "completed",
     });
-    if (firstCompletion) trackEvent("sign_up");
     await postOnboardingCompleted(organizationId ?? undefined);
   }, [
-    onboardingCompletedAt,
-    memberships,
     currentMembership?.onboardingCompletedAt,
     currentMembership?.onboardingSuppressedAt,
     currentMembership?.organizationId,

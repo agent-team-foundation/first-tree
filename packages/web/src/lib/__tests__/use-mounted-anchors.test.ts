@@ -10,15 +10,21 @@ describe("anchorKey", () => {
   it("joins main and agentId with a colon", () => {
     expect(anchorKey("working", "a1")).toBe("working:a1");
     expect(anchorKey("failed", "a3")).toBe("failed:a3");
+    expect(anchorKey("reason", "a4")).toBe("reason:a4");
   });
 });
 
 describe("isJumpable — jump affordance gates on a mounted anchor", () => {
-  const mounted = new Set([anchorKey("working", "atlas"), anchorKey("failed", "cypher")]);
+  const mounted = new Set([
+    anchorKey("working", "atlas"),
+    anchorKey("failed", "cypher"),
+    anchorKey("reason", "beacon"),
+  ]);
 
   it("true when this agent's anchor for that status is mounted", () => {
     expect(isJumpable(mounted, "working", "atlas")).toBe(true);
     expect(isJumpable(mounted, "failed", "cypher")).toBe(true);
+    expect(isJumpable(mounted, "reason", "beacon")).toBe(true);
   });
 
   it("false when the anchor isn't mounted — so nothing becomes a clickable no-op", () => {

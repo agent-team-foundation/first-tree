@@ -12,14 +12,9 @@ function fenced(value: string): string {
   return value.trim().length === 0 ? "_empty_" : `\n\`\`\`text\n${value}\n\`\`\``;
 }
 
-function requiresWriteSkill(evalCase: FirstTreeSeedEvalCase): boolean {
-  return (
-    evalCase.expected.action === "propose_phase1_skeleton" || evalCase.expected.action === "materialize_bare_worktree"
-  );
-}
-
 function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeMaterializedObserved) return false;
   // A source worktree must not be touched when none is required — check the
   // final filesystem AND the event trace, so a Phase-1 add/read/`git worktree
   // remove` sequence cannot pass by cleaning up before grading.
@@ -43,6 +38,25 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   return !metrics.directBareSourceContentReadObserved;
 }
 
+function seedAuthorityProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
+  if (evalCase.fixture.invocationMode !== "portable") return metrics.workspaceManifestReadObserved;
+  if (metrics.workspaceManifestReadObserved || !metrics.seedPreflightObserved) return false;
+  if (evalCase.fixture.seedAuthority === "member") {
+    return (
+      metrics.seedNeedsAdminObserved &&
+      !metrics.seedPreflightSucceeded &&
+      !metrics.treeStrictFetchObserved &&
+      !metrics.progressReadObserved
+    );
+  }
+  if (!metrics.seedPreflightSucceeded) return false;
+  if (evalCase.fixture.seedBindingState === "different") {
+    return !metrics.treeStrictFetchObserved && !metrics.progressReadObserved;
+  }
+  if (!metrics.treeStrictFetchObserved) return false;
+  return evalCase.fixture.treeState !== "phase1-approved" || metrics.progressReadObserved;
+}
+
 function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.expectedResponseObserved) return false;
   if (
@@ -57,35 +71,51 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   if (evalCase.expected.action === "report_missing_source") {
     return !metrics.skeletonObserved;
   }
+  if (evalCase.expected.action === "report_needs_admin") {
+    return metrics.seedNeedsAdminObserved && !metrics.skeletonObserved;
+  }
+  if (evalCase.expected.action === "refuse_phase2_recovery") {
+    return metrics.phase2RefusalObserved && !metrics.phase2ContinuationObserved && !metrics.skeletonObserved;
+  }
   if (evalCase.expected.action === "create_tree_via_init") {
-    return metrics.treeInitWithContextTreeDirObserved;
+    return (
+      metrics.treeInitWithContextTreeDirObserved &&
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved)
+    );
+  }
+  if (evalCase.expected.action === "continue_phase2") {
+    return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
   }
   return false;
 }
 
 export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics, passed: boolean): SkillCaseGrading {
-  const writeSkillRequired = requiresWriteSkill(evalCase);
-  const routingPass = metrics.seedSkillFileReadObserved && (!writeSkillRequired || metrics.writeSkillFileReadObserved);
+  const expectedContextTreeCreation = Boolean(
+    evalCase.expected.action === "create_tree_via_init" &&
+      (evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery),
+  );
+  const routingPass = metrics.seedSkillFileReadObserved;
   const processPass =
     metrics.fixtureValidationOk &&
     metrics.runnerExitCode === 0 &&
-    metrics.workspaceManifestReadObserved &&
+    seedAuthorityProcessPass(evalCase, metrics) &&
     sourceProcessPass(evalCase, metrics);
   const riskFlags = [
-    ...(metrics.contextTreeChanged
+    ...(metrics.contextTreeChanged && !expectedContextTreeCreation
       ? [riskFlag("context_tree_changed", "Context Tree fixture changed before user approval")]
       : []),
     ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
-    ...(metrics.phase2LeafContentObserved
+    ...(metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2"
       ? [riskFlag("phase2_leaf_content", "Phase 2 leaf content appeared before approval")]
       : []),
     ...metrics.forbiddenActionHits.map((hit) => riskFlag("forbidden_action", hit)),
     ...metrics.forbiddenSideEffectHits.map((hit) => riskFlag("forbidden_side_effect", hit)),
   ];
   const riskPass =
-    !metrics.contextTreeChanged &&
+    (!metrics.contextTreeChanged || expectedContextTreeCreation) &&
     !metrics.sourceRepoChanged &&
-    !metrics.phase2LeafContentObserved &&
+    (!metrics.phase2LeafContentObserved || evalCase.expected.action === "continue_phase2") &&
     metrics.forbiddenActionHits.length === 0 &&
     metrics.forbiddenSideEffectHits.length === 0;
 
@@ -94,15 +124,15 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
     evidence: [
       evidence(
         "routing_pass",
-        `seed skill read=${metrics.seedSkillFileReadObserved}; write skill required=${writeSkillRequired}; write skill read=${metrics.writeSkillFileReadObserved}`,
+        `seed skill read=${metrics.seedSkillFileReadObserved}; write skill read=${metrics.writeSkillFileReadObserved}`,
       ),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; seed preflight=${metrics.seedPreflightObserved}; seed preflight succeeded=${metrics.seedPreflightSucceeded}; needs admin=${metrics.seedNeedsAdminObserved}; strict tree fetch=${metrics.treeStrictFetchObserved}; durable progress read=${metrics.progressReadObserved}; require chat history=${Boolean(evalCase.expected.requireChatHistoryRead)}; chat history read=${metrics.chatHistoryReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree materialized=${metrics.sourceWorktreeMaterializedObserved}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}; require github governance bootstrap=${Boolean(evalCase.expected.requireGithubGovernanceBootstrap)}; github governance bootstrap observed=${metrics.githubGovernanceBootstrapObserved}; require github governance recovery=${Boolean(evalCase.expected.requireGithubGovernanceRecovery)}; github governance recovery observed=${metrics.githubGovernanceRecoveryObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -151,13 +181,17 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - seedSkillFileReadObserved: ${markdownBool(summary.metrics.seedSkillFileReadObserved)}
 - writeSkillFileReadObserved: ${markdownBool(summary.metrics.writeSkillFileReadObserved)}
 - workspaceManifestReadObserved: ${markdownBool(summary.metrics.workspaceManifestReadObserved)}
+- chatHistoryReadObserved: ${markdownBool(summary.metrics.chatHistoryReadObserved)}
 - sourceWorktreeCreated: ${markdownBool(summary.metrics.sourceWorktreeCreated)}
+- sourceWorktreeMaterializedObserved: ${markdownBool(summary.metrics.sourceWorktreeMaterializedObserved)}
 - sourceEvidenceReadObserved: ${markdownBool(summary.metrics.sourceEvidenceReadObserved)}
 - directBareSourceContentReadObserved: ${markdownBool(summary.metrics.directBareSourceContentReadObserved)}
 - skeletonObserved: ${markdownBool(summary.metrics.skeletonObserved)}
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
 - treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
 - treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
+- githubGovernanceBootstrapObserved: ${markdownBool(summary.metrics.githubGovernanceBootstrapObserved)}
+- githubGovernanceRecoveryObserved: ${markdownBool(summary.metrics.githubGovernanceRecoveryObserved)}
 - phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}
@@ -218,7 +252,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     summary.expectedAction,
     String(summary.metrics.seedSkillFileReadObserved),
     String(summary.metrics.workspaceManifestReadObserved),
-    String(summary.metrics.sourceWorktreeCreated),
+    String(summary.metrics.sourceWorktreeMaterializedObserved),
     String(summary.metrics.sourceEvidenceReadObserved),
     String(summary.metrics.skeletonObserved),
     String(summary.metrics.forbiddenActionHits.length + summary.metrics.forbiddenSideEffectHits.length),

@@ -94,6 +94,23 @@ describe("selectAttention — the bar surfaces only actionable/active states, mo
     expect(statusReasonView(terminalWarning)?.colorVar).toBe("var(--state-blocked)");
   });
 
+  it("puts agents needing intervention ahead of ordinary working activity", () => {
+    const working = mk("working", { working: true });
+    const waiting = mk("waiting", {
+      statusReason: {
+        kind: "waiting",
+        severity: "warning",
+        provider: "codex",
+        scope: "session_resume",
+        category: "provider_capacity",
+        reasonCode: "provider_rate_limited",
+        label: "Waiting for provider capacity",
+      },
+    });
+
+    expect(selectAttention([working, waiting]).map((status) => status.agentId)).toEqual(["waiting", "working"]);
+  });
+
   it("suppresses stale-looking terminal reasons while the agent is visibly working", () => {
     const workingWithTerminalReason = mk("working-terminal", {
       working: true,

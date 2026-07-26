@@ -1,9 +1,23 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { parseDocument } from "yaml";
 
 import { writeText } from "../commands.js";
 
 export function parseSkillDescription(skillMarkdown: string): string {
+  const frontmatter = skillMarkdown.match(/^---\n([\s\S]*?)\n---/u)?.[1];
+  if (frontmatter) {
+    try {
+      const description = parseDocument(frontmatter).get("description");
+      if (typeof description === "string" && description.trim() !== "") {
+        return description;
+      }
+    } catch (error: unknown) {
+      void error;
+      // Fall back to the legacy line parser for malformed test fixtures.
+    }
+  }
+
   const match = skillMarkdown.match(/^description:\s*"?(.+?)"?\s*$/mu);
   return match?.[1] ?? "Use this skill when its description applies.";
 }

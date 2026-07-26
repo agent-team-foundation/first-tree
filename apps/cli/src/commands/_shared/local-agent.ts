@@ -5,6 +5,7 @@ import {
   agentConfigSchema,
   clientConfigSchema,
   defaultConfigDir,
+  defaultDataDir,
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
@@ -89,47 +90,34 @@ export function resolveLocalAgent(
 /** Build an SDK client scoped to the resolved local agent. */
 export function createSdk(agentName?: string): FirstTreeHubSDK {
   const { serverUrl, agentId } = resolveLocalAgent(agentName);
-  const runtimeSessionToken = resolveRuntimeSessionToken();
   return new FirstTreeHubSDK({
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
-    runtimeSessionToken,
+    runtimeSessionToken: () => resolveRuntimeSessionToken(agentId),
     userAgent: CLI_USER_AGENT,
   });
 }
 
-function resolveRuntimeSessionToken(): string | undefined {
-  const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
-  if (tokenFile) {
-    let token: string;
-    try {
-      token = readFileSync(tokenFile, "utf8").trim();
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      fail(
-        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
-        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file could not be read: ${detail}`,
-        2,
-      );
-    }
-    if (!token) {
-      fail(
-        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
-        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
-        2,
-      );
-    }
-    return token;
+function resolveRuntimeSessionToken(agentId: string): string | undefined {
+  const injectedTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
+  const runtimeAgentId = process.env.FIRST_TREE_AGENT_ID?.trim();
+  const tokenFile =
+    injectedTokenFile && (!runtimeAgentId || runtimeAgentId === agentId)
+      ? injectedTokenFile
+      : join(defaultDataDir(), "runtime-session-tokens", `${agentId}.token`);
+  try {
+    return readFileSync(tokenFile, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
   }
-  return process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
 }
 
 /** Map an SdkError / connection error to the right CLI `fail()`. */
 export function handleSdkError(error: unknown): never {
   if (error instanceof SdkError) {
     const exitCode = error.statusCode === 401 ? 3 : 1;
-    fail(`HTTP_${error.statusCode}`, error.message, exitCode);
+    fail(error.code ?? `HTTP_${error.statusCode}`, error.message, exitCode);
   }
   if (error instanceof TypeError && "cause" in error) {
     fail("CONNECTION_ERROR", `Cannot connect to server: ${error.message}`, 6);

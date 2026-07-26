@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { suspendAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { sendMessage } from "../services/message.js";
+import { runDeferredSendMessagePostCommitEffects, sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 import { readPresence, readSessionState, seedPresence } from "./session-state-helpers.js";
 
@@ -54,6 +54,33 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     });
 
     expect(await readSessionState(app, a2.uuid, chat.id)).toBe("active");
+  });
+
+  it("defers predictive activation until an outer transaction caller flushes post-commit effects", async () => {
+    const app = getApp();
+    const { agent: sender } = await createTestAgent(app, { name: `def-src-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: recipient } = await createTestAgent(app, { name: `def-dst-${crypto.randomUUID().slice(0, 6)}` });
+    const chat = await createChat(app.db, sender.uuid, { type: "group", participantIds: [recipient.uuid] });
+
+    const result = await sendMessage(
+      app.db,
+      chat.id,
+      sender.uuid,
+      {
+        source: "api",
+        format: "text",
+        content: "defer wake",
+        metadata: { mentions: [recipient.uuid] },
+      },
+      { deferPostCommitEffects: true },
+    );
+
+    expect(await readSessionState(app, recipient.uuid, chat.id)).toBeNull();
+    const effects = result.deferredPostCommitEffects;
+    expect(effects).toBeDefined();
+    if (!effects) throw new Error("missing deferred post-commit effects");
+    await runDeferredSendMessagePostCommitEffects(app.db, effects);
+    expect(await readSessionState(app, recipient.uuid, chat.id)).toBe("active");
   });
 
   it("group chat fan-out activates every notify=true participant (N1-B)", async () => {

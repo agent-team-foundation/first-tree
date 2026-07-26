@@ -1,19 +1,19 @@
 import type { Dirent } from "node:fs";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
-import matter from "gray-matter";
-
+import {
+  type ContextTreeReadSnapshotIdentity,
+  InvalidContextTreeReadSnapshotError,
+  readContextTreeReadSnapshotIdentity,
+} from "../../core/context-tree-read.js";
 import { isJsonMode, print } from "../../core/output.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { asString, findGitRoot, isRecord, runCommand } from "./shared.js";
-
-export type NodeMetadata = {
-  title: string;
-  description?: string;
-  owners: string[];
-};
+import { classifyContextContent } from "./content-class.js";
+import type { NodeMetadata } from "./context-document.js";
+import { readNodeMetadata } from "./context-document.js";
+import { asString, findGitRoot, runCommand } from "./shared.js";
 
 export type ContextTreeNode = {
   kind: "directory" | "file";
@@ -53,6 +53,7 @@ type ContextTreeBranchInfo = {
 
 type ContextTreeCommandData = ContextTreeSnapshot & {
   branch: ContextTreeBranchInfo;
+  readSnapshot: ContextTreeReadSnapshotIdentity | null;
 };
 
 type ParsedTreeTreeOptions = {
@@ -74,8 +75,7 @@ type ResolvedTreeTarget = {
 };
 
 const NODE_FILE = "NODE.md";
-const LEAF_FILE_EXCLUDES = new Set([NODE_FILE, "AGENTS.md", "CLAUDE.md"]);
-const SKIPPED_DIRECTORY_NAMES = new Set(["node_modules", "__pycache__", "dist", "build", ".next", ".turbo"]);
+const LEAF_FILE_EXCLUDES = new Set([NODE_FILE]);
 const TREE_TREE_INVALID_LEVEL = "TREE_TREE_INVALID_LEVEL";
 const TREE_TREE_INVALID_PATH = "TREE_TREE_INVALID_PATH";
 const TREE_TREE_FAILED = "TREE_TREE_FAILED";
@@ -91,71 +91,12 @@ class TreeTreeCommandError extends Error {
   }
 }
 
-function isHidden(name: string): boolean {
-  return name.startsWith(".");
-}
-
 function toPosixRelativePath(root: string, target: string): string {
   return relative(root, target).replace(/\\/gu, "/");
 }
 
 function fileHasMarkdownExtension(name: string): boolean {
   return name.endsWith(".md");
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asNonEmptyStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-
-  const items: string[] = [];
-
-  for (const item of value) {
-    const normalized = asNonEmptyString(item);
-
-    if (normalized === undefined) {
-      return undefined;
-    }
-
-    items.push(normalized);
-  }
-
-  return items;
-}
-
-function readFrontmatterMetadata(path: string): NodeMetadata | null {
-  try {
-    const parsed = matter(readFileSync(path, "utf-8"));
-    const data: unknown = parsed.data;
-
-    if (!isRecord(data)) {
-      return null;
-    }
-
-    const title = asNonEmptyString(data.title);
-    const owners = asNonEmptyStringArray(data.owners);
-
-    if (title === undefined || owners === undefined) {
-      return null;
-    }
-
-    return {
-      title,
-      description: asNonEmptyString(data.description),
-      owners,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function formatDisplayValue(value: string): string {
@@ -189,12 +130,16 @@ function compareEntryNames(left: string, right: string): number {
   return 0;
 }
 
-function shouldSkipDirectory(name: string): boolean {
-  return isHidden(name) || SKIPPED_DIRECTORY_NAMES.has(name);
+function shouldSkipDirectory(relativePath: string): boolean {
+  return classifyContextContent(relativePath) === "repo-infra";
 }
 
-function shouldSkipFile(name: string): boolean {
-  return isHidden(name) || !fileHasMarkdownExtension(name) || LEAF_FILE_EXCLUDES.has(name);
+function shouldSkipFile(name: string, relativePath: string): boolean {
+  return (
+    classifyContextContent(relativePath) === "repo-infra" ||
+    !fileHasMarkdownExtension(name) ||
+    LEAF_FILE_EXCLUDES.has(name)
+  );
 }
 
 function isFile(path: string): boolean {
@@ -253,7 +198,7 @@ function buildDirectoryNode(
 ): ContextTreeNode | null {
   const nodePath = join(path, NODE_FILE);
   const hasNode = isFile(nodePath);
-  const metadata = readFrontmatterMetadata(nodePath);
+  const metadata = readNodeMetadata(nodePath);
   const relativePath = toPosixRelativePath(root, path);
   const children: ContextTreeNode[] = [];
 
@@ -263,8 +208,9 @@ function buildDirectoryNode(
 
   if (targetSegments.length > 0) {
     const [nextSegment, ...remainingSegments] = targetSegments;
+    const nextRelativePath = relativePath.length === 0 ? nextSegment : `${relativePath}/${nextSegment}`;
 
-    if (!shouldSkipDirectory(nextSegment)) {
+    if (!shouldSkipDirectory(nextRelativePath)) {
       const child = buildDirectoryNode(root, join(path, nextSegment), depth + 1, nextSegment, remainingSegments);
 
       if (child !== null) {
@@ -275,9 +221,10 @@ function buildDirectoryNode(
     for (const entry of readDirectoryEntries(path)) {
       const entryName = entry.name;
       const childPath = join(path, entryName);
+      const childRelativePath = toPosixRelativePath(root, childPath);
 
       if (entry.isDirectory()) {
-        if (shouldSkipDirectory(entryName)) {
+        if (shouldSkipDirectory(childRelativePath)) {
           continue;
         }
 
@@ -290,11 +237,11 @@ function buildDirectoryNode(
         continue;
       }
 
-      if (!entry.isFile() || shouldSkipFile(entryName)) {
+      if (!entry.isFile() || shouldSkipFile(entryName, childRelativePath)) {
         continue;
       }
 
-      const childMetadata = readFrontmatterMetadata(childPath);
+      const childMetadata = readNodeMetadata(childPath);
 
       if (childMetadata === null) {
         continue;
@@ -540,7 +487,18 @@ function readCurrentBranchName(root: string): string {
   return "unknown";
 }
 
-function readContextTreeBranch(root: string): ContextTreeBranchInfo {
+function readContextTreeBranch(
+  root: string,
+  readSnapshot: ContextTreeReadSnapshotIdentity | null,
+): ContextTreeBranchInfo {
+  if (readSnapshot !== null) {
+    return {
+      name: `snapshot:${readSnapshot.commit.slice(0, 12)}`,
+      isMainline: false,
+      warning: null,
+    };
+  }
+
   const name = readCurrentBranchName(root);
   const isMainline = MAINLINE_BRANCHES.has(name);
 
@@ -673,6 +631,12 @@ function renderContextTreeCommandData(data: ContextTreeCommandData): string {
     lines.push(data.branch.warning);
   }
 
+  if (data.readSnapshot !== null) {
+    lines.push(`Team: ${data.readSnapshot.teamId}`);
+    lines.push(`Binding: ${data.readSnapshot.binding.repo}#${data.readSnapshot.binding.branch}`);
+    lines.push(`Exact commit: ${data.readSnapshot.commit}`);
+  }
+
   lines.push(renderContextTreeSnapshot(data));
   return lines.join("\n");
 }
@@ -705,10 +669,12 @@ export function runTreeTreeCommand(context: CommandContext): void {
     const options = context.command.opts<Record<string, unknown>>();
     const parsedOptions = parseTreeTreeOptions(options, context.command.args);
     const resolvedTarget = resolveTreeTarget(process.cwd(), parsedOptions.path);
+    const readSnapshot = readContextTreeReadSnapshotIdentity(resolvedTarget.repoRoot);
     // Refresh the tree before reading it (hard freshness guarantee), unless
-    // the caller opted out with --no-pull. Best-effort: failures degrade to
-    // the local copy with a stderr warning (see pullContextTreeRepo).
-    if (parsedOptions.pull) {
+    // the caller opted out with --no-pull. An activated BYO task snapshot is
+    // already pinned to an exact commit and must never refresh per selector.
+    // Managed checkouts retain their existing best-effort stale fallback.
+    if (parsedOptions.pull && readSnapshot === null) {
       pullContextTreeRepo(resolvedTarget.repoRoot);
     }
     const snapshot = readContextTreeSnapshot(resolvedTarget.repoRoot, {
@@ -719,7 +685,8 @@ export function runTreeTreeCommand(context: CommandContext): void {
     });
     const data: ContextTreeCommandData = {
       ...snapshot,
-      branch: readContextTreeBranch(resolvedTarget.repoRoot),
+      branch: readContextTreeBranch(resolvedTarget.repoRoot, readSnapshot),
+      readSnapshot,
     };
 
     if (context.options.json || isJsonMode()) {
@@ -733,9 +700,11 @@ export function runTreeTreeCommand(context: CommandContext): void {
     const code =
       error instanceof TreeTreeCommandError
         ? error.code
-        : message.startsWith("Invalid --level")
-          ? TREE_TREE_INVALID_LEVEL
-          : TREE_TREE_FAILED;
+        : error instanceof InvalidContextTreeReadSnapshotError
+          ? error.code
+          : message.startsWith("Invalid --level")
+            ? TREE_TREE_INVALID_LEVEL
+            : TREE_TREE_FAILED;
     print.fail(code, message);
   }
 }

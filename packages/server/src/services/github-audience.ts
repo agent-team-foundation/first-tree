@@ -3,7 +3,7 @@ import {
   AGENT_TYPES,
   type InvolveReason,
   isDeclaredBoundVia,
-  type NormalizedEvent,
+  type NormalizedScmEvent,
 } from "@first-tree/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -46,10 +46,10 @@ export function evaluateDelegateTarget(
  * users, and bot/app senders return null and are delivered without self
  * pruning.
  */
-export async function resolveActorHumanId(
+export async function resolveGithubActorHumanId(
   db: Database,
   organizationId: string,
-  actor: { githubLogin: string },
+  actor: { externalUsername: string },
 ): Promise<string | null> {
   const [agentRow] = await db
     .select({ uuid: agents.uuid })
@@ -58,7 +58,7 @@ export async function resolveActorHumanId(
       and(
         eq(agents.organizationId, organizationId),
         eq(agents.type, AGENT_TYPES.HUMAN),
-        eq(sql`lower(${agents.name})`, actor.githubLogin.toLowerCase()),
+        eq(sql`lower(${agents.name})`, actor.externalUsername.toLowerCase()),
       ),
     )
     .limit(1);
@@ -81,6 +81,7 @@ export type AudienceTarget = {
    * reason.
    */
   involveLogin: string | null;
+  provenance?: "explicit" | "identity_target" | "related_entity";
 };
 
 export type AudienceResolution = {
@@ -95,17 +96,17 @@ export type AudienceResolution = {
  *
  * `subscribed` reads every `(human, delegate)` row already bound to
  * `(org, entity)` in `github_entity_chat_mappings`. `involved` walks
- * `event.involves` as target-human candidates. A target human first reuses
+ * `event.targets` as target-human candidates. A target human first reuses
  * their existing mapping(s) on the entity; only humans without a mapping fall
  * back to their default delegate and produce a `kind: "new"` row.
  *
  * Echo pruning happens in delivery, before fresh-chat resolution, so self-only
  * events do not write cards and mixed events keep the other humans' entries.
  */
-export async function resolveAudience(db: Database, event: NormalizedEvent): Promise<AudienceResolution> {
+export async function resolveGithubAudience(db: Database, event: NormalizedScmEvent): Promise<AudienceResolution> {
   const organizationId = event.source.organizationId;
   const entityKeys = githubEntityKeyCandidates(event.entity.type, event.entity.key);
-  const actorHumanId = await resolveActorHumanId(db, organizationId, event.actor);
+  const actorHumanId = await resolveGithubActorHumanId(db, organizationId, event.actor);
 
   const subscribedRows = await db
     .select({
@@ -126,12 +127,12 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
       ),
     );
 
-  // Dedup subscribed rows by `(humanAgentId, chatId)` (keep earliest
-  // `bound_at`). A single `(human, entity)` pair can carry multiple mapping
-  // rows pointing at the *same* chat (one per delegate that ever drove an
-  // event for this entity under this human); collapsing those to one row is
-  // loss-free and stops `deliverNormalizedEvent` posting N identical cards
-  // to that chat.
+  // Dedup subscribed rows by `(humanAgentId, delegateAgentId, chatId)` (keep
+  // earliest `bound_at`). Alias entity keys can leave duplicate rows for the
+  // same logical attention line, but distinct delegates are distinct wake
+  // lines even when they share one human carrier and chat. The per-chat
+  // delivery planner collapses those lines into one card and unions every
+  // wake agent.
   //
   // The key MUST include `chatId`. Deduping by `humanAgentId` alone assumed
   // every row for a human shared one chat — false once the same human is
@@ -140,14 +141,16 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   // another, each under a different delegate). Collapsing across chats kept
   // only the earliest chat's row and silently dropped every *other* followed
   // chat from the audience — that chat never received the entity's events at
-  // all. "The chat follows, not the person", so the surviving unit is one
-  // row per (human, chat), never one per human.
-  const earliestByHumanChat = new Map<string, (typeof subscribedRows)[number]>();
+  // all. The key also includes `delegateAgentId`: two agent-issued follows can
+  // share the same fallback human and chat while carrying distinct wake
+  // agents. "The chat follows, not the person", so the surviving unit is one
+  // row per (human, delegate, chat).
+  const earliestByAttentionLine = new Map<string, (typeof subscribedRows)[number]>();
   for (const row of subscribedRows) {
-    const key = `${row.humanAgentId}:${row.chatId}`;
-    const current = earliestByHumanChat.get(key);
+    const key = `${row.humanAgentId}:${row.delegateAgentId}:${row.chatId}`;
+    const current = earliestByAttentionLine.get(key);
     if (!current || row.boundAt < current.boundAt) {
-      earliestByHumanChat.set(key, row);
+      earliestByAttentionLine.set(key, row);
     }
   }
   // #766: A `pull_request.opened` delivery reaching a reviewer purely through
@@ -169,22 +172,29 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   // Scope is intentionally narrow: `pull_request` + `opened` only. `issues`
   // has no `review_requested`, and every other event (synchronize, review,
   // comment, …) is a legitimately distinct subscribed signal.
-  const isPullRequestOpened = event.rawEventType === "pull_request" && event.rawAction === "opened";
-  const involvedLogins = new Set(event.involves.map((i) => i.githubLogin.toLowerCase()));
+  const isPullRequestOpened = event.eventType === "pull_request" && event.action === "opened";
+  const involvedLogins = new Set(event.targets.map((target) => target.externalUsername.toLowerCase()));
   const keepSubscribedOpened = (row: (typeof subscribedRows)[number]): boolean => {
     if (!isPullRequestOpened) return true;
     if (isDeclaredBoundVia(row.boundVia)) return true;
     return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
   };
 
-  const subscribed: AudienceTarget[] = [...earliestByHumanChat.values()].filter(keepSubscribedOpened).map((row) => ({
-    humanAgentId: row.humanAgentId,
-    delegateAgentId: row.delegateAgentId,
-    kind: "existing",
-    chatId: row.chatId,
-    involveReason: null,
-    involveLogin: null,
-  }));
+  const subscribed: AudienceTarget[] = [...earliestByAttentionLine.values()]
+    .filter(keepSubscribedOpened)
+    .map((row) => ({
+      humanAgentId: row.humanAgentId,
+      delegateAgentId: row.delegateAgentId,
+      kind: "existing",
+      chatId: row.chatId,
+      involveReason: null,
+      involveLogin: null,
+      provenance: isDeclaredBoundVia(row.boundVia)
+        ? "explicit"
+        : row.boundVia === "fixes_link"
+          ? "related_entity"
+          : "identity_target",
+    }));
 
   const subscribedByHuman = new Map<string, AudienceTarget[]>();
   for (const target of subscribed) {
@@ -194,10 +204,10 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   }
 
   const involved: AudienceTarget[] = [];
-  if (event.involves.length > 0) {
-    const candidateLogins = event.involves.map((i) => i.githubLogin.toLowerCase());
+  if (event.targets.length > 0) {
+    const candidateLogins = event.targets.map((target) => target.externalUsername.toLowerCase());
     const reasonByLogin = new Map<string, InvolveReason>();
-    for (const i of event.involves) reasonByLogin.set(i.githubLogin.toLowerCase(), i.reason);
+    for (const target of event.targets) reasonByLogin.set(target.externalUsername.toLowerCase(), target.reason);
 
     const candidates = await db
       .select({

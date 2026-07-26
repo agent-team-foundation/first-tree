@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { CRON_POLLING_INTERVAL_MAX_SECONDS, CRON_POLLING_INTERVAL_MIN_SECONDS } from "../schemas/cron-job.js";
 import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
@@ -18,6 +19,60 @@ const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
     message: "Landing campaign runtime provider must be codex or claude-code",
   })
   .default("codex");
+
+const gitlabEgressAllowlistSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  },
+  z.array(
+    z
+      .object({
+        origin: z.string().transform((raw, ctx) => {
+          try {
+            const url = new URL(raw);
+            if (
+              url.protocol !== "https:" ||
+              url.username ||
+              url.password ||
+              url.pathname !== "/" ||
+              url.search ||
+              url.hash
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                message: "GitLab egress origin must be an exact credential-free HTTPS origin",
+              });
+              return z.NEVER;
+            }
+            return url.origin.toLowerCase();
+          } catch {
+            ctx.addIssue({ code: "custom", message: "GitLab egress origin must be a valid HTTPS origin" });
+            return z.NEVER;
+          }
+        }),
+        addressPolicy: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("public") }).strict(),
+          z.object({ kind: z.literal("cidrs"), cidrs: z.array(z.string().trim().min(1)).min(1) }).strict(),
+        ]),
+      })
+      .strict(),
+  ),
+);
+
+const googleOauthConfig = optional({
+  clientId: field(z.string().min(1), { env: "FIRST_TREE_GOOGLE_CLIENT_ID" }),
+  clientSecret: field(z.string().min(1), {
+    env: "FIRST_TREE_GOOGLE_CLIENT_SECRET",
+    secret: true,
+  }),
+});
 
 function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
   return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
@@ -40,9 +95,9 @@ export const serverConfigSchema = defineConfig({
   /**
    * Which release channel this server speaks to. Single switch that drives
    * every CLI-facing identifier emitted by the server:
-   *   - `prod`    → tells web/CLI to install `first-tree`           (bin `first-tree`)
-   *   - `staging` → tells web/CLI to install `first-tree-staging`   (bin `first-tree-staging`)
-   *   - `dev`     → no npm package; bootstrap commands skip `npm install -g`
+   *   - `prod`    → installs the portable `first-tree` binary
+   *   - `staging` → installs the portable `first-tree-staging` binary
+   *   - `dev`     → source-only `first-tree-dev` login command
    *
    * Set via `FIRST_TREE_CHANNEL` in the deployment env. Default `dev` makes
    * `pnpm --filter @first-tree/server dev` Just Work on a developer machine.
@@ -208,7 +263,18 @@ export const serverConfigSchema = defineConfig({
   // The server-managed Context Tree mirror mints a per-org GitHub App
   // installation token at request time (see `services/github-app-token.ts`);
   // no global token belongs here.
+  gitlab: optional({
+    /**
+     * Deployment-operator-owned outbound authorization for anonymous GitLab
+     * Context Tree snapshots. JSON array of exact HTTPS origins and either a
+     * public-address policy or explicit IPv4/IPv6 CIDRs. Empty means deny all.
+     */
+    egressAllowlist: field(gitlabEgressAllowlistSchema.default([]), {
+      env: "FIRST_TREE_GITLAB_EGRESS_ALLOWLIST",
+    }),
+  }),
   oauth: optional({
+    ...({ google: googleOauthConfig } as { google?: typeof googleOauthConfig }),
     /**
      * GitHub App credentials. A single App installation simultaneously
      * unlocks user-OAuth, the webhook stream, and installation-token
@@ -277,14 +343,9 @@ export const serverConfigSchema = defineConfig({
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
   connectBootstrap: {
     /**
-     * Fresh-machine bootstrap method returned by POST /me/connect-tokens.
-     * Defaults to npm for published channels until portable artifacts are
-     * fully promoted in production. Dev remains source-only regardless of
-     * this value because it has no published channel artifact.
+     * Base URL for prod/staging portable installers and artifacts. Mirrors
+     * may override it; dev remains source-only.
      */
-    method: field(z.enum(["npm", "portable"]).default("npm"), {
-      env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
-    }),
     portableDownloadBaseUrl: field(z.string().url().default("https://download.first-tree.ai/releases"), {
       env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
     }),
@@ -454,9 +515,12 @@ export const serverConfigSchema = defineConfig({
     runtimeSwitchFaultInjection: field(z.boolean().default(false), {
       env: "FIRST_TREE_RUNTIME_SWITCH_FAULT_INJECTION",
     }),
-    pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
-      env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
-    }),
+    pollingIntervalSeconds: field(
+      z.coerce.number().int().min(CRON_POLLING_INTERVAL_MIN_SECONDS).max(CRON_POLLING_INTERVAL_MAX_SECONDS).default(5),
+      {
+        env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
+      },
+    ),
     presenceCleanupSeconds: field(z.coerce.number().int().positive().default(60), {
       env: "FIRST_TREE_PRESENCE_CLEANUP_SECONDS",
     }),
@@ -470,9 +534,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
     }),
     /**
-     * Idle threshold for source=github chats. Mapped chats require every bound
-     * entity to be closed/merged; no-mapping source=github chats use this same
-     * threshold as an orphan/no-binding cleanup.
+     * Idle threshold for SCM-originated chats. Mapped chats require all GitHub
+     * mappings and active GitLab mappings to be closed/merged; no-mapping SCM
+     * chats use this same threshold as an orphan/no-binding cleanup.
      */
     archiveMappedIdleSeconds: field(
       z.coerce

@@ -1,7 +1,8 @@
 import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
-import type { EvalMetrics, FixtureValidation } from "./types.js";
+import type { EvalMetrics, FixtureValidation, ReadMode } from "./types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
+const READ_HELP_ARGV = ["tree", "read", "--help"];
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
 
 type FactMatcher = {
@@ -13,7 +14,7 @@ const FACT_MATCHERS: readonly FactMatcher[] = [
   {
     all: [
       /user\s+jwt/iu,
-      /(unified authorization surface|single authorization surface|single authorization model|统一[^。\n]*授权|统一[^。\n]*身份模型)/iu,
+      /((?:unified(?:\s+user\s+jwt)?|single)\s+authorization surface|single authorization model|统一[^。\n]*授权|统一[^。\n]*身份模型)/iu,
     ],
     fact: "User JWT auth is the unified authorization surface.",
   },
@@ -41,12 +42,26 @@ function argvEquals(left: readonly string[], right: readonly string[]): boolean 
   return true;
 }
 
+function commandArgv(argv: readonly string[]): readonly string[] {
+  return argv[0] === "--json" ? argv.slice(1) : argv;
+}
+
 function isHelpArgv(argv: readonly string[]): boolean {
-  return argvEquals(argv, HELP_ARGV);
+  return argvEquals(commandArgv(argv), HELP_ARGV);
+}
+
+function isReadHelpArgv(argv: readonly string[]): boolean {
+  return argvEquals(commandArgv(argv), READ_HELP_ARGV);
+}
+
+function isReadActivationArgv(argv: readonly string[]): boolean {
+  const command = commandArgv(argv);
+  return command[0] === "tree" && command[1] === "read" && !isReadHelpArgv(argv);
 }
 
 function isTreeTreeArgv(argv: readonly string[]): boolean {
-  return argv[0] === "tree" && argv[1] === "tree";
+  const command = commandArgv(argv);
+  return command[0] === "tree" && command[1] === "tree";
 }
 
 function isTreeSelectorArgv(argv: readonly string[]): boolean {
@@ -194,11 +209,15 @@ export function deriveMetrics(
 ): EvalMetrics {
   let firstTreeCalls = 0;
   let helpCalls = 0;
+  let readActivationCalls = 0;
   let skillFileReadObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCommandResults: Array<{ argv: string[]; exitCode: number }> = [];
   const helpExitCodes: number[] = [];
   const modelOutputTexts: string[] = [];
+  const readActivationResults: Array<{ exactCommit: string | null; exitCode: number }> = [];
+  const readHelpExitCodes: number[] = [];
+  const selectorSnapshotResults: Array<{ actualHead: string | null; detachedHead: boolean }> = [];
 
   for (const event of events) {
     if (containsSkillFileRead(event)) {
@@ -219,12 +238,30 @@ export function deriveMetrics(
         if (isHelpArgv(argv)) {
           helpCalls += 1;
         }
+        if (isReadActivationArgv(argv)) {
+          readActivationCalls += 1;
+        }
       }
 
       if (type === "first_tree_result" && typeof event.exitCode === "number") {
         firstTreeCommandResults.push({ argv: [...argv], exitCode: event.exitCode });
         if (isHelpArgv(argv)) {
           helpExitCodes.push(event.exitCode);
+        }
+        if (isReadHelpArgv(argv)) {
+          readHelpExitCodes.push(event.exitCode);
+        }
+        if (isReadActivationArgv(argv)) {
+          readActivationResults.push({
+            exactCommit: typeof event.exactCommit === "string" ? event.exactCommit : null,
+            exitCode: event.exitCode,
+          });
+        }
+        if (isTreeSelectorArgv(argv) && event.exitCode === 0) {
+          selectorSnapshotResults.push({
+            actualHead: typeof event.actualHead === "string" ? event.actualHead : null,
+            detachedHead: event.detachedHead === true,
+          });
         }
       }
     }
@@ -236,6 +273,36 @@ export function deriveMetrics(
   const selectionSucceeded = firstTreeCommandResults.some(
     (result) => isTreeSelectorArgv(result.argv) && result.exitCode === 0,
   );
+  const readActivationSucceeded =
+    readActivationCalls === 1 &&
+    readActivationResults.length === 1 &&
+    readActivationResults[0]?.exitCode === 0 &&
+    readActivationResults[0]?.exactCommit !== null;
+  const readHelpSucceeded = readHelpExitCodes.some((exitCode) => exitCode === 0);
+  const selectorCalls = firstTreeArgv.filter(isTreeSelectorArgv);
+  const byoSelectorsNoPull = selectorCalls.length > 0 && selectorCalls.every((argv) => argv.includes("--no-pull"));
+  const readHelpIndex = firstTreeArgv.findIndex(isReadHelpArgv);
+  const readActivationIndex = firstTreeArgv.findIndex(isReadActivationArgv);
+  const hierarchyHelpIndex = firstTreeArgv.findIndex(isHelpArgv);
+  const selectorIndexes = firstTreeArgv
+    .map((argv, index) => (isTreeSelectorArgv(argv) ? index : -1))
+    .filter((index) => index >= 0);
+  const byoReadSequenceOk =
+    readHelpIndex >= 0 &&
+    readActivationIndex > readHelpIndex &&
+    hierarchyHelpIndex > readActivationIndex &&
+    selectorIndexes.length > 0 &&
+    selectorIndexes.every((index) => index > hierarchyHelpIndex);
+  const exactCommit = readActivationResults.find((result) => result.exitCode === 0)?.exactCommit ?? null;
+  const byoSnapshotExactHeadConsistent =
+    exactCommit !== null &&
+    selectorSnapshotResults.length > 0 &&
+    selectorSnapshotResults.length === selectorCalls.length &&
+    selectorSnapshotResults.every((result) => result.actualHead === exactCommit);
+  const byoSnapshotDetached =
+    selectorSnapshotResults.length > 0 &&
+    selectorSnapshotResults.length === selectorCalls.length &&
+    selectorSnapshotResults.every((result) => result.detachedHead);
   const modelFirstTreeCommandsOk = firstTreeCommandResults.every((result) => result.exitCode === 0);
 
   return {
@@ -249,7 +316,14 @@ export function deriveMetrics(
     helpCalls,
     helpExitCodes,
     helpSucceeded,
+    byoReadSequenceOk,
+    byoSelectorsNoPull,
+    byoSnapshotDetached,
+    byoSnapshotExactHeadConsistent,
     modelFirstTreeCommandsOk,
+    readActivationCalls,
+    readActivationSucceeded,
+    readHelpSucceeded,
     runnerExitCode,
     selectionSucceeded,
     skillFileReadObserved,
@@ -257,17 +331,26 @@ export function deriveMetrics(
   };
 }
 
-export function casePassed(expectedTrigger: boolean, metrics: EvalMetrics): boolean {
+export function casePassed(expectedTrigger: boolean, metrics: EvalMetrics, readMode: ReadMode = "managed"): boolean {
   if (!metrics.fixtureValidationOk) return false;
   if (metrics.runnerExitCode !== 0) return false;
 
   if (expectedTrigger) {
+    const readModePassed =
+      readMode === "managed" ||
+      (metrics.readHelpSucceeded &&
+        metrics.readActivationSucceeded &&
+        metrics.byoReadSequenceOk &&
+        metrics.byoSelectorsNoPull &&
+        metrics.byoSnapshotDetached &&
+        metrics.byoSnapshotExactHeadConsistent);
     return (
       metrics.skillFileReadObserved &&
       metrics.expectedFactsObserved &&
       metrics.helpSucceeded &&
       metrics.selectionSucceeded &&
-      metrics.modelFirstTreeCommandsOk
+      metrics.modelFirstTreeCommandsOk &&
+      readModePassed
     );
   }
 

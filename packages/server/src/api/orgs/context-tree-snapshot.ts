@@ -13,11 +13,10 @@ import {
 import { findInstallationByOrg } from "../../services/github-app-installations.js";
 import {
   type ContextTreeInstallationTokenResult,
-  decorateSnapshotWithMintGuidance,
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../../services/github-app-token.js";
-import { getOrgContextTree } from "../../services/org-settings.js";
+import { getOrgContextReviewRuntime, isOrgContextTreeBindingRuntimeCurrent } from "../../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../../services/session-event.js";
 
 const querySchema = z
@@ -31,9 +30,14 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     const timing = createTimingCollector();
     const query = timing.timeSync("parse_query", () => querySchema.parse(request.query));
     const scope = await timing.time("auth", () => requireOrgMembership(request, app.db));
-    const binding: ContextTreeBinding = await timing.time("binding", () =>
-      getOrgContextTree(app.db, scope.organizationId),
+    const reviewRuntime = await timing.time("context_tree_runtime", () =>
+      getOrgContextReviewRuntime(app.db, scope.organizationId),
     );
+    const binding: ContextTreeBinding = {
+      ...(reviewRuntime.provider ? { provider: reviewRuntime.provider } : {}),
+      ...(reviewRuntime.repo ? { repo: reviewRuntime.repo } : {}),
+      ...(reviewRuntime.branch ? { branch: reviewRuntime.branch } : {}),
+    };
     let mintResult: ContextTreeInstallationTokenResult | null = null;
     if (isGithubRemoteBinding(binding)) {
       mintResult = await timing.time("github_token", async () => {
@@ -43,13 +47,20 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     }
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
     const window = query.window ?? "7d";
-    const rawSnapshot = await timing.time("snapshot_build", () =>
-      getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
+    const snapshot = await timing.time("snapshot_build", () =>
+      getContextTreeSnapshot({ ...binding, githubToken }, window, {
+        timing: timing.add,
+        gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin,
+        gitlabEgressAllowlist: app.config.gitlab?.egressAllowlist ?? [],
+        gitlabExecutionGuard:
+          reviewRuntime.provider === "gitlab"
+            ? () => isOrgContextTreeBindingRuntimeCurrent(app.db, scope.organizationId, reviewRuntime)
+            : undefined,
+      }),
     );
-    const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
     // Probe (only on the unavailable + GitHub-remote + minted path) whether the
-    // App genuinely can't read the repo, so the Context tab can offer the "add
-    // repo to the App" recovery without misdirecting other unavailable causes.
+    // App genuinely cannot read the repo. Keep the structured diagnosis for API
+    // compatibility and observability; the Context tab routes recovery to chat.
     const recoveryAction = mintResult
       ? await timing.time("github_recovery", () => resolveContextTreeRecoveryAction(snapshot, binding, mintResult))
       : null;

@@ -179,6 +179,7 @@ async function consumeCodexStdout(
     try {
       const event = JSON.parse(line);
       appendEvent(eventsPath, {
+        cwd: context.paths.workspacePath,
         event,
         type: "codex_event",
       });

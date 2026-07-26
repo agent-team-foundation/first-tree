@@ -142,6 +142,11 @@ describe("codex provider runner hardening", () => {
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
+            cwd: context.paths.workspacePath,
+            event: expect.objectContaining({ type: "turn.completed" }),
+            type: "codex_event",
+          }),
+          expect.objectContaining({
             argv: ["github", "issue", "list"],
             phase: "model",
             type: "first_tree_call",

@@ -3,6 +3,7 @@ import {
   attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
+  CRON_TRIGGER_METADATA_KEY,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
@@ -15,7 +16,7 @@ import {
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -35,10 +36,10 @@ const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
 
 /**
- * Metadata keys reserved for server-owned write paths. Stripped from caller
- * input so an HTTP POST cannot smuggle a UI-trust marker into a regular
- * message — see the `allowSystemSender` field on `SendMessageOptions` for the
- * `systemSender` threat model.
+ * Metadata keys reserved for server-owned write paths. UI-only markers are
+ * stripped from caller input; publication-authority markers fail closed so an
+ * HTTP POST cannot smuggle them into a regular message. See the matching
+ * trusted-internal fields on `SendMessageOptions` for each threat model.
  *
  * Returns the same reference when nothing is stripped, so the common case
  * (no reserved keys present) does not allocate.
@@ -47,15 +48,33 @@ function stripUntrustedMetadataKeys(
   meta: Record<string, unknown>,
   options: SendMessageOptions,
 ): Record<string, unknown> {
+  const contextReviewKey = Object.keys(meta).find(
+    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
+  );
+  if (contextReviewKey && !options.allowContextReviewRun) {
+    throw new BadRequestError(
+      `Metadata key "${contextReviewKey}" is reserved for server-authored Context Reviewer runs.`,
+    );
+  }
+  if (CRON_TRIGGER_METADATA_KEY in meta && !options.allowCronTrigger) {
+    throw new BadRequestError(
+      `Metadata key "${CRON_TRIGGER_METADATA_KEY}" is reserved for server-authored scheduled job triggers.`,
+      { code: "CRON_TRIGGER_METADATA_RESERVED" },
+    );
+  }
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
   const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
   const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
-  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin) return meta;
+  const shouldStripEditedAt = "editedAt" in meta;
+  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin && !shouldStripEditedAt) {
+    return meta;
+  }
   return Object.fromEntries(
     Object.entries(meta).filter(
       ([key]) =>
         key !== ADDRESSED_AGENT_IDS_METADATA_KEY &&
         key !== CLI_BODY_ORIGIN_METADATA_KEY &&
+        key !== "editedAt" &&
         (options.allowSystemSender || key !== "systemSender"),
     ),
   );
@@ -177,10 +196,17 @@ function validateMessageContent(
     validateFileContent(data.content);
     return;
   }
+  if (data.format === "request") {
+    if (typeof data.content !== "string") {
+      throw new BadRequestError("Invalid request message content: expected a non-empty text question.");
+    }
+    validateTextBody(data.content, true);
+    return;
+  }
   // Non-string content (card / reference object shapes) is out of scope here;
   // only string-bearing bodies are guarded against empty / placeholder sends.
   if (typeof data.content === "string") {
-    validateTextBody(data.content, data.format === "request", opts?.hasAttachmentRefs === true);
+    validateTextBody(data.content, false, opts?.hasAttachmentRefs === true);
   }
 }
 
@@ -231,6 +257,19 @@ export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
   recipients: string[];
+  /**
+   * Present only when an internal caller explicitly defers effects until its
+   * own outer transaction commits. Pass this to
+   * `runDeferredSendMessagePostCommitEffects` exactly once after commit.
+   */
+  deferredPostCommitEffects?: DeferredSendMessagePostCommitEffects;
+};
+
+export type DeferredSendMessagePostCommitEffects = {
+  chatId: string;
+  messageId: string;
+  organizationId: string;
+  recipientAgentIds: string[];
 };
 
 export type SendMessageOptions = {
@@ -254,14 +293,26 @@ export type SendMessageOptions = {
    * This option is the **only** other escape hatch, reserved for trusted
    * server-internal delivery paths whose addressing is owned and validated by
    * the caller and **can legitimately resolve to no live speaker for some
-   * events** — today only `github-delivery.deliverNormalizedEvent`, whose card
-   * addressing (`addressedToAgentIds` derived from the audience row) may name a
-   * delegate that is not a speaker of the bound chat. Such a send writes a
+   * events** — currently the trusted GitHub/GitLab SCM card dispatchers. Their
+   * provider-owned audience may resolve to a card with no live speaker wake
+   * target in the bound chat. Such a send writes a
    * silent history/context row for human observers rather than reaching an
    * inbox. Set it only on a path you have audited; never thread it through an
    * HTTP boundary.
    */
   allowRecipientlessSend?: boolean;
+  /**
+   * Trusted-internal opt-in that drops suspended or deleted participants from
+   * `metadata.mentions` instead of rejecting the entire send. SCM mappings can
+   * outlive a wake agent's active lifecycle; their cards must still reach the
+   * bound chat and any other active wake agents without a stale sibling line
+   * poisoning the shared delivery. The normalized metadata persists only the
+   * surviving active mentions.
+   *
+   * Keep this off for ordinary human/agent sends: an explicitly addressed
+   * inactive recipient is normally a caller error that should fail closed.
+   */
+  dropInactiveMentionTargets?: boolean;
   /**
    * When true and `data.content` is a string, prepend `@<name>` tokens for
    * any participant in `metadata.mentions` whose name is missing from the
@@ -286,32 +337,39 @@ export type SendMessageOptions = {
    */
   addressedToAgentIds?: readonly string[];
   /**
-   * Agent IDs to **exclude from the notify (wake) set** even when they would
-   * otherwise be woken via `metadata.mentions` or `addressedToAgentIds`.
-   * Generic trusted-delivery capability, decoupled from `senderId`: the
-   * suppressed agent still receives a `notify=false` inbox row (the message
-   * still lands in history / replays as context), it is simply not woken.
-   *
-   * This is intentionally generic and decoupled from `senderId`; a trusted
-   * dispatcher can keep attribution chat-local while excluding specific agents
-   * from wake. `purpose === "agent-final-text"` still forces silent for
-   * everyone; this only narrows the notify set within the non-silenced branch.
-   */
-  suppressNotifyAgentIds?: readonly string[];
-  /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
-   * uses that key to re-attribute a row to a synthetic "GitHub" sender
+   * uses that key to re-attribute a row to a synthetic SCM provider sender
    * (avatar + name override) instead of the row's actual `senderId`. To
    * prevent a non-dispatcher caller (HTTP POST from web / agent SDK) from
    * smuggling the same marker into an ordinary message — which would let
-   * an arbitrary agent post a phishing message that renders as if from
-   * GitHub — the service unconditionally strips the key from
-   * `data.metadata` when this option is not set. Only
-   * `github-delivery.deliverNormalizedEvent` is expected to set this to
-   * `true`. Defense-in-depth alongside the conjunctive UI trust gate in
-   * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
+   * an arbitrary agent post a phishing message that renders as if from a
+   * provider — the service unconditionally strips the key from
+   * `data.metadata` when this option is not set. Only the trusted GitHub/GitLab
+   * card dispatchers are expected to set this to `true`. Defense-in-depth
+   * alongside each provider card's conjunctive UI trust gate.
    */
   allowSystemSender?: boolean;
+  /**
+   * Trusted-internal capability for creating a Context Reviewer run message.
+   * The `contextTreeReviewer` and `contextReview*` metadata namespace carries
+   * publication authority and is rejected at every ordinary message boundary.
+   * Only the GitHub App Context Reviewer webhook dispatcher may set this option.
+   */
+  allowContextReviewRun?: boolean;
+  /**
+   * Trusted-internal capability for materializing a scheduled job trigger
+   * message. The `cronTrigger` metadata namespace is rejected at every
+   * ordinary message boundary.
+   */
+  allowCronTrigger?: boolean;
+  /**
+   * Trusted-internal escape hatch for a send performed inside an existing
+   * outer database transaction. When enabled, session activation and the
+   * workspace kick are returned as a descriptor instead of running before
+   * that outer transaction commits. The caller MUST flush the descriptor
+   * with `runDeferredSendMessagePostCommitEffects` after commit.
+   */
+  deferPostCommitEffects?: boolean;
 };
 
 export type SendIntentParticipant = {
@@ -363,9 +421,7 @@ export function preflightMessageSendIntent(input: {
   // placeholder body after `maybeUnwrapDoubleEncoded`. `effectiveContent` is
   // what gets normalized and persisted, so guard it here too — before mention
   // normalization can salvage an empty body into a bare "@name".
-  if (typeof effectiveContent === "string") {
-    validateTextBody(effectiveContent, data.format === "request", hasAttachmentRefs);
-  }
+  validateMessageContent({ format: data.format, content: effectiveContent }, { hasAttachmentRefs });
 
   const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
   validateDocumentContext(incomingMeta);
@@ -380,7 +436,12 @@ export function preflightMessageSendIntent(input: {
     ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
     : [];
   const participantsById = new Map(participants.map((p) => [p.agentId, p]));
-  const explicitMentions = explicitMentionsRawList.filter((id) => id === senderId || participantsById.has(id));
+  const explicitMentions = explicitMentionsRawList.filter((id) => {
+    if (id === senderId) return true;
+    const participant = participantsById.get(id);
+    if (!participant) return false;
+    return !options.dropInactiveMentionTargets || participant.status === "active";
+  });
 
   const receiverNames = data.receiverNames ?? [];
   const speakersByName = new Map<string, string>();
@@ -445,25 +506,26 @@ export function preflightMessageSendIntent(input: {
         skipMentionEnforcement: false,
         forceSilentFanOut: false,
       };
-  const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
-
   // Persist the notify-worthy live non-human agents — the recipients whose
   // sessions the send is expected to wake. `mentions` only carries explicit @s /
   // receiverNames, NOT system `addressedToAgentIds` routing (e.g. onboarding
   // kickoff bootstrap), so a surface that needs to know who a turn awaits a
   // reply from can't rely on `mentions` alone. This projection is server-owned
-  // and mirrors fan-out notify semantics: final-text and suppressed recipients
-  // are silent context, not awaited agents.
+  // and mirrors fan-out notify semantics: final-text recipients are silent
+  // context, not awaited agents.
   const addressedAgentIds = !purposeProfile.forceSilentFanOut
     ? [...routedRecipientIds].filter((id) => {
-        if (suppressNotifySet.has(id)) return false;
         const participant = participantsById.get(id);
         return participant !== undefined && participant.status === "active" && participant.type !== "human";
       })
     : [];
   const metadataToStore: Record<string, unknown> = {
     ...incomingMeta,
-    ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
+    ...(options.dropInactiveMentionTargets
+      ? { mentions: mergedMentions }
+      : mergedMentions.length > 0
+        ? { mentions: mergedMentions }
+        : {}),
     ...(addressedAgentIds.length > 0 ? { [ADDRESSED_AGENT_IDS_METADATA_KEY]: addressedAgentIds } : {}),
   };
 
@@ -654,7 +716,8 @@ async function sendMessageInner(
       options,
       participants,
     });
-    const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+    const { content: outboundContent, metadata: preparedMetadata, mentionedAgentIds: mergedMentions } = prepared;
+    const metadataToStore = preparedMetadata;
 
     assertLandingCampaignTrialMessageAllowed({
       chat: chatRow,
@@ -712,9 +775,6 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
-    // Generic wake-exclusion: agents here still get a `notify=false` inbox
-    // row (message lands), they are just not woken. Decoupled from `senderId`.
-    const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -725,10 +785,7 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify:
-          !prepared.forceSilentFanOut &&
-          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)) &&
-          !suppressNotifySet.has(p.agentId),
+        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {
@@ -913,36 +970,58 @@ async function sendMessageInner(
     };
   });
 
-  // Predictive session-state activation: after the main transaction commits,
-  // best-effort upsert an `active` agent_chat_sessions row for every notify=true
-  // recipient so the First Tree UI list refreshes immediately on send (see M-plan
-  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to First Tree UI,
-  // touchPresenceLastSeen=false avoids polluting the client's heartbeat).
-  // Failure is logged but never thrown: the message is durable, and the
-  // client's later `session:state: active` frame self-heals the row.
+  const postCommitEffects: DeferredSendMessagePostCommitEffects = {
+    chatId,
+    messageId: txResult.message.id,
+    organizationId: txResult.organizationId,
+    recipientAgentIds: txResult.recipientAgentIds,
+  };
+  if (!options.deferPostCommitEffects) {
+    await runDeferredSendMessagePostCommitEffects(db, postCommitEffects);
+  }
+
+  return {
+    message: txResult.message,
+    recipients: txResult.recipients,
+    ...(options.deferPostCommitEffects ? { deferredPostCommitEffects: postCommitEffects } : {}),
+  };
+}
+
+/**
+ * Run the non-transactional effects for a durable message. Ordinary sends call
+ * this immediately after their own transaction commits. A caller that sent
+ * through an existing outer transaction uses the deferred descriptor and
+ * invokes this helper only after that outer transaction has committed.
+ */
+export async function runDeferredSendMessagePostCommitEffects(
+  db: Database,
+  effects: DeferredSendMessagePostCommitEffects,
+): Promise<void> {
+  // Predictive session-state activation: best-effort upsert an `active`
+  // agent_chat_sessions row for every notify=true recipient so the First Tree
+  // UI list refreshes immediately on send. Failure is logged but never thrown:
+  // the message is durable, and a later session-state frame self-heals the row.
   const settled = await Promise.allSettled(
-    txResult.recipientAgentIds.map((agentId) =>
-      upsertSessionState(db, agentId, chatId, "active", txResult.organizationId, undefined, {
+    effects.recipientAgentIds.map((agentId) =>
+      upsertSessionState(db, agentId, effects.chatId, "active", effects.organizationId, undefined, {
         touchPresenceLastSeen: false,
       }),
     ),
   );
   for (let i = 0; i < settled.length; i++) {
-    const r = settled[i];
-    if (r?.status === "rejected") {
+    const result = settled[i];
+    if (result?.status === "rejected") {
       log.error(
-        { err: r.reason, chatId, agentId: txResult.recipientAgentIds[i] },
+        { err: result.reason, chatId: effects.chatId, agentId: effects.recipientAgentIds[i] },
         "predictive session activation failed",
       );
     }
   }
 
   // Best-effort chat-first workspace kick — speakers also get the existing
-  // inbox NOTIFY; this is what reaches watcher rows (no inbox entry → no
-  // wake-up otherwise). Failure is dropped; web reconnect refetches.
-  fireChatMessageKick(chatId, txResult.message.id);
-
-  return { message: txResult.message, recipients: txResult.recipients };
+  // inbox NOTIFY; this reaches watcher rows with no inbox entry. Failure is
+  // dropped; web reconnect refetches.
+  fireChatMessageKick(effects.chatId, effects.messageId);
 }
 
 /**
@@ -986,6 +1065,12 @@ export async function editMessage(
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
   if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
+  const protectedContextReviewKey = Object.keys(msg.metadata).find(
+    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
+  );
+  if (protectedContextReviewKey) {
+    throw new ForbiddenError("Context Reviewer run history cannot be edited");
+  }
 
   // The open-question counter (`open_request_count`) is maintained only on the
   // send path, keyed off `format=request`. Allowing an edit to flip a message
@@ -1024,33 +1109,71 @@ export async function editMessage(
     setClause.content = effectiveContent;
   }
 
-  // Track edit in metadata
-  const meta = (msg.metadata ?? {}) as Record<string, unknown>;
-  meta.editedAt = new Date().toISOString();
-  setClause.metadata = meta;
+  // Patch only the edit timestamp in Postgres so concurrent server-owned
+  // metadata transitions cannot be overwritten by a stale read of the row.
+  setClause.metadata = sql`jsonb_set(${messages.metadata}, '{editedAt}', ${JSON.stringify(
+    new Date().toISOString(),
+  )}::jsonb)`;
 
   const [updated] = await db.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return updated;
 }
 
+/**
+ * Opaque message-history cursor. The base64url envelope is safe to copy into
+ * `chat history --cursor` without shell quoting; the id is the deterministic
+ * tie-breaker for messages that share one cursor millisecond.
+ */
+function parseMessageHistoryCursor(cursor: string): { date: Date; id: string } {
+  let decoded = "";
+  if (/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") === cursor) decoded = bytes.toString("utf8");
+  }
+  const [version, iso, id, ...extra] = decoded.split("|");
+  const date = new Date(iso ?? "");
+  if (version !== "v1" || Number.isNaN(date.getTime()) || !id || extra.length > 0) {
+    throw new BadRequestError("cursor must be the nextCursor value from a previous message-history page");
+  }
+  return { date, id };
+}
+
+export function messageHistoryWhere(chatId: string, cursor?: string) {
+  if (!cursor) return eq(messages.chatId, chatId);
+  const { date, id } = parseMessageHistoryCursor(cursor);
+  return and(
+    eq(messages.chatId, chatId),
+    sql`(date_trunc('milliseconds', ${messages.createdAt}), ${messages.id}) < (${date.toISOString()}::timestamptz, ${id}::text)`,
+  );
+}
+
+export function messageHistoryOrderBy() {
+  // Postgres preserves microseconds while JS Date/ISO retains milliseconds.
+  // Compare and order on the same truncated expression so a boundary cursor
+  // cannot skip rows whose raw timestamps differ inside one millisecond.
+  return [sql`date_trunc('milliseconds', ${messages.createdAt}) DESC`, desc(messages.id)] as const;
+}
+
+export function encodeMessageHistoryCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`v1|${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
 export async function listMessages(db: Database, chatId: string, limit: number, cursor?: string) {
-  const where = cursor
-    ? and(eq(messages.chatId, chatId), lt(messages.createdAt, new Date(cursor)))
-    : eq(messages.chatId, chatId);
+  const where = messageHistoryWhere(chatId, cursor);
 
   const query = db
     .select()
     .from(messages)
     .where(where)
-    .orderBy(desc(messages.createdAt))
+    .orderBy(...messageHistoryOrderBy())
     .limit(limit + 1);
 
   const rows = await query;
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items[items.length - 1];
-  const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+  const nextCursor = hasMore && last ? encodeMessageHistoryCursor(last.createdAt, last.id) : null;
 
   return { items, nextCursor };
 }

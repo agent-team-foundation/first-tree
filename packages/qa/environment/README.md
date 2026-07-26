@@ -1,6 +1,7 @@
 # Environment Recipes
 
-Formal QA runs use a disposable run cell so validation does not mutate the operator's checkout or shared local services.
+Formal First Tree QA uses a complete, disposable Docker-backed harness so validation does not mutate the operator's
+checkout or shared services.
 
 ## Temporary Source Worktree
 
@@ -14,55 +15,53 @@ git clone --bare --no-hardlinks <source-repo> "$RUN_ROOT_REAL/repo.git"
 git --git-dir="$RUN_ROOT_REAL/repo.git" worktree add --detach "$RUN_ROOT_REAL/source" <target-ref>
 ```
 
-`realpath` is intentional: on macOS `/tmp` normally resolves through `/private/tmp`, and git writes absolute gitdir paths
-for worktrees. Mounting the unresolved path into Docker can leave containerized git commands pointing at a path that does
-not exist.
+`realpath` matters on macOS because `/tmp` normally resolves through `/private/tmp` and git stores absolute worktree
+paths. Mount the resolved root at the same absolute path inside containers.
 
-This recipe materializes committed refs only. Uncommitted changes in a developer checkout are silently omitted unless
-they are first committed, stashed into a ref, or otherwise materialized as the `<target-ref>`. If the requested target
-depends on uncommitted local state that cannot be reproduced in the run cell, mark the run `BLOCKED` or explicitly report
-the limitation instead of claiming full validation.
+This recipe materializes committed refs only. If requested behavior depends on unreproducible local state, report the
+limitation or `BLOCKED`; never silently test a different target.
 
-Mount the resolved run root at the same absolute path inside containers when host and container artifact paths need to
-match.
+## Complete Docker Run Cell
 
-## Docker Run Cell
+- Use a unique Compose/project prefix and run-local networks, volumes, homes, ports, and data.
+- Build and start the complete First Tree product surface: final CLI/package artifacts, production Server/Web image and
+  Postgres, documentation, portable artifacts, runtime/daemon paths, and other shipped surfaces discovered at the ref.
+- Bind public endpoints to loopback and discover dynamic host ports after startup.
+- Do not expose Postgres, artifacts, provider homes, runtime homes, or host credential stores.
+- Use native or platform bridges for artifacts that cannot execute credibly in Linux Docker; keep their state run-local.
+- Define reset and cleanup for every surface before declaring readiness.
 
-Use Docker for product services that are part of the tested behavior.
-
-Principles:
-
-- run only the services required by the selected QA scope;
-- keep state in run-local volumes or run-root subdirectories;
-- use a unique Compose project name per run;
-- bind web/server ports to loopback by default and discover actual ports after startup;
-- do not expose Postgres, artifact directories, provider homes, runtime homes, or host credential stores.
-
-Common service shapes:
-
-- CLI or docs behavior: source worktree plus a command runner.
-- API behavior: Postgres plus server.
-- Web behavior: Postgres, server, web, and browser tooling.
-- Runtime behavior: runtime runner plus provider bridge, only when real agent behavior is in scope.
+The task scope is chosen after the cell reaches `QA READY`; it does not decide which formal surfaces are initialized.
 
 ## Provider Bridge
 
-Provider state can be an input to runtime QA, but it must be bridged deliberately.
+Classify provider readiness as `binary-detected`, `binary-launchable`, or `one-turn-ready`. A provider-backed product
+operation requires `one-turn-ready`; a binary probe alone cannot prove real agent behavior.
 
-Readiness levels:
+Discover host state first, bridge only the minimum required material, prefer read-only copies/mounts, and use a compatible
+runtime binary for the target platform. Never mount a full host provider home writable. Missing auth, entitlement,
+compatible binaries, or authorized turn capacity is `BLOCKED`, not product `FAIL`.
 
-- `binary-detected`: a provider binary or bundled source is detected.
-- `binary-launchable`: the provider binary can start, or provider doctor/smoke checks pass.
-- `one-turn-ready`: provider auth and runtime session state are sufficient for a real agent turn.
+## Mock GitHub App
 
-Real agent behavior cases require `one-turn-ready`.
+The GitHub App surface (install-url, installation-token minting, repository catalog, signed webhook ingest) needs a
+configured App. A real App/webhook secret is often unavailable in an isolated cell, so a run may report those sub-areas
+`BLOCKED`, or mock them to validate First Tree's own request/parse/verify logic. Reusable assets live in
+`fixtures/github-app/` (mock REST API + webhook payloads + full recipe).
 
-Boundary:
+- The five core credentials — `FIRST_TREE_GITHUB_APP_ID`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`,
+  `_WEBHOOK_SECRET` — are an atomic block: set them together or the server rejects the config at boot. `_SLUG` is separate
+  — optional at boot, required only for `install-url`. A clean boot omits the "GitHub App not configured" log line and the
+  webhook route stops returning its 501 stub.
+- Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. Pass the multi-line
+  PEM via a shell export, or a quoted `--env-file` value (Node 22.13+ supports quoted multi-line env values) — the export
+  just avoids the quoting/escaping fuss.
+- Redirect REST calls with `FIRST_TREE_GITHUB_API_BASE_URL` set to a URL the server can reach (`localhost` only if the
+  mock shares the server's container; otherwise the compose service name or `host.docker.internal`). The mock answers two
+  endpoints only (token + repos), so paths needing other GitHub REST — a real `follow`'s `/repos/:o/:r` +
+  `/repos/:o/:r/issues/:n`, OAuth, org repos — fall through and stay out of scope.
+- Sign webhooks with `x-hub-signature-256: sha256=<HMAC-SHA256(webhook_secret, raw_body)>` and set `x-github-event` /
+  `x-github-delivery`. This exercises signature verification, record-only install recording, and delivery-id dedup.
 
-- discover host provider state first;
-- copy or read-only mount only the minimum credential material needed for the run;
-- use a Linux-compatible provider binary inside Docker;
-- do not assume a macOS or Windows host binary can run inside the container;
-- do not mount the full host provider home as writable shared state.
-
-Missing provider/auth readiness is `BLOCKED`, not product `FAIL`.
+A mock proves the deployment's request/parse/verify wiring, not github.com's live responses; the real install dialog and
+full followed-chat card delivery stay out of an isolated cell.

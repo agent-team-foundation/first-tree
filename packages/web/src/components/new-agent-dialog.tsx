@@ -10,7 +10,7 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
+import { type ConnectTokenResponse, getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -141,7 +141,15 @@ async function resolveAvailableHandle(base: string, isStale: () => boolean): Pro
  * doesn't know about yet — the UI just ignores anything it can't render.
  */
 function asRuntimeProvider(provider: string): RuntimeProvider | null {
-  if (provider === "claude-code" || provider === "claude-code-tui" || provider === "codex") return provider;
+  if (
+    provider === "claude-code" ||
+    provider === "claude-code-tui" ||
+    provider === "codex" ||
+    provider === "cursor" ||
+    provider === "kimi-code"
+  ) {
+    return provider;
+  }
   return null;
 }
 
@@ -159,6 +167,9 @@ function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null 
   // DISABLED_RUNTIME_PROVIDERS restores its priority over Codex in one line.
   if (isRuntimeProviderEnabled("claude-code-tui") && caps["claude-code-tui"]?.state === "ok") return "claude-code-tui";
   if (caps.codex?.state === "ok") return "codex";
+  // Same central-switch guard as the TUI line: a stale `ok` snapshot from a
+  // daemon must not auto-pick a provider that has since been disabled.
+  if (isRuntimeProviderEnabled("cursor") && caps.cursor?.state === "ok") return "cursor";
   // Any other provider (incl. one still disabled in a stale snapshot) is only
   // auto-picked when enabled.
   for (const [provider, entry] of Object.entries(caps)) {
@@ -174,6 +185,8 @@ function prettyRuntimeLabel(provider: RuntimeProvider): string {
   if (provider === "claude-code") return "Claude Code";
   if (provider === "claude-code-tui") return "Claude Code CLI";
   if (provider === "codex") return "Codex";
+  if (provider === "cursor") return "Cursor";
+  if (provider === "kimi-code") return "Kimi Code";
   return provider;
 }
 
@@ -237,8 +250,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // generate one when 0 clients are connected; the dialog then shows the
   // real channel-aware install/login command instead of a useless
   // bare-command hint (codex review caught this). We hold the full
-  // bootstrap string from the server response so the package and CLI names stay
-  // a server-side concern — if it ever changes the dialog won't drift.
+  // bootstrap string from the server response so installer URLs and CLI names
+  // stay a server-side concern — if either changes the dialog won't drift.
   const [connectToken, setConnectToken] = useState<string | null>(null);
   const [connectCommand, setConnectCommand] = useState<string | null>(null);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
@@ -461,10 +474,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number; command: string; bootstrapCommand: string }>(
-          "/me/connect-tokens",
-          {},
-        );
+        const r = await api.post<ConnectTokenResponse>("/me/connect-tokens", {});
         if (cancelled) return;
         setConnectToken(r.token);
         setConnectCommand(r.bootstrapCommand);
@@ -732,7 +742,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Visible to your team</div>
                   <div className="text-caption text-muted-foreground">
-                    Anyone on your team can @mention and chat with it.
+                    Anyone on your team can @mention it and start work with it — it runs on your computer and uses your
+                    plan.
                   </div>
                 </div>
               </OptionCard>
@@ -855,8 +866,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 function NoOkRuntimeBlock() {
   return (
     <p className="text-caption text-destructive">
-      No runtime installed on this computer. Install Claude Code or Codex on it — open this computer&apos;s setup card
-      in Settings → Computers for the install command — then come back.
+      No runtime installed on this computer. Upgrade First Tree for bundled Kimi Code, or install Claude Code, Codex, or
+      Cursor — open this computer&apos;s setup card in Settings → Computers, then come back.
     </p>
   );
 }
@@ -886,12 +897,13 @@ function ZeroComputerBlock({
         Run this on the machine where this agent should live. We&apos;ll pick it up here automatically.
       </div>
       <div className="flex items-stretch gap-2 min-w-0">
-        <code
-          className="block flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded-[var(--radius-input)]"
+        <pre
+          className="m-0 flex-1 min-w-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded-[var(--radius-input)]"
           title={command ?? undefined}
+          style={{ overflowWrap: "anywhere" }}
         >
-          {command ?? "Generating token…"}
-        </code>
+          <code>{command ?? "Generating token…"}</code>
+        </pre>
         <Button type="button" variant="outline" size="sm" onClick={onCopy} disabled={!command} className="shrink-0">
           {copied ? "Copied" : "Copy"}
         </Button>

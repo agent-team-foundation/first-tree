@@ -30,6 +30,8 @@ const RUNTIME_NAME: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
   "claude-code-tui": "Claude Code CLI",
   codex: "Codex",
+  cursor: "Cursor",
+  "kimi-code": "Kimi Code",
 };
 
 export function RuntimeSection(props: RuntimeSectionProps) {

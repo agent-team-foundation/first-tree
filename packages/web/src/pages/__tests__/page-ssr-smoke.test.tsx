@@ -295,6 +295,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? ["agent-1"],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? true,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -598,8 +600,14 @@ function createClient(): QueryClient {
       topic: "Launch planning",
     },
   ]);
-  queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], {
-    rows: [
+  // The rail reads via `useInfiniteQuery`, so seed the `InfiniteData` shape.
+  const meInfinite = (rows: ReturnType<typeof chatRow>[]) => ({
+    pages: [{ rows, nextCursor: null }],
+    pageParams: [undefined],
+  });
+  queryClient.setQueryData(
+    ["me", "chats", "all", "active", false, null, null],
+    meInfinite([
       chatRow(),
       chatRow({
         chatId: "chat-2",
@@ -609,22 +617,21 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
         lastMessageAt: "2026-05-27T09:00:00.000Z",
         lastMessagePreview: "Looks good.",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   // The triad is single-select: rendering with both `unread` + `watching`
   // canonicalizes to Unread, so the component requests watchingParam=false
   // (the 5th key slot) even though the smoke render passes both.
-  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], {
-    rows: [chatRow()],
-    nextCursor: null,
-  });
-  queryClient.setQueryData(["me", "chats", "all", "archived", false, null, null], {
-    rows: [
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], meInfinite([chatRow()]));
+  queryClient.setQueryData(
+    ["me", "chats", "all", "archived", false, null, null],
+    meInfinite([
       chatRow({
         chatId: "chat-2",
         title: "Archived design review",
@@ -633,15 +640,18 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   queryClient.setQueryData(["chat-detail", "chat-1"], chatDetail());
   queryClient.setQueryData(["chat-messages-cache", "chat-1"], CHAT_MESSAGES.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", "chat-1"], CHAT_MESSAGES);
-  queryClient.setQueryData(["session-events", "agent-1", "chat-1"], SESSION_EVENTS);
+  queryClient.setQueryData(["chat-session-events", "chat-1"], {
+    feeds: [{ agentId: "agent-1", ...SESSION_EVENTS }],
+  });
   queryClient.setQueryData(["chat-read-state", "chat-1"], {
     chatId: "chat-1",
     bottomVisibleMessageId: "msg-1",
@@ -738,6 +748,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     activeStep,
     goNext: () => undefined,
     goTo: () => undefined,
+    reportStepFailure: () => undefined,
     organizationId: "org-1",
     memberId: "member-self",
     role: path === "admin" ? "admin" : "member",
@@ -750,7 +761,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
       okRuntimes: ["claude-code", "codex"],
       selectedRuntime: "claude-code",
       setSelectedRuntime: () => undefined,
-      cliCommand: "npm install -g first-tree\nfirst-tree login connect-token",
+      cliCommand:
+        "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+        "~/.local/bin/first-tree login connect-token",
       tokenError: null,
       retry: () => undefined,
     },
@@ -773,7 +786,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     setTreeUrl: () => undefined,
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: () => undefined,
+    offerTeamAgentStart: false,
     completeAndEnterChat: async () => undefined,
+    skipAndEnterChat: async () => undefined,
     finishLater: async () => undefined,
   };
   return {
@@ -928,25 +943,32 @@ describe("page SSR smoke coverage", () => {
     const { ClientsPage } = await import("../clients.js");
     const { LandingPage } = await import("../landing/index.js");
     const { SettingsComputersPage } = await import("../settings/computers.js");
-    const { SettingsContextTreePage } = await import("../settings/context-tree.js");
     const { SettingsGithubPage } = await import("../settings/github.js");
+    const { SettingsRepositoriesPage } = await import("../settings/repositories.js");
     const { SettingsResourcesPage } = await import("../settings/resources.js");
     const { TeamPage } = await import("../team/index.js");
 
     expect(renderPage(<LandingPage />)).toContain("AI-native teams");
-    expect(renderPage(<ClientsPage />)).toContain("Computers");
+    // ClientsPage / SettingsComputersPage no longer render their own title —
+    // the Settings layout owns the single page heading (see settings.tsx), so
+    // assert on stable body copy instead of the moved title.
+    expect(renderPage(<ClientsPage />)).toContain("computer");
     expect(renderPage(<TeamPage />)).toContain("Team");
-    expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
+    expect(renderPage(<SettingsComputersPage />)).toContain("computer");
+    // Page titles moved to the Settings layout; assert on stable section
+    // content each sub-page renders on its own.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
-    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
+    const repositories = renderPage(<SettingsRepositoriesPage />, "/settings/repositories");
+    expect(repositories).toContain("Code repositories");
+    expect(repositories).not.toContain("Context Tree");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: "member" };
-    // Settings GitHub, Context tree, and Resources stay visible (read-only)
+    // Settings GitHub, Repositories, and Resources stay visible (read-only)
     // for members.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
-    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
+    expect(renderPage(<SettingsRepositoriesPage />, "/settings/repositories")).not.toContain("Context Tree");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: null };
     expect(renderPage(<SettingsGithubPage />)).toContain("Loading");
@@ -1214,15 +1236,25 @@ describe("page SSR smoke coverage", () => {
     emptyClient.setQueryData(["chat-detail", "chat-empty"], chatDetail({ id: "chat-empty", title: "Empty chat" }));
     emptyClient.setQueryData(["chat-messages-cache", "chat-empty"], []);
     emptyClient.setQueryData(["chat-messages", "chat-empty"], { items: [], nextCursor: null });
-    emptyClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+    emptyClient.setQueryData(["chat-session-events", "chat-empty"], {
+      feeds: [{ agentId: "agent-1", items: [], nextCursor: null }],
+    });
     expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-empty" />, emptyClient)).toContain(
       "Send a message to start",
     );
 
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
-    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient())).toContain(
-      "Participants",
+    const narrowRendered = renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient());
+    expect(narrowRendered).toContain("Hide chat options");
+    expect(narrowRendered).toContain("Participants");
+    expect(narrowRendered).toContain("GitHub");
+
+    const mobileRendered = renderWithClient(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" />,
+      createClient(),
     );
+    expect(mobileRendered).toContain("Show chat details");
+    expect(mobileRendered).not.toContain("Participants");
   });
 
   it("renders onboarding steps and reusable onboarding UI states", async () => {
@@ -1238,7 +1270,12 @@ describe("page SSR smoke coverage", () => {
 
     const html = renderPage(
       <>
-        <CommandBox command="npm install -g first-tree\nfirst-tree login token" />
+        <CommandBox
+          command={
+            "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+            "~/.local/bin/first-tree login token"
+          }
+        />
         <FlowNote tone="info">Heads up</FlowNote>
         <StatusRow state="waiting" label="Waiting now" />
         <StatusRow state="ok" label="Connected now" />
@@ -1351,7 +1388,7 @@ describe("page SSR smoke coverage", () => {
       ),
     ).toContain("Join Acme");
     expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected to");
-    expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Repository");
+    expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Context Tree");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();
     expect(renderPage(<SettingsLayout />)).toContain("Settings");

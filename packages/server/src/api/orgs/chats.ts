@@ -1,6 +1,6 @@
 import {
   createMeChatSchema,
-  createTaskChatSchema,
+  createWebTaskChatSchema,
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
@@ -15,7 +15,11 @@ import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../.
 import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { scanFixKickoffKey } from "../../services/onboarding-kickoff.js";
+import {
+  campaignActionKickoffKey,
+  recordCampaignActionConversion,
+  resolveCampaignActionContext,
+} from "../../services/onboarding-kickoff.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -102,7 +106,8 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    * GET /orgs/:orgId/chats/source-counts — per-source aggregate powering the
    * conversation-list tag bar (Manual / GitHub / Agent).
    * Returns counts only for sources the caller has chats in, plus an
-   * always-present `manual` entry. Same engagement view filter as the list.
+   * always-present `manual` entry. Same engagement and watcher filters as the
+   * list.
    */
   app.get<{ Params: { orgId: string } }>("/source-counts", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
@@ -110,16 +115,26 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     return listMeChatSourceCounts(app.db, scope.humanAgentId, scope.organizationId, query);
   });
 
+  const createChatRouteOptions = {
+    // `undefined` intentionally preserves @fastify/rate-limit's global shared
+    // bucket while exposing that policy to CodeQL's Fastify route model.
+    config: { otelRecordBody: false, rateLimit: undefined },
+  };
+
   /**
    * POST /orgs/:orgId/chats — create a new chat. The :orgId path param
    * makes the org explicit; visibility of every requested participant is
    * verified before the service layer touches the DB.
+   *
+   * Rate limiting is the global actor-aware `@fastify/rate-limit` guard
+   * registered in `app.ts`; this authenticated route intentionally does not
+   * duplicate the shared safety policy with a lower per-route cap.
    */
-  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
+  app.post<{ Params: { orgId: string } }>("/", createChatRouteOptions, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
-      const body = createTaskChatSchema.parse(rawBody);
+      const body = createWebTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [
         ...body.initialRecipientAgentIds,
         ...(await resolveAgentIdsByNameInOrg(app.db, scope.organizationId, body.initialRecipientNames)),
@@ -133,6 +148,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       );
       await assertAllAgentsVisibleInOrg(app.db, scope, visibleTargetIds);
       await assertNoLandingCampaignTrialAgents(app.db, visibleTargetIds);
+      const campaignAction = resolveCampaignActionContext(body.campaignAction, body.scanFixRepoSlug);
       const result = await createChat(app.db, {
         mode: "task",
         initiatorAgentId: scope.humanAgentId,
@@ -143,13 +159,26 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         description: body.description ?? null,
         initialMessage: { ...body.initialMessage, source: "web" },
         source: "manual",
-        // Production-scan fix conversion: key the launcher on the repo so
-        // re-entering the fix link reuses it (and dedups with the onboarding
-        // path that carries the same key) instead of creating a duplicate.
-        ...(body.scanFixRepoSlug
-          ? { onboardingKickoffKey: scanFixKickoffKey(scope.humanAgentId, body.scanFixRepoSlug) }
+        // Campaign actions share one key across direct and onboarding paths.
+        ...(campaignAction
+          ? { onboardingKickoffKey: campaignActionKickoffKey(scope.humanAgentId, campaignAction) }
           : {}),
       });
+      if (campaignAction) {
+        try {
+          await recordCampaignActionConversion(app.db, {
+            humanAgentId: scope.humanAgentId,
+            organizationId: scope.organizationId,
+            action: campaignAction,
+            actionChatId: result.chat.id,
+          });
+        } catch (err) {
+          app.log.warn(
+            { err, campaign: campaignAction.campaign, actionChatId: result.chat.id },
+            "landing campaign action conversion could not be recorded",
+          );
+        }
+      }
       notifyRecipients(app.notifier, result.recipients, result.message.id);
       return reply.status(201).send({
         chatId: result.chat.id,

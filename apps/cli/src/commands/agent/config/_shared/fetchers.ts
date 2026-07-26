@@ -96,7 +96,12 @@ export function printConfig(cfg: AgentRuntimeConfig): void {
   process.stdout.write(`Agent: ${cfg.agentId}\n`);
   process.stdout.write(`Version: ${cfg.version} (updated ${cfg.updatedAt} by ${cfg.updatedBy})\n`);
   process.stdout.write(`\nModel:    ${cfg.payload.model || "(unset)"}\n`);
-  process.stdout.write(`Reasoning effort: ${cfg.payload.reasoningEffort || "(unset — inherits local effortLevel)"}\n`);
+  // Cursor payloads have no effort channel — the row would only mislead.
+  if ("reasoningEffort" in cfg.payload) {
+    process.stdout.write(
+      `Reasoning effort: ${cfg.payload.reasoningEffort || "(unset — inherits local effortLevel)"}\n`,
+    );
+  }
   const promptSections = cfg.payload.prompt.sections ?? [];
   if (promptSections.length > 0) {
     process.stdout.write(`Effective prompt stack (${promptSections.length} section(s); resolved team + agent):\n`);

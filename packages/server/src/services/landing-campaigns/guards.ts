@@ -5,8 +5,9 @@ import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { chatMembership } from "../../db/schema/chat-membership.js";
 import { chats } from "../../db/schema/chats.js";
+import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
-import { ForbiddenError } from "../../errors.js";
+import { ForbiddenError, ServiceUnavailableError } from "../../errors.js";
 
 const TRIAL_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TRIAL_QUOTA_EXCEEDED_MESSAGE =
@@ -97,5 +98,21 @@ export async function assertMemberIsNotLandingCampaignServiceMember(
     .limit(1);
   if (member && isLandingCampaignServiceMembership(config, member)) {
     throw new ForbiddenError("First Tree landing campaign service member is managed by First Tree.");
+  }
+}
+
+export async function assertOfficialLandingCampaignClient(
+  db: Database,
+  clientId: string,
+  serviceUserId: string,
+  serviceOrgId: string,
+): Promise<void> {
+  const [client] = await db
+    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  if (!client || client.userId !== serviceUserId || client.organizationId !== serviceOrgId) {
+    throw new ServiceUnavailableError("Landing campaign official client is not configured in the service organization");
   }
 }

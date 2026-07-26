@@ -7,17 +7,28 @@ import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
-import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
+import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
-import { sendMessage } from "./message.js";
+import {
+  type ContextReviewerAgent,
+  contextReviewerChatReservationKey,
+  findExistingContextReviewerChat,
+  loadValidContextReviewerAgent,
+  withContextReviewerDispatchAuthority,
+} from "./context-reviewer-common.js";
+import { readContextReviewerAgentReadiness } from "./context-reviewer-readiness.js";
+import {
+  type DeferredSendMessagePostCommitEffects,
+  runDeferredSendMessagePostCommitEffects,
+  sendMessage,
+} from "./message.js";
 import { notifyRecipients } from "./notifier.js";
-import { getOrgContextTree, getOrgSetting } from "./org-settings.js";
+import { getOrgContextReviewRuntime } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
+import { formatContextReviewTopic } from "./scm-entity-chat-topic.js";
 
 const log = createLogger("ContextReviewerPr");
 const require = createRequire(import.meta.url);
@@ -48,13 +59,18 @@ export type ContextReviewerPrTemplateInput = {
   commentUrl: string | null;
   commentAuthorLogin: string | null;
   organizationId: string;
+  contextReviewRunId: string;
   reviewerManagerGithubLogin: string | null;
-  reviewerManagerIsPrAuthor: boolean;
 };
 
 export type ContextReviewerPrResult =
   | { handled: false; reason: ContextReviewerPrSkipReason }
   | { handled: true; chatId: string; messageId: string; reused: boolean; suppressed?: boolean };
+
+type PersistedContextReviewerPrResult = Extract<ContextReviewerPrResult, { handled: true }> & {
+  recipients?: string[];
+  deferredPostCommitEffects?: DeferredSendMessagePostCommitEffects;
+};
 
 export type ContextReviewerPrSkipReason =
   | "unsupported_event"
@@ -63,31 +79,30 @@ export type ContextReviewerPrSkipReason =
   | "repo_mismatch"
   | "feature_disabled"
   | "reviewer_agent_missing"
-  | "reviewer_agent_invalid";
+  | "reviewer_agent_invalid"
+  | "reviewer_runtime_unavailable";
 
 type ContextReviewerPrPayloadInput = Omit<
   ContextReviewerPrTemplateInput,
-  "reviewerManagerGithubLogin" | "reviewerManagerIsPrAuthor"
+  "contextReviewRunId" | "reviewerManagerGithubLogin"
 >;
 
 type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
-  action: "opened" | "synchronize" | "ready_for_review" | "created" | "edited";
+  action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "created" | "edited";
   entityKey: string;
   senderType: string | null;
   commentAuthorType: string | null;
 };
 
 type ContextReviewerPrTrigger =
-  | { eventType: "pull_request"; action: "opened" | "synchronize" | "ready_for_review"; triggerEvent: string }
+  | {
+      eventType: "pull_request";
+      action: "opened" | "synchronize" | "ready_for_review" | "reopened";
+      triggerEvent: string;
+    }
   | { eventType: "issue_comment"; action: "created"; triggerEvent: string }
   | { eventType: "pull_request_review_comment"; action: "created" | "edited"; triggerEvent: string };
-
-type ReviewerAgent = {
-  uuid: string;
-  managerHumanAgentId: string;
-  managerGithubLogin: string | null;
-};
 
 let templateCache: Promise<string> | null = null;
 
@@ -193,11 +208,11 @@ export async function handleContextReviewerPrEvent(
     eventType: string;
     payload: unknown;
     organizationId: string;
+    installationId: number;
   },
 ): Promise<ContextReviewerPrResult> {
-  if (
-    !resolveContextReviewerPrTrigger(input.eventType, isRecord(input.payload) ? readString(input.payload.action) : null)
-  ) {
+  const action = isRecord(input.payload) ? readString(input.payload.action) : null;
+  if (!resolveContextReviewerPrTrigger(input.eventType, action, input.payload)) {
     return { handled: false, reason: "unsupported_event" };
   }
 
@@ -206,11 +221,35 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "malformed_payload" };
   }
 
-  const contextTree = await getOrgContextTree(app.db, input.organizationId);
-  const boundRepo = normalizeGithubRepo(contextTree.repo);
-  if (!boundRepo) {
+  return handleContextReviewerPrEventWithInfo(app, input, info);
+}
+
+async function handleContextReviewerPrEventWithInfo(
+  app: FastifyInstance,
+  input: {
+    eventType: string;
+    payload: unknown;
+    organizationId: string;
+    installationId: number;
+  },
+  info: PullRequestPayloadInfo,
+): Promise<ContextReviewerPrResult> {
+  const runtime = await getOrgContextReviewRuntime(app.db, input.organizationId);
+  const boundRepo = normalizeGithubRepo(runtime.repo);
+  if (runtime.bindingState !== "bound" || !runtime.repo) {
     log.debug({ organizationId: input.organizationId }, "context reviewer skipped: context tree repo unset");
     return { handled: false, reason: "context_tree_repo_unset" };
+  }
+  if (runtime.provider !== "github" || !runtime.providerMatchesRepository || !boundRepo) {
+    log.debug(
+      {
+        organizationId: input.organizationId,
+        provider: runtime.provider,
+        providerMatchesRepository: runtime.providerMatchesRepository,
+      },
+      "context reviewer skipped: context tree is not an executable GitHub binding",
+    );
+    return { handled: false, reason: "repo_mismatch" };
   }
   const webhookRepo = normalizeGithubRepo(info.repoFullName);
   if (!webhookRepo || webhookRepo !== boundRepo) {
@@ -221,16 +260,22 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "repo_mismatch" };
   }
 
-  const features = await getOrgSetting(app.db, input.organizationId, "context_tree_features");
-  if (!features.contextReviewer.enabled) {
+  if (!runtime.contextReviewer.enabled) {
     return { handled: false, reason: "feature_disabled" };
   }
-  const reviewerAgentUuid = features.contextReviewer.agentUuid;
+  if (!app.config.oauth?.githubApp?.slug) {
+    log.warn(
+      { organizationId: input.organizationId },
+      "context reviewer skipped: GitHub App publication identity is not configured",
+    );
+    return { handled: false, reason: "reviewer_runtime_unavailable" };
+  }
+  const reviewerAgentUuid = runtime.contextReviewer.agentUuid;
   if (!reviewerAgentUuid) {
     return { handled: false, reason: "reviewer_agent_missing" };
   }
 
-  const reviewer = await loadValidReviewerAgent(app.db, {
+  const reviewer = await loadValidContextReviewerAgent(app.db, {
     organizationId: input.organizationId,
     reviewerAgentUuid,
   });
@@ -241,109 +286,213 @@ export async function handleContextReviewerPrEvent(
     );
     return { handled: false, reason: "reviewer_agent_invalid" };
   }
-
-  const metadata = chatMetadataSchema.parse({
-    source: "github",
-    entityType: "pull_request",
-    entityKey: info.entityKey,
-    entityUrl: info.htmlUrl,
-    contextTreeReviewer: true,
-    reviewerAgentUuid: reviewer.uuid,
-  });
-  const existingChatId = await findExistingReviewerChat(app.db, {
+  const readiness = await readContextReviewerAgentReadiness(app.db, {
     organizationId: input.organizationId,
-    entityKey: info.entityKey,
+    reviewerAgentUuid,
+    now: new Date(),
+    staleSeconds: app.config.runtime.presenceCleanupSeconds,
   });
-
-  if (existingChatId) {
-    await app.db.update(chats).set({ metadata }).where(eq(chats.id, existingChatId));
-    await applyMembershipWrite(
-      app.db,
-      existingChatId,
-      [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
-      { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+  if (readiness.structuralBlockers.length > 0 || readiness.healthBlockers.length > 0) {
+    log.warn(
+      {
+        organizationId: input.organizationId,
+        reviewerAgentUuid,
+        blockers: [...readiness.structuralBlockers, ...readiness.healthBlockers].map((candidate) => candidate.code),
+      },
+      "context reviewer skipped: configured reviewer runtime is unavailable",
     );
-    const suppressedEchoMessageId = await findSuppressibleReviewerEchoMessageId(app.db, {
-      chatId: existingChatId,
-      info,
-      reviewer,
-      appSlug: app.config.oauth?.githubApp?.slug ?? null,
-    });
-    if (suppressedEchoMessageId) {
-      log.info(
-        {
-          organizationId: input.organizationId,
-          entityKey: info.entityKey,
+    return { handled: false, reason: "reviewer_runtime_unavailable" };
+  }
+
+  const contextReviewRunId = uuidv7();
+  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
+  const fenced = await withContextReviewerDispatchAuthority(
+    app.db,
+    {
+      organizationId: input.organizationId,
+      reviewerAgentUuid,
+      entityKey: info.entityKey,
+      expectedManagerHumanAgentId: reviewer.managerHumanAgentId,
+      staleSeconds: app.config.runtime.presenceCleanupSeconds,
+      authority: {
+        provider: "github",
+        installationId: input.installationId,
+        repository: webhookRepo,
+      },
+    },
+    async (tx, currentReviewer): Promise<PersistedContextReviewerPrResult> => {
+      const metadata = chatMetadataSchema.parse({
+        source: "github",
+        entityType: "pull_request",
+        entityKey: info.entityKey,
+        entityUrl: info.htmlUrl,
+        contextTreeReviewer: true,
+        reviewerAgentUuid: currentReviewer.uuid,
+      });
+      const existingChatId = await findExistingContextReviewerChat(tx, {
+        organizationId: input.organizationId,
+        entityKey: info.entityKey,
+      });
+      if (existingChatId) {
+        await tx.update(chats).set({ metadata }).where(eq(chats.id, existingChatId));
+        await applyMembershipWrite(
+          tx,
+          existingChatId,
+          [{ agentId: currentReviewer.managerHumanAgentId }, { agentId: currentReviewer.uuid }],
+          { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+        );
+        const suppressedEchoMessageId = await findSuppressibleReviewerEchoMessageId(tx, {
           chatId: existingChatId,
-          commentAuthorLogin: info.commentAuthorLogin,
+          info,
+          reviewer: currentReviewer,
+          appSlug: app.config.oauth?.githubApp?.slug ?? null,
+        });
+        if (suppressedEchoMessageId) {
+          log.info(
+            {
+              organizationId: input.organizationId,
+              entityKey: info.entityKey,
+              chatId: existingChatId,
+              commentAuthorLogin: info.commentAuthorLogin,
+            },
+            "context reviewer echo comment suppressed",
+          );
+          return {
+            handled: true,
+            chatId: existingChatId,
+            messageId: suppressedEchoMessageId,
+            reused: true,
+            suppressed: true,
+          };
+        }
+        const sent = await sendMessage(
+          tx,
+          existingChatId,
+          currentReviewer.managerHumanAgentId,
+          {
+            source: "github",
+            format: "markdown",
+            content: prompt,
+            metadata: contextReviewerMessageMetadata(info, currentReviewer, contextReviewRunId),
+          },
+          {
+            normalizeMentionsInContent: false,
+            allowContextReviewRun: true,
+            deferPostCommitEffects: true,
+          },
+        );
+        if (!sent.deferredPostCommitEffects) {
+          throw new Error("Context Reviewer PR message did not return deferred post-commit effects");
+        }
+        return {
+          handled: true,
+          chatId: existingChatId,
+          messageId: sent.message.id,
+          reused: true,
+          recipients: sent.recipients,
+          deferredPostCommitEffects: sent.deferredPostCommitEffects,
+        };
+      }
+
+      const created = await createChat(tx, {
+        mode: "task",
+        initiatorAgentId: currentReviewer.managerHumanAgentId,
+        organizationId: input.organizationId,
+        initialRecipientAgentIds: [currentReviewer.uuid],
+        contextParticipantAgentIds: [],
+        topic: formatContextReviewTopic({
+          provider: "github",
+          repositoryPath: info.repoFullName,
+          changeNumber: info.prNumber,
+        }),
+        onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
+        initialMessage: {
+          source: "github",
+          format: "markdown",
+          content: prompt,
+          metadata: contextReviewerMessageMetadata(info, currentReviewer, contextReviewRunId),
         },
-        "context reviewer echo comment suppressed",
-      );
+        allowContextReviewRun: true,
+        deferPostCommitEffects: true,
+        source: "manual",
+      });
+      await tx.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
+      if (!created.initialMessageCreated) {
+        await applyMembershipWrite(
+          tx,
+          created.chat.id,
+          [{ agentId: currentReviewer.managerHumanAgentId }, { agentId: currentReviewer.uuid }],
+          { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+        );
+        const sent = await sendMessage(
+          tx,
+          created.chat.id,
+          currentReviewer.managerHumanAgentId,
+          {
+            source: "github",
+            format: "markdown",
+            content: prompt,
+            metadata: contextReviewerMessageMetadata(info, currentReviewer, contextReviewRunId),
+          },
+          {
+            normalizeMentionsInContent: false,
+            allowContextReviewRun: true,
+            deferPostCommitEffects: true,
+          },
+        );
+        if (!sent.deferredPostCommitEffects) {
+          throw new Error("Context Reviewer PR message did not return deferred post-commit effects");
+        }
+        return {
+          handled: true,
+          chatId: created.chat.id,
+          messageId: sent.message.id,
+          reused: true,
+          recipients: sent.recipients,
+          deferredPostCommitEffects: sent.deferredPostCommitEffects,
+        };
+      }
+      if (!created.deferredPostCommitEffects) {
+        throw new Error("Context Reviewer PR chat did not return deferred post-commit effects");
+      }
       return {
         handled: true,
-        chatId: existingChatId,
-        messageId: suppressedEchoMessageId,
-        reused: true,
-        suppressed: true,
+        chatId: created.chat.id,
+        messageId: created.message.id,
+        reused: false,
+        recipients: created.recipients,
+        deferredPostCommitEffects: created.deferredPostCommitEffects,
       };
-    }
-
-    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
-    const { message, recipients } = await sendMessage(
-      app.db,
-      existingChatId,
-      reviewer.managerHumanAgentId,
-      {
-        source: "github",
-        format: "markdown",
-        content: prompt,
-        metadata: contextReviewerMessageMetadata(info, reviewer),
-      },
-      { normalizeMentionsInContent: false },
+    },
+  );
+  if (!fenced.authorized) {
+    log.warn(
+      { organizationId: input.organizationId, reviewerAgentUuid },
+      "context reviewer skipped: authority changed before trusted run write",
     );
-    notifyRecipients(app.notifier, recipients, message.id);
+    return { handled: false, reason: "reviewer_runtime_unavailable" };
+  }
+
+  const persisted = fenced.value;
+  if (persisted.deferredPostCommitEffects) {
+    await runDeferredSendMessagePostCommitEffects(app.db, persisted.deferredPostCommitEffects);
+    notifyRecipients(app.notifier, persisted.recipients ?? [], persisted.messageId);
+  }
+  if (!persisted.suppressed) {
     log.info(
       {
         organizationId: input.organizationId,
         entityKey: info.entityKey,
-        chatId: existingChatId,
+        chatId: persisted.chatId,
         triggerEvent: info.triggerEvent,
         isDraft: info.isDraft,
+        reused: persisted.reused,
       },
-      "context reviewer task sent to existing chat",
+      persisted.reused ? "context reviewer task sent to existing chat" : "context reviewer task chat created",
     );
-    return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
   }
-
-  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
-  const created = await createChat(app.db, {
-    mode: "task",
-    initiatorAgentId: reviewer.managerHumanAgentId,
-    organizationId: input.organizationId,
-    initialRecipientAgentIds: [reviewer.uuid],
-    contextParticipantAgentIds: [],
-    topic: `Context Review PR #${info.prNumber}: ${info.title}`,
-    initialMessage: {
-      source: "github",
-      format: "markdown",
-      content: prompt,
-      metadata: contextReviewerMessageMetadata(info, reviewer),
-    },
-    source: "manual",
-  });
-  await app.db.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
-  notifyRecipients(app.notifier, created.recipients, created.message.id);
-  log.info(
-    {
-      organizationId: input.organizationId,
-      entityKey: info.entityKey,
-      chatId: created.chat.id,
-      triggerEvent: info.triggerEvent,
-      isDraft: info.isDraft,
-    },
-    "context reviewer task chat created",
-  );
-  return { handled: true, chatId: created.chat.id, messageId: created.message.id, reused: false };
+  const { recipients: _recipients, deferredPostCommitEffects: _effects, ...result } = persisted;
+  return result;
 }
 
 export async function handleContextReviewerPullRequest(
@@ -352,6 +501,7 @@ export async function handleContextReviewerPullRequest(
     eventType: string;
     payload: unknown;
     organizationId: string;
+    installationId: number;
   },
 ): Promise<ContextReviewerPrResult> {
   return handleContextReviewerPrEvent(app, input);
@@ -361,10 +511,14 @@ function isSupportedContextReviewerPrEvent(eventType: string, action: string | n
   return resolveContextReviewerPrTrigger(eventType, action) !== null;
 }
 
-function resolveContextReviewerPrTrigger(eventType: string, action: string | null): ContextReviewerPrTrigger | null {
+function resolveContextReviewerPrTrigger(
+  eventType: string,
+  action: string | null,
+  _payload?: unknown,
+): ContextReviewerPrTrigger | null {
   if (
     eventType === "pull_request" &&
-    (action === "opened" || action === "synchronize" || action === "ready_for_review")
+    (action === "opened" || action === "reopened" || action === "synchronize" || action === "ready_for_review")
   ) {
     return { eventType, action, triggerEvent: `${eventType}.${action}` };
   }
@@ -377,6 +531,10 @@ function resolveContextReviewerPrTrigger(eventType: string, action: string | nul
   return null;
 }
 
+export function isContextReviewerCandidateEvent(eventType: string, action: string | null, payload?: unknown): boolean {
+  return resolveContextReviewerPrTrigger(eventType, action, payload) !== null;
+}
+
 function extractPullRequestPayloadInfo(
   eventType: string,
   payload: unknown,
@@ -384,7 +542,7 @@ function extractPullRequestPayloadInfo(
 ): PullRequestPayloadInfo | null {
   if (!isRecord(payload)) return null;
   const action = readString(payload.action);
-  const trigger = resolveContextReviewerPrTrigger(eventType, action);
+  const trigger = resolveContextReviewerPrTrigger(eventType, action, payload);
   if (!trigger) return null;
 
   const repo = isRecord(payload.repository) ? payload.repository : null;
@@ -491,17 +649,22 @@ function readCommentAuthor(comment: Record<string, unknown> | null): { login: st
   return { login: readString(user?.login), type: readString(user?.type) };
 }
 
-function buildTemplateInput(info: PullRequestPayloadInfo, reviewer: ReviewerAgent): ContextReviewerPrTemplateInput {
+function buildTemplateInput(
+  info: PullRequestPayloadInfo,
+  reviewer: ContextReviewerAgent,
+  contextReviewRunId: string,
+): ContextReviewerPrTemplateInput {
   return {
     ...info,
+    contextReviewRunId,
     reviewerManagerGithubLogin: reviewer.managerGithubLogin,
-    reviewerManagerIsPrAuthor: sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin),
   };
 }
 
 function contextReviewerMessageMetadata(
   info: PullRequestPayloadInfo,
-  reviewer: ReviewerAgent,
+  reviewer: ContextReviewerAgent,
+  contextReviewRunId: string,
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     source: "github",
@@ -511,12 +674,18 @@ function contextReviewerMessageMetadata(
     entityType: "pull_request",
     entityKey: info.entityKey,
     contextTreeReviewer: true,
+    contextReviewRunId,
+    contextReviewRepository: normalizeGithubRepo(info.repoFullName),
+    contextReviewPrNumber: info.prNumber,
+    contextReviewOrganizationId: info.organizationId,
+    contextReviewReviewerAgentUuid: reviewer.uuid,
+    contextReviewReviewerManagerHumanAgentId: reviewer.managerHumanAgentId,
+    contextReviewSubmission: { state: "pending" },
     mentions: [reviewer.uuid],
     pullRequestAuthorLogin: info.authorLogin,
   };
   if (reviewer.managerGithubLogin) {
     metadata.reviewerManagerGithubLogin = reviewer.managerGithubLogin;
-    metadata.reviewerManagerIsPrAuthor = sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin);
   }
   if (info.commentAuthorLogin) {
     metadata.commentAuthorLogin = info.commentAuthorLogin;
@@ -530,67 +699,9 @@ function contextReviewerMessageMetadata(
   return metadata;
 }
 
-async function loadValidReviewerAgent(
-  db: Database,
-  input: { organizationId: string; reviewerAgentUuid: string },
-): Promise<ReviewerAgent | null> {
-  const [agent] = await db
-    .select({
-      uuid: agents.uuid,
-      managerHumanAgentId: members.agentId,
-      managerGithubLogin: sql<string | null>`${authIdentities.metadata}->>'login'`,
-    })
-    .from(agents)
-    .innerJoin(members, eq(members.id, agents.managerId))
-    .leftJoin(authIdentities, and(eq(authIdentities.userId, members.userId), eq(authIdentities.provider, "github")))
-    .where(
-      and(
-        eq(agents.uuid, input.reviewerAgentUuid),
-        eq(agents.organizationId, input.organizationId),
-        eq(agents.type, "agent"),
-        eq(agents.status, "active"),
-        eq(members.organizationId, input.organizationId),
-        eq(members.status, "active"),
-      ),
-    )
-    .limit(1);
-  return agent ?? null;
-}
-
-function sameGithubLogin(left: string | null, right: string | null): boolean {
-  const normalizedLeft = normalizeGithubLogin(left);
-  const normalizedRight = normalizeGithubLogin(right);
-  return normalizedLeft !== null && normalizedRight !== null && normalizedLeft === normalizedRight;
-}
-
-function normalizeGithubLogin(value: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.toLowerCase() : null;
-}
-
-async function findExistingReviewerChat(
-  db: Database,
-  input: { organizationId: string; entityKey: string },
-): Promise<string | null> {
-  const [row] = await db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(
-      and(
-        eq(chats.organizationId, input.organizationId),
-        sql`${chats.metadata}->>'source' = 'github'`,
-        sql`${chats.metadata}->>'entityType' = 'pull_request'`,
-        sql`${chats.metadata}->>'entityKey' = ${input.entityKey}`,
-        sql`${chats.metadata}->>'contextTreeReviewer' = 'true'`,
-      ),
-    )
-    .limit(1);
-  return row?.id ?? null;
-}
-
 async function findSuppressibleReviewerEchoMessageId(
   db: Database,
-  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent; appSlug: string | null },
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ContextReviewerAgent; appSlug: string | null },
 ): Promise<string | null> {
   if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return null;
 
@@ -643,9 +754,9 @@ function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
 
 export const contextReviewerPrTestInternals = {
   extractPullRequestPayloadInfo,
-  findExistingReviewerChat,
+  findExistingReviewerChat: findExistingContextReviewerChat,
   isSupportedContextReviewerPrEvent,
-  loadValidReviewerAgent,
+  loadValidReviewerAgent: loadValidContextReviewerAgent,
   parseBareRepo,
   parseScpLikeRepo,
   parseUrlRepo,

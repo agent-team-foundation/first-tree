@@ -19,12 +19,16 @@ export const PROVIDER_ORDER: RuntimeProvider[] = [
   RUNTIME_PROVIDERS.CLAUDE_CODE,
   RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
   RUNTIME_PROVIDERS.CODEX,
+  RUNTIME_PROVIDERS.CURSOR,
+  RUNTIME_PROVIDERS.KIMI_CODE,
 ].filter((p) => isRuntimeProviderEnabled(p));
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
   "claude-code-tui": "Claude Code CLI",
   codex: "Codex",
+  cursor: "Cursor",
+  "kimi-code": "Kimi Code",
 };
 
 const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
@@ -57,11 +61,26 @@ export function runtimeProviderLabel(provider: string): string {
  * the SDK. The install command is identical; the additional tmux
  * requirement is surfaced via providerInstallHint().
  */
-export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
+export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string | null> = {
   "claude-code": "@anthropic-ai/claude-code",
   "claude-code-tui": "@anthropic-ai/claude-code",
   codex: "@openai/codex",
+  // Cursor is not distributed via npm — its official installer script is the
+  // only supported install path (see CURSOR_INSTALL_COMMAND).
+  cursor: null,
+  // Runtime execution is bundled, but the official CLI remains the supported
+  // operator login/recovery surface for the shared ~/.kimi-code credential.
+  "kimi-code": "@moonshot-ai/kimi-code",
 };
+
+/**
+ * Cursor's official installer. First Tree never runs this itself — the daemon
+ * does not download/install Cursor (external-only) — the card renders it for
+ * the operator to run. Mirrors `CURSOR_INSTALL_COMMAND` in
+ * `@first-tree/client`'s cursor-binary module (web cannot import the client
+ * package, so the string is duplicated deliberately; update both together).
+ */
+export const CURSOR_INSTALL_COMMAND = "curl https://cursor.com/install -fsS | bash";
 
 /**
  * Per-runtime login command shown after install. Codex prints
@@ -74,6 +93,8 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
   "claude-code": "claude auth login",
   "claude-code-tui": "claude auth login",
   codex: "codex login",
+  cursor: "cursor-agent login",
+  "kimi-code": "kimi # then run /login",
 };
 
 /**
@@ -83,7 +104,9 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
  * box with a copy button per box.
  */
 export function buildInstallCommand(provider: RuntimeProvider, os?: string | null): string {
-  const base = `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
+  const npmPackage = PROVIDER_NPM_PACKAGE[provider];
+  const installLine = npmPackage ? `npm install -g ${npmPackage}` : CURSOR_INSTALL_COMMAND;
+  const base = `${installLine}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
   if (provider === "claude-code-tui") {
     // The tmux-driven runtime additionally needs tmux (>= 3.0). tmux is not an
     // npm package, so emit the command for the host's actual package manager
@@ -187,6 +210,12 @@ export function providerInstallHint(
     return tmuxCmd
       ? `Run \`npm install -g @anthropic-ai/claude-code\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`
       : `Run \`npm install -g @anthropic-ai/claude-code\`, then install tmux (>= 3.0) with your package manager, on this ${device}.`;
+  }
+  if (provider === "cursor") {
+    return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;
+  }
+  if (provider === "kimi-code") {
+    return `Kimi's engine is bundled with First Tree. For login recovery, install \`@moonshot-ai/kimi-code\` on this ${device}, run \`kimi\`, then \`/login\`.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }

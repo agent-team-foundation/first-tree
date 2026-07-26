@@ -1,5 +1,5 @@
-import type { ListMeChatsResponse } from "@first-tree/shared";
-import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
+import { type InfiniteData, type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { getChat } from "../../../api/chats.js";
@@ -43,20 +43,34 @@ function patchReadChatInCachedLists(queryClient: QueryClient, chatId: string, un
   const cachedQueries = queryClient.getQueryCache().findAll({ queryKey: ["me", "chats"] });
   for (const query of cachedQueries) {
     const unreadFilter = query.queryKey[2] === "unread";
-    queryClient.setQueryData<ListMeChatsResponse>(query.queryKey, (prev) => {
-      if (!prev) return prev;
+    // Decrement the opened chat's unread within a single page's rows; in the
+    // unread-only view drop it once it reaches zero.
+    const patchRows = (rows: MeChatRow[]): { rows: MeChatRow[]; changed: boolean } => {
       let changed = false;
-      const rows = prev.rows.flatMap((row) => {
+      const next = rows.flatMap((row) => {
         if (row.chatId !== chatId) return [row];
         changed = true;
-        const patched = {
-          ...row,
-          unreadMentionCount,
-          chatHasExplicitMentionToMe: false,
-        };
+        const patched = { ...row, unreadMentionCount, chatHasExplicitMentionToMe: false };
         return unreadFilter && unreadMentionCount <= 0 ? [] : [patched];
       });
-      return changed ? { ...prev, rows } : prev;
+      return { rows: next, changed };
+    };
+    // The desktop rail stores `InfiniteData` (`useInfiniteQuery`); the command
+    // palette and mobile lists store a bare `ListMeChatsResponse`. The prefix
+    // `findAll(["me","chats"])` matches both, so patch whichever this holds.
+    queryClient.setQueryData<InfiniteData<ListMeChatsResponse> | ListMeChatsResponse>(query.queryKey, (prev) => {
+      if (!prev) return prev;
+      if ("pages" in prev) {
+        let changed = false;
+        const pages = prev.pages.map((page) => {
+          const res = patchRows(page.rows);
+          if (res.changed) changed = true;
+          return res.changed ? { ...page, rows: res.rows } : page;
+        });
+        return changed ? { ...prev, pages } : prev;
+      }
+      const res = patchRows(prev.rows);
+      return res.changed ? { ...prev, rows: res.rows } : prev;
     });
   }
 }
@@ -66,12 +80,14 @@ export function ChatByIdView({
   narrow,
   onShowConversations,
   onClearChat = null,
+  presentation = "workspace",
   isTrial = false,
 }: {
   chatId: string;
   narrow: boolean;
   onShowConversations: (() => void) | null;
   onClearChat?: (() => void) | null;
+  presentation?: "workspace" | "mobile";
   /** Trial surface: forwarded to ChatView to hide chat-management escape
    *  hatches (add participant, agent pause/resume). */
   isTrial?: boolean;
@@ -210,6 +226,7 @@ export function ChatByIdView({
         // hides some surfaces, but not the per-message hovercard).
         isTrial={isTrial}
         titleFallback={chatDetail?.title ?? null}
+        presentation={presentation}
         joinAction={{
           onJoin: () => joinMut.mutate(),
           joining: joinMut.isPending,
@@ -228,6 +245,7 @@ export function ChatByIdView({
       initialChatDetail={chatDetail}
       narrow={narrow}
       onShowConversations={onShowConversations}
+      presentation={presentation}
       isTrial={isTrial}
     />
   );

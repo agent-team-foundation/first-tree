@@ -1,18 +1,28 @@
-import type { WebhookSource } from "@first-tree/shared";
+import type { ScmIngressContext } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { extractMentions, normalizeGithubEvent } from "../services/github-normalize.js";
-
-const source: WebhookSource = {
-  kind: "github-app-installation",
-  installationId: 99,
-  organizationId: "org-uuid",
-};
+import { extractMentions, normalizeGithubEvent, normalizeGithubWebhook } from "../services/github-normalize.js";
 
 const senderUser = { login: "alice", type: "User" };
 const repository = { full_name: "owner/repo" };
 
 function normalize(eventType: string, payload: unknown, deliveryId: string | null = "d-1") {
-  return normalizeGithubEvent(eventType, payload, source, deliveryId);
+  const ingress: ScmIngressContext = {
+    provider: "github",
+    source: { organizationId: "org-uuid", externalId: "installation:99" },
+    stableDeliveryId: deliveryId,
+    ingressAuthority: "verified_signature",
+  };
+  return normalizeGithubEvent(eventType, payload, ingress);
+}
+
+function normalizeEnvelope(eventType: string, payload: unknown) {
+  const ingress: ScmIngressContext = {
+    provider: "github",
+    source: { organizationId: "org-uuid", externalId: "installation:99" },
+    stableDeliveryId: "d-envelope",
+    ingressAuthority: "verified_signature",
+  };
+  return normalizeGithubWebhook(eventType, payload, ingress);
 }
 
 describe("extractMentions", () => {
@@ -31,6 +41,47 @@ describe("extractMentions", () => {
   it("returns [] for null/empty", () => {
     expect(extractMentions(null)).toEqual([]);
     expect(extractMentions("")).toEqual([]);
+  });
+});
+
+describe("normalizeGithubWebhook", () => {
+  it("emits an observation-only envelope for terminal pull requests", () => {
+    const normalized = normalizeEnvelope("pull_request", {
+      action: "closed",
+      sender: senderUser,
+      repository,
+      pull_request: {
+        number: 15,
+        title: "Terminal PR",
+        html_url: "https://github.com/owner/repo/pull/15",
+        state: "closed",
+        merged: true,
+      },
+    });
+    expect(normalized.event).toBeNull();
+    expect(normalized.observation).toMatchObject({
+      state: "merged",
+      entity: { type: "pull_request", key: "owner/repo#15", title: "Terminal PR" },
+    });
+    expect(normalized.entityStateSeed?.state).toBe("merged");
+  });
+
+  it("keeps non-transition observations from overwriting lifecycle state", () => {
+    const normalized = normalizeEnvelope("pull_request", {
+      action: "opened",
+      sender: senderUser,
+      repository,
+      pull_request: {
+        number: 16,
+        title: "Opened PR",
+        html_url: "https://github.com/owner/repo/pull/16",
+        state: "open",
+        draft: true,
+      },
+    });
+    expect(normalized.event?.kind).toBe("opened");
+    expect(normalized.observation?.state).toBeNull();
+    expect(normalized.entityStateSeed?.state).toBe("draft");
   });
 });
 
@@ -53,7 +104,7 @@ describe("normalizeGithubEvent — pull_request", () => {
     if (!event) return;
     expect(event.entity).toEqual({
       type: "pull_request",
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: "owner/repo#10",
       title: "Refactor inbox",
       url: "https://github.com/owner/repo/pull/10",
@@ -62,14 +113,20 @@ describe("normalizeGithubEvent — pull_request", () => {
     // Reviewer (carol) is NOT in involves — GitHub emits a separate
     // review_requested event per reviewer at PR creation, which is the
     // canonical notification path. Collecting it here too would double-fire.
-    expect(event.involves).toEqual([
-      { githubLogin: "dave", reason: "assigned" },
-      { githubLogin: "bob", reason: "mentioned" },
+    expect(event.targets).toEqual([
+      { externalUsername: "dave", reason: "assigned" },
+      { externalUsername: "bob", reason: "mentioned" },
     ]);
     expect(event.relatedRefs).toEqual([{ type: "issue", key: "owner/repo#42" }]);
-    expect(event.actor).toEqual({ githubLogin: "alice", isBot: false });
-    expect(event.rawEventType).toBe("pull_request");
-    expect(event.rawAction).toBe("opened");
+    expect(event.actor).toEqual({ externalUsername: "alice", isBot: false });
+    expect(event.eventType).toBe("pull_request");
+    expect(event.action).toBe("opened");
+    expect(event).toMatchObject({
+      provider: "github",
+      source: { organizationId: "org-uuid", externalId: "installation:99" },
+      stableDeliveryId: "d-1",
+      ingressAuthority: "verified_signature",
+    });
     expect(event.surface.title).toBe("PR #10: Refactor inbox");
   });
 
@@ -86,7 +143,7 @@ describe("normalizeGithubEvent — pull_request", () => {
       },
     });
     expect(event?.kind).toBe("synchronized");
-    expect(event?.involves).toEqual([]);
+    expect(event?.targets).toEqual([]);
   });
 
   it("review_requested with requested_reviewer.login → involves[review_requested]", () => {
@@ -98,7 +155,7 @@ describe("normalizeGithubEvent — pull_request", () => {
       requested_reviewer: { login: "Erin" },
     });
     expect(event?.kind).toBe("review_requested");
-    expect(event?.involves).toEqual([{ githubLogin: "erin", reason: "review_requested" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "erin", reason: "review_requested" }]);
   });
 
   it("review_requested with requested_team (no requested_reviewer.login) → involves=[]", () => {
@@ -110,7 +167,7 @@ describe("normalizeGithubEvent — pull_request", () => {
       requested_team: { name: "core" },
     });
     expect(event?.kind).toBe("review_requested");
-    expect(event?.involves).toEqual([]);
+    expect(event?.targets).toEqual([]);
   });
 
   it("review_request_removed → null (do not notify)", () => {
@@ -138,7 +195,7 @@ describe("normalizeGithubEvent — pull_request", () => {
     expect(event?.kind).toBe("edited");
     expect(event?.entity).toEqual({
       type: "pull_request",
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: "owner/repo#11",
       title: undefined,
       url: undefined,
@@ -148,7 +205,7 @@ describe("normalizeGithubEvent — pull_request", () => {
       body: "Updated notes for @Bob and @bob.",
       url: "",
     });
-    expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "bob", reason: "mentioned" }]);
   });
 
   it("ready_for_review → kind=review_requested with all current reviewers as involves", () => {
@@ -165,9 +222,9 @@ describe("normalizeGithubEvent — pull_request", () => {
       },
     });
     expect(event?.kind).toBe("review_requested");
-    expect(event?.involves).toEqual([
-      { githubLogin: "carol", reason: "review_requested" },
-      { githubLogin: "erin", reason: "review_requested" },
+    expect(event?.targets).toEqual([
+      { externalUsername: "carol", reason: "review_requested" },
+      { externalUsername: "erin", reason: "review_requested" },
     ]);
   });
 
@@ -196,7 +253,7 @@ describe("normalizeGithubEvent — pull_request", () => {
       assignee: { login: "Dave" },
     });
     expect(event?.kind).toBe("assigned");
-    expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "dave", reason: "assigned" }]);
   });
 
   it("assigned with no assignee.login → null", () => {
@@ -279,7 +336,7 @@ describe("normalizeGithubEvent — pull_request_review / review_comment", () => 
       },
     });
     expect(event?.kind).toBe("reviewed");
-    expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "bob", reason: "mentioned" }]);
     expect(event?.entity.type).toBe("pull_request");
   });
 
@@ -362,7 +419,7 @@ describe("normalizeGithubEvent — pull_request_review / review_comment", () => 
       body: "follow-up @Erin",
       url: "",
     });
-    expect(event?.involves).toEqual([{ githubLogin: "erin", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "erin", reason: "mentioned" }]);
   });
 
   it("drops malformed pull_request_review_comment payloads", () => {
@@ -419,13 +476,13 @@ describe("normalizeGithubEvent — issue_comment (Bug 3 core fix)", () => {
     });
     expect(event?.entity).toEqual({
       type: "pull_request",
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: "owner/repo#316",
       title: "Improve onboarding",
       url: "https://github.com/owner/repo/pull/316",
     });
     expect(event?.kind).toBe("commented");
-    expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "bob", reason: "mentioned" }]);
     expect(event?.surface.title).toBe("PR #316: Improve onboarding");
   });
 
@@ -456,7 +513,7 @@ describe("normalizeGithubEvent — issue_comment (Bug 3 core fix)", () => {
       body: "updated @Carol",
       url: "",
     });
-    expect(event?.involves).toEqual([{ githubLogin: "carol", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "carol", reason: "mentioned" }]);
   });
 
   it("drops malformed issue_comment payloads", () => {
@@ -512,9 +569,9 @@ describe("normalizeGithubEvent — issues", () => {
       },
     });
     expect(event?.kind).toBe("opened");
-    expect(event?.involves).toEqual([
-      { githubLogin: "carol", reason: "assigned" },
-      { githubLogin: "bob", reason: "mentioned" },
+    expect(event?.targets).toEqual([
+      { externalUsername: "carol", reason: "assigned" },
+      { externalUsername: "bob", reason: "mentioned" },
     ]);
   });
 
@@ -527,7 +584,7 @@ describe("normalizeGithubEvent — issues", () => {
       assignee: { login: "Dave" },
     });
     expect(event?.kind).toBe("assigned");
-    expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "dave", reason: "assigned" }]);
   });
 
   it("edited, closed, and reopened normalize issue state changes", () => {
@@ -543,7 +600,7 @@ describe("normalizeGithubEvent — issues", () => {
     });
     expect(edited?.kind).toBe("edited");
     expect(edited?.surface.title).toBe("Issue #42");
-    expect(edited?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+    expect(edited?.targets).toEqual([{ externalUsername: "bob", reason: "mentioned" }]);
 
     const closed = normalize("issues", {
       action: "closed",
@@ -552,7 +609,7 @@ describe("normalizeGithubEvent — issues", () => {
       issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
     });
     expect(closed?.kind).toBe("closed");
-    expect(closed?.involves).toEqual([]);
+    expect(closed?.targets).toEqual([]);
 
     const reopened = normalize("issues", {
       action: "reopened",
@@ -561,7 +618,7 @@ describe("normalizeGithubEvent — issues", () => {
       issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
     });
     expect(reopened?.kind).toBe("reopened");
-    expect(reopened?.involves).toEqual([]);
+    expect(reopened?.targets).toEqual([]);
   });
 
   it("assigned with no assignee.login → null", () => {
@@ -608,7 +665,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     expect(event?.entity.type).toBe("discussion");
     expect(event?.entity.key).toBe("owner/repo#9");
     expect(event?.kind).toBe("opened");
-    expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "bob", reason: "mentioned" }]);
   });
 
   it("discussion state changes normalize to edited, closed, reopened, or other", () => {
@@ -620,7 +677,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     });
     expect(edited?.kind).toBe("edited");
     expect(edited?.surface.title).toBe("Discussion #9");
-    expect(edited?.involves).toEqual([{ githubLogin: "carol", reason: "mentioned" }]);
+    expect(edited?.targets).toEqual([{ externalUsername: "carol", reason: "mentioned" }]);
 
     const closed = normalize("discussion", {
       action: "closed",
@@ -646,7 +703,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
         discussion: { number: 9, title: "RFC", html_url: "https://github.com/owner/repo/discussions/9" },
       });
       expect(event?.kind).toBe("other");
-      expect(event?.involves).toEqual([]);
+      expect(event?.targets).toEqual([]);
     }
   });
 
@@ -697,7 +754,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
       body: "edit @Dave",
       url: "",
     });
-    expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "dave", reason: "mentioned" }]);
   });
 
   it("drops malformed discussion_comment payloads", () => {
@@ -750,7 +807,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     });
     expect(event?.entity).toEqual({
       type: "commit",
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: "owner/repo@abc1234",
       url: "https://github.com/owner/repo/commit/abc1234#comment-1",
     });
@@ -774,7 +831,7 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
       body: "please inspect @Erin",
       url: "",
     });
-    expect(event?.involves).toEqual([{ githubLogin: "erin", reason: "mentioned" }]);
+    expect(event?.targets).toEqual([{ externalUsername: "erin", reason: "mentioned" }]);
   });
 
   it("drops malformed commit_comment payloads", () => {
@@ -887,7 +944,7 @@ describe("normalizeGithubEvent — out-of-scope event types & malformed payloads
       },
     });
     expect(event).not.toBeNull();
-    expect(event?.actor).toEqual({ githubLogin: "dependabot[bot]", isBot: true });
-    expect(event?.involves).toEqual([]);
+    expect(event?.actor).toEqual({ externalUsername: "dependabot[bot]", isBot: true });
+    expect(event?.targets).toEqual([]);
   });
 });

@@ -13,7 +13,6 @@ import type { Database } from "../../db/connection.js";
 import { agentChatSessions } from "../../db/schema/agent-chat-sessions.js";
 import { agents } from "../../db/schema/agents.js";
 import { chats } from "../../db/schema/chats.js";
-import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { messages } from "../../db/schema/messages.js";
 import { sessionEvents } from "../../db/schema/session-events.js";
@@ -31,10 +30,10 @@ import { computeWorking } from "../agent-chat-status.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
-import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
+import { MEMBER_STATUSES, reactivateMembership, syncCurrentUserDisplayName } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
-import { assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
+import { assertOfficialLandingCampaignClient, assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
 import {
   buildLandingCampaignAgentMetadata,
   buildLandingCampaignChatMetadata,
@@ -162,7 +161,7 @@ async function ensureServiceMember(
   serviceUserId: string,
 ): Promise<typeof members.$inferSelect> {
   const [serviceUser] = await db
-    .select({ id: users.id, username: users.username, displayName: users.displayName })
+    .select({ id: users.id, username: users.username })
     .from(users)
     .where(eq(users.id, serviceUserId))
     .limit(1);
@@ -170,72 +169,61 @@ async function ensureServiceMember(
     throw new ServiceUnavailableError("Landing campaign service user is not configured");
   }
 
-  const [existing] = await db
-    .select()
-    .from(members)
-    .where(and(eq(members.userId, serviceUserId), eq(members.organizationId, organizationId)))
-    .limit(1);
-  if (existing) {
-    if (existing.status !== MEMBER_STATUSES.ACTIVE) {
-      await reactivateMembership(db, existing, {
-        displayName: serviceUser.displayName,
-        username: serviceUser.username,
-        role: "member",
-        resetOnboarding: false,
-      });
-      return { ...existing, status: MEMBER_STATUSES.ACTIVE, role: "member" };
+  return syncCurrentUserDisplayName(db, serviceUserId, async (effectiveDisplayName) => {
+    const [existing] = await db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, serviceUserId), eq(members.organizationId, organizationId)))
+      .limit(1);
+    if (existing) {
+      if (existing.status !== MEMBER_STATUSES.ACTIVE) {
+        await reactivateMembership(db, existing, {
+          username: serviceUser.username,
+          role: "member",
+          resetOnboarding: false,
+        });
+        return { ...existing, status: MEMBER_STATUSES.ACTIVE, role: "member" };
+      }
+      if (existing.role !== "member") {
+        const [updated] = await db
+          .update(members)
+          .set({ role: "member" })
+          .where(eq(members.id, existing.id))
+          .returning();
+        if (!updated) throw new Error("Unexpected: service member role update returned no row");
+        return updated;
+      }
+      return existing;
     }
-    if (existing.role !== "member") {
-      const [updated] = await db.update(members).set({ role: "member" }).where(eq(members.id, existing.id)).returning();
-      if (!updated) throw new Error("Unexpected: service member role update returned no row");
-      return updated;
-    }
-    return existing;
-  }
 
-  const memberId = uuidv7();
-  const agentId = uuidv7();
-  const agentName = await resolveAvailableServiceAgentName(db, organizationId);
-  await db.insert(agents).values({
-    uuid: agentId,
-    name: agentName,
-    organizationId,
-    type: "human",
-    displayName: serviceUser.displayName || "First Tree",
-    inboxId: `inbox_${agentId}`,
-    source: "admin-api",
-    visibility: "private",
-    managerId: memberId,
-    metadata: { landingCampaignServiceUser: true },
-  });
-  const [created] = await db
-    .insert(members)
-    .values({
-      id: memberId,
-      userId: serviceUserId,
+    const memberId = uuidv7();
+    const agentId = uuidv7();
+    const agentName = await resolveAvailableServiceAgentName(db, organizationId);
+    await db.insert(agents).values({
+      uuid: agentId,
+      name: agentName,
       organizationId,
-      agentId,
-      role: "member",
-    })
-    .returning();
-  if (!created) throw new Error("Unexpected: INSERT RETURNING produced no service member row");
-  return created;
-}
-
-async function assertOfficialClient(
-  db: Database,
-  clientId: string,
-  serviceUserId: string,
-  serviceOrgId: string,
-): Promise<void> {
-  const [client] = await db
-    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
-    .from(clients)
-    .where(eq(clients.id, clientId))
-    .limit(1);
-  if (!client || client.userId !== serviceUserId || client.organizationId !== serviceOrgId) {
-    throw new ServiceUnavailableError("Landing campaign official client is not configured in the service organization");
-  }
+      type: "human",
+      displayName: effectiveDisplayName || "First Tree",
+      inboxId: `inbox_${agentId}`,
+      source: "admin-api",
+      visibility: "private",
+      managerId: memberId,
+      metadata: { landingCampaignServiceUser: true },
+    });
+    const [created] = await db
+      .insert(members)
+      .values({
+        id: memberId,
+        userId: serviceUserId,
+        organizationId,
+        agentId,
+        role: "member",
+      })
+      .returning();
+    if (!created) throw new Error("Unexpected: INSERT RETURNING produced no service member row");
+    return created;
+  });
 }
 
 async function createCampaignAgentWithFallbackName(
@@ -388,6 +376,7 @@ async function ensureTrialChatAndBootstrap(
     campaign: string;
     repo: LandingCampaignRepoMetadata;
     skillSet: LandingCampaignSkillSet;
+    attribution?: LandingCampaignStartRequest["attribution"];
   },
 ): Promise<{ chatId: string; sent?: { recipients: string[]; messageId: string } }> {
   const kickoffKey = [
@@ -404,6 +393,7 @@ async function ensureTrialChatAndBootstrap(
     skillSetId: input.skillSet.id,
     skillSetVersion: input.skillSet.version,
     repo: input.repo,
+    ...(input.attribution ? { attribution: input.attribution } : {}),
     state: "running",
     inputLocked: false,
     maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
@@ -544,7 +534,7 @@ export async function startLandingCampaignTrial(
     throw new ForbiddenError("Landing campaign trials cannot be started in the First Tree service organization.");
   }
 
-  await assertOfficialClient(app.db, config.clientId, config.serviceUserId, config.serviceOrgId);
+  await assertOfficialLandingCampaignClient(app.db, config.clientId, config.serviceUserId, config.serviceOrgId);
   const { serviceMember, trialAgent } = await provisionTrialAgent(app, {
     organizationId: caller.organizationId,
     serviceUserId: config.serviceUserId,
@@ -564,6 +554,7 @@ export async function startLandingCampaignTrial(
     campaign: body.campaign,
     repo,
     skillSet,
+    ...(body.attribution ? { attribution: body.attribution } : {}),
   });
   if (result.sent) notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
 

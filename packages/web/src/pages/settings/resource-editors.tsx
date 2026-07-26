@@ -33,8 +33,8 @@ const asDefaultMode = (v: string): DefaultMode => DEFAULT_MODES.find((d) => d ==
 const asTransport = (v: string): Transport => TRANSPORTS.find((t) => t === v) ?? "stdio";
 
 const DEFAULT_OPTIONS: SelectOption[] = [
-  { value: "recommended", label: "On by default", hint: "Enabled for every agent" },
-  { value: "available", label: "Opt-in", hint: "Agents enable it themselves" },
+  { value: "recommended", label: "On by default" },
+  { value: "available", label: "Opt-in" },
 ];
 
 /**
@@ -124,8 +124,17 @@ export type EditorState =
 // Capabilities tab share this trigger shape.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function AddResourceButton({ type, onClick }: { type: ResourceType; onClick: () => void }) {
-  const label = `Add ${typeLabelSingular(type)}`;
+export function AddResourceButton({
+  type,
+  onClick,
+  label: labelOverride,
+}: {
+  type: ResourceType;
+  onClick: () => void;
+  /** Override the aria-label/tooltip noun; defaults to the type's singular. */
+  label?: string;
+}) {
+  const label = labelOverride ?? `Add ${typeLabelSingular(type)}`;
   return (
     <Button size="xs" variant="ghost" aria-label={label} title={label} onClick={onClick}>
       <Plus className="h-4 w-4" />
@@ -398,8 +407,10 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
 
   // A repo has no user-meaningful name — it's the `owner/repo` of the URL — so we
   // don't ask for one: the display name is derived from the (normalized) URL. The
-  // URL is normalized first so common paste shapes (github.com/org/repo, org/repo)
-  // work without a scheme; the server schema still validates the result. Repos are
+  // URL is normalized first so common full-host paste shapes work without a
+  // scheme; the server schema still validates the result. The owner/repo shorthand
+  // remains GitHub-specific, so the provider-neutral UI prompts for a full host.
+  // Repos are
   // always a team-wide default: pin `defaultEnabled: "recommended"` (editing a
   // legacy Opt-in repo normalizes it to recommended).
   const normalizedUrl = normalizeRepoUrl(url);
@@ -417,7 +428,7 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         label="Repository URL"
         value={url}
         onChange={setUrl}
-        placeholder="github.com/org/repo"
+        placeholder="https://git.example.com/org/repo.git"
         mono
         required
       />
@@ -430,9 +441,6 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         placeholder="main"
         mono
       />
-      <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
-        On by default — every agent gets this repo.
-      </p>
     </ModalEditor>
   );
 }
@@ -675,7 +683,7 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
         onChange={setDescription}
         placeholder="What this skill does"
       />
-      <BodyField id="skill-body" label="Content" value={body} onChange={setBody} />
+      <BodyField id="skill-body" value={body} onChange={setBody} />
       <DefaultModeField value={mode} onChange={setMode} />
     </ModalEditor>
   );
@@ -685,7 +693,7 @@ function BodyField({
   id,
   value,
   onChange,
-  label = "Body",
+  label = "Content",
 }: {
   id: string;
   value: string;

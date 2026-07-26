@@ -1,4 +1,5 @@
-import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";
 import { users } from "./users.js";
 
@@ -38,7 +39,20 @@ export const clients = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     /** Tombstone marker for client identities retired through Settings / logout --purge. */
     retiredAt: timestamp("retired_at", { withTimezone: true }),
+    /**
+     * Optional Client-reported pause reason from the existing heartbeat frame
+     * (`auth_rejected` | `auth_refresh_failed`). Null when healthy. Cron
+     * dispatchability treats a non-null value as `client_paused`.
+     */
+    pausedReason: text("paused_reason"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   },
-  (table) => [index("idx_clients_user").on(table.userId), index("idx_clients_org").on(table.organizationId)],
+  (table) => [
+    index("idx_clients_user").on(table.userId),
+    index("idx_clients_org").on(table.organizationId),
+    check(
+      "ck_clients_paused_reason",
+      sql`${table.pausedReason} IS NULL OR ${table.pausedReason} IN ('auth_rejected', 'auth_refresh_failed')`,
+    ),
+  ],
 );

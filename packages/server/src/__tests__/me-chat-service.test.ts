@@ -181,12 +181,17 @@ describe("chat-first workspace service layer", () => {
       metadata: { mentions: [owner.humanAgentUuid] },
     });
 
+    // The `request` message opens a request to the human, so the chat surfaces
+    // in the attention group, not the ordinary `rows` — search all groups.
+    const findChat = (res: Awaited<ReturnType<typeof listMeChats>>) =>
+      [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].find((r) => r.chatId === chatId);
+
     const before = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
     });
-    expect(before.rows.find((r) => r.chatId === chatId)).toMatchObject({
+    expect(findChat(before)).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
     });
@@ -197,7 +202,7 @@ describe("chat-first workspace service layer", () => {
       filter: "all",
       engagement: "all",
     });
-    expect(after.rows.find((r) => r.chatId === chatId)).toMatchObject({
+    expect(findChat(after)).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
     });
@@ -879,16 +884,33 @@ describe("chat-first workspace service layer", () => {
     expect(page2.rows[0]?.chatId).toBe(c1.chatId);
   });
 
-  it("listMeChats rejects an invalid cursor", async () => {
+  it("listMeChats recovers a legacy cursor as a first-page request but 400s an invalid one", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
+    // A recognized pre-PR legacy cursor restarts from page 1 so an already-open
+    // client recovers across the rollout instead of looping its load-more Retry.
+    // Use the deployed null-tail shape `|<chatId>` (empty timestamp) the old
+    // encoder emitted for a `last_message_at IS NULL` boundary.
+    const legacy = Buffer.from("|old-chat", "utf8").toString("base64url");
+    const recovered = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+      cursor: legacy,
+    });
+    expect(recovered.priorityRows).toEqual({ attention: [], pinned: [] });
+    expect(Array.isArray(recovered.rows)).toBe(true);
+
+    // A genuinely invalid cursor (here: an unsupported version) still surfaces as
+    // a typed 400 so a real client/API bug is not masked as a first-page request.
+    const invalid = Buffer.from("v9|2026-05-06T10:24:00.000Z|chat", "utf8").toString("base64url");
     await expect(
       listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
         limit: 50,
         filter: "all",
         engagement: "all",
-        cursor: "not-a-valid-cursor",
+        cursor: invalid,
       }),
     ).rejects.toThrow(/invalid cursor/i);
   });

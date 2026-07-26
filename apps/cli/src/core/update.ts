@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -22,6 +22,7 @@ import * as semver from "semver";
 import { resolveServerUrl, ServerUrlNotConfiguredError } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { resolveNpmInvocation } from "./npm-invocation.js";
 import { print } from "./output.js";
 
 /** Hard ceiling on a single `npm install -g` invocation (5 min). */
@@ -49,20 +50,6 @@ type PortableMetadataIdentity = {
  * binaries are not published and refuse self-update entirely).
  */
 export const PACKAGE_NAME = channelConfig.packageName;
-
-/**
- * Pick the `npm` binary to invoke for self-update. Background service units
- * prepend the current Node directory to PATH, but also prefer the sibling
- * npm explicitly so self-update stays aligned with the Node toolchain that
- * launched the daemon. If that sibling is missing (e.g. corporate custom
- * layout), fall back to PATH lookup.
- */
-function resolveNpmCommand(): string {
-  const binName = process.platform === "win32" ? "npm.cmd" : "npm";
-  const sibling = join(dirname(process.execPath), binName);
-  if (existsSync(sibling)) return sibling;
-  return "npm";
-}
 
 /**
  * Detect how the CLI was launched. Used by the update path to decide whether
@@ -236,8 +223,10 @@ function parseNpmViewEngineRange(stdout: string): string | null {
 
 function lookupNpmTargetNodeEngineRange(spec: string): string | null {
   if (PACKAGE_NAME === null) return null;
-  const res = spawnSync(resolveNpmCommand(), ["view", `${PACKAGE_NAME}@${spec}`, "engines.node", "--json"], {
+  const npm = resolveNpmInvocation(["view", `${PACKAGE_NAME}@${spec}`, "engines.node", "--json"]);
+  const res = spawnSync(npm.command, npm.args, {
     encoding: "utf-8",
+    shell: npm.shell,
     timeout: NPM_METADATA_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -668,19 +657,33 @@ export async function installGlobalSpec(
     return engineMismatch;
   }
   return new Promise((resolvePromise) => {
-    const npmCmd = resolveNpmCommand();
-    const npmArgs = ["install", "-g", `${PACKAGE_NAME}@${spec}`];
+    const npm = resolveNpmInvocation(["install", "-g", `${PACKAGE_NAME}@${spec}`]);
     // Bug 4: route the subprocess through ChildProcessRegistry so it is
     // tracked and reaped by the lifecycle shutdown hook, AND give it a
     // 5-minute hard timeout (network blip on the registry used to block
     // the main process for 60s+ with no escalation). Failures are mapped
     // through the error taxonomy so UpdateManager knows whether to retry.
-    const { child } = getChildProcessRegistry().spawn(npmCmd, npmArgs, {
-      category: "npm-install",
-      label: `npm install -g ${PACKAGE_NAME}@${spec}`,
-      timeoutMs: NPM_INSTALL_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child: ChildProcess;
+    try {
+      ({ child } = getChildProcessRegistry().spawn(npm.command, npm.args, {
+        category: "npm-install",
+        label: `npm install -g ${PACKAGE_NAME}@${spec}`,
+        timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: npm.shell,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const classification = classify(err, { source: "update" });
+      resolvePromise({
+        ok: false,
+        mode: "global",
+        reason: message,
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
+        reasonCode: classification.reasonCode,
+      });
+      return;
+    }
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -830,8 +833,10 @@ export function fetchLatestVersion(timeoutMs = 10_000): VersionLookupResult {
   if (PACKAGE_NAME === null) {
     return { ok: false, reason: "this binary's channel does not publish to npm (dev channel)." };
   }
-  const res = spawnSync(resolveNpmCommand(), ["view", PACKAGE_NAME, "version"], {
+  const npm = resolveNpmInvocation(["view", PACKAGE_NAME, "version"]);
+  const res = spawnSync(npm.command, npm.args, {
     encoding: "utf-8",
+    shell: npm.shell,
     timeout: timeoutMs,
     stdio: ["ignore", "pipe", "pipe"],
   });

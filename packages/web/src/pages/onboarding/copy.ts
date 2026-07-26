@@ -67,6 +67,12 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     title: "Join the team",
     why: "A First Tree team is where you, your teammates, and your agents work together.",
   },
+  "get-started": {
+    // title/why are rendered per-sub-state by StepGetStarted (choose vs pick a
+    // team agent); the shell skips them while empty.
+    title: "",
+    why: "",
+  },
 };
 
 /** One plain launch line for every start-chat finale — admin or invitee, team
@@ -190,7 +196,7 @@ export const COPY = {
     // wraps the command in a "please run this" line so the agent executes it
     // instead of just explaining a bare command.
     terminalBoxLabel: "Run this command in your terminal",
-    agentBoxLabel: "Or paste this to your Claude Code or Codex agent",
+    agentBoxLabel: "Or paste this to your Claude Code, Codex, or Cursor agent",
     agentPromptPrefix: "Help me install First Tree by running the command below:",
     // Quiet caption naming the nested coding-agent list, so the indented rows
     // read as "found ON this computer" (the relationship the nesting implies)
@@ -200,10 +206,6 @@ export const COPY = {
       count === 1 ? "Coding agent on this computer" : "Coding agents on this computer",
     // Bridge below the detected-agents list → the next step (create-agent).
     detectedBridge: "Next, create your first agent.",
-    // Stuck recovery (replaces the Need-help disclosure): ONE line, Node.js the
-    // #1 cause of "command not found". `nodeLinkLabel` is the inline link.
-    stuckNodePre: "“command not found”? → ",
-    stuckNodePost: ", re-run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     // One line: the "✓ <host> connected" row above already says the computer is
@@ -212,8 +214,6 @@ export const COPY = {
     // implied — a detected agent just shows up). Problem + fix only.
     noRuntime: "No coding agent found yet. Install one (like Claude Code) and sign in.",
     detecting: "Looking for coding agents on it…",
-    nodeLinkLabel: "Install Node.js (free)",
-    nodeUrl: "https://nodejs.org",
     /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).
         Calm + recoverable: the auto-retry handles transient blips, so by the
         time this shows it's worth a manual Try again. */
@@ -328,6 +328,34 @@ export const COPY = {
     // The primary action on the not-ready screen — start a simple first chat now
     // instead of waiting on the team.
     startAnyway: "Start chat",
+  },
+  /** get-started fork (invitee only): own agent vs team-agent quick start. */
+  getStarted: {
+    chooseTitle: "You're in. How do you want to start?",
+    chooseWhy: "Both paths land you in the team — pick what fits right now.",
+    own: {
+      title: "Set up my own agent",
+      description: "Connect your computer and create your personal agent — the full First Tree experience.",
+      cta: "Continue setup",
+    },
+    quick: {
+      title: "Take a quick look with a team agent",
+      description:
+        "Jump in now and chat with an agent your teammates already run — nothing to install. You can set up your own agent any time later.",
+      cta: "Quick start",
+    },
+    pickTitle: "Pick a team agent",
+    pickWhy: "Start chatting now. You can set up your own agent any time later.",
+    /** Ownership tag on each row — descriptive wording, not a new product concept. */
+    runBy: (owner: string) => `Run by ${owner}`,
+    startChat: "Start chat",
+    pickEmpty: "No team agent is available right now — set up your own instead.",
+    /** Roster read failed — distinct from empty, so a network blip never
+     *  becomes a false "no agent available" claim. */
+    pickError: "Couldn't load your team's agents just now.",
+    pickRetry: "Try again",
+    /** Footnote under the list: quick start does not finish setup. */
+    pickFootnote: "Starting here won't finish your setup — you can complete it any time from Settings.",
   },
   /** failure recovery, shared */
   errors: {

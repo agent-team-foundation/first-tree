@@ -421,6 +421,9 @@ describe("conversation-list source tags", () => {
   it("watcher rows count toward source counts and surface in source-filtered list", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
+      { metadata: {}, topic: "speaker-only-manual" },
+    ]);
 
     // A non-human agent that admin manages; another human (peer) creates
     // the PR chat with that managed agent. The result: admin gets a
@@ -465,6 +468,14 @@ describe("conversation-list source tags", () => {
       engagement: "active",
     });
     expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
+    expect(counts.manual).toEqual({ chatCount: 1, unreadChatCount: 0 });
+
+    const watchingCounts = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
+      engagement: "active",
+      watching: true,
+    });
+    expect(watchingCounts.counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
+    expect(watchingCounts.counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 
     // Filtering by origin AND `watching=true` surfaces the watcher row.
     // Phase B lifted `watching` out of the filter enum into an

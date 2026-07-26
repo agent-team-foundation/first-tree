@@ -7,10 +7,55 @@ export const landingCampaignSlugSchema = z
   .max(100)
   .regex(/^[a-z0-9][a-z0-9-]*$/u, "Campaign must be a kebab-case slug.");
 
+/** Campaigns that the current Cloud build can actively launch or hand off. */
+export const KNOWN_LANDING_CAMPAIGN_SLUGS = ["production-scan", "agent-readiness"] as const;
+export const knownLandingCampaignSlugSchema = z.enum(KNOWN_LANDING_CAMPAIGN_SLUGS);
+export type KnownLandingCampaignSlug = z.infer<typeof knownLandingCampaignSlugSchema>;
+
+export function isKnownLandingCampaignSlug(value: unknown): value is KnownLandingCampaignSlug {
+  return knownLandingCampaignSlugSchema.safeParse(value).success;
+}
+
+export const landingCampaignRepoSlugSchema = z
+  .string()
+  .max(200)
+  .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u);
+
+export const landingCampaignAttributionSchema = z
+  .object({
+    attemptId: z.string().uuid(),
+    variant: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  })
+  .strict();
+export type LandingCampaignAttribution = z.infer<typeof landingCampaignAttributionSchema>;
+
+export const landingCampaignActionConversionSchema = z
+  .object({
+    chatId: z.string().min(1),
+    recordedAt: z.string().datetime(),
+  })
+  .strict();
+export type LandingCampaignActionConversion = z.infer<typeof landingCampaignActionConversionSchema>;
+
+/** Trusted campaign action context carried by direct and onboarding chat creation. */
+export const landingCampaignActionContextSchema = z
+  .object({
+    campaign: knownLandingCampaignSlugSchema,
+    repoSlug: landingCampaignRepoSlugSchema,
+  })
+  .strict();
+export type LandingCampaignActionContext = z.infer<typeof landingCampaignActionContextSchema>;
+
 export const landingCampaignStartRequestSchema = z.object({
   organizationId: z.string().min(1).optional(),
   campaign: landingCampaignSlugSchema,
   repoUrl: repoUrlSchema,
+  attribution: landingCampaignAttributionSchema.optional(),
 });
 export type LandingCampaignStartRequest = z.infer<typeof landingCampaignStartRequestSchema>;
 
@@ -53,6 +98,8 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     skillSetId: z.string().min(1),
     skillSetVersion: z.string().min(1),
     repo: landingCampaignRepoMetadataSchema,
+    attribution: landingCampaignAttributionSchema.optional(),
+    actionConversion: landingCampaignActionConversionSchema.optional(),
     state: landingCampaignTrialChatStateSchema,
     inputLocked: z.boolean(),
     awaitingUserKind: landingCampaignTrialAwaitingUserKindSchema.optional(),

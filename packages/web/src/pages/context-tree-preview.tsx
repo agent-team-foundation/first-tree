@@ -4,12 +4,12 @@ import { Route, Routes } from "react-router";
 import { AuthContext } from "../auth/auth-context.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { ContextTreeBuildEntry } from "./context-tree-build-entry.js";
-import { SettingsContextTreePage } from "./settings/context-tree.js";
+import { SettingsRepositoriesPage } from "./settings/repositories.js";
 import { SettingsLayout } from "./settings.js";
 
 /**
- * DEV-only visual preview for the collapsed build-tree work. Renders the REAL
- * full Settings → Context tree page (sidebar + header + panel) in each state,
+ * DEV-only visual preview for the chat-first Context setup. Renders the REAL
+ * full Settings → Repositories page (sidebar + header + both repo models) in each state,
  * plus the Context tab's single build entry. Mounted with a seeded React Query
  * cache + a mock AuthContext so the real components render with no backend.
  * Visual review only — buttons hit dead mocks.
@@ -36,46 +36,44 @@ const AGENTS = [
     organizationId: ORG,
   },
 ];
-const REPO_RESOURCE = [
-  { type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/acme-web" } },
-];
-// GitHub App installation + the repos it grants — seeds the inline connect+pick
-// states of the Context tab build entry (no repo resource yet).
-const INSTALLATION = {
-  installationId: 42,
-  accountLogin: "acme",
-  accountType: "Organization",
-  manageUrl: "https://github.com/organizations/acme/settings/installations/42",
-  suspended: false,
-  permissions: {},
-  events: [],
-};
-const GH_REPOS = [
-  {
-    fullName: "acme/acme-web",
-    cloneUrl: "https://github.com/acme/acme-web.git",
-    htmlUrl: "https://github.com/acme/acme-web",
-    private: true,
-    defaultBranch: "main",
-    pushedAt: null,
-  },
-  {
-    fullName: "acme/acme-api",
-    cloneUrl: "https://github.com/acme/acme-api.git",
-    htmlUrl: "https://github.com/acme/acme-api",
-    private: true,
-    defaultBranch: "main",
-    pushedAt: null,
-  },
-];
 const FEATURES_DISABLED = { contextReviewer: { enabled: false, agentUuid: null } };
 const FEATURES_ENABLED = { contextReviewer: { enabled: true, agentUuid: "0192bbbb-bot2" } };
 // Enabled, but the saved reviewer is no longer one of the admin's active agents.
 const FEATURES_ENABLED_MISSING = { contextReviewer: { enabled: true, agentUuid: "0192ffff-gone" } };
 const BOUND = { repo: "https://github.com/acme/acme-context", branch: "main" };
 const UNBOUND = { repo: null, branch: null };
-// The Context Reviewer section loads candidate agents from this key once on.
-const REVIEWER_AGENTS_KEY = ["context-reviewer", "managed-agents", ORG] as const;
+const CODE_REPOSITORIES = [
+  {
+    id: "repo-web",
+    organizationId: ORG,
+    type: "repo",
+    scope: "team",
+    ownerAgentId: null,
+    name: "first-tree",
+    repoCanonicalKey: "github.com/acme/first-tree",
+    defaultEnabled: "recommended",
+    status: "active",
+    payload: { url: "https://github.com/acme/first-tree.git", defaultBranch: "main" },
+    createdBy: "member-preview",
+    updatedBy: "member-preview",
+    createdAt: "2026-07-16T00:00:00.000Z",
+    updatedAt: "2026-07-16T00:00:00.000Z",
+  },
+];
+const GITHUB_APP_READY = {
+  installationId: 42,
+  accountLogin: "acme",
+  accountType: "Organization",
+  accountGithubId: 42,
+  repositorySelection: "selected",
+  permissions: { metadata: "read", pull_requests: "write" },
+  events: ["pull_request"],
+  suspended: false,
+  manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+  createdAt: "2026-07-16T00:00:00.000Z",
+  updatedAt: "2026-07-16T00:00:00.000Z",
+};
+const REVIEWER_AGENTS_KEY = ["context-reviewer", "org-agents", ORG] as const;
 
 type Seed = ReadonlyArray<readonly [readonly unknown[], unknown]>;
 
@@ -97,7 +95,7 @@ function mockAuth(role: string, onboardingCompletedAt: string | null): ContextTy
   >;
 }
 
-/** The REAL Settings → Context tree page (sidebar + header + panel) for one state. */
+/** The REAL Settings → Repositories page (sidebar + header + panels) for one state. */
 function FullPageCase({ title, authRole, seed }: { title: string; authRole: string; seed: Seed }) {
   const qc = useSeededClient(seed);
   const auth = mockAuth(authRole, "2026-01-01T00:00:00.000Z");
@@ -117,8 +115,8 @@ function FullPageCase({ title, authRole, seed }: { title: string; authRole: stri
         <QueryClientProvider client={qc}>
           <AuthContext.Provider value={auth}>
             <Routes>
-              <Route element={<SettingsLayout />}>
-                <Route path="*" element={<SettingsContextTreePage />} />
+              <Route element={<SettingsLayout activePathname="/settings/repositories" />}>
+                <Route path="*" element={<SettingsRepositoriesPage />} />
               </Route>
             </Routes>
           </AuthContext.Provider>
@@ -129,7 +127,15 @@ function FullPageCase({ title, authRole, seed }: { title: string; authRole: stri
 }
 
 /** The Context tab build entry on its own (it lives in the Context tab empty state). */
-function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
+function BuildEntryCase({
+  title,
+  seed,
+  intent = "build",
+}: {
+  title: string;
+  seed: Seed;
+  intent?: "build" | "recover";
+}) {
   const qc = useSeededClient(seed);
   const auth = mockAuth("admin", "2026-01-01T00:00:00.000Z");
   return (
@@ -146,7 +152,7 @@ function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
       </div>
       <QueryClientProvider client={qc}>
         <AuthContext.Provider value={auth}>
-          <ContextTreeBuildEntry />
+          <ContextTreeBuildEntry intent={intent} />
         </AuthContext.Provider>
       </QueryClientProvider>
     </section>
@@ -156,60 +162,74 @@ function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
 export function ContextTreePreviewPage() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", padding: "var(--sp-6)" }}>
-      <PageHeader title="Context tree — preview" subtitle="DEV-only visual review of the collapsed build-tree work." />
+      <PageHeader title="Repositories — preview" subtitle="DEV-only visual review of repository settings." />
 
       <div style={{ marginTop: "var(--sp-5)" }}>
         <FullPageCase
-          title="Settings → Context tree · admin, team HAS a tree (the bug fix — no more build CTA)"
+          title="Settings → Repositories · admin, team HAS a tree"
           authRole="admin"
           seed={[
-            [["org-setting", ORG, "context_tree"], BOUND],
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "raw"], BOUND],
+            [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
+            [["github-app-installation", ORG], GITHUB_APP_READY],
+          ]}
+        />
+        <FullPageCase
+          title="Settings → Repositories · admin, no Context Tree yet"
+          authRole="admin"
+          seed={[
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "raw"], UNBOUND],
             [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
           ]}
         />
         <FullPageCase
-          title="Settings → Context tree · admin, no tree yet"
-          authRole="admin"
-          seed={[
-            [["org-setting", ORG, "context_tree"], UNBOUND],
-            [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
-          ]}
-        />
-        <FullPageCase
-          title="Settings → Context tree · member (read-only)"
+          title="Settings → Repositories · member (read-only)"
           authRole="member"
-          seed={[[["org-setting", ORG, "context_tree"], BOUND]]}
+          seed={[
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "safe"], BOUND],
+            [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
+            [["github-app-installation", ORG], GITHUB_APP_READY],
+          ]}
         />
       </div>
 
       <div className="text-eyebrow" style={{ color: "var(--fg-3)", margin: "var(--sp-4) 0 var(--sp-3)" }}>
-        Context Reviewer · immediate-save Switch (replaces the old checkbox + Save). Toggle on/off to see setup ↔ saved.
+        Automatic PR review · immediate-save Switch. Toggle on/off to see setup ↔ saved.
       </div>
       <div style={{ marginTop: "var(--sp-2)" }}>
         <FullPageCase
-          title="Context Reviewer · OFF (flip the Switch on → agent selector appears, pick one to enable)"
+          title="Automatic PR review · OFF (flip the Switch on → choose a reviewer)"
           authRole="admin"
           seed={[
-            [["org-setting", ORG, "context_tree"], BOUND],
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "raw"], BOUND],
             [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
+            [["github-app-installation", ORG], GITHUB_APP_READY],
             [REVIEWER_AGENTS_KEY, AGENTS],
           ]}
         />
         <FullPageCase
-          title="Context Reviewer · ON with a selected agent (Switch on, agent in the Select)"
+          title="Automatic PR review · ON with a selected reviewer"
           authRole="admin"
           seed={[
-            [["org-setting", ORG, "context_tree"], BOUND],
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "raw"], BOUND],
             [["org-setting", ORG, "context_tree_features"], FEATURES_ENABLED],
+            [["github-app-installation", ORG], GITHUB_APP_READY],
             [REVIEWER_AGENTS_KEY, AGENTS],
           ]}
         />
         <FullPageCase
-          title="Context Reviewer · ON but saved reviewer no longer available (warning + re-pick / turn off)"
+          title="Automatic PR review · saved reviewer unavailable"
           authRole="admin"
           seed={[
-            [["org-setting", ORG, "context_tree"], BOUND],
+            [["team-resources"], CODE_REPOSITORIES],
+            [["org-setting", ORG, "context_tree", "raw"], BOUND],
             [["org-setting", ORG, "context_tree_features"], FEATURES_ENABLED_MISSING],
+            [["github-app-installation", ORG], GITHUB_APP_READY],
             [REVIEWER_AGENTS_KEY, AGENTS],
           ]}
         />
@@ -225,37 +245,13 @@ export function ContextTreePreviewPage() {
           gap: "var(--sp-5)",
         }}
       >
+        <BuildEntryCase title="build · 2 agents" seed={[[["context-build", "managed-agents", ORG], AGENTS]]} />
         <BuildEntryCase
-          title="repo connected · 2 agents"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], REPO_RESOURCE],
-          ]}
+          title="bound tree recovery · continue in chat"
+          intent="recover"
+          seed={[[["context-build", "managed-agents", ORG], AGENTS]]}
         />
-        <BuildEntryCase
-          title="no repo · GitHub not connected (install CTA)"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], []],
-            [["context-build", "installation", ORG], null],
-          ]}
-        />
-        <BuildEntryCase
-          title="no repo · connected → pick a repo inline"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], []],
-            [["context-build", "installation", ORG], INSTALLATION],
-            [["context-build", "org-github-repos", ORG], GH_REPOS],
-          ]}
-        />
-        <BuildEntryCase
-          title="repo connected · no active agent"
-          seed={[
-            [["context-build", "managed-agents", ORG], []],
-            [["context-build", "resources", ORG], REPO_RESOURCE],
-          ]}
-        />
+        <BuildEntryCase title="build · no active agent" seed={[[["context-build", "managed-agents", ORG], []]]} />
       </div>
     </div>
   );

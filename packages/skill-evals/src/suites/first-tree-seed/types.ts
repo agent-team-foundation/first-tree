@@ -2,16 +2,36 @@ import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type SeedTreeState = "empty" | "nonempty" | "unbound";
-export type SeedSourceRepoState = "bare-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
+export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedChatHistoryState = "absent" | "approved-phase1";
+export type SeedInvocationMode = "managed" | "portable";
+export type SeedProgressState = "matching-phase1" | "no-marker" | "source-mismatch" | "unreadable-commit";
+export type SeedAuthorityState = "admin" | "member";
+export type SeedBindingState = "matching" | "different";
+export type SeedSourceForge = "github" | "gitlab";
+export type SeedSourceLocalBranchState = "fresh" | "stale";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
   | "report_missing_source"
   | "materialize_bare_worktree"
-  | "create_tree_via_init";
+  | "create_tree_via_init"
+  | "report_needs_admin"
+  | "refuse_phase2_recovery"
+  | "continue_phase2";
 
 export type FirstTreeSeedFixture = {
+  chatHistoryState?: SeedChatHistoryState;
+  invocationMode?: SeedInvocationMode;
+  progressState?: SeedProgressState;
+  seedAuthority?: SeedAuthorityState;
+  seedBindingState?: SeedBindingState;
+  sourceDeclaredRef?: string;
+  sourceDefaultBranch?: string;
+  sourceForge?: SeedSourceForge;
+  sourceLocalBranchState?: SeedSourceLocalBranchState;
+  sourceAdvancesAfterPhase1?: boolean;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };
@@ -19,6 +39,9 @@ export type FirstTreeSeedFixture = {
 export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
+  requireChatHistoryRead?: boolean;
+  requireGithubGovernanceBootstrap?: boolean;
+  requireGithubGovernanceRecovery?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
@@ -65,6 +88,7 @@ export type FixtureValidation = {
 
 export type EvalMetrics = {
   approvalRequestObserved: boolean;
+  chatHistoryReadObserved: boolean;
   contextTreeChanged: boolean;
   contextTreeStatus: string;
   directBareSourceContentReadObserved: boolean;
@@ -74,8 +98,17 @@ export type EvalMetrics = {
   forbiddenActionHits: readonly string[];
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
+  githubGovernanceBootstrapObserved: boolean;
+  githubGovernanceRecoveryObserved: boolean;
+  githubAppRequirementObserved: boolean;
+  progressReadObserved: boolean;
+  phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;
+  phase2RefusalObserved: boolean;
   runnerExitCode: number | null;
+  seedNeedsAdminObserved: boolean;
+  seedPreflightObserved: boolean;
+  seedPreflightSucceeded: boolean;
   seedSkillFileReadObserved: boolean;
   skeletonObserved: boolean;
   sourceEvidenceReadObserved: boolean;
@@ -86,8 +119,10 @@ export type EvalMetrics = {
   // a Phase-1 add/read/cleanup sequence cannot erase it.
   sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
+  sourceWorktreeMaterializedObserved: boolean;
   treeInitObserved: boolean;
   treeInitWithContextTreeDirObserved: boolean;
+  treeStrictFetchObserved: boolean;
   workspaceManifestReadObserved: boolean;
   writeSkillFileReadObserved: boolean;
 };

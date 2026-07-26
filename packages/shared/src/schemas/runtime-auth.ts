@@ -8,7 +8,7 @@ import { z } from "zod";
  * rather than returning `started: true` for a provider that will never publish
  * pending auth.
  */
-export const runtimeAuthProviderSchema = z.enum(["claude-code", "codex"]);
+export const runtimeAuthProviderSchema = z.enum(["claude-code", "codex", "cursor"]);
 export type RuntimeAuthProvider = z.infer<typeof runtimeAuthProviderSchema>;
 
 /**

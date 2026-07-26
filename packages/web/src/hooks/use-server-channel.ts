@@ -1,10 +1,18 @@
+import {
+  type AuthProviderAvailability,
+  authProviderAvailabilitySchema,
+  CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+  type ConnectBootstrapCommandTemplate,
+} from "@first-tree/shared";
 import type { ChannelName } from "@first-tree/shared/channel";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client.js";
 
 type ServerBootstrapConfig = {
   channel: ChannelName | null;
+  connectBootstrapCommandTemplate: ConnectBootstrapCommandTemplate | null;
   growthLandingPagesEnabled: boolean;
+  authProviders: AuthProviderAvailability;
 };
 
 /**
@@ -34,10 +42,33 @@ export function extractGrowthLandingPagesEnabled(data: unknown): boolean {
   return false;
 }
 
+export function extractAuthProviderAvailability(data: unknown): AuthProviderAvailability {
+  if (typeof data !== "object" || data === null || !("authProviders" in data)) {
+    return { google: false, github: false };
+  }
+  const result = authProviderAvailabilitySchema.safeParse(data.authProviders);
+  return result.success ? result.data : { google: false, github: false };
+}
+
+export function extractConnectBootstrapCommandTemplate(data: unknown): ConnectBootstrapCommandTemplate | null {
+  if (typeof data !== "object" || data === null || !("connectBootstrapCommandTemplate" in data)) return null;
+  const template = data.connectBootstrapCommandTemplate;
+  if (typeof template !== "object" || template === null) return null;
+  if (!("command" in template) || typeof template.command !== "string") return null;
+  if (!("codePlaceholder" in template) || template.codePlaceholder !== CONNECT_BOOTSTRAP_CODE_PLACEHOLDER) return null;
+  if (template.command.split(CONNECT_BOOTSTRAP_CODE_PLACEHOLDER).length !== 2) return null;
+  return {
+    command: template.command,
+    codePlaceholder: CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+  };
+}
+
 function extractServerBootstrapConfig(data: unknown): ServerBootstrapConfig {
   return {
     channel: extractChannel(data),
+    connectBootstrapCommandTemplate: extractConnectBootstrapCommandTemplate(data),
     growthLandingPagesEnabled: extractGrowthLandingPagesEnabled(data),
+    authProviders: extractAuthProviderAvailability(data),
   };
 }
 
@@ -75,14 +106,17 @@ export function useServerChannelState(): { channel: ChannelName | null; settled:
   return { channel: config?.channel ?? null, settled };
 }
 
-/**
- * The release channel this server speaks (`dev` | `staging` | `prod`), or null
- * while loading / when the server does not report one. Gates channel-scoped UI
- * such as the staging-only "hide agent final text" view toggle; for a gate that
- * must distinguish loading from unknown, use {@link useServerChannelState}.
- */
-export function useServerChannel(): ChannelName | null {
-  return useServerChannelState().channel;
+export function useContextTreeSetupPreviewBootstrapState(): {
+  channel: ChannelName | null;
+  commandTemplate: ConnectBootstrapCommandTemplate | null;
+  settled: boolean;
+} {
+  const { config, settled } = useServerBootstrapConfig();
+  return {
+    channel: config?.channel ?? null,
+    commandTemplate: config?.connectBootstrapCommandTemplate ?? null,
+    settled,
+  };
 }
 
 /**
@@ -98,4 +132,15 @@ export function useGrowthLandingPagesState(): { enabled: boolean; settled: boole
 
 export function useGrowthLandingPagesEnabled(): boolean {
   return useGrowthLandingPagesState().enabled;
+}
+
+export function useAuthProviderAvailabilityState(): {
+  providers: AuthProviderAvailability;
+  settled: boolean;
+} {
+  const { config, settled } = useServerBootstrapConfig();
+  return {
+    providers: config?.authProviders ?? { google: false, github: false },
+    settled,
+  };
 }

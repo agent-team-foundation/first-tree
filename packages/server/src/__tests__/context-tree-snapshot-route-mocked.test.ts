@@ -36,10 +36,24 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
 
   const snapshot = input.snapshot ?? unavailableSnapshot("mock snapshot");
   const resolveUserPrimaryOrgId = vi.fn().mockResolvedValue(input.orgId);
-  const getOrgContextTree = vi.fn().mockResolvedValue({
+  const getOrgContextTreeBinding = vi.fn().mockResolvedValue({
     repo: "https://github.com/acme/context-tree.git",
     branch: "main",
   });
+  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue(
+    input.orgId
+      ? {
+          provider: "github",
+          repo: "https://github.com/acme/context-tree.git",
+          branch: "main",
+          providerSource: "declared",
+          providerMatchesRepository: true,
+          gitlabConnection: null,
+          contextReviewer: { enabled: false, agentUuid: null },
+        }
+      : null,
+  );
+  const isOrgContextTreeBindingRuntimeCurrent = vi.fn().mockResolvedValue(true);
   const getContextTreeSnapshot = vi.fn().mockResolvedValue(snapshot);
   const isGithubRemoteBinding = vi.fn().mockReturnValue(input.githubRemote ?? false);
   const findInstallationByOrg = vi.fn().mockResolvedValue({ installationId: 123 });
@@ -47,7 +61,6 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     ok: false,
     reason: "no-installation",
   });
-  const decorateSnapshotWithMintGuidance = vi.fn((raw: ContextTreeSnapshot) => raw);
   const resolveContextTreeRecoveryAction = vi.fn().mockResolvedValue("manage_github_app_installation");
   const resolveOrgViewer = vi.fn().mockResolvedValue({ memberId: "member-1", role: "admin" });
   const summarizeContextTreeUsage = vi.fn().mockResolvedValue({
@@ -72,7 +85,12 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../scope/require-user.js", () => ({
     requireUser: () => ({ userId: "user-1" }),
   }));
-  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTree, resolveUserPrimaryOrgId }));
+  vi.doMock("../services/org-settings.js", () => ({
+    getOrgContextReviewRuntime,
+    getOrgContextTreeBinding,
+    isOrgContextTreeBindingRuntimeCurrent,
+    resolveUserPrimaryOrgId,
+  }));
   vi.doMock("../services/context-tree-snapshot.js", () => ({
     contextTreeSnapshotWindowDays: () => 7,
     getContextTreeSnapshot,
@@ -80,7 +98,6 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   }));
   vi.doMock("../services/github-app-installations.js", () => ({ findInstallationByOrg }));
   vi.doMock("../services/github-app-token.js", () => ({
-    decorateSnapshotWithMintGuidance,
     mintContextTreeInstallationToken,
     resolveContextTreeRecoveryAction,
   }));
@@ -100,10 +117,11 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     app,
     mocks: {
       buildContextTreeIoSummary,
-      decorateSnapshotWithMintGuidance,
       findInstallationByOrg,
+      getOrgContextReviewRuntime,
       getContextTreeSnapshot,
-      getOrgContextTree,
+      getOrgContextTreeBinding,
+      isOrgContextTreeBindingRuntimeCurrent,
       isGithubRemoteBinding,
       mintContextTreeInstallationToken,
       resolveContextTreeRecoveryAction,
@@ -126,30 +144,70 @@ describe("context tree snapshot user route with mocked dependencies", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ snapshotStatus: "unavailable", recoveryAction: null });
-    expect(ctx.mocks.getOrgContextTree).not.toHaveBeenCalled();
+    expect(ctx.mocks.getOrgContextTreeBinding).not.toHaveBeenCalled();
     expect(ctx.mocks.findInstallationByOrg).not.toHaveBeenCalled();
     expect(ctx.mocks.summarizeContextTreeUsage).not.toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).not.toHaveBeenCalled();
     await ctx.app.close();
   });
 
-  it("mints GitHub App guidance and reconciles org telemetry for GitHub remote bindings", async () => {
+  it("mints snapshot credentials without adding App guidance and reconciles org telemetry", async () => {
     const ctx = await setupRoute({ orgId: "org-1", githubRemote: true });
     const res = await ctx.app.inject({ method: "GET", url: "/snapshot?window=30d" });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       recoveryAction: "manage_github_app_installation",
+      contextStatus: { detail: "mock snapshot" },
       usage: { windowDays: 7, agentCount: 1, usageCount: 2 },
       io: { windowDays: 7, summary: { read: { eventCount: 1 } } },
     });
+    expect(res.json<{ contextStatus: { detail: string } }>().contextStatus.detail).not.toContain("GitHub App");
     expect(ctx.mocks.findInstallationByOrg).toHaveBeenCalledWith(ctx.app.db, "org-1");
     expect(ctx.mocks.mintContextTreeInstallationToken).toHaveBeenCalled();
-    expect(ctx.mocks.decorateSnapshotWithMintGuidance).toHaveBeenCalled();
     expect(ctx.mocks.resolveContextTreeRecoveryAction).toHaveBeenCalled();
     expect(ctx.mocks.resolveOrgViewer).toHaveBeenCalledWith(ctx.app.db, "user-1", "org-1");
     expect(ctx.mocks.summarizeContextTreeUsage).toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).toHaveBeenCalled();
+    await ctx.app.close();
+  });
+
+  it("drives the snapshot from one live runtime tuple instead of a separately read stale binding", async () => {
+    const ctx = await setupRoute({ orgId: "org-1" });
+    ctx.mocks.getOrgContextTreeBinding.mockResolvedValue({
+      provider: "gitlab",
+      repo: "https://gitlab.example/acme/old-tree.git",
+      branch: "old-branch",
+    });
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValue({
+      provider: "gitlab",
+      repo: "https://gitlab.example/acme/new-tree.git",
+      branch: "new-branch",
+      providerSource: "declared",
+      providerMatchesRepository: true,
+      gitlabConnection: {
+        id: "connection-1",
+        instanceOrigin: "https://gitlab.example",
+        endpointSeen: true,
+        lastValidInboundAt: null,
+      },
+      contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+    });
+
+    const res = await ctx.app.inject({ method: "GET", url: "/snapshot" });
+
+    expect(res.statusCode).toBe(200);
+    expect(ctx.mocks.getOrgContextTreeBinding).not.toHaveBeenCalled();
+    expect(ctx.mocks.getContextTreeSnapshot).toHaveBeenCalledWith(
+      {
+        provider: "gitlab",
+        repo: "https://gitlab.example/acme/new-tree.git",
+        branch: "new-branch",
+        githubToken: undefined,
+      },
+      "7d",
+      expect.objectContaining({ gitlabInstanceOrigin: "https://gitlab.example" }),
+    );
     await ctx.app.close();
   });
 });

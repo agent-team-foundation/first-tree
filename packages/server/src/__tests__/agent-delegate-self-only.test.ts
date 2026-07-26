@@ -73,7 +73,7 @@ describe("PATCH /agents/:uuid — delegateMention is self-only", () => {
     expect(res.json().delegateMention).toBe(targetUuid);
   });
 
-  it("still lets an admin edit another member's non-delegate fields (200)", async () => {
+  it("still lets an admin edit another member's non-identity fields (200)", async () => {
     const app = getApp();
     const a = await createTestAdmin(app);
     const b = await createTestAdmin(app);
@@ -82,10 +82,10 @@ describe("PATCH /agents/:uuid — delegateMention is self-only", () => {
       method: "PATCH",
       url: `/api/v1/agents/${b.humanAgentUuid}`,
       headers: { authorization: `Bearer ${a.accessToken}` },
-      payload: { displayName: "Renamed by admin" },
+      payload: { avatarColorToken: "hue-3" },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().displayName).toBe("Renamed by admin");
+    expect(res.json().avatarColorToken).toBe("hue-3");
   });
 });

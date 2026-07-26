@@ -20,6 +20,25 @@ vi.mock("../hooks/pulse-context.js", () => ({
   PulseProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+const serverChannelStateMock = vi.hoisted(() => ({
+  channel: "prod" as "dev" | "staging" | "prod" | null,
+  settled: true,
+  commandTemplate: {
+    command:
+      "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+      "~/.local/bin/first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+  } as {
+    command: string;
+    codePlaceholder: string;
+  } | null,
+}));
+
+vi.mock("../hooks/use-server-channel.js", () => ({
+  useServerChannelState: () => serverChannelStateMock,
+  useContextTreeSetupPreviewBootstrapState: () => serverChannelStateMock,
+}));
+
 vi.mock("../components/ui/toast.js", () => ({
   ToastProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -48,6 +67,20 @@ vi.mock("../pages/context.js", () => ({ ContextPage: () => <div>context page</di
 vi.mock("../pages/docs/docs-list-page.js", () => ({ DocsListPage: () => <div>docs list page</div> }));
 vi.mock("../pages/docs/doc-page.js", () => ({ DocPage: () => <div>doc page</div> }));
 vi.mock("../pages/team/index.js", () => ({ TeamPage: () => <div>team page</div> }));
+vi.mock("../pages/mobile/shell.js", async () => {
+  const { Outlet } = await import("react-router");
+  return {
+    MobileShell: () => (
+      <div data-testid="mobile-shell">
+        mobile shell
+        <Outlet />
+      </div>
+    ),
+  };
+});
+vi.mock("../pages/mobile/work.js", () => ({ MobileWorkPage: () => <div>mobile work</div> }));
+vi.mock("../pages/mobile/team.js", () => ({ MobileTeamPage: () => <div>mobile team</div> }));
+vi.mock("../pages/mobile/me.js", () => ({ MobileMePage: () => <div>mobile me</div> }));
 vi.mock("../pages/settings.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -60,10 +93,29 @@ vi.mock("../pages/settings.js", async () => {
   };
 });
 vi.mock("../pages/settings/computers.js", () => ({ SettingsComputersPage: () => <div>settings computers</div> }));
-vi.mock("../pages/settings/context-tree.js", () => ({ SettingsContextTreePage: () => <div>settings context</div> }));
+vi.mock("../pages/settings/account.js", () => ({ SettingsAccountPage: () => <div>settings account</div> }));
+vi.mock("../pages/settings/context-tree.js", async () => {
+  const { Navigate } = await import("react-router");
+  return { SettingsContextTreePage: () => <Navigate to="/settings/setup" replace /> };
+});
 vi.mock("../pages/settings/github.js", () => ({ SettingsGithubPage: () => <div>settings github</div> }));
-vi.mock("../pages/settings/onboarding.js", () => ({ SettingsOnboardingPage: () => <div>settings onboarding</div> }));
+vi.mock("../pages/settings/gitlab.js", () => ({ SettingsGitlabPage: () => <div>settings gitlab</div> }));
+vi.mock("../pages/settings/integrations.js", async () => {
+  const { Outlet } = await import("react-router");
+  return {
+    SettingsIntegrationsLayout: () => (
+      <div>
+        integrations layout
+        <Outlet />
+      </div>
+    ),
+  };
+});
+vi.mock("../pages/settings/repositories.js", () => ({
+  SettingsRepositoriesPage: () => <div>settings repositories</div>,
+}));
 vi.mock("../pages/settings/resources.js", () => ({ SettingsResourcesPage: () => <div>settings resources</div> }));
+vi.mock("../pages/settings/setup.js", () => ({ SettingsSetupPage: () => <div>settings setup</div> }));
 vi.mock("../pages/agent-detail.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -99,6 +151,7 @@ vi.mock("../pages/request-dock-preview.js", () => ({ RequestDockPreviewPage: () 
 vi.mock("../pages/command-palette-preview.js", () => ({
   CommandPalettePreviewPage: () => <div>command palette preview</div>,
 }));
+vi.mock("../pages/mobile-preview.js", () => ({ MobilePreviewPage: () => <div>mobile preview page</div> }));
 vi.mock("../pages/user-menu-preview.js", () => ({ UserMenuPreviewPage: () => <div>user menu preview</div> }));
 vi.mock("../pages/support-menu-preview.js", () => ({ SupportMenuPreviewPage: () => <div>support menu preview</div> }));
 vi.mock("../pages/chat-summary-preview.js", () => ({ ChatSummaryPreviewPage: () => <div>chat summary preview</div> }));
@@ -108,13 +161,36 @@ vi.mock("../pages/team-switcher-preview.js", () => ({
 vi.mock("../pages/settings-github-preview.js", () => ({
   SettingsGithubPreviewPage: () => <div>settings github preview</div>,
 }));
+vi.mock("../pages/setup-preview.js", () => ({ SetupPreviewPage: () => <div>setup preview</div> }));
 vi.mock("../pages/onboarding-preview.js", () => ({ OnboardingPreviewPage: () => <div>onboarding preview</div> }));
+vi.mock("../pages/context-tree-setup-preview.js", () => ({
+  ContextTreeSetupPreviewPage: () => (
+    <div data-testid="context-tree-setup-preview-mock">context tree setup preview</div>
+  ),
+}));
 vi.mock("../pages/team-preview.js", () => ({ TeamPreviewPage: () => <div>team preview</div> }));
 vi.mock("../pages/resources-preview.js", () => ({ ResourcesPreviewPage: () => <div>resources preview</div> }));
 vi.mock("../pages/agent-detail-preview.js", () => ({ AgentDetailPreviewPage: () => <div>agent detail preview</div> }));
 vi.mock("../pages/styleguide-preview.js", () => ({ StyleguidePreviewPage: () => <div>styleguide preview</div> }));
 
 let root: Root | null = null;
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: query.includes("max-width") ? width <= 767 : width >= 768,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
 
 async function renderAppAt(path: string, dev = true): Promise<string> {
   vi.resetModules();
@@ -143,6 +219,15 @@ describe("App routes", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     root = null;
+    setViewportWidth(1280);
+    serverChannelStateMock.channel = "prod";
+    serverChannelStateMock.settled = true;
+    serverChannelStateMock.commandTemplate = {
+      command:
+        "curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n" +
+        "~/.local/bin/first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+      codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    };
   });
 
   afterEach(async () => {
@@ -154,6 +239,10 @@ describe("App routes", () => {
   });
 
   it("routes public, protected, nested, preview, and redirect paths", async () => {
+    expect(await renderAppAt("/")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
     expect(await renderAppAt("/login")).toContain("login page");
     await resetRenderedApp();
 
@@ -172,13 +261,41 @@ describe("App routes", () => {
     expect(await renderAppAt("/agents/agent-1/tools")).toContain("profile tab");
     await resetRenderedApp();
 
+    expect(await renderAppAt("/settings")).toContain("settings account");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/account")).toContain("settings account");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/user-settings?connection=google-linked")).toContain("settings account");
+    expect(window.location.pathname).toBe("/settings/account");
+    expect(window.location.search).toBe("?connection=google-linked");
+    await resetRenderedApp();
+
     expect(await renderAppAt("/settings/github")).toContain("settings github");
     await resetRenderedApp();
 
-    expect(await renderAppAt("/settings/setup")).toContain("settings onboarding");
+    expect(await renderAppAt("/settings/integrations/github")).toContain("settings github");
     await resetRenderedApp();
 
-    expect(await renderAppAt("/settings/context")).toContain("settings context");
+    expect(await renderAppAt("/settings/integrations/gitlab")).toContain("settings gitlab");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/integrations")).toContain("settings github");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/setup")).toContain("settings setup");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/onboarding")).toContain("settings setup");
+    expect(window.location.pathname).toBe("/settings/setup");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/repositories")).toContain("settings repositories");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/context")).toContain("settings setup");
+    expect(window.location.pathname).toBe("/settings/setup");
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/resources")).toContain("settings resources");
@@ -217,7 +334,110 @@ describe("App routes", () => {
     expect(await renderAppAt("/preview/styleguide")).toContain("styleguide preview");
     await resetRenderedApp();
 
+    expect(await renderAppAt("/preview/mobile")).toContain("mobile preview page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
     expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
+  });
+
+  it("opens the mobile experience on prod", async () => {
+    setViewportWidth(390);
+    expect(await renderAppAt("/")).toContain("mobile work");
+    expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m")).toContain("mobile work");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/now")).toContain("mobile work");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("mobile work");
+  });
+
+  it("waits for the server channel before choosing the mobile or desktop shell", async () => {
+    serverChannelStateMock.channel = null;
+    serverChannelStateMock.settled = false;
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/")).not.toContain("workspace page");
+    expect(document.body.textContent ?? "").not.toContain("mobile work");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+  });
+
+  it("recovers a settled unusable channel to the desktop root", async () => {
+    serverChannelStateMock.channel = null;
+    serverChannelStateMock.settled = true;
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/")).toContain("workspace page");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/now")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("workspace page");
+  });
+
+  it("opens mobile routes, phone root, and PWA metadata on staging", async () => {
+    serverChannelStateMock.channel = "staging";
+    setViewportWidth(390);
+    expect(await renderAppAt("/")).toContain("mobile work");
+    expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m")).toContain("mobile work");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("mobile work");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/team")).toContain("mobile team");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/me")).toContain("mobile me");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/?desktop=1")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/?c=chat-1")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/#debug")).toContain("workspace page");
+  });
+
+  it("opens the mobile experience on dev", async () => {
+    serverChannelStateMock.channel = "dev";
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/m/now")).toContain("mobile work");
   });
 
   it("routes development preview pages and omits dev-only previews in production", async () => {
@@ -257,6 +477,9 @@ describe("App routes", () => {
     expect(await renderAppAt("/preview/settings-github")).toContain("settings github preview");
     await resetRenderedApp();
 
+    expect(await renderAppAt("/preview/setup")).toContain("setup preview");
+    await resetRenderedApp();
+
     expect(await renderAppAt("/preview/onboarding")).toContain("onboarding preview");
     await resetRenderedApp();
 
@@ -272,5 +495,51 @@ describe("App routes", () => {
     const productionPreview = await renderAppAt("/preview/styleguide", false);
     expect(productionPreview).toContain("styleguide preview");
     expect(productionPreview).not.toContain("context preview");
+  });
+
+  it("exposes Context Tree setup only in development and on the staging channel", async () => {
+    expect(await renderAppAt("/preview/context-tree-setup")).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "staging";
+    expect(await renderAppAt("/preview/context-tree-setup", false)).toContain("context tree setup preview");
+    await resetRenderedApp();
+
+    serverChannelStateMock.commandTemplate = null;
+    const reloadSpy = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
+    const missingAuthority = await renderAppAt("/preview/context-tree-setup", false);
+    expect(missingAuthority).toContain("Preview unavailable");
+    expect(document.querySelector('[data-testid="context-tree-setup-preview-mock"]')).toBeNull();
+    const reloadButton = document.querySelector<HTMLButtonElement>("button");
+    expect(reloadButton?.textContent).toBe("Reload preview");
+    await act(async () => reloadButton?.click());
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    reloadSpy.mockRestore();
+    expect(window.location.pathname).toBe("/preview/context-tree-setup");
+    await resetRenderedApp();
+
+    serverChannelStateMock.commandTemplate = {
+      command: "first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+      codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
+    };
+    serverChannelStateMock.settled = false;
+    const pendingRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(pendingRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/preview/context-tree-setup");
+    await resetRenderedApp();
+
+    serverChannelStateMock.settled = true;
+    serverChannelStateMock.channel = null;
+    const unknownRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(unknownRoute).toContain("workspace page");
+    expect(unknownRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
+    await resetRenderedApp();
+
+    serverChannelStateMock.channel = "prod";
+    const productionRoute = await renderAppAt("/preview/context-tree-setup", false);
+    expect(productionRoute).toContain("workspace page");
+    expect(productionRoute).not.toContain("context tree setup preview");
+    expect(window.location.pathname).toBe("/");
   });
 });

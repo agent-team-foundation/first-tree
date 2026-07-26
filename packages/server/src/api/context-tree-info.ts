@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { requireUser } from "../scope/require-user.js";
-import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
+import { getOrgContextTreeBinding, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 
 export async function contextTreeInfoRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -15,7 +15,7 @@ export async function contextTreeInfoRoutes(app: FastifyInstance): Promise<void>
     if (!orgId) {
       return { repo: null, branch: null };
     }
-    const tree = await getOrgContextTree(app.db, orgId);
-    return { repo: tree.repo ?? null, branch: tree.branch ?? null };
+    const tree = await getOrgContextTreeBinding(app.db, orgId);
+    return { repo: tree?.repo ?? null, branch: tree?.branch ?? null };
   });
 }

@@ -191,6 +191,17 @@ export async function runLogout(opts: {
   // 1. Stop daemon (best-effort).
   if (isServiceSupported()) {
     const svc = getClientServiceStatus();
+    if (svc.migrationRequired === "root-systemd-user-to-system") {
+      const detail = svc.detail ? `: ${svc.detail}` : "";
+      print.line(`  Background service requires migration before logout${detail}.\n\n`);
+      print.line("  Refusing to remove credentials while the legacy root daemon may still be running.\n");
+      print.line(`  Complete the migration with \`${channelConfig.binName} login <code>\`, then retry logout.\n\n`);
+      fail(
+        "DAEMON_MIGRATION_REQUIRED",
+        `Cannot safely logout while background service migration is required: ${svc.platform}${detail}`,
+        1,
+      );
+    }
     if (svc.state === "unknown" && opts.purge) {
       const detail = svc.detail ? `: ${svc.detail}` : "";
       print.line(`  Could not determine ${svc.platform} service state${detail}.\n\n`);

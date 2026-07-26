@@ -1,0 +1,10 @@
+{
+  "action": "created",
+  "installation": {
+    "id": 88800002,
+    "account": { "id": 99802, "login": "neworg", "type": "Organization" },
+    "permissions": { "contents": "read", "metadata": "read" },
+    "events": ["push", "pull_request"]
+  },
+  "sender": { "id": 88001, "login": "gh-mockadmin", "type": "User" }
+}

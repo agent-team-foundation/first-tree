@@ -259,16 +259,19 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // their primary local-execution surface. Landing campaign trials are forced
   // through the app-server handler, which supplies a custom managed permissions
   // profile instead of this SDK-only legacy sandbox field.
+  const reasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
     sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
-    // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
-    // is a subset of the SDK's ModelReasoningEffort and deliberately omits
-    // "minimal", which is incompatible with the default tool set (footgun F3).
-    modelReasoningEffort: payload.kind === "codex" ? payload.reasoningEffort : "high",
+    // previously hard-coded). Codex CLI/app-server 0.144.1 accepts the newer
+    // provider-native "max" and "ultra" values, but the SDK's TypeScript union
+    // still stops at "xhigh" even though its runtime serializer forwards the
+    // literal as `model_reasoning_effort`. Keep this assertion isolated at the
+    // third-party boundary until the upstream declaration catches up.
+    modelReasoningEffort: reasoningEffort as ThreadOptions["modelReasoningEffort"],
     webSearchEnabled: false,
     additionalDirectories,
   };
@@ -432,6 +435,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   let codex: Codex | null = null;
   let thread: Thread | null = null;
   let threadId: string | null = null;
+  let activeProviderEnv: Record<string, string> | null = null;
   // Best-effort label for the current Codex thread's model — recorded from the
   // last `buildCodexThreadOptions` call so `token_usage` events can carry a
   // model name. The SDK does not echo back the actual model used (the CLI may
@@ -1361,7 +1365,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    * need a thread restart) stays out of scope; this targets the prompt.
    */
   function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
-    if (!agentConfigCache || !cwd || !threadId) return null;
+    if (!agentConfigCache || !cwd || !threadId || !activeProviderEnv) return null;
     // Never throw: this runs on the inject drain path AFTER the batch has been
     // dequeued, so a thrown briefing rewrite would strand the message (no
     // turn/start, no token.retry). On any failure, skip the hot-switch for this
@@ -1439,6 +1443,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     const resumeThreadId = threadId ?? undefined;
     thread = null;
     codex = null;
+    activeProviderEnv = null;
     initialTurnPreparing = false;
     pendingChatContextPrompt = null;
     sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
@@ -1502,11 +1507,13 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
+      const providerEnv = buildEnv(sessionCtx);
       const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
-      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      codex = createCodexClient({ env: providerEnv, config: buildCodexConfig(payload) }, sessionCtx);
+      activeProviderEnv = providerEnv;
       activePayload = payload;
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
@@ -1577,6 +1584,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
+      const providerEnv = buildEnv(sessionCtx);
       const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
@@ -1599,7 +1607,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
       }
 
-      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      codex = createCodexClient({ env: providerEnv, config: buildCodexConfig(payload) }, sessionCtx);
+      activeProviderEnv = providerEnv;
       activePayload = payload;
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
@@ -1656,6 +1665,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       thread = null;
       codex = null;
       activePayload = null;
+      activeProviderEnv = null;
       initialTurnPreparing = false;
       pendingChatContextPrompt = null;
     },
@@ -1676,6 +1686,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       thread = null;
       codex = null;
       activePayload = null;
+      activeProviderEnv = null;
 
       // Source repos, the Context Tree clone, and on-demand worktrees under
       // `<cwd>/worktrees/<name>/` are all agent-managed state — the agent

@@ -3,7 +3,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Opt-in live model evaluations for First Tree skills.",
+  "description": "Human-directed live model evaluations for First Tree skills.",
   "scripts": {
     "eval:floor": "tsx src/index.ts floor",
     "eval:gate": "tsx src/index.ts gate",
@@ -12,14 +12,18 @@
     "eval:select": "tsx src/index.ts select",
     "eval:summary": "tsx src/index.ts summary",
     "eval:compare": "tsx src/index.ts compare",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --exclude '.runs/**'",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=22.16.0"
   },
+  "dependencies": {
+    "@first-tree/shared": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.16.0",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "yaml": "^2.8.3"
   }
 }

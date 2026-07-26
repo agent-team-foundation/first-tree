@@ -1,5 +1,6 @@
-import type { AgentMainStatus } from "@first-tree/shared";
 import { useEffect, useState } from "react";
+
+export type TimelineAnchorKind = "working" | "failed" | "reason";
 
 /**
  * Which `data-*-agent` attribute carries each status's timeline anchor.
@@ -9,21 +10,21 @@ import { useEffect, useState } from "react";
 const ANCHOR_ATTR = {
   working: "data-working-agent",
   failed: "data-error-agent",
+  reason: "data-status-reason-agent",
 } as const;
 
 /** Stable key for the mounted-anchor set. */
-export function anchorKey(main: AgentMainStatus, agentId: string): string {
-  return `${main}:${agentId}`;
+export function anchorKey(kind: TimelineAnchorKind, agentId: string): string {
+  return `${kind}:${agentId}`;
 }
 
 /**
  * Whether an agent's status can jump to the timeline right now — i.e. its
- * anchor is in the mounted set. The single predicate every jump affordance
- * gates on (rail row text, rail `Reply ↩`, AgentRow pills/chip) so none can
- * become a clickable no-op. Pure & exported for tests.
+ * anchor is in the mounted set. Compose-rail jump affordances gate on this so
+ * none can become a clickable no-op. Pure & exported for tests.
  */
-export function isJumpable(mounted: ReadonlySet<string>, main: AgentMainStatus, agentId: string): boolean {
-  return mounted.has(anchorKey(main, agentId));
+export function isJumpable(mounted: ReadonlySet<string>, kind: TimelineAnchorKind, agentId: string): boolean {
+  return mounted.has(anchorKey(kind, agentId));
 }
 
 function scanAnchors(): Set<string> {
@@ -44,23 +45,19 @@ function sameKeys(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 }
 
 /**
- * Set of `${main}:${agentId}` for every timeline anchor currently mounted in
- * the DOM (working / failed). The status surfaces (compose rail,
- * AgentRow) gate the "jump to timeline" affordance on this so a row is only
- * clickable when its target is actually present — no silent no-op.
+ * Set of `${kind}:${agentId}` for every timeline anchor currently mounted in
+ * the DOM (working / failed / status reason). The compose activity rail gates its "jump to
+ * timeline" affordance on this so a row is only clickable when its target is
+ * actually present — no silent no-op.
  *
  * It's computed in an effect (never a render-time DOM read) and refreshed via a
  * MutationObserver, deduped so an unchanged set doesn't re-render. The scan is
- * DOM-driven on purpose: anchors come from two different subtrees (the centre
- * timeline vs. the right-sidebar roster) and from a query keyed per-agent, so
- * observing what's mounted is simpler and more accurate than re-deriving from
- * each source.
+ * DOM-driven on purpose: anchors come from multiple center-timeline row types
+ * and a query keyed per-agent, so observing what's mounted is simpler and more
+ * accurate than re-deriving from each source.
  *
- * ⚠️ Why a gate is needed at all: the chat timeline loads only the latest 50
- * messages (no pagination) and only the primary agent's session events, so a
- * non-primary agent's working/error anchor may not be
- * mounted. Full jump coverage (older messages / all agents) is a follow-up that
- * depends on message pagination + multi-agent event loading — out of scope here.
+ * A gate is still needed because the chat timeline loads bounded message and
+ * event windows, so older evidence may not be mounted.
  */
 export function useMountedAnchors(): ReadonlySet<string> {
   const [keys, setKeys] = useState<ReadonlySet<string>>(() => new Set());

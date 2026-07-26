@@ -20,6 +20,7 @@
  */
 
 import { isCodexBinaryMissingError } from "./codex-binary.js";
+import { isCursorBinaryMissingError } from "./cursor-binary.js";
 
 export const ERROR_KINDS = {
   TRANSIENT: "transient",
@@ -238,7 +239,11 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
   // Check class names FIRST so they win over loose substring heuristics
   // (e.g. "fetch failed" in an unrelated message accidentally classifying a
   // permanent identity error as transient network).
-  if (shape.name === "ClientUserMismatchError" || shape.name === "ClientOrgMismatchError") {
+  if (
+    shape.name === "ClientUserMismatchError" ||
+    shape.name === "ClientOrgMismatchError" ||
+    shape.name === "ClientRetiredError"
+  ) {
     return {
       kind: ERROR_KINDS.PERMANENT,
       strategy: NONE,
@@ -285,6 +290,25 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       strategy: NONE,
       reasonCode: "codex_binary_missing",
       message: shape.message ?? "Codex runtime binary missing",
+    };
+  }
+  // Same present-but-flaky vs genuinely-missing split for the external Cursor
+  // Agent CLI: a smoke-check flake retries, a resolved-nothing / clean-broken
+  // binary is a permanent capability failure.
+  if (shape.name === "CursorBinaryVerifyTransientError") {
+    return {
+      kind: ERROR_KINDS.TRANSIENT,
+      strategy: TRANSIENT_FAST,
+      reasonCode: "cursor_verify_transient",
+      message: shape.message ?? "cursor-agent --version smoke check did not complete (transient)",
+    };
+  }
+  if (isCursorBinaryMissingError(err)) {
+    return {
+      kind: ERROR_KINDS.PERMANENT,
+      strategy: NONE,
+      reasonCode: "cursor_binary_missing",
+      message: shape.message ?? "Cursor Agent CLI binary missing",
     };
   }
   // `AbortSignal.timeout()` aborts with a `DOMException` whose `name` is

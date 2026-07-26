@@ -6,9 +6,11 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   COMPOSER_ACCEPT_ATTRIBUTE,
+  chatMetadataSchema,
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
+  imageAttachmentRefsFromMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   isLandingCampaignTrialChatLocked,
@@ -20,25 +22,29 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   ArrowUp,
   AtSign,
   Check,
   Download,
   ExternalLink,
   Eye,
-  EyeOff,
   Menu,
   MessageSquare,
   PanelRight,
   Paperclip,
   X,
+  X as XIcon,
 } from "lucide-react";
 import {
+  type CSSProperties,
+  createContext,
   memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -50,12 +56,7 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import {
-  downloadAttachment,
-  fetchAttachmentBase64,
-  uploadAttachment,
-  uploadMimeFor,
-} from "../../../api/attachments.js";
+import { downloadAttachment, uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -72,19 +73,21 @@ import {
   sendChatMessage,
   sendFileMessageBatch,
 } from "../../../api/chats.js";
-import { getImage, putImage } from "../../../api/image-store.js";
+import { putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asErrorPayload,
-  listSessionEvents,
+  chatSessionEventsQueryKey,
+  listChatSessionEvents,
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
+import { sendAskAnswer } from "../../../components/chat/ask-answer-transport.js";
 import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
@@ -95,22 +98,35 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
+import {
+  GITLAB_SYSTEM_SENDER_NAME,
+  GitlabEventCardMessage,
+  GitlabSystemAvatar,
+  isGitlabEventCardContent,
+  isTrustedGitlabDispatcherMessage,
+} from "../../../components/chat/gitlab-event-card.js";
+import { ImageRefGallery } from "../../../components/chat/image-ref-gallery.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
+  readMentions,
   readRequestPayload,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
+  composerPickerVisible,
   MentionAutocompletePopover,
   type MentionCandidate,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../../../components/mention-highlight-overlay.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
-import { rehypeMentions } from "../../../components/rehype-mentions.js";
+import {
+  installTimelineMentionCopy,
+  type RenderedMentionParticipant,
+  rehypeMentions,
+} from "../../../components/rehype-mentions.js";
 import {
   resolveMentionContext,
   SlashCommandPopover,
@@ -119,15 +135,18 @@ import {
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
+import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
+import { useGitlabEntityPresentation } from "../../../hooks/use-gitlab-entity-presentation.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
-import { useServerChannel } from "../../../hooks/use-server-channel.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
+import { gitlabEntityLinkPresentation } from "../../../lib/gitlab-entity-link.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-usage.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -137,14 +156,17 @@ import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
-import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
+import { MobileCurrentStateCard } from "../../mobile/current-state-card.js";
+import { applyPersistedChatRename } from "../chat-title-cache.js";
+import { GitHubSection } from "../right-sidebar/github-section.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
+import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
@@ -173,36 +195,6 @@ function saveSidebarOpen(open: boolean): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? "1" : "0");
-  } catch {
-    // localStorage may be unavailable (private mode); ignore.
-  }
-}
-
-/**
- * Temporary, staging-only preference: hide messages stamped
- * `purpose: "agent-final-text"`. The per-turn final-text mirror that used to
- * auto-produce these is RETIRED (the runtime no longer auto-forwards a turn's
- * output to chat); the purpose now only carries deliberate runtime notices
- * (e.g. the codex usage-limit notice). This toggle is legacy from the mirror
- * era — a pure view filter, nothing is deleted — and only applies on non-prod
- * channels (hidden on prod; see `finalTextToggleEnabled`). Cleanup is a noted
- * follow-up; defaults to OFF (show everything).
- */
-const HIDE_AGENT_FINAL_TEXT_STORAGE_KEY = "first-tree:chat:hide-agent-final-text:v1";
-
-function loadHideAgentFinalText(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveHideAgentFinalText(hide: boolean): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY, hide ? "1" : "0");
   } catch {
     // localStorage may be unavailable (private mode); ignore.
   }
@@ -479,6 +471,10 @@ function ErrorRow({
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
       data-error-agent={fatal ? event.agentId : undefined}
+      // Every provider reason, including waiting/retrying/warning rows, is
+      // evidence for the Inspector's reason summary without becoming a
+      // failure-status anchor.
+      data-status-reason-agent={retryReason ? event.agentId : undefined}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: `var(--hairline-bold) solid ${color}`,
@@ -488,16 +484,18 @@ function ErrorRow({
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
     >
-      <div className="mono uppercase text-caption" style={{ color }}>
+      <div data-error-header className="mono uppercase text-caption" style={{ color, overflowWrap: "anywhere" }}>
         {label}
         {agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
+        data-error-message
         className="text-label"
         style={{
           marginTop: 2,
           color: "var(--fg-2)",
           whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
         }}
       >
         {message}
@@ -555,17 +553,19 @@ type MessageRowProps = {
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
   /** Trial surface: render sender avatar/name as plain identity, without the
-   *  AgentHovercard whose actions ("Open details" → /agents/:id, "Chat" →
+   *  AgentHovercard whose actions ("View profile" → /agents/:id, "New chat" →
    *  /?c=draft) would navigate out of the controlled trial conversation. */
   isTrial: boolean;
 };
 
+const GitlabInstanceOriginContext = createContext<string | null>(null);
+
 type MessageBodyProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
 };
 
 type MessageMarkdownProps = {
@@ -585,6 +585,7 @@ const MessageMarkdown = memo(function MessageMarkdown({ children, components, re
 const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipants }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const gitlabInstanceOrigin = useContext(GitlabInstanceOriginContext);
   // Generic attachment refs (doc-preview is the first consumer; kind:
   // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
   // look the ref up and seed the drawer's cache. Old messages (legacy inline
@@ -596,16 +597,43 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  const metadataImages = useMemo(
+    () =>
+      imageAttachmentRefsFromMetadata(msg.metadata).map((ref) => ({
+        imageId: ref.attachmentId,
+        filename: ref.filename,
+      })),
+    [msg.metadata],
+  );
   // Attachment refs to render as download chips: everything in
   // `metadata.attachments` that is NOT already surfaced as an inline
   // `[display](attachment:<id>)` link in the body (the agent doc-capture
   // flow, which keeps its drawer link). Human composer uploads carry the ref
-  // with no inline link, so they render here as a FileChip.
+  // with no inline link, so they render here as a FileChip. For a `file`
+  // image-batch message the linked body lives in the batch `caption` (a doc +
+  // image agent send: image thumbnails + a doc link in the caption), so read
+  // that too — otherwise the doc would double-render as caption link AND chip.
   const chipAttachmentRefs = useMemo(() => {
-    const body = typeof msg.content === "string" ? msg.content : "";
-    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+    const body =
+      typeof msg.content === "string"
+        ? msg.content
+        : isImageBatchRefContent(msg.content)
+          ? (msg.content.caption ?? "")
+          : "";
+    return attachmentRefsFromMetadata(msg.metadata).filter(
+      (ref) => ref.kind !== "image" && !body.includes(`attachment:${ref.attachmentId}`),
+    );
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
+  // Resolve a visible label only when this token's persisted mention ID still
+  // identifies the current owner of the canonical handle. System-level
+  // addressedAgentIds can include recipients unrelated to a particular token
+  // and therefore are not identity evidence. Handles can be released and
+  // reused after an agent is deleted; resolving history from the chat's
+  // current name map alone would then visibly reassign the old mention to a
+  // different person. Legacy rows without structured mentions degrade safely
+  // to their original `@handle` text.
+  const historicalMentionAgentIds = useMemo(() => new Set(readMentions(msg.metadata)), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
@@ -633,8 +661,13 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // original rendering. `selfAgentId` flips chips that target the viewer
   // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
   const messageRehypePlugins = useMemo(
-    () => [rehypeMentions(mentionParticipants, { selfAgentId: myAgentId })],
-    [mentionParticipants, myAgentId],
+    () => [
+      rehypeMentions(mentionParticipants, {
+        selfAgentId: myAgentId,
+        allowedAgentIds: historicalMentionAgentIds,
+      }),
+    ],
+    [historicalMentionAgentIds, mentionParticipants, myAgentId],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -720,14 +753,35 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           setSearchParams(next);
         };
 
+        const gitlabPresentation =
+          typeof children === "string" && children === href
+            ? gitlabEntityLinkPresentation(href, gitlabInstanceOrigin)
+            : null;
+
         return (
-          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
-            {children}
+          <a
+            {...props}
+            href={href}
+            title={gitlabPresentation?.title ?? props.title}
+            onClick={onClick}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {gitlabPresentation?.label ?? children}
           </a>
         );
       },
     }),
-    [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
+    [
+      docAttachmentRefs,
+      failedDocMentions,
+      gitlabInstanceOrigin,
+      msg.chatId,
+      msg.id,
+      queryClient,
+      searchParams,
+      setSearchParams,
+    ],
   );
 
   return (
@@ -745,13 +799,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           rehypePlugins={messageRehypePlugins}
         />
       ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
-        <img
-          src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
-          alt={msg.content.filename ?? "image"}
-          style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-        />
+        <InlineImage content={msg.content} />
       ) : msg.format === "file" && isImageRefContent(msg.content) ? (
-        <ImageFromRef content={msg.content} />
+        <StandaloneImageRef content={msg.content} />
       ) : msg.format === "text" || msg.format === "markdown" || msg.format === "request" ? (
         // A `request` ("ask") renders as a normal message — just its markdown
         // body. The answering surface is the AskTakeover overlay; the timeline
@@ -761,6 +811,8 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         </MessageMarkdown>
       ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
         <GithubEventCardMessage content={msg.content} />
+      ) : msg.format === "card" && isGitlabEventCardContent(msg.content) ? (
+        <GitlabEventCardMessage content={msg.content} />
       ) : (
         <pre
           className="mono text-label"
@@ -775,6 +827,10 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           {JSON.stringify(msg.content, null, 2)}
         </pre>
       )}
+      <ImageRefGallery
+        images={metadataImages}
+        hasLeadingContent={typeof msg.content === "string" && msg.content.trim().length > 0}
+      />
       {chipAttachmentRefs.length > 0 && (
         <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
           {chipAttachmentRefs.map((ref) => (
@@ -815,8 +871,13 @@ const MessageRow = memo(function MessageRow({
   // so the recipient does not see their own name color treatment on a
   // card the dispatcher wrote on their row.
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const isSystem = isGithubSystem;
-  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isGitlabSystem = isTrustedGitlabDispatcherMessage(msg);
+  const isSystem = isGithubSystem || isGitlabSystem;
+  const senderName = isGithubSystem
+    ? GITHUB_SYSTEM_SENDER_NAME
+    : isGitlabSystem
+      ? GITLAB_SYSTEM_SENDER_NAME
+      : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
 
   return (
@@ -831,6 +892,8 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
+      ) : isGitlabSystem ? (
+        <GitlabSystemAvatar size={20} />
       ) : isTrial ? (
         <span className="block self-start rounded-full">
           <Avatar
@@ -857,9 +920,12 @@ const MessageRow = memo(function MessageRow({
         </AgentHovercard>
       )}
       <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
+        <div className="flex flex-wrap items-baseline" style={{ gap: 8 }}>
           {isSystem || isTrial ? (
-            <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+            <span
+              className="mono text-body font-semibold"
+              style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+            >
               {senderName}
             </span>
           ) : (
@@ -868,9 +934,12 @@ const MessageRow = memo(function MessageRow({
               chatId={msg.chatId}
               name={senderName}
               placement="bottom"
-              triggerClassName="cursor-pointer hover:underline"
+              triggerClassName="min-w-0 max-w-full cursor-pointer text-left hover:underline"
             >
-              <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+              <span
+                className="mono text-body font-semibold"
+                style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+              >
                 {senderName}
               </span>
             </AgentHovercard>
@@ -929,14 +998,19 @@ function messageBodyFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery):
   );
 }
 
-function mentionParticipantsEqual(a: readonly MentionParticipant[], b: readonly MentionParticipant[]): boolean {
+function mentionParticipantsEqual(
+  a: readonly RenderedMentionParticipant[],
+  b: readonly RenderedMentionParticipant[],
+): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const left = a[i];
     const right = b[i];
     if (!left || !right) return false;
-    if (left.agentId !== right.agentId || left.name !== right.name) return false;
+    if (left.agentId !== right.agentId || left.name !== right.name || left.displayName !== right.displayName) {
+      return false;
+    }
   }
   return true;
 }
@@ -1037,69 +1111,56 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
 }
 
 /**
- * Render an image referenced by `{imageId}`. The per-browser IndexedDB cache
- * is consulted first (sender's own sends warm it on send); on a miss the bytes
- * are fetched from the org attachment store and the cache is warmed for next
- * time. Only a failed fetch (deleted attachment / network) falls through to
- * the placeholder.
+ * Chat-image thumbnail styling.
+ *
+ * - `standalone` (a single-image message): shown at its natural aspect within
+ *   a width AND height cap, so a tall image no longer runs the full column.
+ * The width caps are `min(<desktop cap>, 100%)` so they never exceed the
+ * (narrow, on mobile) message column — an inline `maxWidth` would otherwise
+ * override the responsive `img { max-width: 100% }` preflight and overflow the
+ * shared mobile chat surface.
  */
-function ImageFromRef({ content }: { content: ImageRefContent }) {
-  const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
-    kind: "loading",
-  });
+const STANDALONE_IMG_STYLE = {
+  maxWidth: "min(25rem, 100%)",
+  maxHeight: 360,
+  borderRadius: "var(--radius-panel)",
+  cursor: "zoom-in",
+  display: "block",
+} satisfies CSSProperties;
+function StandaloneImageRef({ content }: { content: ImageRefContent }) {
+  return <ImageRefGallery images={[content]} />;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const hit = await getImage(content.imageId);
-      if (cancelled) return;
-      if (hit) {
-        setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
-        return;
-      }
-      try {
-        const fetched = await fetchAttachmentBase64(content.imageId);
-        if (cancelled) return;
-        // Warm the cache for subsequent renders; best-effort.
-        putImage({ imageId: content.imageId, base64: fetched.base64, mimeType: fetched.mimeType }).catch(() => {});
-        setState({ kind: "hit", src: `data:${fetched.mimeType};base64,${fetched.base64}` });
-      } catch {
-        if (!cancelled) setState({ kind: "miss" });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [content.imageId]);
-
-  if (state.kind === "hit") {
-    return (
-      <img
-        src={state.src}
-        alt={content.filename}
-        style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-      />
-    );
-  }
-  if (state.kind === "miss") {
-    return (
-      <span className="text-label" style={{ color: "var(--fg-3)", fontStyle: "italic" }}>
-        [Image "{content.filename}" failed to load]
-      </span>
-    );
-  }
+/**
+ * A single inline base64 image message (no attachment row): the thumbnail plus
+ * its own lightbox. Download in the lightbox saves the `data:` URL directly.
+ */
+function InlineImage({ content }: { content: FileMessageContent }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const filename = content.filename ?? "image";
+  const dataSrc = `data:${content.mimeType};base64,${content.data}`;
+  const images: LightboxImage[] = [{ dataSrc, filename }];
   return (
-    <span className="text-label" style={{ color: "var(--fg-4)" }}>
-      …
-    </span>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpenIndex(0)}
+        aria-label={`Open image ${filename}`}
+        className="block border-none bg-transparent p-0"
+        style={{ marginTop: 4, maxWidth: "100%", minWidth: 0 }}
+      >
+        <img src={dataSrc} alt={filename} style={STANDALONE_IMG_STYLE} />
+      </button>
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+    </>
   );
 }
 
 /**
  * Render a batched image message: optional caption rendered as markdown
  * (matching the regular text path so mention chips and links look the
- * same), followed by each attachment via {@link ImageFromRef}. One bubble
- * per send, regardless of how many images the user attached.
+ * same), then the images as a tidy equal-height gallery. One bubble per send,
+ * one shared lightbox that pages through the batch.
  */
 function ImageBatchFromRef({
   content,
@@ -1118,11 +1179,7 @@ function ImageBatchFromRef({
           {caption}
         </Markdown>
       ) : null}
-      <div className="flex flex-wrap" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
-        {content.attachments.map((att) => (
-          <ImageFromRef key={att.imageId} content={att} />
-        ))}
-      </div>
+      <ImageRefGallery images={content.attachments} hasLeadingContent={caption.length > 0} />
     </div>
   );
 }
@@ -1133,6 +1190,8 @@ type TimelineItem =
   | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
 type ChatTimelineProps = {
+  mobile: boolean;
+  currentState: ReactNode;
   itemCount: number;
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
@@ -1157,7 +1216,7 @@ type ChatTimelineProps = {
   chatId: string;
   /** Non-human agent participants — drives the inline offline notice. */
   agents: ChatParticipantDetail[];
-  mentionParticipants: MentionParticipant[];
+  mentionParticipants: RenderedMentionParticipant[];
   dockRequestId: string | undefined;
   gapAfterMessageId: string | null;
   firstNewItemIdx: number;
@@ -1167,6 +1226,8 @@ type ChatTimelineProps = {
 };
 
 const ChatTimeline = memo(function ChatTimeline({
+  mobile,
+  currentState,
   itemCount,
   visibleItems,
   hiddenByBlock,
@@ -1203,8 +1264,14 @@ const ChatTimeline = memo(function ChatTimeline({
   );
   return (
     <div ref={overlayContainerRef} className="relative flex-1 flex flex-col min-h-0">
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto"
+        data-chat-timeline-scroll
+        style={{ padding: `var(--sp-2_5) ${mobile ? "var(--sp-4)" : "var(--sp-6)"}` }}
+      >
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+          {currentState}
           {itemCount === 0 && (
             <div
               className="flex flex-col items-center text-body"
@@ -1320,10 +1387,9 @@ const ChatTimeline = memo(function ChatTimeline({
 });
 
 /**
- * Renders a small "↗ View on GitHub" link beside the chat title when the chat
- * was created by the GitHub webhook router. Reads `metadata.entityUrl` (set by
- * `services/github-entity-chat.ts::createEntityChat`); shows nothing if the
- * chat has no entity metadata or the URL is missing.
+ * Renders the provider entity link beside an SCM-owned chat title. The URL is
+ * persisted only after the provider ingress authority validates its origin;
+ * manual/follow-only chats carry no provider anchor metadata and render none.
  *
  * Defensive parsing: `metadata` is typed `Record<string, unknown>` on the
  * wire, so we narrow inline rather than trust the shape. A schema parse would
@@ -1331,15 +1397,17 @@ const ChatTimeline = memo(function ChatTimeline({
  * 2-field check isn't worth it.
  */
 function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefined }) {
-  if (!metadata || metadata.source !== "github") return null;
-  const url = typeof metadata.entityUrl === "string" ? metadata.entityUrl : null;
+  const parsed = chatMetadataSchema.safeParse(metadata);
+  if (!parsed.success || (parsed.data.source !== "github" && parsed.data.source !== "gitlab")) return null;
+  const url = parsed.data.entityUrl ?? null;
   if (!url) return null;
+  const provider = parsed.data.source === "github" ? "GitHub" : "GitLab";
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      title="View on GitHub"
+      title={`View on ${provider}`}
       className="inline-flex items-center"
       style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
     >
@@ -1362,6 +1430,7 @@ export function ChatView({
   joinAction,
   narrow = false,
   onShowConversations = null,
+  presentation = "workspace",
   isTrial = false,
 }: {
   agentId: string;
@@ -1390,15 +1459,18 @@ export function ChatView({
   };
   /** Workspace shell is in narrow-viewport mode (<768). Two effects:
    *  (1) `onShowConversations` is non-null, so we render a hamburger in
-   *  the chat header; (2) the right rail, when shown, renders as an
-   *  absolute-positioned overlay over the chat instead of an inline
-   *  shrink-0 column — at 375 px logical there isn't room for both. */
+   *  the chat header; (2) mobile presentation can replace the full details
+   *  rail with a participants sheet. */
   narrow?: boolean;
+  /** Generic narrow Workspace keeps the full details rail, including GitHub
+   * state. `/m/work` opts into the smaller mobile participants sheet. */
+  presentation?: "workspace" | "mobile";
   /** Non-null only in narrow mode. Invoking it summons the conversation-
    *  list overlay (which lives in `WorkspacePage`). */
   onShowConversations?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
@@ -1518,35 +1590,39 @@ export function ChatView({
   // rail (a global preference, not per-chat), otherwise collapsed for the full
   // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
+  const useMobileDetailsSheet = presentation === "mobile";
+  // Touch-optimized composer: on the phone surface the action toolbar moves
+  // out of the textarea's bottom-padding overlay into a normal flow row, tap
+  // targets grow to the ~44 touch minimum, the box rests at one line, the placeholder drops
+  // the desktop keyboard-shortcut teaching text, and Enter inserts a newline
+  // (soft keyboards have no Shift+Enter, so send is the button only). Gated on
+  // the mobile route rather than a viewport query so the structural + sizing
+  // changes flip together with one signal; font-size stays synced separately
+  // via the `--composer-font-size` zoom guard on both the textarea and mirror.
+  const composerMobile = presentation === "mobile";
   const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
+  const [showMobileDetails, setShowMobileDetails] = useState(false);
+  const detailsOpen = useMobileDetailsSheet ? showMobileDetails : showSidebar;
   // Persist only genuine user choices (toggle / dismiss / open), never the
   // transient doc-preview stash — that must not masquerade as an explicit
   // preference. `setSidebarByUser` writes through to localStorage;
   // system-driven changes use `setShowSidebar`.
-  const setSidebarByUser = useCallback((open: boolean | ((v: boolean) => boolean)) => {
-    setShowSidebar((prev) => {
-      const next = typeof open === "function" ? open(prev) : open;
-      storedSidebarPref.current = next;
-      saveSidebarOpen(next);
-      return next;
-    });
-  }, []);
+  const setSidebarByUser = useCallback(
+    (open: boolean | ((v: boolean) => boolean)) => {
+      if (useMobileDetailsSheet) {
+        setShowMobileDetails((prev) => (typeof open === "function" ? open(prev) : open));
+        return;
+      }
+      setShowSidebar((prev) => {
+        const next = typeof open === "function" ? open(prev) : open;
+        storedSidebarPref.current = next;
+        saveSidebarOpen(next);
+        return next;
+      });
+    },
+    [useMobileDetailsSheet],
+  );
 
-  // Temporary, staging-only view filter: hide agent final-text mirrors. The
-  // toggle renders only on non-prod channels (`finalTextToggleEnabled`), and
-  // the filter is additionally gated on that flag so a stale localStorage
-  // preference can never hide messages on prod. Default OFF (show everything).
-  const serverChannel = useServerChannel();
-  const finalTextToggleEnabled = serverChannel === "dev" || serverChannel === "staging";
-  const [hideAgentFinalText, setHideAgentFinalText] = useState<boolean>(loadHideAgentFinalText);
-  const toggleHideAgentFinalText = useCallback(() => {
-    setHideAgentFinalText((prev) => {
-      const next = !prev;
-      saveHideAgentFinalText(next);
-      return next;
-    });
-  }, []);
-  const hideFinalTextActive = finalTextToggleEnabled && hideAgentFinalText;
   // The chat id the description-driven rail default was last applied for.
   // Doc-preview opens to the right of chat-view (mounted at workspace level);
   // we render two right rails on the same row, so when the user clicks a doc
@@ -1597,9 +1673,13 @@ export function ChatView({
   // collapse the rail too. Skip while doc-preview owns the right rail —
   // its own component handles Esc to close itself.
   useEffect(() => {
-    if (!showSidebar || hasDocPreview) return;
+    if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A nested top layer (for example a dialog or autocomplete) owns the first
+      // Escape and marks it handled. Keep the details rail open until the next
+      // Escape instead of dismissing two layers in one keypress.
+      if (event.defaultPrevented) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement) {
         const tag = active.tagName;
@@ -1609,9 +1689,10 @@ export function ChatView({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasDocPreview, showSidebar, setSidebarByUser]);
+  }, [detailsOpen, hasDocPreview, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const readOnlyComposerRef = useRef<HTMLDivElement | null>(null);
   // The composer footer band — wraps BOTH the request dock (with its option
   // radios) and the composer. The Enter-to-resolve backstop binds its keydown
   // listener here, not on `window`, so it only sees keys from inside the
@@ -1625,6 +1706,15 @@ export function ChatView({
   // ResizeObserver-stabilised scrolling) and useReadTracker (as the
   // IntersectionObserver root).
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Non-editable selections dispatch `copy` at the focused node (often body or
+  // the composer), not at the message element that contains the selection.
+  // Listen on the owning document so ordinary and cross-message timeline copy
+  // always reaches the canonical-handle rewrite, then scope strictly back to
+  // this chat's scroll container through the selection Range.
+  useEffect(() => {
+    const ownerDocument = scrollContainerRef.current?.ownerDocument ?? document;
+    return installTimelineMentionCopy(ownerDocument, () => scrollContainerRef.current);
+  }, []);
   // Positioning context for the chat-summary floating card: the expanded
   // summary is portaled into the timeline's `relative` wrapper and laid out
   // `absolute; top:0` over the message area, so it never occupies stream space
@@ -1717,15 +1807,6 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
-  // Fetch newest events first so the turn-grouping filter always sees the
-  // latest `turn_end` even in chats with thousands of total events. The
-  // timeline renderer later sorts by timestamp, so the fetch order is moot
-  // for display — only the contents of the window matter.
-  const { data: eventsData } = useQuery({
-    queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-  });
-
   const {
     data: chatDetail,
     isLoading: chatDetailLoading,
@@ -1736,6 +1817,23 @@ export function ChatView({
     enabled: !!chatId,
     initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
     staleTime: 10_000,
+  });
+
+  // A globally addressed chat may render before the shell finishes switching
+  // Teams. Bind the trust decision to the rendered chat's Team, never to the
+  // transient shell selection, and refresh it so remote connection changes
+  // eventually replace (or remove) the compact-label trust boundary.
+  const chatOrganizationId = chatDetail?.organizationId ?? null;
+  const { instanceOrigin: gitlabInstanceOrigin, markdownComponents: askMarkdownComponents } =
+    useGitlabEntityPresentation(chatOrganizationId);
+
+  // Fetch one chat-scoped batch with an independent newest-first window per
+  // non-human speaker. Chat membership is the disclosure boundary, so a
+  // private speaker is inspectable here without becoming org-discoverable.
+  // One batch also prevents the old N-query fanout as group size grows.
+  const { data: eventFeedsData } = useQuery({
+    queryKey: chatSessionEventsQueryKey(chatId),
+    queryFn: () => listChatSessionEvents(chatId, { limit: 200, direction: "desc" }),
   });
 
   // The right rail no longer auto-opens per chat: the running summary moved to
@@ -2239,49 +2337,8 @@ export function ChatView({
     if (askBusy) return;
     setAskError(null);
     setAskBusy(true);
-    // Route to the asker PLUS anyone the free text @mentioned (deduped).
-    const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
-    const resolves: RequestResolution = { request: request.id, kind: "answered" };
-    const docs = answer.attachments ?? [];
     try {
-      const docRefs: AttachmentRef[] = [];
-      for (const doc of docs) {
-        const uploaded = await uploadAttachment(doc.file);
-        docRefs.push({
-          attachmentId: uploaded.id,
-          kind: doc.kind,
-          mimeType: uploadMimeFor(doc.file),
-          filename: doc.file.name,
-          size: doc.file.size,
-        });
-      }
-
-      if (answer.images.length > 0) {
-        const refs: ImageRefContent[] = [];
-        for (const file of answer.images) {
-          const uploaded = await uploadAttachment(file);
-          // Warm the per-browser cache so the sender renders its own image
-          // instantly. Best-effort — the render path re-fetches on a miss.
-          try {
-            await putImage({ imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type });
-          } catch {
-            // IndexedDB quota / availability — ignore, fall back to server fetch.
-          }
-          refs.push({ imageId: uploaded.id, mimeType: file.type, filename: file.name, size: file.size });
-        }
-        await sendFileMessageBatch(
-          chatId,
-          { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
-          { inReplyTo: request.id, resolves },
-        );
-      } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, {
-          inReplyTo: request.id,
-          resolves,
-          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
-        });
-      }
+      await sendAskAnswer({ chatId, request, answer });
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       scrollToBottom("smooth");
@@ -2301,11 +2358,22 @@ export function ChatView({
   }, [renaming]);
   const renameMut = useMutation({
     mutationFn: (topic: string | null) => renameChat(chatId, topic),
-    onSuccess: () => {
+    onSuccess: (updatedChat) => {
+      // The write has succeeded, so project the persisted title into the hot
+      // detail + list caches synchronously. The trailing invalidations reconcile
+      // the full server projection without leaving the rail on the old title.
+      applyPersistedChatRename(queryClient, updatedChat);
       setRenaming(false);
+      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       queryClient.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
       queryClient.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+    },
+    onError: (error) => {
+      addToast({
+        title: "Couldn't rename chat",
+        description: error instanceof Error ? error.message : "The title wasn't saved. Try again.",
+      });
     },
   });
   const commitRename = () => {
@@ -2346,17 +2414,8 @@ export function ChatView({
     for (const m of fromCache) byId.set(m.id, m);
     for (const m of fromServer) byId.set(m.id, m);
     const sorted = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    // Staging-only view filter applied at THE single source feeding the
-    // timeline AND every read-state projection derived from it (pill,
-    // high-water, divider, scroll anchor, useReadTracker's `messages`). Doing
-    // it here — not just at the rendered `items` — keeps the DOM and those
-    // projections from diverging: a hidden row has no DOM node, so it must
-    // also be absent from pill/anchor math or it drives an un-clearable "N
-    // new" pill. The IDB/server caches keep the full set, so toggling off
-    // restores the rows; the read-tracker derives its writes from the visible
-    // DOM (see use-read-tracker), so durable read-state stays coherent.
-    return selectVisibleMessages(sorted, hideFinalTextActive);
-  }, [cachedMessages, messagesData, hideFinalTextActive]);
+    return sorted;
+  }, [cachedMessages, messagesData]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -2441,26 +2500,6 @@ export function ChatView({
   // `key`), so chat-view no longer resets per-question selections here.
 
   const items: TimelineItem[] = useMemo(() => {
-    const rawEvents = eventsData?.items ?? [];
-    const visibleEvents = filterEventsForTimeline(rawEvents);
-
-    // Turn anchor: the seq of the last turn_end across all events (including
-    // ones filterEventsForTimeline dropped). Every surviving transient event
-    // has seq > lastTurnEndSeq, so the agent's current turn gets one stable,
-    // remount-safe key that survives toolUseId dedupe (pending → final swaps).
-    let lastTurnEndSeq = -1;
-    for (const e of rawEvents) {
-      if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
-    }
-
-    // Collapse each agent's surviving transient events into ONE workgroup.
-    // filterEventsForTimeline already narrows them to that agent's current
-    // (un-ended) turn, so one workgroup == one in-progress turn. We deliberately
-    // do NOT split on interleaved chat messages: a message landing mid-turn must
-    // not fracture the turn into duplicate "working" cards. Each workgroup is
-    // anchored at its earliest event so it sorts into the timeline where the
-    // turn began; messages and error rows keep their own chronological slots.
-    //
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
     // vanish on chat re-open until the server fetch lands. When the staging
@@ -2474,57 +2513,52 @@ export function ChatView({
       data: m,
     }));
 
-    const turnEventsByAgent = new Map<string, SessionEventRow[]>();
-    for (const e of visibleEvents) {
-      if (e.kind === "tool_call" || e.kind === "thinking" || e.kind === "assistant_text") {
-        const existing = turnEventsByAgent.get(e.agentId);
-        if (existing) existing.push(e);
-        else turnEventsByAgent.set(e.agentId, [e]);
-      } else {
-        // error rows stay standalone and visible across turns.
-        out.push({ kind: "event", at: e.createdAt, key: `e-${e.id}`, data: e });
+    // A seq is monotonic only within one (agent, chat) session, so combine the
+    // independently fetched feeds by agent before finding turn boundaries.
+    // Dedup by event id protects a temporarily duplicated participant/query.
+    const rawEventsByAgent = new Map<string, Map<string, SessionEventRow>>();
+    for (const feed of eventFeedsData?.feeds ?? []) {
+      for (const event of feed.items) {
+        const existing = rawEventsByAgent.get(event.agentId);
+        if (existing) existing.set(event.id, event);
+        else rawEventsByAgent.set(event.agentId, new Map([[event.id, event]]));
       }
     }
-    for (const [agentId, events] of turnEventsByAgent) {
-      events.sort((a, b) => a.seq - b.seq);
-      const first = events[0];
-      if (!first) continue;
-      out.push({ kind: "workgroup", at: first.createdAt, key: `wg-${lastTurnEndSeq}-${agentId}`, events });
+
+    for (const [eventAgentId, eventsById] of rawEventsByAgent) {
+      const rawEvents = [...eventsById.values()];
+      const visibleEvents = filterEventsForTimeline(rawEvents);
+      let lastTurnEndSeq = -1;
+      for (const event of rawEvents) {
+        if (event.kind === "turn_end" && event.seq > lastTurnEndSeq) lastTurnEndSeq = event.seq;
+      }
+
+      const turnEvents: SessionEventRow[] = [];
+      for (const event of visibleEvents) {
+        if (event.kind === "tool_call" || event.kind === "thinking" || event.kind === "assistant_text") {
+          turnEvents.push(event);
+        } else {
+          // Error rows stay standalone and visible across turns.
+          out.push({ kind: "event", at: event.createdAt, key: `e-${event.id}`, data: event });
+        }
+      }
+      turnEvents.sort((a, b) => a.seq - b.seq);
+      const first = turnEvents[0];
+      if (first) {
+        out.push({
+          kind: "workgroup",
+          at: first.createdAt,
+          key: `wg-${lastTurnEndSeq}-${eventAgentId}`,
+          events: turnEvents,
+        });
+      }
     }
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [mergedMessages, eventsData]);
+  }, [mergedMessages, eventFeedsData]);
 
   const itemCount = items.length;
-
-  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
-  // (see the `items` builder above). This is the timeline's authoritative
-  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
-  // so every chat-scoped status surface (roster, compose bar, hovercard)
-  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
-  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
-  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
-  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
-  // blanks an agent's work status.
-  //
-  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
-  // agentId, chatId]`), so `items` only ever carries the primary agent's
-  // workgroup and this set covers only that agent — exactly the agent whose
-  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
-  // secondary agent (no card) is never wrongly forced to working; it just shows
-  // the composite. Fixing idle-while-working for secondary agents would need a
-  // multi-agent events feed and is out of this stopgap's scope.
-  const liveTurnAgentIds = useMemo(
-    () =>
-      new Set(
-        items
-          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
-          .map((it) => it.events[0]?.agentId)
-          .filter((id): id is string => id != null),
-      ),
-    [items],
-  );
 
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
@@ -2545,7 +2579,7 @@ export function ChatView({
   // where the user's viewport bottom was the last time they left
   // this chat. React Query's cache holds it after first read so a
   // chat re-open does not block on IDB.
-  const { data: readState } = useQuery({
+  const { data: readState, isLoading: readStateLoading } = useQuery({
     queryKey: ["chat-read-state", chatId],
     queryFn: () => getReadState(chatId),
     staleTime: Infinity,
@@ -2929,10 +2963,28 @@ export function ChatView({
   //    at the last message's bottom, leaving in-progress tool_call
   //    workgroups (events that arrived after messages) below the
   //    fold. Added the stable follow-up scroll.
+  //  - yuezengwu manual report → PR 1997's mobile Work surface landed
+  //    summarized chats at the timeline top (scrollTop = 0) so the
+  //    in-flow Current state card was visible on entry. Agent-owned
+  //    chats almost always carry a summary, so mobile opens were
+  //    stuck at the top of every chat. Reverted to the anchor/bottom
+  //    model on all presentations; the card stays reachable by
+  //    scrolling up, and its "Updated" badge flags fresh summaries.
+  //  - baixiaohang PR 2017 review → the one-shot guard could commit
+  //    the bottom fallback while the IDB read-state lookup was still
+  //    in flight (cached messages render first, `readState` still
+  //    `undefined`), permanently missing the stored anchor on a cold
+  //    open. Landing now also waits for the read-state query to
+  //    resolve; a resolved-but-empty row still falls through to the
+  //    bottom branch.
   const landedForChatRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (itemCount === 0) return;
     if (landedForChatRef.current === chatId) return;
+    // The persisted anchor arrives asynchronously (IndexedDB); do not
+    // commit the one-shot landing until the query has resolved, or the
+    // bottom fallback would win the race on cold opens.
+    if (readStateLoading) return;
     landedForChatRef.current = chatId;
     if (bottomVisibleResolution) {
       // Land the stored anchor at the viewport bottom. Any messages
@@ -2950,6 +3002,7 @@ export function ChatView({
   }, [
     chatId,
     itemCount,
+    readStateLoading,
     bottomVisibleResolution,
     scrollToMessageImmediate,
     scrollToBottomImmediate,
@@ -3242,7 +3295,7 @@ export function ChatView({
     // so that joining-then-typing skips the greeting on the next mount.
     if (readOnly) return;
     if (prefilledChatsRef.current.has(chatId)) return;
-    if (!messagesData || !eventsData || !chatDetail) return;
+    if (!messagesData || !eventFeedsData || !chatDetail) return;
     if (items.length > 0) return;
     if (draft.length > 0) return;
     if (requiresMention) return;
@@ -3261,7 +3314,7 @@ export function ChatView({
     chatId,
     agentId,
     messagesData,
-    eventsData,
+    eventFeedsData,
     chatDetail,
     items.length,
     draft.length,
@@ -3281,33 +3334,34 @@ export function ChatView({
    * runs its own unresolved-token guard on the agent path (the PR-393
    * anti-hallucination fix); on the human web path it's tolerated by the
    * `mentions.ts` regex excluding npm scoped names from token scans. */
-  // Shared participant projection: drives draftMentions resolution, the
-  // composer's mirror-overlay highlight, and the sent-message rehype
-  // plugin — keeping a single source of truth so the three paths can't
-  // drift on case-sensitivity or filtering.
+  // Composer-only participant projection: routing stays keyed by immutable
+  // `name`, and the mirror overlay must remain byte-for-byte aligned with the
+  // textarea. Sent-message rendering has a separate display-name projection
+  // below so presentation cannot leak back into routing.
   const mentionParticipants = useMemo<MentionParticipant[]>(
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
   );
-  // Rendered-message variant of the projection above: the rehype plugin
-  // resolves `@<name>` tokens against this list, and it MUST include the
-  // viewer themselves so chips that target them flip to the
-  // `.mention-chip.is-self` attention tone. `mentionCandidates` deliberately
-  // excludes self (the composer's `@` autocomplete should not suggest you
-  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
-  // that self-exclusive semantics), so we append the viewer here in a
-  // separate projection used only by rendered messages. Source the viewer's
-  // slug from the speaker-only `chatParticipantById` map — NOT from the
-  // org-identity fallback in `chatScopedAgentIdentity` — so a non-speaker
-  // watcher viewing the chat doesn't get their org-wide name pushed into
-  // the resolver, which would paint chips that the server would never
-  // actually route to them.
-  const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
-    if (!myAgentId) return mentionParticipants;
-    const selfParticipant = chatParticipantById.get(myAgentId);
-    if (!selfParticipant?.name) return mentionParticipants;
-    return [...mentionParticipants, { agentId: myAgentId, name: selfParticipant.name }];
-  }, [mentionParticipants, myAgentId, chatParticipantById]);
+  // Rendered-message projection: all chat speakers (including self) carry
+  // `displayName` for the visible chip while the immutable `name` remains the
+  // resolver key and copy target. Reading directly from chat detail preserves
+  // the membership disclosure boundary for private agents and excludes
+  // non-speaker watchers.
+  const renderMentionParticipants = useMemo<RenderedMentionParticipant[]>(
+    () =>
+      (chatDetail?.participants ?? []).flatMap((participant) =>
+        participant.name
+          ? [
+              {
+                agentId: participant.agentId,
+                name: participant.name,
+                displayName: participant.displayName,
+              },
+            ]
+          : [],
+      ),
+    [chatDetail?.participants],
+  );
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**
@@ -3498,12 +3552,18 @@ export function ChatView({
               <AskTakeover
                 key={dockRequest.id}
                 body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
+                images={imageAttachmentRefsFromMetadata(dockRequest.metadata).map((ref) => ({
+                  imageId: ref.attachmentId,
+                  filename: ref.filename,
+                }))}
                 payload={dockPayload}
                 askerName={chatScopedAgentName(dockRequest.senderId)}
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                markdownComponents={askMarkdownComponents}
                 isTrial={isTrial}
+                mobile={composerMobile}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
@@ -3569,8 +3629,12 @@ export function ChatView({
                 <button
                   type="button"
                   onClick={onShowConversations}
-                  aria-label="Show conversations"
-                  title="Show conversations"
+                  // Mobile chat detail is a full-screen page whose only exit is
+                  // back to the chat list, so it uses a back arrow. Desktop
+                  // narrow Workspace summons the conversation-list overlay (a
+                  // menu), so it keeps the hamburger.
+                  aria-label={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
+                  title={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
                   className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                   style={{
                     width: 28,
@@ -3582,7 +3646,11 @@ export function ChatView({
                     cursor: "pointer",
                   }}
                 >
-                  <Menu size={16} strokeWidth={2.25} />
+                  {useMobileDetailsSheet ? (
+                    <ArrowLeft size={18} strokeWidth={2.25} />
+                  ) : (
+                    <Menu size={16} strokeWidth={2.25} />
+                  )}
                 </button>
               ) : null}
               {/* Identity — title is the sole click-to-rename affordance
@@ -3620,9 +3688,12 @@ export function ChatView({
                       watching
                     </span>
                   </span>
-                ) : isTrial ? (
-                  // Trial surface: the title is not renamable (a write on the
-                  // controlled single-run chat) — render it as plain text.
+                ) : isTrial || useMobileDetailsSheet ? (
+                  // Trial and mobile surfaces keep the header as
+                  // navigation/context only. Rename remains a desktop detail
+                  // action instead of a hidden tap target in the chat title.
+                  // Gated on mobile presentation, not viewport width, so the
+                  // ordinary narrow Workspace keeps its click-to-rename title.
                   <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                     {chatDetail?.title ?? titleFallback ?? "…"}
                   </span>
@@ -3734,73 +3805,81 @@ export function ChatView({
               {/* Trial surface hides the entire audience/details cluster
                   (participant stats, add participant, chat-details toggle) —
                   the trial is a pure conversation with no side rail. */}
-              {!isTrial && (
-                <>
-                  {/* Audience — compact stats icon + quick-add icon. Replaces
+              {!isTrial &&
+                (narrow ? (
+                  <button
+                    type="button"
+                    onClick={toggleSidebar}
+                    aria-label={
+                      detailsOpen
+                        ? useMobileDetailsSheet
+                          ? "Hide chat details"
+                          : "Hide chat options"
+                        : useMobileDetailsSheet
+                          ? "Show chat details"
+                          : "Show chat options"
+                    }
+                    aria-expanded={detailsOpen}
+                    aria-pressed={detailsOpen}
+                    title={
+                      detailsOpen
+                        ? useMobileDetailsSheet
+                          ? "Hide chat details"
+                          : "Hide chat options"
+                        : useMobileDetailsSheet
+                          ? "Show chat details"
+                          : "Show chat options"
+                    }
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 32,
+                      height: 32,
+                      border: 0,
+                      background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <PanelRight size={17} strokeWidth={2.25} />
+                  </button>
+                ) : (
+                  <>
+                    {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
               chats grew past three participants. Stats icon shows count
               + hover popover with full name list; the quick-add icon
               opens the same dropdown the sidebar's "+ Add participant"
               uses (shared backend mutation, single one-way-door notice). */}
-                  <ParticipantsStats
-                    participants={chatDetail?.participants ?? []}
-                    chatId={chatId}
-                    agentIdentity={chatScopedAgentIdentity}
-                    onOpen={() => setSidebarByUser(true)}
-                  />
-                  {/* Vertical divider splits "look" (avatar strip = identity +
+                    <ParticipantsStats
+                      participants={chatDetail?.participants ?? []}
+                      chatId={chatId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onOpen={() => setSidebarByUser(true)}
+                    />
+                    {/* Vertical divider splits "look" (avatar strip = identity +
                   state) from "do" (add / open details). Keeps the four
                   icons from reading as one undifferentiated cluster. */}
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0"
-                    style={{
-                      width: "var(--hairline)",
-                      height: "var(--sp-4)",
-                      background: "var(--border)",
-                      marginLeft: "var(--sp-1)",
-                      marginRight: "var(--sp-1)",
-                    }}
-                  />
-                  {readOnly ? null : (
-                    <AddParticipantDropdown
-                      variant="icon"
-                      chatId={chatId}
-                      participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                      onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                    />
-                  )}
-                  {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
-              (gated on `finalTextToggleEnabled`). Filters the per-turn
-              final-text mirrors out of the timeline so a human watcher sees
-              only deliberate sends + human messages. Eye / EyeOff conveys the
-              show/hide state; pressed styling marks "currently hiding". */}
-                  {finalTextToggleEnabled && (
-                    <button
-                      type="button"
-                      onClick={toggleHideAgentFinalText}
-                      aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      aria-pressed={hideAgentFinalText}
-                      title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0"
                       style={{
-                        width: 28,
-                        height: 28,
-                        border: 0,
-                        background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                        borderRadius: "var(--radius-input)",
-                        color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                        cursor: "pointer",
+                        width: "var(--hairline)",
+                        height: "var(--sp-4)",
+                        background: "var(--border)",
+                        marginLeft: "var(--sp-1)",
+                        marginRight: "var(--sp-1)",
                       }}
-                    >
-                      {hideAgentFinalText ? (
-                        <EyeOff size={16} strokeWidth={2.25} />
-                      ) : (
-                        <Eye size={16} strokeWidth={2.25} />
-                      )}
-                    </button>
-                  )}
-                  {/* Chat details toggle — opens the right rail (Participants /
+                    />
+                    {readOnly ? null : (
+                      <AddParticipantDropdown
+                        variant="icon"
+                        chatId={chatId}
+                        participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                        onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                      />
+                    )}
+                    {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
               panel-toggle convention (Linear / Notion / VS Code); the same
@@ -3808,40 +3887,42 @@ export function ChatView({
               background + darker foreground) carries the open/closed state.
               An ellipsis is reserved for overflow-action menus (see
               row-actions-menu.tsx), so it would mislead here. */}
-                  <button
-                    type="button"
-                    onClick={toggleSidebar}
-                    aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                    aria-expanded={showSidebar}
-                    aria-pressed={showSidebar}
-                    title={showSidebar ? "Hide chat details" : "Show chat details"}
-                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                    style={{
-                      width: 28,
-                      height: 28,
-                      border: 0,
-                      background: showSidebar ? "var(--bg-sunken)" : "transparent",
-                      borderRadius: "var(--radius-input)",
-                      color: showSidebar ? "var(--fg)" : "var(--fg-3)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <PanelRight size={16} strokeWidth={2.25} />
-                  </button>
-                </>
-              )}
+                    <button
+                      type="button"
+                      onClick={toggleSidebar}
+                      aria-label={detailsOpen ? "Hide chat details" : "Show chat details"}
+                      aria-expanded={detailsOpen}
+                      aria-pressed={detailsOpen}
+                      title={detailsOpen ? "Hide chat details" : "Show chat details"}
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        border: 0,
+                        background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <PanelRight size={16} strokeWidth={2.25} />
+                    </button>
+                  </>
+                ))}
             </div>
           </div>
 
-          <ChatSummary
-            chatId={chatId}
-            description={chatDetail?.description ?? null}
-            descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
-            lastReadAt={chatDetail?.lastReadAt ?? null}
-            freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
-            scrollContainerRef={scrollContainerRef}
-            overlayContainerRef={overlayContainerRef}
-          />
+          {useMobileDetailsSheet ? null : (
+            <ChatSummary
+              chatId={chatId}
+              description={chatDetail?.description ?? null}
+              descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
+              lastReadAt={chatDetail?.lastReadAt ?? null}
+              freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+              scrollContainerRef={scrollContainerRef}
+              overlayContainerRef={overlayContainerRef}
+            />
+          )}
 
           {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
             <div
@@ -3888,9 +3969,19 @@ export function ChatView({
           Scroll viewport stays full-width so the scrollbar hugs the panel's
           right edge — pushing it inward would float the column. Reading column
           inside is capped via `maxWidth` and centered to align with the
-          composer below into one vertical thread. Side padding (sp-6) prevents
-          content from kissing the panel border on narrow viewports. */}
+          composer below into one vertical thread. Side padding is sp-4 on the
+          phone surface and sp-6 elsewhere. */}
           <ChatTimeline
+            mobile={presentation === "mobile"}
+            currentState={
+              useMobileDetailsSheet ? (
+                <MobileCurrentStateCard
+                  description={chatDetail?.description ?? null}
+                  descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
+                  lastReadAt={chatDetail?.lastReadAt ?? null}
+                />
+              ) : null
+            }
             itemCount={itemCount}
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}
@@ -3929,19 +4020,40 @@ export function ChatView({
             <div
               ref={composerFooterRef}
               className="shrink-0"
+              data-chat-composer-footer
               style={{
-                padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
+                paddingTop: "var(--sp-2_5)",
+                paddingInline: presentation === "mobile" ? "var(--sp-4)" : "var(--sp-6)",
+                paddingBottom: "calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {!readOnly && chatTokenUsage && chatProcessedTokens > 0 ? (
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                    title={formatTokenUsageTitle(chatTokenUsage)}
+                  >
+                    {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
+                  </div>
+                ) : null}
+                {/* Live status is view-only awareness, so watchers keep the
+                    same stable “what are agents doing?” entry as participants.
+                    Reply controls below remain gated by `readOnly`. */}
+                <ComposeStatusBar
+                  chatId={chatId}
+                  agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                  fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
+                />
                 {readOnly ? (
                   <div
-                    className="flex items-center"
+                    ref={readOnlyComposerRef}
+                    tabIndex={-1}
+                    className="composer-card flex items-center"
                     style={{
                       gap: "var(--sp-3)",
                       padding: "var(--sp-2) var(--sp-3)",
                       border: "var(--hairline) solid var(--border)",
-                      borderRadius: 6,
                       // Raised surface (`--bg-raised`) so the slot reads as a
                       // distinct input card lifted above the timeline (`--bg`),
                       // sharing the header chrome's surface. Mirrors the editable
@@ -3975,32 +4087,35 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatProcessedTokens > 0 ? (
-                      <div
-                        className="mono text-caption"
-                        style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={formatTokenUsageTitle(chatTokenUsage)}
-                      >
-                        {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
-                      </div>
-                    ) : null}
-                    <ComposeStatusBar
-                      chatId={chatId}
-                      agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                    />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
+                      className="composer-card composer-input"
+                      // Phone-only: flatten the card's top corners while a picker
+                      // panel (mention or slash) is docked flush above it so the two
+                      // read as one welded surface (see
+                      // `.composer-card[data-picker-open]` in index.css). Gated via
+                      // composerPickerVisible on `!isTrial`: trial keeps the slash
+                      // hook live but renders no panel, so a trial `/` must not weld
+                      // an empty input.
+                      data-picker-open={
+                        composerPickerVisible({
+                          isTrial,
+                          mentionOpen: mention.trigger != null,
+                          slashOpen: slash.trigger != null,
+                        })
+                          ? "true"
+                          : undefined
+                      }
                       style={{
                         position: "relative",
                         border: "var(--hairline) solid var(--border)",
-                        borderRadius: 6,
                         // Raised surface (`--bg-raised`) lifts the composer above
                         // the timeline (`--bg`) so it reads as a focused input card
                         // rather than blending into the page; the hairline border
-                        // still defines its edge.
+                        // still defines its edge. Radius lives in `.composer-card`.
                         background: "var(--bg-raised)",
                       }}
                       onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
@@ -4025,7 +4140,11 @@ export function ChatView({
                           style={{
                             position: "absolute",
                             right: 8,
-                            bottom: 44,
+                            // Floats just above the send button, which points the
+                            // arrow at it. The send cluster sits higher on mobile
+                            // (larger button in the flow-row toolbar) than in the
+                            // desktop overlay strip, so lift the tip to match.
+                            bottom: composerMobile ? 52 : 44,
                             zIndex: 5,
                             pointerEvents: "none",
                             maxWidth: "calc(100% - var(--sp-4))",
@@ -4076,8 +4195,11 @@ export function ChatView({
                                     position: "absolute",
                                     top: 1,
                                     right: 1,
-                                    width: 14,
-                                    height: 14,
+                                    // Mobile: bump the corner × so it's tappable;
+                                    // kept modest so it doesn't swamp the small
+                                    // thumbnail. Desktop stays smaller.
+                                    width: composerMobile ? 20 : 14,
+                                    height: composerMobile ? 20 : 14,
                                     borderRadius: "50%",
                                     background: "var(--color-overlay-scrim)",
                                     border: "none",
@@ -4089,7 +4211,7 @@ export function ChatView({
                                     padding: 0,
                                   }}
                                 >
-                                  <X className="h-2 w-2" />
+                                  <X className={composerMobile ? "h-3 w-3" : "h-2 w-2"} />
                                 </button>
                               </div>
                             ) : (
@@ -4102,8 +4224,10 @@ export function ChatView({
                                     onClick={() => removeAttachment(att.id)}
                                     aria-label={`Remove ${att.file.name}`}
                                     style={{
-                                      width: 14,
-                                      height: 14,
+                                      // Mobile: a roomier tap target on the file chip's
+                                      // remove ×; desktop stays small.
+                                      width: composerMobile ? 26 : 14,
+                                      height: composerMobile ? 26 : 14,
                                       borderRadius: "50%",
                                       background: "var(--color-overlay-scrim)",
                                       border: "none",
@@ -4115,7 +4239,7 @@ export function ChatView({
                                       padding: 0,
                                     }}
                                   >
-                                    <X className="h-2 w-2" />
+                                    <X className={composerMobile ? "h-3.5 w-3.5" : "h-2 w-2"} />
                                   </button>
                                 }
                               />
@@ -4156,7 +4280,12 @@ export function ChatView({
                           textareaRef={textareaRef}
                           chipClassName="mention-text"
                           mirrorStyle={{
-                            padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                            // Bottom padding tracks the textarea: on mobile the
+                            // toolbar leaves the textarea's padding strip, so both
+                            // drop to a symmetric inset and stay glyph-aligned.
+                            padding: composerMobile
+                              ? "var(--sp-2_25) var(--sp-3)"
+                              : "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             // Tracks the textarea, which the mobile zoom guard
                             // (index.css) raises to the iOS no-zoom floor on
                             // phone widths; reading the same var keeps mirror
@@ -4254,9 +4383,19 @@ export function ChatView({
                                     // shows only while empty; once the user types it's
                                     // gone, and the tip bubble covers a blocked send.
                                     "In a group, @mention who this is for"
-                                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                                  : composerMobile
+                                    ? // Mobile: drop the desktop keyboard-shortcut
+                                      // teaching text — `/` and `@` live in the
+                                      // toolbar and there's no keyboard hint to give
+                                      // on a touch surface. Keep it to the bare prompt.
+                                      `Message @${displayName}`
+                                    : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
-                          rows={2}
+                          // The auto-resize hook measures `scrollHeight` after
+                          // `height:auto`, which reverts the box to this `rows` count —
+                          // so `rows` (not just min-height) sets the empty resting
+                          // height. Mobile rests at one line; desktop keeps two.
+                          rows={composerMobile ? 1 : 2}
                           onKeyDown={(e) => {
                             // Skip while an IME is composing so Enter confirms the
                             // candidate instead of sending / picking a mention.
@@ -4275,7 +4414,11 @@ export function ChatView({
                               // sending or moving the cursor.
                               if (mention.handleKey(e)) return;
                             }
-                            if (e.key === "Enter" && !e.shiftKey) {
+                            // Mobile soft keyboards have no Shift+Enter, so Enter
+                            // inserts a newline; sending is the button only. Desktop
+                            // keeps Enter-to-send. Popover key handling above still
+                            // claims Enter first (pick a mention / command).
+                            if (!composerMobile && e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               handleSend();
                             }
@@ -4283,7 +4426,14 @@ export function ChatView({
                           disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                           className="mention-composer-textarea w-full outline-none text-subtitle font-normal placeholder:text-muted-foreground"
                           style={{
-                            padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                            // Mobile: the toolbar is a flow row below, not an overlay
+                            // inside the textarea, so the padding is symmetric (no
+                            // tall bottom strip) and the box rests at one line and
+                            // auto-grows. Desktop keeps the 2-line contract + bottom
+                            // strip that houses the absolute toolbar.
+                            padding: composerMobile
+                              ? "var(--sp-2_25) var(--sp-3)"
+                              : "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             background: "transparent",
                             border: "none",
                             // `rows={2}` alone won't survive the auto-resize hook:
@@ -4291,12 +4441,13 @@ export function ChatView({
                             // which collapses an empty textarea to ~1 line and
                             // breaks chat-view's pre-auto-grow 2-line contract.
                             // CSS `min-height` is a hard floor that wins over the
-                            // hook's inline `height`, so we restate the 2-line
-                            // starting size here: 2 line-heights + top + bottom
-                            // padding. Cap at 10.5rem (~8 visible lines) so long
+                            // hook's inline `height`, so we restate the starting
+                            // size here. Cap at 10.5rem (~8 visible lines) so long
                             // pastes scroll inside instead of pushing the footer
                             // toolbar off-screen.
-                            minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                            minHeight: composerMobile
+                              ? "calc(1lh + var(--sp-2_25) + var(--sp-2_25))"
+                              : "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
                             maxHeight: "10.5rem",
                             overflowY: "auto",
                             resize: "none",
@@ -4323,27 +4474,39 @@ export function ChatView({
                       </div>
                       <div
                         className="flex items-center justify-between text-caption"
-                        style={{
-                          position: "absolute",
-                          bottom: 6,
-                          left: 10,
-                          right: 10,
-                          color: "var(--fg-4)",
-                          // This toolbar sits inside the textarea's bottom-padding
-                          // strip (`--sp-7_5`). The textarea above carries
-                          // `zIndex: 1` (caret-over-overlay fix), which would
-                          // otherwise hit-test ABOVE this z-auto row — the
-                          // buttons stay visible through the textarea's
-                          // transparent background but every click lands on the
-                          // textarea instead (send/@/attach appear dead; only
-                          // Enter works). Stack the toolbar higher so it gets
-                          // pointer events back.
-                          zIndex: 2,
-                        }}
+                        style={
+                          composerMobile
+                            ? {
+                                // Mobile: a normal flow row below the textarea — no
+                                // overlay, so it can't overlap text and its larger tap
+                                // targets don't have to fit inside a thin strip. Top
+                                // padding trims because the textarea's own bottom
+                                // padding already sits above.
+                                padding: "0 var(--sp-1) var(--sp-1)",
+                                color: "var(--fg-4)",
+                              }
+                            : {
+                                position: "absolute",
+                                bottom: 6,
+                                left: 10,
+                                right: 10,
+                                color: "var(--fg-4)",
+                                // This toolbar sits inside the textarea's bottom-padding
+                                // strip (`--sp-7_5`). The textarea above carries
+                                // `zIndex: 1` (caret-over-overlay fix), which would
+                                // otherwise hit-test ABOVE this z-auto row — the
+                                // buttons stay visible through the textarea's
+                                // transparent background but every click lands on the
+                                // textarea instead (send/@/attach appear dead; only
+                                // Enter works). Stack the toolbar higher so it gets
+                                // pointer events back.
+                                zIndex: 2,
+                              }
+                        }
                       >
                         {/* Trial: no @mention / attach affordances — just type + send. */}
                         {!isTrial && (
-                          <span className="mono flex items-center" style={{ gap: 10 }}>
+                          <span className="mono flex items-center" style={{ gap: composerMobile ? 2 : 10 }}>
                             <button
                               type="button"
                               onClick={() => {
@@ -4379,9 +4542,12 @@ export function ChatView({
                                 padding: 0,
                                 display: "inline-flex",
                                 alignItems: "center",
+                                // Mobile: grow the tap target to the touch minimum
+                                // (icon stays small, centered).
+                                ...(composerMobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
                               }}
                             >
-                              <AtSign className="h-3.5 w-3.5" />
+                              <AtSign className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
                             </button>
                             <button
                               type="button"
@@ -4399,9 +4565,12 @@ export function ChatView({
                                 padding: 0,
                                 display: "inline-flex",
                                 alignItems: "center",
+                                // Mobile: grow the tap target to the touch minimum
+                                // (icon stays small, centered).
+                                ...(composerMobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
                               }}
                             >
-                              <Paperclip className="h-3.5 w-3.5" />
+                              <Paperclip className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
                             </button>
                             <input
                               ref={fileInputRef}
@@ -4440,7 +4609,11 @@ export function ChatView({
                             title={
                               sendBlockedByMentionGate
                                 ? "@mention someone to send — a group message must address someone"
-                                : "Send (Enter)"
+                                : // On mobile Enter inserts a newline, so the button is
+                                  // the only way to send — don't advertise the Enter shortcut.
+                                  composerMobile
+                                  ? "Send"
+                                  : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
@@ -4449,15 +4622,19 @@ export function ChatView({
                               sendDisabled && "cursor-not-allowed",
                             )}
                             style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: "var(--radius-input)",
+                              // Mobile: a 44-unit hit area to clear the touch minimum —
+                              // this is the ONLY send path on mobile (Enter inserts a
+                              // newline), so it must not fall below the floor. Desktop
+                              // stays compact. Icon stays visually small either way.
+                              width: composerMobile ? 44 : 28,
+                              height: composerMobile ? 44 : 28,
+                              borderRadius: composerMobile ? 12 : "var(--radius-input)",
                               background: "var(--fg)",
                               color: "var(--bg-raised)",
                               border: "none",
                             }}
                           >
-                            <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                            <ArrowUp className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} strokeWidth={2.5} />
                           </button>
                         </span>
                       </div>
@@ -4482,32 +4659,40 @@ export function ChatView({
         {/* No chat-details right rail on the trial surface — a pure
             conversation. `!isTrial` also defends against a persisted
             `showSidebar=true` carried over from a prior non-trial session. */}
-        {showSidebar && !isTrial ? (
+        {detailsOpen && !isTrial ? (
           narrow ? (
-            // Narrow viewport: rail floats over the chat instead of
-            // pushing it aside. A scrim catches outside-clicks for
-            // dismissal — Esc still works via the existing key handler
-            // bound earlier in this component.
-            <>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => setSidebarByUser(false)}
-                className="absolute inset-0 z-20"
-                style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+            useMobileDetailsSheet ? (
+              <MobileChatDetailsSheet
+                chatId={chatId}
+                participants={chatDetail?.participants ?? []}
+                participantsLoading={chatDetailLoading}
+                managedByMe={managedByMeMap}
+                onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                readOnly={readOnly}
+                onDismiss={() => setSidebarByUser(false)}
               />
-              <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
-                <ChatRightSidebar
-                  chatId={chatId}
-                  participants={chatDetail?.participants ?? []}
-                  participantsLoading={chatDetailLoading}
-                  managedByMe={managedByMeMap}
-                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                  readOnly={readOnly}
-                  width="min(88vw, 20rem)"
+            ) : (
+              <>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setSidebarByUser(false)}
+                  className="absolute inset-0 z-20"
+                  style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
                 />
-              </div>
-            </>
+                <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
+                  <ChatRightSidebar
+                    chatId={chatId}
+                    participants={chatDetail?.participants ?? []}
+                    participantsLoading={chatDetailLoading}
+                    managedByMe={managedByMeMap}
+                    onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    readOnly={readOnly}
+                    width="min(88vw, 20rem)"
+                  />
+                </div>
+              </>
+            )
           ) : (
             <ChatRightSidebar
               chatId={chatId}
@@ -4522,7 +4707,125 @@ export function ChatView({
       </div>
     </div>
   );
-  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
+  return (
+    <GitlabInstanceOriginContext.Provider value={gitlabInstanceOrigin}>{body}</GitlabInstanceOriginContext.Provider>
+  );
+}
+
+function MobileChatDetailsSheet({
+  chatId,
+  participants,
+  participantsLoading,
+  managedByMe,
+  onAdded,
+  readOnly,
+  onDismiss,
+}: {
+  chatId: string;
+  participants: ChatParticipantDetail[];
+  participantsLoading: boolean;
+  managedByMe: Map<string, boolean>;
+  onAdded: () => void;
+  readOnly: boolean;
+  onDismiss: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+
+  const onDialogKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDismiss();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable.item(0);
+      const last = focusable.item(focusable.length - 1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [onDismiss],
+  );
+
+  return (
+    <div className="absolute inset-0 z-30 flex items-end" data-mobile-chat-details-sheet-root>
+      <button
+        type="button"
+        aria-label="Close chat details"
+        onClick={onDismiss}
+        className="absolute inset-0"
+        style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-chat-details-sheet-title"
+        data-mobile-chat-details-sheet="true"
+        onKeyDown={onDialogKeyDown}
+        className="relative z-10 w-full overflow-hidden border-t shadow-[var(--shadow-md)] animate-in fade-in slide-in-from-bottom-4 duration-150"
+        style={{
+          maxHeight: "82vh",
+          borderColor: "var(--border)",
+          borderRadius: "var(--radius-dialog) var(--radius-dialog) 0 0",
+          background: "var(--bg-raised)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
+      >
+        <div
+          className="flex items-center"
+          style={{
+            gap: "var(--sp-3)",
+            padding: "var(--sp-4) var(--sp-4) var(--sp-2)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="min-w-0" style={{ flex: 1 }}>
+            <h2 id="mobile-chat-details-sheet-title" className="text-mobile-title" style={{ margin: 0 }}>
+              Chat details
+            </h2>
+          </div>
+          <button
+            ref={closeRef}
+            type="button"
+            aria-label="Close chat details"
+            onClick={onDismiss}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-input)] border transition-colors hover:bg-[var(--bg-hover)]"
+            style={{ borderColor: "var(--border)", color: "var(--fg-3)" }}
+          >
+            <XIcon aria-hidden className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - var(--sp-16))" }}>
+          <ParticipantsSection
+            chatId={chatId}
+            participants={participants}
+            participantsLoading={participantsLoading}
+            managedByMe={managedByMe}
+            onAdded={onAdded}
+            readOnly={readOnly}
+          />
+          <GitHubSection chatId={chatId} variant="mobile" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -4635,7 +4938,7 @@ function ParticipantAvatar({
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${label} · ${stateText}. Open chat details.`}
+      aria-label={`${label} · ${stateText}. Open participants.`}
       title={`${label} · ${stateText}`}
       className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
       style={{

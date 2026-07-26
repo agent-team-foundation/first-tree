@@ -12,6 +12,7 @@ import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
+import { StepGetStarted } from "./onboarding/steps/step-get-started.js";
 import { StepJoinTeam } from "./onboarding/steps/step-join-team.js";
 import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
@@ -47,11 +48,12 @@ const ORG_ID = "org-acme";
 const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
 const DEFAULT_AGENT_NAME = "gandy assistant";
-// Mirror the real prod bootstrap shape (server fills the channel's actual
-// package + bin name — `first-tree` on prod; see api/me.ts) so the gallery
-// reads true for design review instead of showing literal <package>/<binName>
-// placeholders a real user never sees.
-const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+// Mirror the real prod bootstrap shape (server fills the channel's installer
+// URL + bin name — `first-tree` on prod; see api/me.ts) so the gallery reads
+// true for design review instead of showing placeholders a real user never sees.
+const SAMPLE_CLI =
+  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 const GITHUB_ACCESS_GROUP = "GitHub access states";
 
 const NOW_ISO = new Date().toISOString();
@@ -72,6 +74,22 @@ const HOST: HubClient = {
 };
 
 const REPO_WEB = "https://github.com/acme/web.git";
+
+// Roster for the get-started fork's team-agent picker scenarios.
+const TEAM_AGENTS = [
+  {
+    uuid: "01920000-0000-7000-8000-0000000000a1",
+    name: "dev-assistant",
+    displayName: "Dev Assistant",
+    managerId: "member-owner-1",
+  },
+  {
+    uuid: "01920000-0000-7000-8000-0000000000a2",
+    name: "docs-helper",
+    displayName: "Docs Helper",
+    managerId: "member-owner-1",
+  },
+];
 const REPO_API = "https://github.com/acme/api.git";
 const REPO_INFRA = "https://github.com/acme/infra.git";
 
@@ -259,6 +277,15 @@ type NetProfile = {
    * fetch), so only the error scenarios opt in.
    */
   installUrlError?: 403 | 503 | 500;
+  /**
+   * GET /orgs/:id/agents — the get-started fork's team-agent picker roster.
+   * Matched for ANY org id (the picker resolves the org through the app-level
+   * selected org, not the fixture org). Opt-in: scenarios that don't declare
+   * it fall through to the real fetch.
+   */
+  orgAgents?: "pending" | "error" | Array<{ uuid: string; name: string; displayName: string; managerId: string }>;
+  /** GET /orgs/:id/members — owner names for the picker's "Run by X" tag. */
+  orgMembers?: boolean;
 };
 
 // The active scenario's net profile, read by the shim. Set during render of the
@@ -288,6 +315,46 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
 
   if (p === "/me/organizations") {
     return jsonResponse([{ id: ORG_ID, name: "acme", displayName: TEAM_NAME, role: "admin" }]);
+  }
+  // Get-started fork picker: roster + owner names. Matched for ANY org id
+  // because these requests carry the app-level selected org, not the fixture
+  // org. Opt-in via the scenario's net profile; otherwise fall through.
+  if (activeNet.orgAgents !== undefined && /^\/orgs\/[^/]+\/agents$/.test(p ?? "")) {
+    if (activeNet.orgAgents === "pending") return new Promise<Response>(() => {});
+    if (activeNet.orgAgents === "error") return statusResponse(500, JSON.stringify({ error: "roster unavailable" }));
+    return jsonResponse({
+      items: activeNet.orgAgents.map((a) => ({
+        ...a,
+        organizationId: ORG_ID,
+        type: "agent",
+        status: "active",
+        visibility: "organization",
+        inboxId: `inbox-${a.uuid}`,
+        delegateMention: null,
+        metadata: {},
+        clientId: null,
+        runtimeProvider: "claude-code",
+        avatarColorToken: null,
+        avatarImageUrl: null,
+      })),
+      nextCursor: null,
+    });
+  }
+  if (activeNet.orgMembers && /^\/orgs\/[^/]+\/members$/.test(p ?? "")) {
+    return jsonResponse([
+      {
+        id: "member-owner-1",
+        userId: "u1",
+        organizationId: ORG_ID,
+        agentId: "h1",
+        role: "member",
+        createdAt: "",
+        username: "zhangwei",
+        displayName: "Zhang Wei",
+        avatarUrl: null,
+        lastActiveAt: null,
+      },
+    ]);
   }
   // Invitee start-chat picker → /me/github/repos; admin connect-code picker →
   // the org-scoped installation repos. Both render from the same `repos`
@@ -395,13 +462,6 @@ type WizardSpec = {
    * status appears. Mirrors the per-tab key StepConnectCode sets.
    */
   seedInstallAttempt?: boolean;
-  /**
-   * Render connect-computer in its "stuck" state so the Node.js recovery line
-   * appears. The real state is gated on a 75s internal timer (STUCK_AFTER_MS)
-   * that fixtures can't force, so the preview seeds it directly via
-   * StepConnectComputer's `initialStuck` prop.
-   */
-  connectStuck?: boolean;
 };
 
 // Per-tab marker StepConnectCode reads to detect "came back without an install"
@@ -499,14 +559,6 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
   },
-  {
-    id: "admin-cc-stuck",
-    label: "Waiting · Node.js hint",
-    group: "Connect-computer states",
-    role: "admin",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
-  },
-
   {
     id: "admin-ca-form",
     label: "Create agent",
@@ -765,6 +817,72 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   },
 
   {
+    id: "inv-fork-choose",
+    label: "Get started · fork",
+    group: "Invitee flow",
+    role: "invitee",
+    view: "flow",
+    // The fork renders only while the org offers a team-agent start; clicking
+    // "Quick start" advances into the live pick sub-state (the shim serves the
+    // roster below).
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: TEAM_AGENTS, orgMembers: true },
+    },
+  },
+  {
+    id: "inv-fork-pick",
+    label: "Pick a team agent",
+    group: "Get-started fork states",
+    role: "invitee",
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: TEAM_AGENTS, orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-loading",
+    label: "Pick · loading",
+    group: "Get-started fork states",
+    role: "invitee",
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: "pending", orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-empty",
+    label: "Pick · no team agent",
+    group: "Get-started fork states",
+    role: "invitee",
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: [], orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-error",
+    label: "Pick · roster failed",
+    group: "Get-started fork states",
+    role: "invitee",
+    // A rejected roster read is a DISTINCT state from empty: it names the
+    // failure and offers retry instead of falsely claiming no agent exists.
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: "error", orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+
+  {
     id: "inv-ko-not-ready",
     label: "Team not ready · missing setup",
     group: "Start-chat states",
@@ -803,6 +921,7 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     activeStep: sequence[0] as StepId,
     goNext: NOOP,
     goTo: NOOP,
+    reportStepFailure: NOOP,
     organizationId: ORG_ID,
     memberId: "mem-preview",
     role: path === "admin" ? "admin" : "member",
@@ -829,25 +948,29 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     setTreeUrl: NOOP,
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: NOOP,
+    offerTeamAgentStart: false,
     completeAndEnterChat: ASYNC_NOOP,
+    skipAndEnterChat: ASYNC_NOOP,
     finishLater: ASYNC_NOOP,
   };
 }
 
-function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: boolean }): ReactNode {
+function StepBody({ step }: { step: PreviewStepId }): ReactNode {
   switch (step) {
     case "create-team":
       return <StepTeam />;
     case "connect-code":
       return <StepConnectCode />;
     case "connect-computer":
-      return <StepConnectComputer initialStuck={connectStuck} />;
+      return <StepConnectComputer />;
     case "create-agent":
       return <StepCreateAgent />;
     case "start-chat":
       return <StepStartChat />;
     case "join-team":
       return <StepJoinTeam />;
+    case "get-started":
+      return <StepGetStarted />;
     default:
       return null;
   }
@@ -941,7 +1064,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   };
 
   const Shell = OnboardingShell;
-  const body = spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />;
+  const body = spec.body ?? <StepBody step={spec.step} />;
 
   return (
     <QueryClientProvider client={queryClient}>

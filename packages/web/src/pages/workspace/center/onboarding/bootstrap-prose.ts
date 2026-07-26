@@ -4,16 +4,15 @@
  * (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
  * `first-tree-seed`), and those skills own the concrete flow.
  *
- * Work/intro chats are value-first. Tree setup chats are separate and resilient:
- * Cloud owns creating/adopting the minimum tree repo binding, while the agent
- * reads the actual bound tree content and chooses seed vs read/write from that
- * evidence. A mere binding does not imply a populated tree.
+ * Work/intro chats are value-first. The dedicated Context Tree setup endpoint
+ * owns its canonical bootstrap so browser versions cannot race to persist
+ * different setup semantics under the same idempotency key.
  *
  * Single source of truth: only the start-chat step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
-export type TreeSetupBootstrapPlan = "agentSeed" | "useBoundTree" | "createBinding";
+import { type CampaignActionConfig, getCampaign } from "../../../quickstart/campaigns.js";
 
 function formatSourceList(sourceUrls: readonly string[], heading: string): string[] {
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
@@ -40,40 +39,6 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get started with First Tree."].join("\n");
 }
 
-export function buildTreeSetupBootstrap(
-  sourceUrls: readonly string[],
-  opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },
-): string {
-  if (opts.treeBindingPlan === "agentSeed") {
-    // Visible, user-voice task text (onboarding kickoff contract: no skill names
-    // / hidden directives). The agent reaches first-tree-seed from the tree-less
-    // family map + skill descriptions, and seed adapts to the tree's ACTUAL state
-    // — creating + binding it from zero, or filling a bound-but-empty tree. The
-    // tree URL is included only as a hint when a binding already exists.
-    return [
-      "Let's set up our team's shared context.",
-      "",
-      "Please build out our Context Tree from our connected code — propose an initial structure for me to review, then fill it in.",
-      "",
-      ...formatSourceList(sourceUrls, "Connected code:"),
-      ...(opts.treeUrl ? ["", `Context Tree: ${opts.treeUrl}`] : []),
-    ].join("\n");
-  }
-  const sourceLines = formatSourceList(sourceUrls, "Source code:");
-  const treeLine = `Context Tree: ${opts.treeUrl ?? "resolved by First Tree Cloud"}`;
-  return [
-    "This chat sets up team context for future agent work.",
-    "",
-    treeLine,
-    "",
-    ...sourceLines,
-    "",
-    "This setup helps future agents understand the team's code, decisions, and conventions. The first task chat stays separate.",
-    "",
-    "Read the bound tree first. Use first-tree-read, first-tree-seed, or first-tree-write as appropriate.",
-  ].join("\n");
-}
-
 /**
  * Invitee joining a team that's already set up. The agent inherits the team's
  * recommended repos + Context Tree automatically, so the invitee never selects
@@ -83,6 +48,25 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
   return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get settled into this team on First Tree."].join(
     "\n",
   );
+}
+
+/**
+ * Team-agent start: a joining member begins in a teammate's org-visible agent
+ * chat without connecting a computer or creating their own agent. The agent is
+ * an established teammate (not being onboarded itself, and its manager is not
+ * the sender), so there is no "welcome aboard" — the human is the newcomer
+ * asking to get settled. Dual-reader like every kickoff bootstrap: clean
+ * member-voice prose the user sees verbatim, phrased to semantically match the
+ * welcome skill.
+ */
+export function buildTeamAgentStartBootstrap(agentDisplayName: string): string {
+  return [
+    `${agentDisplayName}, hi — I just joined the team.`,
+    "",
+    "I don't have my own agent set up yet, so I'm starting here with you. " +
+      "Please help me get settled into this team on First Tree: introduce what the team is working on, " +
+      "and suggest a few ways you can help me right away.",
+  ].join("\n");
 }
 
 /**
@@ -100,27 +84,33 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
  * admin and may get a Context Tree build offer after value; the greeting-free
  * direct path stays role-unclear and makes no admin-only offer.
  */
-export function buildScanFixBootstrap(
+export function buildCampaignActionBootstrap(
   agentDisplayName: string,
+  action: CampaignActionConfig,
   handoff: { repoUrl: string; reportKey: string | null },
   opening: "onboarding" | "direct" = "onboarding",
 ): string {
   const reportLines = handoff.reportKey
     ? [
-        `Hosted report: https://report.first-tree.ai/${handoff.reportKey}.html`,
-        `Machine-readable findings: https://report.first-tree.ai/${handoff.reportKey}.json`,
+        `Hosted report: ${action.reportBaseUrl}/${handoff.reportKey}.html`,
+        `Machine-readable findings: ${action.reportBaseUrl}/${handoff.reportKey}.json`,
       ]
     : [];
-  const closing = handoff.reportKey
-    ? "Start from the machine-readable findings and fix the blockers in severity order. If the findings link has expired, or the repository isn't accessible from here, say exactly what is needed — a re-run of the scan, the narrowest GitHub access, or a local path."
-    : "The scan report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.";
+  const closing = handoff.reportKey ? action.withReportInstruction : action.withoutReportInstruction;
   const openingLines =
     opening === "direct"
-      ? [`${agentDisplayName}, please help me fix the launch blockers found by my production readiness scan.`]
-      : [
-          `${agentDisplayName}, welcome aboard.`,
-          "",
-          "Please help me fix the launch blockers found by my production readiness scan.",
-        ];
+      ? [`${agentDisplayName}, please help me ${action.request}.`]
+      : [`${agentDisplayName}, welcome aboard.`, "", `Please help me ${action.request}.`];
   return [...openingLines, "", `Repository: ${handoff.repoUrl}`, ...reportLines, "", closing].join("\n");
+}
+
+/** Compatibility wrapper for the deployed production-scan action. */
+export function buildScanFixBootstrap(
+  agentDisplayName: string,
+  handoff: { repoUrl: string; reportKey: string | null },
+  opening: "onboarding" | "direct" = "onboarding",
+): string {
+  const campaign = getCampaign("production-scan");
+  if (!campaign) throw new Error("production-scan campaign config is missing");
+  return buildCampaignActionBootstrap(agentDisplayName, campaign.action, handoff, opening);
 }

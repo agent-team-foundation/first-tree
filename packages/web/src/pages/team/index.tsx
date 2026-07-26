@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { PageHeader } from "../../components/ui/page-header.js";
+import { invalidateDisplayNameQueries } from "../../lib/identity-cache.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { formatRelative } from "../../lib/utils.js";
 import {
@@ -159,7 +160,16 @@ export function TeamPage() {
   const updateMemberMut = useMutation({
     mutationFn: async (vars: { id: string; patch: { displayName?: string; role?: "admin" | "member" } }) =>
       updateMember(vars.id, vars.patch),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+    onSuccess: async (_member, vars) => {
+      const refreshProjection =
+        vars.patch.displayName !== undefined
+          ? invalidateDisplayNameQueries(queryClient)
+          : queryClient.invalidateQueries({ queryKey: ["members"] });
+      // A combined self rename + role edit uses this admin route rather than
+      // /me/profile. AuthProvider owns a separate /me snapshot, so refresh it
+      // alongside React Query or the user menu keeps the old identity/role.
+      await Promise.all([refreshProjection, ...(vars.id === memberId ? [refreshMe()] : [])]);
+    },
   });
   // Self-service display-name edit (PATCH /me/profile). Routed here instead of
   // the admin member route so a non-admin can rename themselves; the server
@@ -174,8 +184,7 @@ export function TeamPage() {
       // Refresh both, else the top-right menu shows the old name until the next
       // natural fetchMe.
       await refreshMe();
-      queryClient.invalidateQueries({ queryKey: ["members"] });
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      await invalidateDisplayNameQueries(queryClient);
     },
   });
   const deleteMemberMut = useMutation({

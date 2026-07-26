@@ -1,6 +1,6 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
@@ -15,9 +15,14 @@ import * as githubAudienceService from "../services/github-audience.js";
 import * as githubEntityStateService from "../services/github-entity-state.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, seedClient, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
+const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -131,9 +136,9 @@ async function seedInstallation(
     accountLogin: "owner",
     accountGithubId: 1000 + opts.installationId,
     hubOrganizationId: opts.orgId,
-    permissions: { contents: "read" },
+    permissions: { contents: "read", pull_requests: "write" },
     events: ["pull_request", "issues"],
-    suspendedAt: opts.suspended ? new Date() : null,
+    suspendedAt: opts.suspended ? new Date(Date.now() - 1_000) : null,
   });
 }
 
@@ -143,6 +148,16 @@ async function configureContextReviewer(app: App, admin: Awaited<ReturnType<type
     memberId: admin.memberId,
     name: `context-reviewer-${randomUUID().slice(0, 6)}`,
   });
+  const clientId = await seedClient(app, admin.userId, admin.organizationId);
+  await app.db.update(agents).set({ clientId, runtimeProvider: "claude-code" }).where(eq(agents.uuid, reviewer));
+  await seedHealthyAgentRuntime(app, {
+    agentUuid: reviewer,
+    clientId,
+  });
+  await app.db
+    .update(githubAppInstallations)
+    .set({ events: ["pull_request", "issue_comment", "pull_request_review_comment", "issues"] })
+    .where(eq(githubAppInstallations.hubOrganizationId, admin.organizationId));
   await putOrgSetting(
     app.db,
     admin.organizationId,
@@ -169,7 +184,7 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
       html_url: `https://github.com/${repoFullName}/pull/42`,
       body: "",
       base: { ref: "main" },
-      head: { ref: "context-reviewer" },
+      head: { ref: "context-reviewer", sha: "a".repeat(40) },
       draft: false,
       user: { login: "context-writer", type: "User" },
     },
@@ -200,8 +215,44 @@ function contextIssueCommentPayload(installationId: number, repoFullName = "owne
   };
 }
 
+function contextReviewerGithubFetch(liveHead = "a".repeat(40)) {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/access_tokens") && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          token: "installation-token",
+          expires_at: "2030-01-01T00:00:00.000Z",
+          permissions: { metadata: "read", pull_requests: "write" },
+          repository_selection: "selected",
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/repos/owner/context-tree/pulls/42")) {
+      return new Response(
+        JSON.stringify({
+          number: 42,
+          state: "open",
+          draft: false,
+          merged: false,
+          head: { sha: liveHead },
+          html_url: "https://github.com/owner/context-tree/pull/42",
+          body: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
 describe("POST /webhooks/github-app", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("returns 401 on a bad HMAC signature", async () => {
     const app = getApp();
@@ -631,6 +682,40 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toMatchObject({ ok: true, event: "star", handled: false });
   });
 
+  it("does not claim a supported event when x-github-delivery is absent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100023;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const claimSpy = vi.spyOn(eventDedupService, "claimEvent");
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 923,
+        title: "No delivery id",
+        html_url: "https://github.com/owner/repo/issues/923",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    };
+
+    try {
+      const first = await postWebhook(app, "issues", payload, { skipDelivery: true });
+      const second = await postWebhook(app, "issues", payload, { skipDelivery: true });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ event: "issues", audience: 0 });
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).toMatchObject({ event: "issues", audience: 0 });
+      expect(claimSpy).not.toHaveBeenCalled();
+    } finally {
+      claimSpy.mockRestore();
+    }
+  });
+
   it("derives PR state seeds from issue comment payload fallbacks", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -745,7 +830,7 @@ describe("POST /webhooks/github-app", () => {
     const deliveryId = randomUUID();
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const audienceSpy = vi
-      .spyOn(githubAudienceService, "resolveAudience")
+      .spyOn(githubAudienceService, "resolveGithubAudience")
       .mockRejectedValueOnce(new Error("audience down"));
     const unclaimSpy = vi.spyOn(eventDedupService, "unclaimEvent").mockRejectedValueOnce(new Error("unclaim down"));
 
@@ -1604,6 +1689,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100041;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const res = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId));
 
@@ -1629,11 +1715,9 @@ describe("POST /webhooks/github-app", () => {
       .from(messages)
       .where(eq(messages.chatId, chat?.id ?? ""))
       .limit(1);
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --request-changes --body-file");
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body-file");
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
-    expect(message?.content).toContain("Context changes requested");
-    expect(message?.content).toContain("Still unclear or needs more detail");
+    expect(message?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(message?.content).not.toContain("gh pr review");
+    expect(message?.content).not.toContain("Context changes requested");
     expect(message?.content).toContain("Draft status from webhook: ready for review");
     expect(message?.metadata).toMatchObject({
       source: "github",
@@ -1652,11 +1736,14 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100043;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const opened = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId));
     expect(opened.statusCode).toBe(200);
     expect(opened.json()).toMatchObject({ contextReviewer: { handled: true, reused: false } });
 
+    const liveHead = "b".repeat(40);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch(liveHead));
     const followUp = await postWebhook(app, "issue_comment", contextIssueCommentPayload(installationId));
 
     expect(followUp.statusCode).toBe(200);
@@ -1681,7 +1768,7 @@ describe("POST /webhooks/github-app", () => {
     expect(followUpMessage?.content).toContain(
       "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
     );
-    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.content).toContain("Load the installed `context-tree-review` skill");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -1709,6 +1796,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100044;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const draftOpenedPayload = contextPullRequestPayload(installationId);
     draftOpenedPayload.pull_request.draft = true;
@@ -1740,8 +1828,8 @@ describe("POST /webhooks/github-app", () => {
     );
     expect(followUpMessage?.content).toContain("Trigger event: pull_request.ready_for_review");
     expect(followUpMessage?.content).toContain("Draft status from webhook: ready for review");
-    expect(followUpMessage?.content).toContain("Do not rely on an older approval or comment review");
-    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(followUpMessage?.content).not.toContain("gh pr review");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
@@ -1761,6 +1849,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100042;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const res = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId, "owner/code"));
 
@@ -1809,6 +1898,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100043;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
     const deliveryId = randomUUID();
     const payload = contextPullRequestPayload(installationId);
 

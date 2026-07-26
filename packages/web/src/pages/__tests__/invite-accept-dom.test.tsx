@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { InvitationPreview, MeMembership, OrgBrief } from "@first-tree/shared";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router";
@@ -64,6 +65,8 @@ vi.mock("react-router", async (importOriginal) => {
 });
 
 let root: Root | null = null;
+let queryClient: QueryClient | null = null;
+let providerAvailability = { google: true, github: true };
 
 function preview(overrides: Partial<InvitationPreview> = {}): InvitationPreview {
   return {
@@ -96,14 +99,18 @@ async function renderDom(element: ReactElement, route = "/invite/token-1"): Prom
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  const currentQueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient = currentQueryClient;
   await act(async () => {
     root?.render(
-      <MemoryRouter initialEntries={[route]}>
-        <Routes>
-          <Route path="/invite/:token" element={element} />
-          <Route path="/" element={<div>home</div>} />
-        </Routes>
-      </MemoryRouter>,
+      <QueryClientProvider client={currentQueryClient}>
+        <MemoryRouter initialEntries={[route]}>
+          <Routes>
+            <Route path="/invite/:token" element={element} />
+            <Route path="/" element={<div>home</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
   });
   await flush();
@@ -140,9 +147,11 @@ beforeEach(() => {
   authMock.value.selectOrganization.mockClear();
   navigateMock.mockReset();
   clientMocks.get.mockReset();
+  providerAvailability = { google: true, github: true };
   clientMocks.post.mockReset();
   onboardingMocks.markOnboardingResume.mockReset();
   clientMocks.get.mockImplementation(async (path: string) => {
+    if (path === "/bootstrap/config") return { authProviders: providerAvailability };
     if (path === "/me/organizations") return [org()];
     if (path === "/me") return { member: { organizationId: "org-old" } };
     throw new Error(`Unexpected GET ${path}`);
@@ -164,6 +173,8 @@ beforeEach(() => {
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = null;
+  queryClient?.clear();
+  queryClient = null;
   document.body.innerHTML = "";
   vi.useRealTimers();
 });
@@ -194,7 +205,21 @@ describe("InviteAcceptPage", () => {
     await waitForText(publicPage, "Continue with GitHub to join");
     const link = publicPage.querySelector<HTMLAnchorElement>("a[href^='/api/v1/auth/github/start']");
     expect(link?.href).toContain("next=%2Finvite%2Ftoken-1");
-    expect(clientMocks.get).not.toHaveBeenCalled();
+    expect(clientMocks.get).toHaveBeenCalledWith("/bootstrap/config");
+    await act(async () => root?.unmount());
+    root = null;
+
+    providerAvailability = { google: true, github: false };
+    const googleOnlyPage = await renderDom(<InviteAcceptPage />);
+    await waitForText(googleOnlyPage, "Continue with Google to join");
+    expect(googleOnlyPage.textContent).not.toContain("Continue with GitHub to join");
+    await act(async () => root?.unmount());
+    root = null;
+
+    providerAvailability = { google: false, github: true };
+    const githubOnlyPage = await renderDom(<InviteAcceptPage />);
+    await waitForText(githubOnlyPage, "Continue with GitHub to join");
+    expect(githubOnlyPage.textContent).not.toContain("Continue with Google to join");
     await act(async () => root?.unmount());
     root = null;
 

@@ -257,6 +257,8 @@ export type SessionMessage = {
   content: string | Record<string, unknown>;
   /** Optional metadata. */
   metadata: Record<string, unknown> | null;
+  /** Server-stamped message provenance used by trusted attribution gates. */
+  source?: string | null;
   /**
    * Server-stamped message creation time (ISO 8601). Carried so the
    * `[From: …]` attribution header can annotate when a message was sent —
@@ -281,6 +283,8 @@ export type PrecedingMessage = {
   format: string;
   content: unknown;
   metadata: Record<string, unknown>;
+  /** Optional for compatibility with preceding context from older servers. */
+  source?: string | null;
   createdAt: string;
 };
 

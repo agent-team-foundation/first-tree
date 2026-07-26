@@ -299,7 +299,15 @@ describe("WorkspacePage DOM behavior", () => {
     expect(filtered.get("group")).toBe("source");
 
     await click(buttonByText(container, "Clear filters"));
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?group=source");
+    // "Clear filters" resets the popover's own dimensions (origin / with /
+    // engagement) but LEAVES the header triad (watching) and grouping intact.
+    const cleared = locationParams(container);
+    expect(cleared.get("watching")).toBe("1");
+    expect(cleared.get("group")).toBe("source");
+    expect(cleared.has("origin")).toBe(false);
+    expect(cleared.has("with")).toBe(false);
+    expect(cleared.has("engagement")).toBe(false);
+    expect(cleared.has("unread")).toBe(false);
 
     await act(async () => root.unmount());
   });

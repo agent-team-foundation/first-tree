@@ -21,6 +21,17 @@ const githubEntity = {
   number: 42,
 };
 
+const gitlabEntity = {
+  entityType: "pull_request",
+  entityUrl: "https://gitlab.example/acme/api/-/merge_requests/42",
+  projectPath: "acme/api",
+  entityIid: 42,
+  title: null,
+  state: null,
+  status: "pending",
+  boundVia: "agent_declared",
+};
+
 function jsonResponse(data: unknown, status = 200, headers: TestHeaders = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -131,6 +142,26 @@ describe("FirstTreeHubSDK comprehensive wrappers", () => {
     expect(requestInit(fetchMock, 0).headers).not.toMatchObject({ "Content-Type": "application/json" });
   });
 
+  it("resolves the runtime session token for each request", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ accessToken: "outbox-token-1", expiresIn: 60 }),
+      jsonResponse({ accessToken: "outbox-token-2", expiresIn: 60 }),
+    );
+    let runtimeSessionToken = "runtime-session-1";
+    const sdk = makeSdk({ runtimeSessionToken: () => runtimeSessionToken });
+
+    await expect(sdk.createAgentOutboxToken("chat-1")).resolves.toMatchObject({ accessToken: "outbox-token-1" });
+    runtimeSessionToken = "runtime-session-2";
+    await expect(sdk.createAgentOutboxToken("chat-2")).resolves.toMatchObject({ accessToken: "outbox-token-2" });
+
+    expect(requestInit(fetchMock, 0).headers).toMatchObject({
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-session-1",
+    });
+    expect(requestInit(fetchMock, 1).headers).toMatchObject({
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-session-2",
+    });
+  });
+
   it("builds chat and GitHub entity wrapper paths, bodies, and queries", async () => {
     const fetchMock = mockFetch(
       jsonResponse({ chatIds: ["chat-1", "chat-2"] }),
@@ -169,6 +200,33 @@ describe("FirstTreeHubSDK comprehensive wrappers", () => {
       method: "PATCH",
       body: JSON.stringify({ topic: "New topic", description: null }),
     });
+  });
+
+  it("builds typed GitLab entity follow, list, and URL-unfollow requests", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ status: "created", entity: gitlabEntity }, 201),
+      jsonResponse({ items: [gitlabEntity] }),
+      jsonResponse({ removed: 1 }),
+    );
+    const sdk = makeSdk();
+
+    await expect(sdk.followGitlabEntity("chat-1", { entityUrl: gitlabEntity.entityUrl })).resolves.toEqual({
+      status: "created",
+      entity: gitlabEntity,
+    });
+    await expect(sdk.listChatGitlabEntities("chat-1")).resolves.toEqual({ items: [gitlabEntity] });
+    await expect(sdk.unfollowGitlabEntity("chat-1", gitlabEntity.entityUrl)).resolves.toEqual({ removed: 1 });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities`,
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities`,
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities?entity=${encodeURIComponent(gitlabEntity.entityUrl)}`,
+    ]);
+    expect(requestInit(fetchMock, 0)).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ entityUrl: gitlabEntity.entityUrl }),
+    });
+    expect(requestInit(fetchMock, 2)).toMatchObject({ method: "DELETE" });
   });
 
   it("builds document wrapper paths, queries, and JSON bodies", async () => {

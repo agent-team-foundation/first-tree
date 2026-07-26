@@ -45,6 +45,9 @@ vi.mock("../../../api/onboarding-events.js", () => eventMocks);
 vi.mock("../../../lib/visibility-interval.js", () => visibilityMocks);
 
 let root: Root | null = null;
+const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
+const bootstrapCommand = (token: string): string =>
+  `curl -fsSL ${PROD_INSTALLER_URL} | sh\n~/.local/bin/first-tree login ${token}`;
 
 function expectHookValue<T>(value: T): NonNullable<T> {
   if (value === null || value === undefined) throw new Error("hook value was not captured");
@@ -302,15 +305,16 @@ describe("shared setup hooks", () => {
 
   it("mints connect commands, surfaces final token failures, and retries manually", async () => {
     const latest = { current: null as ComputerConnection | null };
+    const onTokenMintFailed = vi.fn();
     activityMocks.listClients.mockResolvedValue([]);
     clientMocks.api.post
       .mockResolvedValueOnce({
         token: "token-1",
         expiresIn: 600,
-        command: "first-tree-dev login token-1",
-        bootstrapCommand: "first-tree-dev login token-1",
-        npmSpec: null,
-        binName: "first-tree-dev",
+        command: "first-tree login token-1",
+        bootstrapCommand: bootstrapCommand("token-1"),
+        installerUrl: PROD_INSTALLER_URL,
+        binName: "first-tree",
       })
       .mockRejectedValueOnce(new Error("token retry failed"))
       .mockRejectedValueOnce("still down")
@@ -318,14 +322,14 @@ describe("shared setup hooks", () => {
       .mockResolvedValueOnce({
         token: "token-2",
         expiresIn: 600,
-        command: "first-tree-dev login token-2",
-        bootstrapCommand: "first-tree-dev login token-2",
-        npmSpec: null,
-        binName: "first-tree-dev",
+        command: "first-tree login token-2",
+        bootstrapCommand: bootstrapCommand("token-2"),
+        installerUrl: PROD_INSTALLER_URL,
+        binName: "first-tree",
       });
 
     function Probe() {
-      latest.current = useComputerConnection(true);
+      latest.current = useComputerConnection(true, { onTokenMintFailed });
       return <div>{latest.current.cliCommand ?? latest.current.tokenError ?? "pending"}</div>;
     }
 
@@ -333,7 +337,7 @@ describe("shared setup hooks", () => {
     await flush();
     await flush();
 
-    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-1");
+    expect(expectHookValue(latest.current).cliCommand).toBe(bootstrapCommand("token-1"));
 
     await act(async () => expectHookValue(latest.current).retry());
     await act(async () => {
@@ -341,12 +345,13 @@ describe("shared setup hooks", () => {
     });
 
     expect(expectHookValue(latest.current).tokenError).toBe("token failed");
+    expect(onTokenMintFailed).toHaveBeenCalledTimes(1);
 
     await act(async () => expectHookValue(latest.current).retry());
     await flush();
     await flush();
 
-    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-2");
+    expect(expectHookValue(latest.current).cliCommand).toBe(bootstrapCommand("token-2"));
     expect(expectHookValue(latest.current).tokenError).toBeNull();
   }, 10_000);
 

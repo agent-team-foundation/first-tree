@@ -17,7 +17,9 @@
  *     sends the composed answer; Skip sends a "skipped" answer (the caller's
  *     `onSkip` writes the resolving reply) so the asking agent unblocks rather
  *     than waiting on a never-answered question. There is no "dismiss but keep it
- *     open" path — skip is an answer, not a deferral.
+ *     open" path in the blocking chat view — skip is an answer, not a deferral.
+ *     A feed-level shortcut may supply `onDismiss` so the user can lower the
+ *     sheet and keep triaging without resolving the question.
  *
  * The free-text answer surface mirrors the chat composer: it supports `@mention`
  * autocomplete (against chat speakers plus host-supplied inviteable agents) and
@@ -35,10 +37,16 @@ import { AtSign, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { usePendingAttachments } from "../../lib/use-pending-attachments.js";
-import { MentionAutocompletePopover, type MentionCandidate, useMentionAutocomplete } from "../mention-autocomplete.js";
+import {
+  composerPickerVisible,
+  MentionAutocompletePopover,
+  type MentionCandidate,
+  useMentionAutocomplete,
+} from "../mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { FileChip } from "../ui/file-chip.js";
-import { Markdown } from "../ui/markdown.js";
+import { Markdown, type MarkdownProps } from "../ui/markdown.js";
+import { ImageRefGallery, type ReferencedImage } from "./image-ref-gallery.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
 
 /**
@@ -101,20 +109,30 @@ function useKeyboardInset(): number {
 
 export function AskTakeover({
   body,
+  images = [],
   payload,
   askerName,
   sending = false,
   mentionCandidates = [],
+  markdownComponents,
   error,
   onReply,
   onSkip,
+  onDismiss,
   isTrial = false,
+  mobile = false,
 }: {
   /** Trial surface: match the minimal trial composer — no @mention / attach
    *  affordances in the answer input, just plain text. */
   isTrial?: boolean;
+  /** Touch surface (the mobile route): enlarge tap targets to the touch
+   *  minimum and make Enter insert a newline (Reply button is the only submit),
+   *  matching the mobile chat composer. */
+  mobile?: boolean;
   /** The ask itself — the request message's markdown body. */
   body: string;
+  /** Images attached to the ask, shown beneath the body in the same scroller. */
+  images?: readonly ReferencedImage[];
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
@@ -122,6 +140,8 @@ export function AskTakeover({
    *  (self-excluded, same source as the composer). Empty → no autocomplete and
    *  every `@<token>` stays plain text. */
   mentionCandidates?: MentionCandidate[];
+  /** Host-provided link presentation shared with the message timeline. */
+  markdownComponents?: MarkdownProps["components"];
   /** A host-side send failure to surface in the card (the composer is covered,
    *  so a failed resolve must show here or it looks like nothing happened). */
   error?: string;
@@ -129,6 +149,9 @@ export function AskTakeover({
   onReply: (answer: AskAnswer) => void;
   /** Resolve the question with a "skipped" answer (caller sends the reply). */
   onSkip: () => void;
+  /** Optional feed-sheet close: leaves the question open. Blocking chat views
+   *  intentionally omit this so their existing must-answer contract remains. */
+  onDismiss?: () => void;
 }) {
   const options = payload.options;
   const multi = payload.multiSelect === true;
@@ -136,7 +159,10 @@ export function AskTakeover({
   const [freeText, setFreeText] = useState("");
   const [cursor, setCursor] = useState(0);
   // Tighten the horizontal padding on phone widths so the card uses the
-  // available width instead of burning it on gutters.
+  // available width instead of burning it on gutters. Note this keys off the
+  // measured *viewport width*, whereas the touch-target / Enter behavior keys
+  // off the `mobile` *route* prop — two intentionally distinct axes (a narrow
+  // desktop window wants tighter gutters but not phone-sized tap targets).
   const viewport = useWorkspaceViewport();
   const padX = viewport === "narrow" ? "var(--sp-4)" : "var(--sp-6)";
   // Keep the card (and its pinned footer) above the on-screen keyboard.
@@ -242,10 +268,14 @@ export function AskTakeover({
       if (e.key === "Escape") {
         if (sending) return;
         e.preventDefault();
-        onSkip();
+        if (onDismiss) onDismiss();
+        else onSkip();
         return;
       }
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Mobile soft keyboards have no Shift+Enter, so Enter must insert a
+      // newline in the answer box; the Reply button is the only submit path.
+      // Desktop keeps Enter-to-reply.
+      if (e.key === "Enter" && !e.shiftKey && !mobile) {
         // An option row is a radio/checkbox button that owns Enter as its
         // toggle; let that native behavior stand rather than resolving.
         if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
@@ -256,17 +286,18 @@ export function AskTakeover({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sending, canReply, onSkip, reply]);
+  }, [sending, canReply, onSkip, onDismiss, reply, mobile]);
 
   // Visible chrome (border + fill + radius) lives on the WRAPPER, not the
   // textarea: the textarea is painted transparent so the mention overlay
   // behind it can draw the actual glyphs (PR 1256). An opaque textarea
   // background sits *above* that overlay and hides the typed text — the
   // white-on-white regression this restores. Mirrors chat-view's composer.
+  // Radius lives in `.ask-answer-field` (index.css), not inline, so the phone
+  // weld rule can flatten the top corners while the portal picker is docked.
   const fieldChrome = {
     position: "relative" as const,
     border: "var(--hairline) solid var(--border-strong)",
-    borderRadius: "var(--radius-input)",
     background: "var(--bg)",
   };
 
@@ -301,7 +332,17 @@ export function AskTakeover({
    *  as the sole box on a free-text ask): mention autocomplete + highlight +
    *  image paste, with the text drawn by the mirror overlay. */
   const renderAnswerInput = (placeholder: string, minHeight: number) => (
-    <div style={fieldChrome}>
+    <div
+      className="ask-answer-field"
+      // Phone-only weld: flatten the field's top corners while the portal picker
+      // is docked flush above it (`.ask-answer-field[data-picker-open]` in
+      // index.css). composerPickerVisible keeps a trial `@` (no panel rendered)
+      // from welding an empty field.
+      data-picker-open={
+        composerPickerVisible({ isTrial, mentionOpen: mention.trigger != null, slashOpen: false }) ? "true" : undefined
+      }
+      style={fieldChrome}
+    >
       {/* No mention autocomplete on the trial answer input (single agent). */}
       {isTrial ? null : (
         <MentionAutocompletePopover
@@ -310,6 +351,13 @@ export function AskTakeover({
           highlightIndex={mention.highlightIndex}
           anchorRef={taRef}
           onPick={mention.pick}
+          // Phone: portal the picker out of the answer card's scroll clip so its
+          // first/active candidates stay visible. Wider viewports keep the
+          // in-flow float (the card is tall enough there not to clip).
+          portal={viewport === "narrow"}
+          // Dismiss (not just hide) when the field scrolls out of the card so the
+          // now-invisible picker can't be Enter-selected.
+          onDismiss={mention.dismiss}
         />
       )}
       <MentionHighlightOverlay
@@ -397,8 +445,9 @@ export function AskTakeover({
                   position: "absolute",
                   top: 2,
                   right: 2,
-                  width: 16,
-                  height: 16,
+                  // Mobile: a roomier corner × (kept modest vs the small thumbnail).
+                  width: mobile ? 22 : 16,
+                  height: mobile ? 22 : 16,
                   borderRadius: "50%",
                   background: "var(--color-overlay-scrim)",
                   border: "none",
@@ -410,7 +459,7 @@ export function AskTakeover({
                   padding: 0,
                 }}
               >
-                <X className="h-2.5 w-2.5" />
+                <X className={mobile ? "h-3 w-3" : "h-2.5 w-2.5"} />
               </button>
             </div>
           ) : (
@@ -423,8 +472,9 @@ export function AskTakeover({
                   onClick={() => removeAttachment(att.id)}
                   aria-label={`Remove ${att.file.name}`}
                   style={{
-                    width: 14,
-                    height: 14,
+                    // Mobile: a roomier tap target on the file chip's remove ×.
+                    width: mobile ? 26 : 14,
+                    height: mobile ? 26 : 14,
                     borderRadius: "50%",
                     background: "var(--color-overlay-scrim)",
                     border: "none",
@@ -436,7 +486,7 @@ export function AskTakeover({
                     padding: 0,
                   }}
                 >
-                  <X className="h-2 w-2" />
+                  <X className={mobile ? "h-3.5 w-3.5" : "h-2 w-2"} />
                 </button>
               }
             />
@@ -463,9 +513,11 @@ export function AskTakeover({
             padding: 0,
             display: "inline-flex",
             alignItems: "center",
+            // Mobile: grow the tap target to the touch minimum (icon stays small).
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
-          <AtSign className="h-3.5 w-3.5" />
+          <AtSign className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
         </button>
         <button
           type="button"
@@ -480,9 +532,11 @@ export function AskTakeover({
             padding: 0,
             display: "inline-flex",
             alignItems: "center",
+            // Mobile: grow the tap target to the touch minimum (icon stays small).
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
-          <Paperclip className="h-3.5 w-3.5" />
+          <Paperclip className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
         </button>
         <input
           ref={fileInputRef}
@@ -513,9 +567,9 @@ export function AskTakeover({
         bottom: keyboardInset,
         zIndex: 30,
         display: "flex",
-        alignItems: "center",
+        alignItems: mobile ? "flex-end" : "center",
         justifyContent: "center",
-        padding: "clamp(var(--sp-2_5), 2.5%, var(--sp-7))",
+        padding: mobile ? "var(--sp-2) 0 0" : "clamp(var(--sp-2_5), 2.5%, var(--sp-7))",
         background: "color-mix(in oklch, var(--fg) 10%, transparent)",
       }}
     >
@@ -528,16 +582,40 @@ export function AskTakeover({
           // Slightly wider than the message reading column; height fits the
           // content and is capped to the area (50rem cap).
           width: "min(100%, 50rem)",
-          maxHeight: "100%",
+          maxHeight: mobile ? "min(92%, 50rem)" : "100%",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
+          position: "relative",
           background: "var(--bg-raised)",
           border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-dialog)",
+          borderRadius: mobile ? "var(--radius-dialog) var(--radius-dialog) 0 0" : "var(--radius-dialog)",
           boxShadow: "var(--shadow-md)",
         }}
       >
+        {onDismiss ? (
+          <button
+            type="button"
+            aria-label="Close question"
+            onClick={onDismiss}
+            disabled={sending}
+            className="absolute inline-flex items-center justify-center"
+            style={{
+              top: "var(--sp-2)",
+              right: "var(--sp-2)",
+              zIndex: 2,
+              width: 44,
+              height: 44,
+              border: 0,
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-raised)",
+              color: "var(--fg-3)",
+              opacity: sending ? 0.5 : 1,
+            }}
+          >
+            <X aria-hidden className="h-5 w-5" />
+          </button>
+        ) : null}
         {/* Scrolling region: the ask body PLUS the answer surface. Keeping the
             options inside the scroller (rather than in a fixed block) is what
             guarantees Reply is reachable — when the card is shorter than its
@@ -559,7 +637,8 @@ export function AskTakeover({
               lineHeight: 1.6,
             }}
           >
-            <Markdown>{body}</Markdown>
+            <Markdown components={markdownComponents}>{body}</Markdown>
+            <ImageRefGallery images={images} hasLeadingContent={body.trim().length > 0} />
           </div>
 
           {/* Answer surface — options + Other (or a single free-text box),
@@ -620,53 +699,61 @@ export function AskTakeover({
         {/* Pinned footer — Skip / Reply. Fixed (flex 0 0 auto) so it never
             scrolls out of view: Reply is reachable at any viewport height. */}
         <div
+          data-ask-takeover-footer
+          className={mobile ? "pb-safe-bottom" : undefined}
           style={{
             flex: "0 0 auto",
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "center",
-            gap: "var(--sp-3)",
-            padding: `var(--sp-3) ${padX}`,
             borderTop: "var(--hairline) solid var(--border-faint)",
           }}
         >
-          <button
-            type="button"
-            onClick={onSkip}
-            disabled={sending}
-            title="Skip (Esc)"
-            className="text-label"
+          <div
+            className="flex items-center justify-end"
             style={{
-              height: 34,
-              padding: "0 var(--sp-4)",
-              borderRadius: "var(--radius-input)",
-              border: "var(--hairline) solid transparent",
-              background: "transparent",
-              color: "var(--fg-2)",
-              cursor: sending ? "default" : "pointer",
+              gap: "var(--sp-3)",
+              padding: `var(--sp-3) ${padX}`,
             }}
           >
-            Skip
-          </button>
-          <button
-            type="button"
-            onClick={reply}
-            disabled={!canReply}
-            title="Reply (Enter)"
-            className="text-label"
-            style={{
-              height: 34,
-              padding: "0 var(--sp-4)",
-              borderRadius: "var(--radius-input)",
-              border: "var(--hairline) solid transparent",
-              background: "var(--primary)",
-              color: "var(--primary-on)",
-              cursor: canReply ? "pointer" : "default",
-              opacity: canReply ? 1 : 0.5,
-            }}
-          >
-            {sending ? "Replying…" : "Reply"}
-          </button>
+            <button
+              type="button"
+              onClick={onSkip}
+              disabled={sending}
+              title="Skip (Esc)"
+              className="text-label"
+              style={{
+                // Mobile: 44 height clears the touch minimum.
+                height: mobile ? 44 : 34,
+                padding: "0 var(--sp-4)",
+                borderRadius: "var(--radius-input)",
+                border: "var(--hairline) solid transparent",
+                background: "transparent",
+                color: "var(--fg-2)",
+                cursor: sending ? "default" : "pointer",
+              }}
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              onClick={reply}
+              disabled={!canReply}
+              title={mobile ? "Reply" : "Reply (Enter)"}
+              className="text-label"
+              style={{
+                // Mobile: 44 height clears the touch minimum (Reply is the only
+                // submit path there — Enter inserts a newline).
+                height: mobile ? 44 : 34,
+                padding: "0 var(--sp-4)",
+                borderRadius: "var(--radius-input)",
+                border: "var(--hairline) solid transparent",
+                background: "var(--primary)",
+                color: "var(--primary-on)",
+                cursor: canReply ? "pointer" : "default",
+                opacity: canReply ? 1 : 0.5,
+              }}
+            >
+              {sending ? "Replying…" : "Reply"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

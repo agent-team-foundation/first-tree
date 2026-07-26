@@ -1,10 +1,11 @@
 # Proxy & network egress (daemon behind a firewall)
 
-First Tree's background daemon (launchd on macOS, systemd `--user` on Linux,
+First Tree's background daemon (launchd on macOS, systemd on Linux,
 and per-user Task Scheduler on Windows) is **compatible with** whatever proxy
-you run — it does not configure, capture, or manage a proxy for you. This page
-explains the one thing you must do so the daemon can reach the network the same
-way your shell does.
+you run — it does not configure, capture, or manage a proxy for you. Linux uses
+`systemd --user` for normal users and a system-scoped unit when the CLI is run
+as root. This page explains the one thing you must do so the daemon can reach
+the network the same way your shell does.
 
 ## Symptom
 

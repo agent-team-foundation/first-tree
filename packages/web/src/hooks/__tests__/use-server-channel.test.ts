@@ -1,13 +1,17 @@
 // @vitest-environment happy-dom
 
+import { CONNECT_BOOTSTRAP_CODE_PLACEHOLDER } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client.js";
 import {
+  extractAuthProviderAvailability,
   extractChannel,
+  extractConnectBootstrapCommandTemplate,
   extractGrowthLandingPagesEnabled,
+  useContextTreeSetupPreviewBootstrapState,
   useGrowthLandingPagesEnabled,
   useGrowthLandingPagesState,
   useServerChannelState,
@@ -24,6 +28,7 @@ Object.assign(window, { IS_REACT_ACT_ENVIRONMENT: true });
 
 type ObservedBootstrap = {
   channel: ReturnType<typeof useServerChannelState>;
+  contextTreeSetup: ReturnType<typeof useContextTreeSetupPreviewBootstrapState>;
   growth: ReturnType<typeof useGrowthLandingPagesState>;
   growthEnabled: boolean;
 };
@@ -84,14 +89,75 @@ describe("extractGrowthLandingPagesEnabled", () => {
   });
 });
 
+describe("extractAuthProviderAvailability", () => {
+  it("accepts the public provider availability shape", () => {
+    expect(extractAuthProviderAvailability({ authProviders: { google: true, github: false } })).toEqual({
+      google: true,
+      github: false,
+    });
+  });
+
+  it("fails closed for missing or malformed availability", () => {
+    expect(extractAuthProviderAvailability({})).toEqual({ google: false, github: false });
+    expect(extractAuthProviderAvailability({ authProviders: { google: "yes", github: true } })).toEqual({
+      google: false,
+      github: false,
+    });
+  });
+});
+
+describe("extractConnectBootstrapCommandTemplate", () => {
+  const template = {
+    command: `first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
+    codePlaceholder: CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+  };
+
+  it("accepts a single server-authored connect-code placeholder", () => {
+    expect(extractConnectBootstrapCommandTemplate({ connectBootstrapCommandTemplate: template })).toEqual(template);
+  });
+
+  it("fails closed for missing, duplicated, or unknown placeholders", () => {
+    expect(extractConnectBootstrapCommandTemplate({})).toBeNull();
+    expect(
+      extractConnectBootstrapCommandTemplate({
+        connectBootstrapCommandTemplate: {
+          ...template,
+          command: `${template.command} ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      extractConnectBootstrapCommandTemplate({
+        connectBootstrapCommandTemplate: { command: template.command, codePlaceholder: "UNKNOWN" },
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("server bootstrap hooks", () => {
   it("reads channel and growth flags from the public bootstrap config", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ channel: "staging", growthLandingPagesEnabled: true });
+    vi.mocked(api.get).mockResolvedValueOnce({
+      channel: "staging",
+      connectBootstrapCommandTemplate: {
+        command: `first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
+        codePlaceholder: CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+      },
+      growthLandingPagesEnabled: true,
+      authProviders: { google: true, github: true },
+    });
 
     const observed = await renderBootstrapProbe();
 
     expect(api.get).toHaveBeenCalledWith("/bootstrap/config");
     expect(observed.channel).toEqual({ channel: "staging", settled: true });
+    expect(observed.contextTreeSetup).toEqual({
+      channel: "staging",
+      commandTemplate: {
+        command: `first-tree-staging login ${CONNECT_BOOTSTRAP_CODE_PLACEHOLDER}`,
+        codePlaceholder: CONNECT_BOOTSTRAP_CODE_PLACEHOLDER,
+      },
+      settled: true,
+    });
     expect(observed.growth).toEqual({ enabled: true, settled: true });
     expect(observed.growthEnabled).toBe(true);
   });
@@ -102,6 +168,7 @@ describe("server bootstrap hooks", () => {
     const observed = await renderBootstrapProbe();
 
     expect(observed.channel).toEqual({ channel: null, settled: true });
+    expect(observed.contextTreeSetup).toEqual({ channel: null, commandTemplate: null, settled: true });
     expect(observed.growth).toEqual({ enabled: false, settled: true });
     expect(observed.growthEnabled).toBe(false);
   });
@@ -113,6 +180,7 @@ async function renderBootstrapProbe(): Promise<ObservedBootstrap> {
   function Probe(): null {
     observedRef.current = {
       channel: useServerChannelState(),
+      contextTreeSetup: useContextTreeSetupPreviewBootstrapState(),
       growth: useGrowthLandingPagesState(),
       growthEnabled: useGrowthLandingPagesEnabled(),
     };

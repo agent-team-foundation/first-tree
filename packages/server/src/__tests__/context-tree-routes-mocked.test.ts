@@ -60,6 +60,17 @@ async function setupRoute() {
     }
   }
 
+  class ContextTreeWritePreflightError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: 403 | 409,
+      message: string,
+    ) {
+      super(message);
+      this.name = "ContextTreeWritePreflightError";
+    }
+  }
+
   const requireOrgAdmin = vi.fn().mockResolvedValue(scope);
   const requireOrgMembership = vi.fn().mockResolvedValue(scope);
   const findInstallationByOrg = vi.fn().mockResolvedValue(installation);
@@ -72,14 +83,39 @@ async function setupRoute() {
   const getFreshGithubUserToken = vi.fn();
   const getRepoFileWithToken = vi.fn().mockResolvedValue({ path: "NODE.md" });
   const createRepoFileWithToken = vi.fn().mockResolvedValue({ content: { path: "NODE.md" } });
-  const getOrgContextTree = vi.fn().mockResolvedValue({ repo: undefined, branch: undefined });
-  const putOrgSetting = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
+  const getOrgContextTreeBinding = vi.fn().mockResolvedValue(null);
+  const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
+  const getOrgContextReviewRuntime = vi.fn().mockResolvedValue({
+    bindingState: "unbound",
+    provider: null,
+    repo: null,
+    branch: "main",
+    providerSource: "unknown",
+    providerMatchesRepository: true,
+    gitlabConnection: null,
+    contextReviewer: { enabled: false, agentUuid: null },
+  });
+  const isOrgContextTreeBindingRuntimeCurrent = vi.fn().mockResolvedValue(true);
+  const putInitializedOrgContextTreeBinding = vi
+    .fn()
+    .mockResolvedValue({ provider: "github", repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
+  const preflightContextTreeWriteAuthority = vi.fn().mockResolvedValue({
+    provider: "github",
+    binding: { provider: "github", repo: repo.cloneUrl, branch: "main" },
+    gitlabInstanceOrigin: null,
+    reviewerAgentUuid: "reviewer-current",
+    requesterGithubLogin: "writer",
+  });
 
   vi.doMock("../scope/require-org.js", () => ({ requireOrgAdmin, requireOrgMembership }));
   vi.doMock("../services/context-tree-repo-provisioner.js", () => ({
     ContextTreeRepoProvisionError,
     ensureInstallationOwnedContextTreeRepo,
+  }));
+  vi.doMock("../services/context-tree-write-preflight.js", () => ({
+    ContextTreeWritePreflightError,
+    preflightContextTreeWriteAuthority,
   }));
   vi.doMock("../services/github-app.js", () => ({
     GithubAppApiError,
@@ -89,7 +125,13 @@ async function setupRoute() {
   vi.doMock("../services/github-app-installations.js", () => ({ findInstallationByOrg }));
   vi.doMock("../services/github-app-token.js", () => ({ mintContextTreeInstallationToken }));
   vi.doMock("../services/github-user-token.js", () => ({ GithubUserTokenError, getFreshGithubUserToken }));
-  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTree, putOrgSetting }));
+  vi.doMock("../services/org-settings.js", () => ({
+    getOrgContextTreeBinding,
+    getOrgContextTreeSettingState,
+    getOrgContextReviewRuntime,
+    isOrgContextTreeBindingRuntimeCurrent,
+    putInitializedOrgContextTreeBinding,
+  }));
   vi.doMock("../services/organization.js", () => ({ getOrganization }));
 
   const { orgContextTreeRoutes } = await import("../api/orgs/context-tree.js");
@@ -100,6 +142,14 @@ async function setupRoute() {
       secrets: { encryptionKey: "test-key" },
     },
   });
+  let writePreflightDeclaresInheritedRateLimit = false;
+  app.addHook("onRoute", (routeOptions) => {
+    if (routeOptions.url === "/write-preflight") {
+      const { config } = routeOptions;
+      writePreflightDeclaresInheritedRateLimit =
+        config !== undefined && Reflect.has(config, "rateLimit") && Reflect.get(config, "rateLimit") === undefined;
+    }
+  });
   await app.register(orgContextTreeRoutes);
   await app.ready();
 
@@ -108,7 +158,13 @@ async function setupRoute() {
     scope,
     installation,
     repo,
-    classes: { ContextTreeRepoProvisionError, GithubAppApiError, GithubUserTokenError },
+    writePreflightDeclaresInheritedRateLimit,
+    classes: {
+      ContextTreeRepoProvisionError,
+      ContextTreeWritePreflightError,
+      GithubAppApiError,
+      GithubUserTokenError,
+    },
     mocks: {
       requireOrgAdmin,
       requireOrgMembership,
@@ -118,9 +174,13 @@ async function setupRoute() {
       getFreshGithubUserToken,
       getRepoFileWithToken,
       createRepoFileWithToken,
-      getOrgContextTree,
-      putOrgSetting,
+      getOrgContextTreeBinding,
+      getOrgContextTreeSettingState,
+      getOrgContextReviewRuntime,
+      isOrgContextTreeBindingRuntimeCurrent,
+      putInitializedOrgContextTreeBinding,
       getOrganization,
+      preflightContextTreeWriteAuthority,
     },
   };
 }
@@ -134,6 +194,158 @@ describe("org context tree routes with mocked service edges", () => {
   async function initialize(ctx: RouteMocks) {
     return ctx.app.inject({ method: "POST", url: "/initialize", payload: {} });
   }
+
+  it("declares the inherited global rate limit for Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    expect(ctx.writePreflightDeclaresInheritedRateLimit).toBe(true);
+  });
+
+  it("passes only the authenticated explicit Team tuple into Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ctx.mocks.preflightContextTreeWriteAuthority).toHaveBeenCalledWith(ctx.app.db, {
+      organizationId: ctx.scope.organizationId,
+      requester: {
+        userId: ctx.scope.userId,
+        memberId: ctx.scope.memberId,
+        humanAgentUuid: ctx.scope.humanAgentId,
+      },
+      requesterGithubLogin: "writer",
+    });
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      provider: "github",
+      binding: { provider: "github", repo: ctx.repo.cloneUrl, branch: "main" },
+      gitlabInstanceOrigin: null,
+      reviewerAgentUuid: "reviewer-current",
+      requesterGithubLogin: "writer",
+    });
+  });
+
+  it("preserves typed Write preflight failure state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.preflightContextTreeWriteAuthority.mockRejectedValueOnce(
+      new ctx.classes.ContextTreeWritePreflightError(
+        "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+        409,
+        "Agent Review is unavailable.",
+      ),
+    );
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "Agent Review is unavailable.",
+      code: "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+    });
+  });
+
+  it("returns the explicit Admin Team's current unbound Seed state without mutation", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: { status: "unbound", branch: "main" },
+      gitlabConnection: null,
+    });
+    expect(ctx.mocks.requireOrgMembership).toHaveBeenCalledTimes(1);
+    expect(ctx.mocks.getOrgContextReviewRuntime).toHaveBeenCalledWith(ctx.app.db, ctx.scope.organizationId);
+    expect(ctx.mocks.ensureInstallationOwnedContextTreeRepo).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
+  it("returns Server current bound state for an Admin Seed retry", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValueOnce({
+      bindingState: "bound",
+      provider: "github",
+      repo: ctx.repo.cloneUrl,
+      branch: "release",
+      providerSource: "declared",
+      providerMatchesRepository: true,
+      gitlabConnection: null,
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: {
+        status: "bound",
+        binding: { provider: "github", repo: ctx.repo.cloneUrl, branch: "release" },
+      },
+      gitlabConnection: null,
+    });
+  });
+
+  it("returns stable Needs Admin for an active ordinary member before reading binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.requireOrgMembership.mockResolvedValueOnce({ ...ctx.scope, role: "member" });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({
+      error: "Context Tree Seed requires an active Team Admin.",
+      code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+    });
+    expect(ctx.mocks.getOrgContextReviewRuntime).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on invalid historical Seed binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextReviewRuntime.mockResolvedValueOnce({
+      bindingState: "invalid",
+      provider: null,
+      repo: null,
+      branch: null,
+      providerSource: "unknown",
+      providerMatchesRepository: false,
+      gitlabConnection: null,
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+      code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+    });
+  });
+
+  it("rejects caller-selected Seed authority fields", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/seed-preflight",
+      payload: { role: "admin", binding: null },
+    });
+
+    // The production app maps ZodError to 400; this route-only Fastify harness
+    // intentionally omits the global error handler, so it surfaces as 500 here.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(ctx.mocks.requireOrgMembership).not.toHaveBeenCalled();
+  });
 
   it("returns no_installation when minting unexpectedly succeeds without an installation row", async () => {
     const ctx = await setupRoute();
@@ -175,6 +387,69 @@ describe("org context tree routes with mocked service edges", () => {
     expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { field: "clone URL", repoOverride: { cloneUrl: "https://user:secret@github.com/acme/tree.git" } },
+    { field: "HTML URL", repoOverride: { htmlUrl: "not-a-url" } },
+    { field: "HTTP HTML URL", repoOverride: { htmlUrl: "http://github.com/acme/tree" } },
+    { field: "credentialed HTML URL", repoOverride: { htmlUrl: "https://user:secret@github.com/acme/tree" } },
+    { field: "off-host HTML URL", repoOverride: { htmlUrl: "https://example.com/acme/tree" } },
+    { field: "off-host clone URL", repoOverride: { cloneUrl: "https://example.com/acme/acme-context-tree.git" } },
+    { field: "mismatched clone URL", repoOverride: { cloneUrl: "https://github.com/acme/other-tree.git" } },
+    { field: "mismatched HTML URL", repoOverride: { htmlUrl: "https://github.com/acme/other-tree" } },
+    { field: "mismatched full name", repoOverride: { fullName: "acme/other-tree" } },
+    { field: "mismatched owner", repoOverride: { ownerLogin: "other" } },
+    { field: "mismatched name", repoOverride: { name: "other-tree" } },
+  ])("maps an invalid provider $field to a fixed upstream error before writing files", async ({ repoOverride }) => {
+    const ctx = await setupRoute();
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce({ ...ctx.repo, ...repoOverride });
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "GitHub returned invalid repository details. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      field: "owner",
+      repo: {
+        ownerLogin: "other",
+        name: "acme-context-tree",
+        fullName: "other/acme-context-tree",
+        cloneUrl: "https://github.com/other/acme-context-tree.git",
+        htmlUrl: "https://github.com/other/acme-context-tree",
+      },
+    },
+    {
+      field: "name",
+      repo: {
+        ownerLogin: "acme",
+        name: "other-context-tree",
+        fullName: "acme/other-context-tree",
+        cloneUrl: "https://github.com/acme/other-context-tree.git",
+        htmlUrl: "https://github.com/acme/other-context-tree",
+      },
+    },
+  ])("rejects a self-consistent provider response for the wrong expected $field", async ({ repo }) => {
+    const ctx = await setupRoute();
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce(repo);
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "GitHub returned invalid repository details. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
   it("rethrows unexpected provision failures as a server error", async () => {
     const ctx = await setupRoute();
     ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockRejectedValueOnce(new Error("provision exploded"));
@@ -214,7 +489,7 @@ describe("org context tree routes with mocked service edges", () => {
       code: "upstream",
     });
     expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
-    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("maps unexpected root node create failures to an upstream initialize error", async () => {
@@ -229,7 +504,7 @@ describe("org context tree routes with mocked service edges", () => {
       error: "Couldn't initialize the Context Tree root node. Try again in a moment.",
       code: "upstream",
     });
-    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("maps workflow verification failures after root success", async () => {
@@ -245,7 +520,7 @@ describe("org context tree routes with mocked service edges", () => {
       error: "Couldn't verify the Context Tree validation workflow. Try again in a moment.",
       code: "upstream",
     });
-    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("maps unexpected workflow create failures to an upstream initialize error", async () => {
@@ -262,7 +537,7 @@ describe("org context tree routes with mocked service edges", () => {
       error: "Couldn't initialize the Context Tree validation workflow. Try again in a moment.",
       code: "upstream",
     });
-    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("maps workflow conflict verification failures to the existing-file upstream error", async () => {
@@ -281,15 +556,28 @@ describe("org context tree routes with mocked service edges", () => {
       code: "upstream",
     });
     expect(ctx.mocks.getRepoFileWithToken).toHaveBeenCalledTimes(3);
-    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("initializes missing root and workflow files before saving the org setting", async () => {
     const ctx = await setupRoute();
+    const expectedRepo = {
+      ...ctx.repo,
+      name: "acme-research-team-context-tree",
+      fullName: "acme/acme-research-team-context-tree",
+      cloneUrl: "https://github.com/acme/acme-research-team-context-tree.git",
+      htmlUrl: "https://github.com/acme/acme-research-team-context-tree",
+    };
     ctx.mocks.getOrganization.mockResolvedValueOnce({
       id: ctx.scope.organizationId,
       name: "fallback-name",
       displayName: "  Àcme   Research Team  ",
+    });
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce(expectedRepo);
+    ctx.mocks.putInitializedOrgContextTreeBinding.mockResolvedValueOnce({
+      provider: "github",
+      repo: expectedRepo.cloneUrl,
+      branch: "main",
     });
     ctx.mocks.getRepoFileWithToken
       .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404))
@@ -299,8 +587,8 @@ describe("org context tree routes with mocked service edges", () => {
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({
-      repo: ctx.repo.cloneUrl,
-      htmlUrl: ctx.repo.htmlUrl,
+      repo: expectedRepo.cloneUrl,
+      htmlUrl: expectedRepo.htmlUrl,
       branch: "main",
       nodePath: "NODE.md",
     });
@@ -324,12 +612,11 @@ describe("org context tree routes with mocked service edges", () => {
         message: "Initialize Context Tree validation workflow",
       }),
     );
-    expect(ctx.mocks.putOrgSetting).toHaveBeenCalledWith(
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).toHaveBeenCalledWith(
       ctx.app.db,
       ctx.scope.organizationId,
-      "context_tree",
-      { repo: ctx.repo.cloneUrl, branch: "main" },
-      { updatedBy: ctx.scope.userId },
+      { provider: "github", repo: expectedRepo.cloneUrl, branch: "main" },
+      { expectedUnboundBranch: "main", updatedBy: ctx.scope.userId, gitlabEgressAllowlist: [] },
     );
   });
 });

@@ -43,13 +43,13 @@ export async function runFirstTreeReadCase(
   const runnerExitCode = runnerResult.exitCode;
   const events = readEvents(paths.eventsPath);
   const metrics = deriveMetrics(events, fixtureValidation, runnerExitCode, evalCase.expectedFacts);
-  const passed = casePassed(evalCase.expectedTrigger, metrics);
-  const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed);
+  const passed = casePassed(evalCase.expectedTrigger, metrics, evalCase.readMode);
+  const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed, evalCase.readMode);
   const observability = deriveRunObservability(events);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
-    driftNote: driftNote(metrics, evalCase.expectedTrigger),
+    driftNote: driftNote(metrics, evalCase.expectedTrigger, evalCase.readMode),
     expectedTrigger: evalCase.expectedTrigger,
     firstResponseLatencyMs: observability.firstResponseLatencyMs,
     fixtureValidation,
@@ -58,6 +58,7 @@ export async function runFirstTreeReadCase(
     metrics,
     passed,
     prompt: evalCase.prompt,
+    readMode: evalCase.readMode,
     runRoot: paths.runRoot,
     startedAt,
     summaryJsonPath: paths.summaryJsonPath,

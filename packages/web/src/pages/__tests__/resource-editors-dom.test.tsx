@@ -108,9 +108,9 @@ async function clickWhenEnabled(text: string): Promise<void> {
 
 async function render(): Promise<{ root: Root }> {
   // Mount the shared sections component with every type: the machinery under
-  // test is type-agnostic, and the page-level split (repo on Settings →
-  // GitHub as "Source Repos", the rest on Settings → Resources) is covered
-  // by the page smoke tests.
+  // test is type-agnostic, and the page-level split (repo in the shared
+  // Integrations code-access area, the rest on Settings → Resources) is
+  // covered by the page smoke tests.
   const { ResourceTypeSections } = await import("../settings/resource-sections.js");
   const { RESOURCE_TYPES } = await import("../settings/resource-editors.js");
   const { ToastProvider } = await import("../../components/ui/toast.js");

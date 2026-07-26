@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   applyClientLoggerConfig: vi.fn(),
+  createLogger: vi.fn(() => ({
+    debug: vi.fn(),
+    warn: vi.fn(),
+  })),
   FirstTreeHubSDK: vi.fn(),
   SdkError: class SdkError extends Error {},
   setCliBinding: vi.fn(),
@@ -140,6 +144,10 @@ describe("CLI entry and public exports", () => {
     expect(api.SdkError).toBe(clientMocks.SdkError);
     expect(api.HubUrlDerivationError).toBeDefined();
     expect(api.ClientRuntime).toBeDefined();
+    expect(api.ContextTreeSeedPreflightCliError).toBeDefined();
+    expect(api.preflightContextTreeSeed).toBeDefined();
+    expect(api.ContextTreeWritePreflightCliError).toBeDefined();
+    expect(api.preflightContextTreeWrite).toBeDefined();
     expect("rotateClientIdWithBackup" in api).toBe(false);
   });
 });

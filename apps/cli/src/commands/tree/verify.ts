@@ -1,20 +1,25 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
 import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { readSourceBindingContract } from "./binding-contract.js";
+import { readSourceBindingContract, SOURCE_INTEGRATION_FILES } from "./binding-contract.js";
 import { TREE_PROGRESS_FILE } from "./binding-state.js";
+import type { ContextContentClassCounts } from "./content-class.js";
+import { inspectRepoInfraMarkdownFile } from "./content-class.js";
 import { resolveRepoRoot } from "./shared.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
-import { runValidateMembers } from "./validate-members.js";
-import { runValidateNodes } from "./validate-nodes.js";
+import { collectMemberValidationFindings, formatLegacyMemberError } from "./validate-members.js";
+import { collectNodeValidationFindings, formatLegacyNodeError } from "./validate-nodes.js";
+import {
+  formatValidationFinding,
+  type TreeValidationFinding,
+  VALIDATION_CODES,
+  type ValidationCode,
+} from "./validation-finding.js";
 
-const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
-const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/mu;
-const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/mu;
 const UNCHECKED_RE = /^- \[ \] (.+)$/gmu;
 
 export const VERIFY_USAGE = `usage: ${channelConfig.binName} tree verify [--tree-path PATH]
@@ -39,7 +44,9 @@ export type VerifySummary = {
     rootNodeFrontmatter: VerifyCheck;
     treeState: VerifyCheck;
   };
+  findings: TreeValidationFinding[];
   ok: boolean;
+  scannedByContentClass: ContextContentClassCounts;
   targetRoot: string;
 };
 
@@ -55,16 +62,6 @@ function readTargetRoot(command: Command): string {
   }
 
   return resolveRepoRoot(process.cwd());
-}
-
-function parseFrontmatter(path: string): string | null {
-  try {
-    const text = readFileSync(path, "utf-8");
-    const match = text.match(FRONTMATTER_RE);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
 }
 
 function readUncheckedProgressItems(root: string): string[] {
@@ -83,28 +80,102 @@ function formatSourceRepoError(targetRoot: string): string {
   return `This repo only has source/workspace integration installed. Verify the tree repo instead, for example \`${channelConfig.binName} tree verify --tree-path ${examplePath}\`.`;
 }
 
+function deduplicateFindings(findings: TreeValidationFinding[]): TreeValidationFinding[] {
+  return findings.filter(
+    (finding, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.code === finding.code && candidate.path === finding.path && candidate.target === finding.target,
+      ) === index,
+  );
+}
+
+const ROOT_METADATA_CODES = new Set<ValidationCode>([
+  VALIDATION_CODES.frontmatterMissing,
+  VALIDATION_CODES.frontmatterParse,
+  VALIDATION_CODES.titleMissing,
+  VALIDATION_CODES.titleInvalid,
+  VALIDATION_CODES.ownersMissing,
+  VALIDATION_CODES.ownersInvalid,
+  VALIDATION_CODES.markdownFileSymlinkBroken,
+  VALIDATION_CODES.markdownFileSymlinkUnsupported,
+  VALIDATION_CODES.markdownFilePathEscape,
+]);
+
+function rootNodeExists(path: string): boolean {
+  try {
+    const entry = lstatSync(path);
+    if (entry.isFile()) {
+      return true;
+    }
+    if (!entry.isSymbolicLink()) {
+      return false;
+    }
+    try {
+      return !statSync(path).isDirectory();
+    } catch {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
+function formatRootNodeError(finding: TreeValidationFinding): string {
+  switch (finding.code) {
+    case VALIDATION_CODES.frontmatterMissing:
+    case VALIDATION_CODES.frontmatterParse:
+      return "Root NODE.md is missing frontmatter.";
+    case VALIDATION_CODES.titleMissing:
+    case VALIDATION_CODES.titleInvalid:
+      return "Root NODE.md is missing a title.";
+    case VALIDATION_CODES.ownersMissing:
+    case VALIDATION_CODES.ownersInvalid:
+      return "Root NODE.md is missing owners.";
+    case VALIDATION_CODES.markdownFilePathEscape:
+      return "Root NODE.md resolves outside the Context Tree root.";
+    case VALIDATION_CODES.markdownFileSymlinkBroken:
+      return "Root NODE.md symlink target cannot be resolved.";
+    case VALIDATION_CODES.markdownFileSymlinkUnsupported:
+      return "Root NODE.md symlink target is not a regular file.";
+    default:
+      return formatValidationFinding(finding);
+  }
+}
+
 export function verifyTreeRoot(targetRoot: string): VerifySummary {
-  if (readSourceBindingContract(targetRoot) !== undefined && readTreeIdentityContract(targetRoot) === undefined) {
+  const invalidManagedPath = SOURCE_INTEGRATION_FILES.some(
+    (file) => inspectRepoInfraMarkdownFile(targetRoot, file).kind === "invalid",
+  );
+  if (
+    !invalidManagedPath &&
+    readSourceBindingContract(targetRoot) !== undefined &&
+    readTreeIdentityContract(targetRoot) === undefined
+  ) {
     throw new Error(formatSourceRepoError(targetRoot));
   }
 
-  const rootFrontmatter = parseFrontmatter(join(targetRoot, "NODE.md"));
-  const rootNodeErrors: string[] = [];
-
-  if (rootFrontmatter === null) {
-    rootNodeErrors.push("Root NODE.md is missing frontmatter.");
-  } else {
-    if (!TITLE_RE.test(rootFrontmatter)) {
-      rootNodeErrors.push("Root NODE.md is missing a title.");
-    }
-    if (!OWNERS_RE.test(rootFrontmatter)) {
-      rootNodeErrors.push("Root NODE.md is missing owners.");
-    }
-  }
-
   const progressItems = readUncheckedProgressItems(targetRoot);
-  const nodeResult = runValidateNodes(targetRoot);
-  const memberResult = runValidateMembers(targetRoot);
+  const nodeResult = collectNodeValidationFindings(targetRoot);
+  const memberResult = collectMemberValidationFindings(targetRoot);
+  const missingRootFinding: TreeValidationFinding[] = rootNodeExists(join(targetRoot, "NODE.md"))
+    ? []
+    : [
+        {
+          code: VALIDATION_CODES.frontmatterMissing,
+          message: "root NODE.md is missing",
+          path: "NODE.md",
+        },
+      ];
+  const nodeFindings = [...missingRootFinding, ...nodeResult.findings];
+  const rootFindings = nodeFindings.filter(
+    (finding) => finding.path === "NODE.md" && ROOT_METADATA_CODES.has(finding.code),
+  );
+  const findings = deduplicateFindings([...nodeFindings, ...memberResult.findings]);
+  const nodeErrors = nodeFindings.map(formatLegacyNodeError);
+  const memberErrors = memberResult.findings.map(formatLegacyMemberError);
+  const rootNodeErrors = rootFindings.map(formatRootNodeError);
+
   // W1 moved workspace/tree identity out of the tree repo and into the
   // workspace-root manifest. A fresh CI checkout of a tree repo is therefore
   // valid without the pre-W1 `.first-tree/VERSION` / `tree.json` files.
@@ -116,12 +187,12 @@ export function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok: true,
       },
       members: {
-        ok: memberResult.exitCode === 0,
-        ...(memberResult.exitCode === 0 ? {} : { errors: memberResult.errors }),
+        ok: memberErrors.length === 0,
+        ...(memberErrors.length === 0 ? {} : { errors: memberErrors }),
       },
       nodes: {
-        ok: nodeResult.exitCode === 0,
-        ...(nodeResult.exitCode === 0 ? {} : { errors: nodeResult.errors }),
+        ok: nodeErrors.length === 0,
+        ...(nodeErrors.length === 0 ? {} : { errors: nodeErrors }),
       },
       progress: {
         ok: progressItems.length === 0,
@@ -138,7 +209,9 @@ export function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok: true,
       },
     },
+    findings,
     ok: false,
+    scannedByContentClass: nodeResult.scannedByContentClass,
     targetRoot,
   };
 
@@ -164,6 +237,13 @@ function printVerifySummary(summary: VerifySummary): void {
     console.log(`  [${icon}] ${label}`);
     for (const error of check.errors ?? []) {
       console.log(`    - ${error}`);
+    }
+  }
+
+  if (summary.findings.length > 0) {
+    console.log("\n  Findings");
+    for (const finding of summary.findings) {
+      console.log(`    - ${formatValidationFinding(finding)}`);
     }
   }
 

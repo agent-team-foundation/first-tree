@@ -1,25 +1,34 @@
-# Evidence Guidance
+# Evidence And Performance Guidance
 
-Evidence is chosen per task. No single evidence type is mandatory for every run, but every formal conclusion must point
-to evidence that actually supports it.
+Every formal conclusion must point to evidence that supports it. Choose the least evidence that makes the claim credible;
+no single evidence type applies to every surface.
 
 ## Evidence Menu
 
-- Command output for CLI behavior, setup checks, build steps, or provider smoke checks.
-- Service logs for server, web, daemon, runtime, Docker, or startup failures.
-- HTTP/API probes for API behavior, auth, persistence, or integration boundaries.
-- Database observations for persistence, permissions, state transitions, and fixture setup.
-- Screenshots, browser console output, and browser network observations for UI behavior.
-- Runtime transcripts or provider logs for real agent-turn behavior.
+- CLI output, exit status, installed files, and independent state readback.
+- Service logs, HTTP/API/WS observations, database state, and restart/reconnect behavior.
+- Browser-visible state, screenshots, console/network output, accessibility state, and downloads.
+- SDK consumer, daemon/worker, provider/runtime, installer, migration, and portable-artifact observations.
 
-## Use Judgment
+Source, logs, mocks, test assertions, and direct database setup help diagnosis or establish preconditions but rarely
+prove public product behavior alone.
 
-Use the least evidence that makes the conclusion credible. A CLI-only run does not need screenshots. A UI regression may
-need browser evidence. A persistence bug may need API and database observations. Direct database fixture setup can prove a
-precondition, but it is not product behavior evidence.
+## Readiness Performance
+
+During harness initialization, record a lightweight characterization for every formal surface when applicable:
+
+- dependency/install and build duration;
+- final artifact, package, image, or bundle size;
+- start-to-ready or first-consumer duration;
+- idle CPU, memory, process/container, and disk state;
+- driver/observer response and reset/reprobe duration.
+
+One readiness sample proves measurement capability, not a statistical regression. Run deeper sampling only when the task,
+an SLO, a case, a change risk, or an observed issue requires it. State workload, environment, sample count, cold/warm
+state, raw errors, and baseline/SLO before claiming a regression.
 
 ## Redaction
 
-Avoid pasting secrets into reports. Redact tokens, cookies, authorization headers, provider credentials, private
-connection strings, personal data, and private session content. When evidence is sensitive, summarize the observation and
-keep the local artifact path available for the operator.
+Redact tokens, cookies, auth headers, provider credentials, private connection strings, personal data, and private
+session content. Keep enough sanitized context to interpret the result and retain sensitive evidence only at safe local
+paths.

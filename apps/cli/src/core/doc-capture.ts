@@ -1,10 +1,6 @@
-import {
-  buildMessageDocumentSnapshots,
-  type FirstTreeHubSDK,
-  type SelfFence,
-  type WorkspaceFence,
-} from "@first-tree/client";
+import { buildMessageDocumentSnapshots, type FirstTreeHubSDK, type WorkspaceFence } from "@first-tree/client";
 import { type AttachmentRef, documentContextSchema } from "@first-tree/shared";
+import { resolveChatOrgId, resolveSelfFenceFromEnv } from "./capture-context.js";
 
 /**
  * Capture the `.md` documents an outbound `chat send` message references, the
@@ -31,7 +27,7 @@ import { type AttachmentRef, documentContextSchema } from "@first-tree/shared";
  */
 export async function captureOutboundDocs(
   content: string,
-  ctx: { sdk: FirstTreeHubSDK; chatId?: string },
+  ctx: { sdk: FirstTreeHubSDK; chatId?: string; maxAttachments?: number },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ content: string; attachments?: AttachmentRef[]; documentContext?: unknown }> {
   const self = resolveSelfFenceFromEnv(env);
@@ -49,7 +45,11 @@ export async function captureOutboundDocs(
     const { refs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
       content,
       self,
-      { uploader: ctx.sdk, orgId },
+      {
+        uploader: ctx.sdk,
+        orgId,
+        ...(ctx.maxAttachments !== undefined ? { maxAttachments: ctx.maxAttachments } : {}),
+      },
       fence,
     );
     const result: { content: string; attachments?: AttachmentRef[]; documentContext?: unknown } = {
@@ -63,23 +63,4 @@ export async function captureOutboundDocs(
   } catch {
     return { content };
   }
-}
-
-async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<string | null> {
-  try {
-    const detail = await sdk.getChatDetail(chatId);
-    return typeof detail.organizationId === "string" && detail.organizationId.length > 0 ? detail.organizationId : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveSelfFenceFromEnv(env: NodeJS.ProcessEnv): SelfFence | null {
-  const agentHome = env.FIRST_TREE_DOC_AGENT_HOME;
-  if (agentHome) {
-    const singleRepoLocalPath = env.FIRST_TREE_DOC_REPO_LOCAL_PATH;
-    return singleRepoLocalPath ? { agentHome, singleRepoLocalPath } : { agentHome };
-  }
-  const legacyBase = env.FIRST_TREE_DOC_BASE;
-  return legacyBase ? { agentHome: legacyBase } : null;
 }

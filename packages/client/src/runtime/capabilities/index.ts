@@ -7,6 +7,8 @@ import {
 import { probeClaudeCodeCapability } from "./claude-code.js";
 import { probeClaudeCodeTuiCapability } from "./claude-code-tui.js";
 import { probeCodexCapability } from "./codex.js";
+import { probeCursorCapability } from "./cursor.js";
+import { probeKimiCodeCapability } from "./kimi-code.js";
 
 /** Periodic full re-probe ceiling: re-detect at most this often on reconnect to
  * catch silent drift (a provider uninstalled while connected). Detection is
@@ -17,7 +19,7 @@ export const REPROBE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * temporarily disabled. Drives whether a daemon's advertised snapshot still has
  * a provider worth re-probing (see {@link hasNonOkProvider}). */
 export const PROBED_RUNTIME_PROVIDERS: readonly RuntimeProvider[] = (
-  ["claude-code", "claude-code-tui", "codex"] as const
+  ["claude-code", "claude-code-tui", "codex", "cursor", "kimi-code"] as const
 ).filter((p) => isRuntimeProviderEnabled(p));
 
 /** First delay before the daemon-side degraded-capability re-probe fires. Short
@@ -88,6 +90,8 @@ export async function probeCapabilities(): Promise<ClientCapabilities> {
   if (isRuntimeProviderEnabled("claude-code")) probes.push(["claude-code", probeClaudeCodeCapability()]);
   if (isRuntimeProviderEnabled("claude-code-tui")) probes.push(["claude-code-tui", probeClaudeCodeTuiCapability()]);
   if (isRuntimeProviderEnabled("codex")) probes.push(["codex", probeCodexCapability()]);
+  if (isRuntimeProviderEnabled("cursor")) probes.push(["cursor", probeCursorCapability()]);
+  if (isRuntimeProviderEnabled("kimi-code")) probes.push(["kimi-code", probeKimiCodeCapability()]);
   return aggregate(probes);
 }
 
