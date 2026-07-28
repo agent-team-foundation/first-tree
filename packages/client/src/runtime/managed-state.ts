@@ -30,6 +30,23 @@ import { join } from "node:path";
  */
 const RUNTIME_DIR = ".first-tree-workspace";
 
+const MANAGED_SKILL_NAME_MAX_LENGTH = 64;
+const MANAGED_SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+/**
+ * Managed-state skill names are First Tree-owned payload slugs, not arbitrary
+ * user/plugin skill descriptors. Keep the on-disk deletion ledger to one exact
+ * lowercase kebab-case path segment. Invalid values are dropped on read rather
+ * than normalized so attacker-controlled spellings can never gain meaning.
+ *
+ * @internal Shared with the installer deletion boundary; not public API.
+ */
+export function isValidManagedSkillName(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length <= MANAGED_SKILL_NAME_MAX_LENGTH && MANAGED_SKILL_NAME_PATTERN.test(value)
+  );
+}
+
 /**
  * Path inside the agent home where {@link readManagedState} /
  * {@link writeManagedState} persist the record. Lives alongside
@@ -73,15 +90,15 @@ export function readManagedState(workspacePath: string): ManagedState | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const record = parsed as Record<string, unknown>;
   if (record.schemaVersion !== 1) return null;
-  const skills = readStringArray(record.skills);
+  const skills = readManagedSkillNames(record.skills);
   const cliVersion = typeof record.cliVersion === "string" ? record.cliVersion : null;
   const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : new Date(0).toISOString();
   return { schemaVersion: 1, cliVersion, updatedAt, skills };
 }
 
-function readStringArray(value: unknown): string[] {
+function readManagedSkillNames(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+  return value.filter(isValidManagedSkillName);
 }
 
 /**

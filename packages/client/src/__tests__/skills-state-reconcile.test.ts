@@ -9,12 +9,21 @@
 // Helper-level coverage of the installer copy logic lives in
 // `bootstrap.test.ts`; this file proves the reconcile wiring in PR #869.
 
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFirstTreeSkills, TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
-import { readManagedState, writeManagedState } from "../runtime/managed-state.js";
+import { MANAGED_STATE_REL, readManagedState, writeManagedState } from "../runtime/managed-state.js";
 
 /**
  * Build a bundled-skills root mirroring the shape `installFirstTreeSkills`
@@ -110,6 +119,102 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
       expect(() => lstatSync(join(workspace, ".claude", "skills", name))).toThrow();
     }
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
+  });
+
+  it("contains a poisoned ledger while preserving valid reconcile behavior and every sentinel", () => {
+    const agentsRoot = join(workspace, ".agents", "skills");
+    const claudeRoot = join(workspace, ".claude", "skills");
+    const externalDir = join(tmpBase, "external-sentinel");
+    const agentsSibling = join(workspace, ".agents", "skills-sibling");
+    const claudeSibling = join(workspace, ".claude", "skills-sibling");
+    mkdirSync(externalDir, { recursive: true });
+    mkdirSync(agentsSibling, { recursive: true });
+    mkdirSync(claudeSibling, { recursive: true });
+    writeFileSync(join(externalDir, "sentinel"), "keep external\n");
+    writeFileSync(join(agentsSibling, "sentinel"), "keep agents sibling\n");
+    writeFileSync(join(claudeSibling, "sentinel"), "keep claude sibling\n");
+    writeFileSync(join(workspace, "workspace-sentinel"), "keep workspace\n");
+
+    plantManagedSkill(workspace, "legacy-stale");
+    plantManagedSkill(workspace, "first-tree-read");
+    plantManagedSkill(workspace, "my-custom");
+    writeFileSync(join(agentsRoot, ".root-sentinel"), "keep agents root\n");
+    writeFileSync(join(claudeRoot, ".root-sentinel"), "keep claude root\n");
+
+    const maliciousNames = [
+      "",
+      " ",
+      ".",
+      "..",
+      "../..",
+      "../../workspace-sentinel",
+      "../../../external-sentinel",
+      "../skills-sibling",
+      "nested/skill",
+      "nested\\skill",
+      externalDir,
+      "C:",
+      "C:relative",
+      "C:\\absolute\\skill",
+      "C:/absolute/skill",
+      "\\root-relative\\skill",
+      "\\\\server\\share\\skill",
+      "\\\\?\\C:\\device\\skill",
+      "skill\0name",
+      "skill\nname",
+      "技能",
+      "First-Tree",
+      "a".repeat(65),
+    ];
+    writeFileSync(
+      join(workspace, MANAGED_STATE_REL),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: "poisoned",
+        updatedAt: new Date(0).toISOString(),
+        skills: ["legacy-stale", "first-tree-read", ...maliciousNames],
+      }),
+      "utf8",
+    );
+
+    installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
+
+    expect(readFileSync(join(externalDir, "sentinel"), "utf8")).toContain("keep external");
+    expect(readFileSync(join(workspace, "workspace-sentinel"), "utf8")).toContain("keep workspace");
+    expect(readFileSync(join(agentsRoot, ".root-sentinel"), "utf8")).toContain("keep agents root");
+    expect(readFileSync(join(claudeRoot, ".root-sentinel"), "utf8")).toContain("keep claude root");
+    expect(readFileSync(join(agentsSibling, "sentinel"), "utf8")).toContain("keep agents sibling");
+    expect(readFileSync(join(claudeSibling, "sentinel"), "utf8")).toContain("keep claude sibling");
+
+    expect(existsSync(join(agentsRoot, "legacy-stale"))).toBe(false);
+    expect(() => lstatSync(join(claudeRoot, "legacy-stale"))).toThrow();
+    expect(existsSync(join(agentsRoot, "first-tree-read", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(claudeRoot, "first-tree-read")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(agentsRoot, "my-custom", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(claudeRoot, "my-custom")).isSymbolicLink()).toBe(true);
+    expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
+  });
+
+  it.each([
+    ["malformed JSON", "{not json"],
+    [
+      "a future schema",
+      JSON.stringify({
+        schemaVersion: 2,
+        cliVersion: "future",
+        updatedAt: new Date(0).toISOString(),
+        skills: ["legacy-preserved"],
+      }),
+    ],
+  ])("does not delete stale payloads from %s before rolling state forward", (_label, rawState) => {
+    plantManagedSkill(workspace, "legacy-preserved");
+    writeFileSync(join(workspace, MANAGED_STATE_REL), rawState, "utf8");
+
+    installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
+
+    expect(existsSync(join(workspace, ".agents", "skills", "legacy-preserved", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(workspace, ".claude", "skills", "legacy-preserved")).isSymbolicLink()).toBe(true);
+    expect(readManagedState(workspace)).toMatchObject({ schemaVersion: 1, skills: [...TREE_SKILL_NAMES].sort() });
   });
 
   it("keeps CORE skills a prior version recorded as TREE skills — moved tiers, not retired", () => {

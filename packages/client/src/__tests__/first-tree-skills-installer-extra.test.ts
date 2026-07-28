@@ -10,15 +10,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installFirstTreeSkills,
   installOneSkill,
+  removeManagedSkill,
   resolveBundledSkillsRoot,
+  resolveManagedSkillRemovalTarget,
   TREE_SKILL_NAMES,
 } from "../runtime/first-tree-skills/installer.js";
-import { writeManagedState } from "../runtime/managed-state.js";
+import { readManagedState, writeManagedState } from "../runtime/managed-state.js";
 
 const originalPlatform = process.platform;
 
@@ -76,8 +78,155 @@ describe("first-tree skill installer edge coverage", () => {
   afterEach(() => {
     setPlatform(originalPlatform);
     vi.doUnmock("node:fs");
+    vi.doUnmock("../runtime/managed-state.js");
     vi.resetModules();
     rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  it("resolves only exact immediate children under each skills root", () => {
+    const external = join(tmpBase, "external");
+    const rejected = [
+      "",
+      ".",
+      "..",
+      "../skills-sibling",
+      "../../external",
+      "nested/skill",
+      "nested\\skill",
+      external,
+      "C:",
+      "C:relative",
+      "C:\\absolute\\skill",
+      "C:/absolute/skill",
+      "\\root-relative\\skill",
+      "\\\\server\\share\\skill",
+      "\\\\?\\C:\\device\\skill",
+      "\\\\.\\pipe\\skill",
+    ];
+
+    for (const root of [join(workspace, ".agents", "skills"), join(workspace, ".claude", "skills")]) {
+      expect(resolveManagedSkillRemovalTarget(root, "legacy-safe")).toBe(resolve(root, "legacy-safe"));
+      for (const name of rejected) {
+        expect(
+          resolveManagedSkillRemovalTarget(root, name),
+          `${root} should reject ${JSON.stringify(name)}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it("wires every root through containment even when the slug guard is permissive", async () => {
+    const agentsRoot = join(workspace, ".agents", "skills");
+    const claudeRoot = join(workspace, ".claude", "skills");
+    mkdirSync(agentsRoot, { recursive: true });
+    mkdirSync(claudeRoot, { recursive: true });
+    writeFileSync(join(agentsRoot, ".root-sentinel"), "keep agents root\n");
+    writeFileSync(join(claudeRoot, ".root-sentinel"), "keep claude root\n");
+    plantManagedSkill(workspace, "legacy-safe");
+
+    const permissiveValidator = vi.fn(() => true);
+    vi.resetModules();
+    vi.doMock("../runtime/managed-state.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../runtime/managed-state.js")>();
+      return {
+        ...actual,
+        isValidManagedSkillName: permissiveValidator,
+      };
+    });
+
+    try {
+      const mod = await import("../runtime/first-tree-skills/installer.js");
+      mod.removeManagedSkill(workspace, ".");
+
+      expect(permissiveValidator).toHaveBeenCalledTimes(2);
+      expect(existsSync(agentsRoot)).toBe(true);
+      expect(existsSync(claudeRoot)).toBe(true);
+      expect(readFileSync(join(agentsRoot, ".root-sentinel"), "utf8")).toContain("keep agents root");
+      expect(readFileSync(join(claudeRoot, ".root-sentinel"), "utf8")).toContain("keep claude root");
+
+      mod.removeManagedSkill(workspace, "legacy-safe");
+
+      expect(permissiveValidator).toHaveBeenCalledTimes(4);
+      expect(existsSync(join(agentsRoot, "legacy-safe"))).toBe(false);
+      expect(() => lstatSync(join(claudeRoot, "legacy-safe"))).toThrow();
+    } finally {
+      vi.doUnmock("../runtime/managed-state.js");
+      vi.resetModules();
+    }
+  });
+
+  it("continues reconciliation and rolls the ledger when the agents directory removal fails", async () => {
+    plantManagedSkill(workspace, "legacy-failure");
+    const agentsPath = join(workspace, ".agents", "skills", "legacy-failure");
+    const claudePath = join(workspace, ".claude", "skills", "legacy-failure");
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "previous",
+      updatedAt: new Date(0).toISOString(),
+      skills: ["legacy-failure"],
+    });
+
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        rmSync: (path: string, options: { force?: boolean; recursive?: boolean }) => {
+          if (path === agentsPath) {
+            throw Object.assign(new Error("agents removal denied"), { code: "EACCES" });
+          }
+          return actual.rmSync(path, options);
+        },
+      };
+    });
+
+    try {
+      const mod = await import("../runtime/first-tree-skills/installer.js");
+      mod.installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot: writeTreeSkillsRoot(tmpBase) });
+
+      expect(existsSync(agentsPath)).toBe(true);
+      expect(() => lstatSync(claudePath)).toThrow();
+      expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
+  it("unlinks stale leaf symlinks without following their external target", () => {
+    const external = join(tmpBase, "external-leaf-target");
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, "sentinel"), "keep external target\n");
+    const agentsPath = join(workspace, ".agents", "skills", "legacy-link");
+    const claudePath = join(workspace, ".claude", "skills", "legacy-link");
+    mkdirSync(join(workspace, ".agents", "skills"), { recursive: true });
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    symlinkSync(external, agentsPath);
+    symlinkSync(external, claudePath);
+
+    removeManagedSkill(workspace, "legacy-link");
+
+    expect(() => lstatSync(agentsPath)).toThrow();
+    expect(() => lstatSync(claudePath)).toThrow();
+    expect(readFileSync(join(external, "sentinel"), "utf8")).toContain("keep external target");
+  });
+
+  it("removes a stale directory without following a nested external symlink", () => {
+    const external = join(tmpBase, "external-nested-target");
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, "sentinel"), "keep nested target\n");
+    const agentsPath = join(workspace, ".agents", "skills", "legacy-nested");
+    const claudePath = join(workspace, ".claude", "skills", "legacy-nested");
+    mkdirSync(agentsPath, { recursive: true });
+    symlinkSync(external, join(agentsPath, "external-link"));
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    symlinkSync(join("..", "..", ".agents", "skills", "legacy-nested"), claudePath);
+
+    removeManagedSkill(workspace, "legacy-nested");
+
+    expect(existsSync(agentsPath)).toBe(false);
+    expect(() => lstatSync(claudePath)).toThrow();
+    expect(readFileSync(join(external, "sentinel"), "utf8")).toContain("keep nested target");
   });
 
   it("reports a packaging error when bundled skills cannot be found", () => {
