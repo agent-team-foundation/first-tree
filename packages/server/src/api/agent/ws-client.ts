@@ -438,34 +438,82 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         app.log.info({ clientId, agentId, reason }, "dropped stale local agent binding");
       }
 
-      async function ensureAgentStillRoutedHere(agentId: string): Promise<boolean> {
-        if (!isAgentStillRoutedHere(agentId)) return false;
-        const info = boundAgents.get(agentId);
-        if (!info || !clientId) return false;
-        const [row] = await app.db
+      /**
+       * Authoritative route check for several bindings in one round-trip.
+       *
+       * A socket can hold many bindings and there is no hard per-client agent
+       * cap, so validating them one at a time made ACK and heartbeat cost grow
+       * with fleet size. The judgement per agent is unchanged; only the
+       * fetch is batched.
+       *
+       * Returns the ids still routed to this socket. Agents whose
+       * authoritative route moved away are dropped with the usual side
+       * effects (`dropLocalAgentBinding`).
+       */
+      async function ensureAgentsStillRoutedHere(agentIds: readonly string[]): Promise<Set<string>> {
+        const routed = new Set<string>();
+        if (!clientId) return routed;
+        // Snapshot before querying: `dropLocalAgentBinding` mutates
+        // `boundAgents`, so deciding the candidate set up front keeps the
+        // outcome independent of drop order. The in-memory gate is free, so
+        // only survivors reach the database.
+        const candidates = agentIds.filter((agentId) => isAgentStillRoutedHere(agentId));
+        if (candidates.length === 0) return routed;
+
+        const rows = await app.db
           .select({
+            uuid: agents.uuid,
             clientId: agents.clientId,
             runtimeProvider: agents.runtimeProvider,
             status: agents.status,
             metadata: agents.metadata,
           })
           .from(agents)
-          .where(eq(agents.uuid, agentId))
-          .limit(1);
-        if (row?.clientId === clientId && row.status === "active" && row.runtimeProvider === info.runtimeProvider) {
-          return true;
+          .where(inArray(agents.uuid, candidates));
+        const rowByAgentId = new Map(rows.map((row) => [row.uuid, row]));
+
+        for (const agentId of candidates) {
+          // Read the binding *after* the query, not before. A rebind updates
+          // the row and the local binding together, so whichever side is read
+          // first can go stale and report a provider mismatch that drops an
+          // agent which had just rebound successfully.
+          //
+          // This relocates that window rather than closing it. `row` is a
+          // snapshot from the moment Postgres executed the SELECT, so reading
+          // the binding afterwards exposes [snapshot .. result delivery +
+          // event loop turn] where reading it first exposed [binding read ..
+          // snapshot] — two halves of the same round-trip, comparable in
+          // width. Neither is negligible: the socket's message handler is not
+          // awaited by the emitter, and bind frames are not serialised
+          // against heartbeat frames, so the interleaving is reachable.
+          const info = boundAgents.get(agentId);
+          if (!info) continue;
+          const row = rowByAgentId.get(agentId);
+          if (row?.clientId === clientId && row.status === "active" && row.runtimeProvider === info.runtimeProvider) {
+            routed.add(agentId);
+            continue;
+          }
+          // A claimed runtime switch parks the binding rather than dropping
+          // it: the agent is no longer routed here, but the local binding has
+          // to survive so the switch can still be completed or aborted.
+          const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
+          if (
+            row?.status === "suspended" &&
+            switchClaim?.phase === "claimed" &&
+            switchClaim.oldClientId === clientId &&
+            switchClaim.oldRuntimeProvider === info.runtimeProvider
+          ) {
+            continue;
+          }
+          dropLocalAgentBinding(agentId, "authoritative_route_changed");
         }
-        const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
-        if (
-          row?.status === "suspended" &&
-          switchClaim?.phase === "claimed" &&
-          switchClaim.oldClientId === clientId &&
-          switchClaim.oldRuntimeProvider === info.runtimeProvider
-        ) {
-          return false;
-        }
-        dropLocalAgentBinding(agentId, "authoritative_route_changed");
-        return false;
+        return routed;
+      }
+
+      /** Single-agent form. Delegates so there is exactly one implementation
+       *  of the route judgement and its drop side effects. */
+      async function ensureAgentStillRoutedHere(agentId: string): Promise<boolean> {
+        return (await ensureAgentsStillRoutedHere([agentId])).has(agentId);
       }
 
       function inboxInFlightCount(agentId: string): number {
@@ -1630,12 +1678,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               await chainInboxDelivery("__socket", async () => {
                 try {
-                  const routedBoundAgents = [];
-                  for (const agent of boundAgents.values()) {
-                    if (await ensureAgentStillRoutedHere(agent.agentId)) {
-                      routedBoundAgents.push(agent);
-                    }
-                  }
+                  // Keep whole binding records, not just ids: the ack result
+                  // is mapped back to its owning agent by `inboxId` below.
+                  const boundSnapshot = [...boundAgents.values()];
+                  const routedIds = await ensureAgentsStillRoutedHere(boundSnapshot.map((agent) => agent.agentId));
+                  const routedBoundAgents = boundSnapshot.filter((agent) => routedIds.has(agent.agentId));
                   const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                     app.db,
                     entryId,
@@ -1768,10 +1815,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "heartbeat") {
               if (clientId && connectionManager.isActiveClientConnection(clientId, socket)) {
-                const routedAgentIds = [];
-                for (const id of boundAgents.keys()) {
-                  if (await ensureAgentStillRoutedHere(id)) routedAgentIds.push(id);
-                }
+                const routedAgentIds = [...(await ensureAgentsStillRoutedHere([...boundAgents.keys()]))];
                 const pausedReason =
                   msg && typeof msg === "object" && "pausedReason" in msg
                     ? ((msg as { pausedReason?: "auth_rejected" | "auth_refresh_failed" | null }).pausedReason ?? null)
@@ -1782,11 +1826,20 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   routedAgentIds,
                   pausedReason,
                 });
+                // No second route check here. `restoredAgentIds` is already a
+                // subset of `routedAgentIds` (it is filtered by an `EXISTS` on
+                // the same client + active status), and the repair itself
+                // re-validates: `maybeRepairInboxBacklog` gates on the
+                // in-memory route, then `drainBacklogForAgent` opens with its
+                // own `ensureAgentStillRoutedHere` — a strictly later, and so
+                // strictly fresher, authoritative check. Re-reading here would
+                // add one query per bound agent on every heartbeat and close
+                // no race. The only residual effect is that an agent that just
+                // moved away can still consume one repair-throttle slot, which
+                // is meaningless for a binding that is going away.
                 const repairableAgentIds = new Set(liveness.restoredAgentIds);
                 for (const info of boundAgents.values()) {
-                  if (repairableAgentIds.has(info.agentId) && (await ensureAgentStillRoutedHere(info.agentId))) {
-                    maybeRepairInboxBacklog(info.agentId, info.inboxId);
-                  }
+                  if (repairableAgentIds.has(info.agentId)) maybeRepairInboxBacklog(info.agentId, info.inboxId);
                 }
                 await reconcilePinnedAgentsForClient();
               }

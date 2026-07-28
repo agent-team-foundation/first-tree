@@ -326,6 +326,9 @@ describe("Agent client WS branch fakes", () => {
   function activeAgentRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       id: "agent_1",
+      // Batched route validation reads `agents.uuid` to map each returned row
+      // back to its agent; a single-row lookup could leave it implicit.
+      uuid: "agent_1",
       displayName: "Agent",
       type: "agent",
       organizationId: "org_1",

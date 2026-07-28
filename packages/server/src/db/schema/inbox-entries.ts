@@ -44,11 +44,37 @@ export const inboxEntries = pgTable(
       .on(table.inboxId, table.createdAt)
       .where(sql`status = 'pending' AND notify = true`),
     /**
-     * Bundling lookup: given a notify=true trigger, find all silent pending
-     * rows in the same chat that should be attached as preceding context.
-     * Composite shape mirrors the actual WHERE clause used in pollInbox.
+     * Bundling lookup: given a notify=true trigger, find the silent pending
+     * rows in the same chat to attach as preceding context.
+     *
+     * `id` is indexed because every caller bounds the window by id — the
+     * preceding-context window (`> previous notify cursor`, `< trigger`) and
+     * ACK-through's `id <= cursor` drain. Inside a LATERAL those bounds are
+     * correlated values whose width the planner cannot estimate, so without
+     * `id` it scans every silent row in the chat and discards almost all of
+     * them.
+     *
+     * Partial rather than a wider composite: `status`/`notify` move into the
+     * predicate instead of the key. A key ending in the unique `id` defeats
+     * B-tree deduplication — the four-column form compresses ~240k rows into
+     * ~7 bytes each, while appending `id` makes every key unique and costs
+     * ~49 bytes each. Restricting the row set instead keeps the index small,
+     * and `inbox_entries` is append-only, so excluding consumed rows matters
+     * more over time than it does today.
      */
-    index("idx_inbox_chat_silent").on(table.inboxId, table.chatId, table.notify, table.status),
+    index("idx_inbox_chat_silent_pending")
+      .on(table.inboxId, table.chatId, table.id)
+      .where(sql`status = 'pending' AND notify = false`),
+    /**
+     * Notify-cursor lookup: the previous trigger before a given entry, and
+     * ACK-through's contiguous notify prefix.
+     *
+     * Deliberately not filtered on `status` — both callers must see notify
+     * rows in any state. An already-acked trigger still closes a preceding-
+     * context window, and ACK-through has to walk acked rows to prove the
+     * prefix has no gap.
+     */
+    index("idx_inbox_chat_notify").on(table.inboxId, table.chatId, table.id).where(sql`notify = true`),
     /**
      * Message-history delivery status lookup. The chat messages API checks
      * whether any inbox row for a message is acked, delivered, or still
