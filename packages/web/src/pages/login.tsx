@@ -1,11 +1,12 @@
 import { ArrowLeft, Github, Lock, Zap } from "lucide-react";
-import { Navigate, useLocation } from "react-router";
+import { Link, Navigate, useLocation } from "react-router";
 import { beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
 import { useAuthProviderAvailabilityState } from "../hooks/use-server-channel.js";
+import { isStandalone } from "./mobile/install-guide-state.js";
 
 // Marketing site (parent brand) — the "Back to home" link points here rather
 // than the in-app landing route. Mirrors the pattern in footer.tsx / layout.tsx.
@@ -37,6 +38,8 @@ export function LoginPage() {
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
   const redirectTo = readFromPath(location.state) ?? "/";
+  const isMobileSignIn = redirectTo.startsWith("/m/");
+  const isStandaloneMobileSignIn = isMobileSignIn && isStandalone();
   // GitHub OAuth is a full-page navigation, so React Router state is
   // dropped on the way out. Pass the deep-link target through the
   // server's `?next=` instead — the server validates it via the same
@@ -66,16 +69,32 @@ export function LoginPage() {
     // `landing-marketing` swaps the local --bg/--fg/--border tokens to the
     // first-tree.ai palette (near-black + cool-light), shared with the parent
     // brand. Scoping it here means the dashboard chrome stays unaffected.
-    <div className="landing-marketing flex min-h-screen flex-col bg-background text-foreground">
-      <header className="px-4 py-3">
-        <a
-          href={PARENT_URL}
-          className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] px-2 py-1 text-body text-fg-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to home
-        </a>
-      </header>
+    <div
+      className={`landing-marketing flex flex-col overflow-y-auto bg-background text-foreground ${
+        isMobileSignIn ? "h-dvh-screen pt-safe-top pb-safe-bottom" : "min-h-screen"
+      }`}
+    >
+      {isStandaloneMobileSignIn ? null : (
+        <header className="px-4 py-3">
+          {isMobileSignIn ? (
+            <Link
+              to="/m/install"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] px-2 py-1 text-body text-fg-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to install
+            </Link>
+          ) : (
+            <a
+              href={PARENT_URL}
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] px-2 py-1 text-body text-fg-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to home
+            </a>
+          )}
+        </header>
+      )}
 
       <div className="flex flex-1 items-center justify-center px-4 pb-16">
         <div className="w-full max-w-sm rounded-[var(--radius-panel)] border border-border bg-card p-6 text-card-foreground shadow-[var(--shadow-sm)]">
@@ -83,9 +102,11 @@ export function LoginPage() {
             <div className="mb-2 flex justify-center text-foreground">
               <FirstTreeLogo width={28} height={32} />
             </div>
-            <div className="text-title">First Tree</div>
+            <div className="text-title">{isMobileSignIn ? "Sign in to First Tree" : "First Tree"}</div>
             <p className="text-label text-fg-2" style={{ marginTop: "var(--sp-1)" }}>
-              Set up your team and your first AI agent.
+              {isMobileSignIn
+                ? "Use the same Google or GitHub account as on desktop."
+                : "Set up your team and your first AI agent."}
             </p>
           </div>
 
@@ -118,30 +139,34 @@ export function LoginPage() {
               </>
             )}
 
-            <p className="text-center text-label text-fg-3">
-              <span className="font-medium text-fg-2">
-                {availableProviderLabels.length > 0
-                  ? `Sign in uses your ${availableProviderLabels.join(" or ")} identity.`
-                  : "Sign-in options are managed by this deployment."}
-              </span>{" "}
-              You authorize a repo later, only when an agent needs to work in it.
-            </p>
+            {isMobileSignIn ? null : (
+              <>
+                <p className="text-center text-label text-fg-3">
+                  <span className="font-medium text-fg-2">
+                    {availableProviderLabels.length > 0
+                      ? `Sign in uses your ${availableProviderLabels.join(" or ")} identity.`
+                      : "Sign-in options are managed by this deployment."}
+                  </span>{" "}
+                  You authorize a repo later, only when an agent needs to work in it.
+                </p>
 
-            <div className="flex items-center justify-center gap-4 border-t border-border pt-4 text-caption text-fg-3">
-              <span className="inline-flex items-center gap-1.5">
-                <Lock className="h-3 w-3" />
-                No repo access yet
-              </span>
-              <a
-                href={REPO_URL}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-              >
-                <Github className="h-3 w-3" />
-                Open source
-              </a>
-            </div>
+                <div className="flex items-center justify-center gap-4 border-t border-border pt-4 text-caption text-fg-3">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Lock className="h-3 w-3" />
+                    No repo access yet
+                  </span>
+                  <a
+                    href={REPO_URL}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                  >
+                    <Github className="h-3 w-3" />
+                    Open source
+                  </a>
+                </div>
+              </>
+            )}
 
             <p className="text-center text-label text-fg-3">
               By continuing you agree to our{" "}

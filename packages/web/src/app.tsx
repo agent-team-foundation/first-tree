@@ -8,7 +8,8 @@ import { Layout } from "./components/layout.js";
 import { Button } from "./components/ui/button.js";
 import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
-import { useContextTreeSetupPreviewBootstrapState, useServerChannelState } from "./hooks/use-server-channel.js";
+import { useMobileExperienceState } from "./hooks/use-mobile-experience.js";
+import { useContextTreeSetupPreviewBootstrapState } from "./hooks/use-server-channel.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { RepositoriesTab } from "./pages/agent-detail/repositories-tab.js";
@@ -21,8 +22,10 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { MobileInstallPage } from "./pages/mobile/install.js";
 import { MobileMePage } from "./pages/mobile/me.js";
 import { MobileShell } from "./pages/mobile/shell.js";
+import { MobileStandaloneOpenTracker } from "./pages/mobile/standalone-open-tracker.js";
 import { MobileTeamPage } from "./pages/mobile/team.js";
 import { MobileWorkPage } from "./pages/mobile/work.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
@@ -180,6 +183,7 @@ export function App() {
         <ToastProvider>
           <BrowserRouter>
             <MobileExperienceHead />
+            <MobileStandaloneOpenTracker />
             <RouteTracker />
             <Routes>
               {/* Public routes — no auth required */}
@@ -191,6 +195,7 @@ export function App() {
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
+              <Route path="/m/install" element={<MobileInstallRoute />} />
               <Route path="/preview/context-tree-setup" element={<ContextTreeSetupPreviewRoute />} />
               {ContextPreviewPage ? (
                 <Route
@@ -496,11 +501,6 @@ export function App() {
   );
 }
 
-type MobileExperienceState = {
-  enabled: boolean;
-  settled: boolean;
-};
-
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
@@ -565,17 +565,6 @@ function shouldOpenMobileRoot(location: ReturnType<typeof useLocation>): boolean
   return window.innerWidth > 0 && window.innerWidth < 768;
 }
 
-function useMobileExperienceState(): MobileExperienceState {
-  const { channel, settled: channelSettled } = useServerChannelState();
-  if (!channelSettled) {
-    return { enabled: false, settled: false };
-  }
-  return {
-    enabled: channel === "dev" || channel === "staging" || channel === "prod",
-    settled: true,
-  };
-}
-
 function MobileExperienceGate() {
   const mobileExperience = useMobileExperienceState();
   if (!mobileExperience.settled) return null;
@@ -586,6 +575,13 @@ function MobileExperienceGate() {
       <MobileShell />
     </PulseProvider>
   );
+}
+
+function MobileInstallRoute() {
+  const mobileExperience = useMobileExperienceState();
+  if (!mobileExperience.settled) return null;
+  if (!mobileExperience.enabled) return <Navigate to="/" replace />;
+  return <MobileInstallPage />;
 }
 
 function MobileExperienceHead() {

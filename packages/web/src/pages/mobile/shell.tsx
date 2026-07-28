@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Navigate, Outlet, useLocation, useSearchParams } from "react-router";
+import { Outlet, useLocation, useSearchParams } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
@@ -7,6 +7,7 @@ import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { MobileBottomTabs } from "./components.js";
 import { mobileRowsFromList } from "./data.js";
 import { InstallGuideSheet } from "./install-guide-sheet.js";
+import { MobileSetupHandoff } from "./setup-handoff.js";
 import { useInstallGuideAuto } from "./use-install-guide.js";
 import { mobileWorkListQueryOptions, mobileWorkSourceCountsQueryOptions } from "./work-queries.js";
 
@@ -64,7 +65,7 @@ export function MobileShell() {
       onboardingCompletedAt,
     })
   ) {
-    return <Navigate to="/onboarding" replace />;
+    return <MobileSetupHandoff />;
   }
 
   return (

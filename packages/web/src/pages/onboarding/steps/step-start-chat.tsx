@@ -502,8 +502,8 @@ function StartingState() {
 }
 
 /**
- * "Join the community" — the two channel cards (WeChat / Discord, see
- * CommunityChannels) as a footer under the launch CTA. Rendered only in the
+ * "Stay connected" — the mobile install and community cards as a footer under
+ * the launch CTA. Rendered only in the
  * stable finale bodies (never during loading/starting transitions), separated
  * from the primary action by a hairline so it reads as a footer and can't
  * compete with "Start chat".
@@ -522,7 +522,7 @@ function CommunityBlock() {
       <span className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
         {COPY.startChat.community.title}
       </span>
-      <CommunityChannels />
+      <CommunityChannels includeMobile />
     </div>
   );
 }

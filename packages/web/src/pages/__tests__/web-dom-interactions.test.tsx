@@ -146,6 +146,11 @@ const authMock = vi.hoisted(() => {
   };
 });
 
+const mobileExperienceMock = vi.hoisted(() => ({
+  enabled: true,
+  settled: true,
+}));
+
 vi.mock("../../api/activity.js", () => activityMocks);
 vi.mock("../../api/agent-config.js", () => agentConfigMocks);
 vi.mock("../../api/agents.js", async (importOriginal) => ({
@@ -176,6 +181,9 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 vi.mock("../../auth/auth-context.js", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => authMock.value,
+}));
+vi.mock("../../hooks/use-mobile-experience.js", () => ({
+  useMobileExperienceState: () => mobileExperienceMock,
 }));
 vi.mock("../../lib/use-agent-name-map.js", () => ({
   useAgentNameMap: () => (id: string | null | undefined) => (id ? (AGENT_NAMES[id] ?? id) : "unknown"),
@@ -415,7 +423,7 @@ function createClient(): QueryClient {
 
 async function renderDom(
   element: ReactElement,
-  route = "/",
+  route: string | { pathname: string; state?: unknown } = "/",
   seed?: (queryClient: QueryClient) => void,
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
@@ -611,6 +619,8 @@ beforeEach(() => {
   setupDom();
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  mobileExperienceMock.enabled = true;
+  mobileExperienceMock.settled = true;
   authMock.value = {
     ...authMock.value,
     role: "admin",
@@ -1316,6 +1326,48 @@ describe("web DOM interaction coverage", () => {
       expect(deepLink.container.textContent).not.toContain("Dev: skip GitHub");
       await unmountRoot(deepLink.root);
 
+      const mobile = await renderDom(
+        <LoginPage />,
+        {
+          pathname: "/login",
+          state: { from: { pathname: "/m/work", search: "", hash: "" } },
+        },
+        undefined,
+      );
+      await waitForText("Sign in to First Tree", mobile.container);
+      expect(mobile.container.textContent).toContain("Use the same Google or GitHub account as on desktop.");
+      expect(mobile.container.textContent).not.toContain("Set up your team");
+      expect(mobile.container.textContent).not.toContain("No repo access yet");
+      const mobileRoot = mobile.container.querySelector(".landing-marketing");
+      expect(mobileRoot?.className).toContain("h-dvh-screen");
+      expect(mobileRoot?.className).toContain("pt-safe-top");
+      expect(mobileRoot?.className).toContain("pb-safe-bottom");
+      expect(
+        mobile.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start?next=%2Fm%2Fwork"]'),
+      ).toBeTruthy();
+      await unmountRoot(mobile.root);
+
+      const originalMatchMedia = window.matchMedia;
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: vi.fn().mockReturnValue({ matches: true }),
+      });
+      const installedMobile = await renderDom(
+        <LoginPage />,
+        {
+          pathname: "/login",
+          state: { from: { pathname: "/m/work", search: "", hash: "" } },
+        },
+        undefined,
+      );
+      await waitForText("Sign in to First Tree", installedMobile.container);
+      expect(installedMobile.container.textContent).not.toContain("Back to install");
+      await unmountRoot(installedMobile.root);
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+
       authMock.value = { ...authMock.value, isAuthenticated: true };
       const authed = await renderDom(<LoginPage />, "/login", undefined);
       expect(authed.container.textContent).toBe("");
@@ -1508,17 +1560,43 @@ describe("web DOM interaction coverage", () => {
     );
     await waitForText("Join", document.body);
 
-    // The avatar menu is account-only: no team rows, just Sign out.
+    // The avatar menu is account-only: no team rows, with a permanent mobile
+    // handoff alongside account settings and sign-out.
     const account = await renderDom(<UserMenu />);
     await click(account.container.querySelector('button[aria-haspopup="menu"]'));
     expect(account.container.textContent).toContain("Account settings");
+    expect(account.container.textContent).toContain("Open on mobile");
     expect(account.container.textContent).not.toContain("Beta");
     expect(account.container.textContent).not.toContain("Create new team");
+    await click(
+      [...account.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("Open on mobile"),
+      ) ?? null,
+    );
+    await waitForText("Open First Tree on your phone", document.body);
+    expect(document.body.textContent).toContain("You’ll sign in once after installation.");
+    expect(document.body.querySelector('span[role="img"] svg')).not.toBeNull();
+    const mobileDialog = [...document.body.querySelectorAll<HTMLElement>('[role="dialog"]')].find((dialog) =>
+      dialog.textContent?.includes("Open First Tree on your phone"),
+    );
+    await click(
+      [...(mobileDialog?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.includes("Close")) ??
+        null,
+    );
+    expect(document.activeElement).toBe(account.container.querySelector('button[aria-haspopup="menu"]'));
+
+    await click(account.container.querySelector('button[aria-haspopup="menu"]'));
     await click(
       [...account.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ??
         null,
     );
     expect(logout).toHaveBeenCalled();
+
+    mobileExperienceMock.enabled = false;
+    const unavailableAccount = await renderDom(<UserMenu />);
+    await click(unavailableAccount.container.querySelector('button[aria-haspopup="menu"]'));
+    expect(unavailableAccount.container.textContent).not.toContain("Open on mobile");
+
     api.get = originalGet;
   });
 
@@ -2112,6 +2190,17 @@ describe("web DOM interaction coverage", () => {
       treeUrl: "",
     });
     await waitForText("Start working with your agent", adminNoProject.container);
+    expect(adminNoProject.container.textContent).toContain("Stay connected");
+    expect(adminNoProject.container.textContent).toContain("Mobile app");
+    expect(adminNoProject.container.textContent).toContain("Scan to install");
+    expect(adminNoProject.container.textContent).toContain("WeChat group");
+    expect(adminNoProject.container.textContent).toContain("Discord");
+    const communityGrid = [...adminNoProject.container.querySelectorAll(".grid")].find((element) =>
+      element.textContent?.includes("Mobile app"),
+    );
+    expect(communityGrid?.className).toContain("grid-cols-2");
+    expect(communityGrid?.className).toContain("sm:grid-cols-3");
+    expect(communityGrid?.querySelector('span[role="img"] svg')?.getAttribute("class")).toContain("h-20");
     await click(findButton(adminNoProject.container, "Start chat"));
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ agentUuid: "agent-1", topic: "Get started with First Tree" }),

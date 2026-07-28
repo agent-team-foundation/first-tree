@@ -94,11 +94,16 @@ export function useInstallPrompt(): {
   const install = useCallback(async (): Promise<InstallOutcome> => {
     if (!deferredPrompt) return "unavailable";
     const event = deferredPrompt;
-    await event.prompt();
-    const choice = await event.userChoice;
-    deferredPrompt = null;
-    publish();
-    return choice.outcome;
+    try {
+      await event.prompt();
+      const choice = await event.userChoice;
+      return choice.outcome;
+    } catch {
+      return "unavailable";
+    } finally {
+      if (deferredPrompt === event) deferredPrompt = null;
+      publish();
+    }
   }, []);
 
   return { platform, mode, install };

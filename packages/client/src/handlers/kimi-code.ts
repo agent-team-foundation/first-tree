@@ -170,6 +170,7 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let ctx: SessionContext | null = null;
   let harness: KimiHarnessLike | null = null;
+  let harnessEffectiveHome: string | null = null;
   let session: Session | null = null;
   let sessionId: string | null = null;
   let activePayload: AgentRuntimeConfigPayload | null = null;
@@ -674,11 +675,20 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
     };
   }
 
-  function ensureHarness(): KimiHarnessLike {
-    harness ??= harnessFactory({
-      identity: { userAgentProduct: "first-tree", version: KIMI_IDENTITY_VERSION },
-      uiMode: "first-tree",
-    });
+  async function ensureHarness(homeDir?: string): Promise<KimiHarnessLike> {
+    const effectiveHome = homeDir ?? null;
+    if (harness && harnessEffectiveHome !== effectiveHome) {
+      await closeHarness();
+    }
+    if (!harness) {
+      const options: KimiHarnessOptions = {
+        identity: { userAgentProduct: "first-tree", version: KIMI_IDENTITY_VERSION },
+        uiMode: "first-tree",
+        ...(homeDir !== undefined ? { homeDir } : {}),
+      };
+      harness = harnessFactory(options);
+    }
+    harnessEffectiveHome = effectiveHome;
     return harness;
   }
 
@@ -731,8 +741,11 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         roleAdditional: prepared.roleAdditional,
         ...(prepared.payload.model ? { model: prepared.payload.model } : {}),
       };
+      const kimiHome = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value.trim() ?? null;
+      const effectiveHomeDir = kimiHome !== null && kimiHome.length === 0 ? null : kimiHome;
       try {
-        session = await ensureHarness().createSession(options);
+        const activeHarness = await ensureHarness(effectiveHomeDir ?? undefined);
+        session = await activeHarness.createSession(options);
         sessionId = session.id;
         sessionActive = true;
         initialTurnPreparing = true;
@@ -758,8 +771,11 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         additionalDirs: prepared.additionalDirs,
         roleAdditional: prepared.roleAdditional,
       };
+      const kimiHome = prepared.payload.env.find((entry) => entry.key === "KIMI_CODE_HOME")?.value.trim() ?? null;
+      const effectiveHomeDir = kimiHome !== null && kimiHome.length === 0 ? null : kimiHome;
       try {
-        session = await ensureHarness().resumeSession(input);
+        const activeHarness = await ensureHarness(effectiveHomeDir ?? undefined);
+        session = await activeHarness.resumeSession(input);
         sessionId = session.id;
         await session.setPermission("yolo");
         if (prepared.payload.model) await session.setModel(prepared.payload.model);

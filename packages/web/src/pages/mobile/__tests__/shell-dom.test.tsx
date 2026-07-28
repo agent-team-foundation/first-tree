@@ -28,9 +28,9 @@ const authMock = vi.hoisted(() => {
       currentOrgHasUsableAgent: true,
       currentOrgHasPersonalAgent: true,
       docsEnabled: false,
-      onboardingStep: "completed" as const,
+      onboardingStep: "completed" as "connect" | "create_agent" | "completed" | null,
       onboardingDismissedAt: null,
-      onboardingCompletedAt: "2026-07-01T00:00:00.000Z",
+      onboardingCompletedAt: "2026-07-01T00:00:00.000Z" as string | null,
       dismissOnboarding: vi.fn(async () => undefined),
       restoreOnboarding: vi.fn(async () => undefined),
       markOnboardingCompleted: vi.fn(async () => undefined),
@@ -103,6 +103,9 @@ describe("MobileShell", () => {
 
   beforeEach(() => {
     harness = createDomHarness();
+    authMock.value.onboardingStep = "completed";
+    authMock.value.onboardingCompletedAt = "2026-07-01T00:00:00.000Z";
+    authMock.value.currentOrgHasPersonalAgent = true;
     meChatMocks.listMeChats.mockReset();
     meChatMocks.listMeChats.mockReturnValue(new Promise(() => undefined));
     meChatMocks.listMeChatSourceCounts.mockReset();
@@ -147,6 +150,19 @@ describe("MobileShell", () => {
     expect(shell).not.toBeNull();
     expect((shell as HTMLElement).style.height).toBe("");
     expect(shell?.className).toContain("pt-safe-top");
+  });
+
+  it("hands incomplete setup back to desktop instead of opening complex onboarding on mobile", async () => {
+    authMock.value.onboardingStep = "create_agent";
+    authMock.value.onboardingCompletedAt = null;
+    authMock.value.currentOrgHasPersonalAgent = false;
+    renderShell(harness, "/m/work");
+    await harness.flush();
+
+    expect(harness.container.textContent).toContain("Finish setup on desktop");
+    expect(harness.container.textContent).toContain("Copy desktop setup link");
+    expect(harness.container.textContent).toContain("Use another account");
+    expect(harness.container.textContent).not.toContain("work content");
   });
 
   it("shares one active-list poller and one source-count poller between shell and Work", async () => {

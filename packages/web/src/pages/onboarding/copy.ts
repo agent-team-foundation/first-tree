@@ -311,7 +311,7 @@ export const COPY = {
      *  (shared with the top-bar SupportMenu), so only the onboarding-surface
      *  heading is copy here. */
     community: {
-      title: "Join the community",
+      title: "Stay connected",
     },
   },
   /** invitee · join-team confirmation + the one not-ready (blocked-on-admin) state.

@@ -79,6 +79,7 @@ vi.mock("../pages/mobile/shell.js", async () => {
   };
 });
 vi.mock("../pages/mobile/work.js", () => ({ MobileWorkPage: () => <div>mobile work</div> }));
+vi.mock("../pages/mobile/install.js", () => ({ MobileInstallPage: () => <div>mobile install</div> }));
 vi.mock("../pages/mobile/team.js", () => ({ MobileTeamPage: () => <div>mobile team</div> }));
 vi.mock("../pages/mobile/me.js", () => ({ MobileMePage: () => <div>mobile me</div> }));
 vi.mock("../pages/settings.js", async () => {
@@ -255,6 +256,9 @@ describe("App routes", () => {
     expect(await renderAppAt("/invite/token-1")).toContain("invite accept");
     await resetRenderedApp();
 
+    expect(await renderAppAt("/m/install?source=start_chat")).toContain("mobile install");
+    await resetRenderedApp();
+
     expect(await renderAppAt("/onboarding")).toContain("onboarding page");
     await resetRenderedApp();
 
@@ -370,6 +374,8 @@ describe("App routes", () => {
     expect(await renderAppAt("/")).not.toContain("workspace page");
     expect(document.body.textContent ?? "").not.toContain("mobile work");
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+
+    expect(await renderAppAt("/m/install")).not.toContain("mobile install");
   });
 
   it("recovers a settled unusable channel to the desktop root", async () => {
@@ -389,6 +395,11 @@ describe("App routes", () => {
 
     setViewportWidth(390);
     expect(await renderAppAt("/m/chat")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/install")).toContain("workspace page");
   });
 
   it("opens mobile routes, phone root, and PWA metadata on staging", async () => {

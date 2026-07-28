@@ -72,11 +72,16 @@ COPY --from=build /app/packages/web/dist packages/server/web-dist/
 # /api/v1/context-tree/snapshot. wget is used by the container healthcheck.
 RUN apk add --no-cache git wget
 
+RUN addgroup -S firsttree && \
+    adduser -S -G firsttree firsttree
+    
 ENV NODE_ENV=production
 ENV FIRST_TREE_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://localhost:8000/healthz || exit 1
+
+USER firsttree
 
 CMD ["node", "packages/server/dist/index.mjs"]

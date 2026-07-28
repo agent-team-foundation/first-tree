@@ -1,8 +1,10 @@
-import { LogOut, Settings } from "lucide-react";
+import { LogOut, Settings, Smartphone } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
+import { useMobileExperienceState } from "../hooks/use-mobile-experience.js";
 import { Avatar } from "./avatar.js";
+import { OpenOnMobileDialog } from "./mobile-install-promotion.js";
 
 // Marketing site — where an explicit sign-out lands the browser, so the user
 // leaves the app on the parent brand surface rather than an app route (which
@@ -20,9 +22,12 @@ const PARENT_URL = "https://first-tree.ai";
  */
 export function UserMenu() {
   const { user, logout } = useAuth();
+  const mobileExperience = useMobileExperienceState();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [mobileDialogOpen, setMobileDialogOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -48,6 +53,7 @@ export function UserMenu() {
   return (
     <div ref={ref} className="relative" data-testid="user-menu">
       <button
+        ref={triggerRef}
         type="button"
         aria-label={`User menu, ${displayName}`}
         aria-haspopup="menu"
@@ -98,6 +104,23 @@ export function UserMenu() {
               <Settings className="h-3.5 w-3.5" />
               <span>Account settings</span>
             </button>
+            {mobileExperience.settled && mobileExperience.enabled ? (
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="dialog"
+                aria-expanded={mobileDialogOpen}
+                onClick={() => {
+                  setOpen(false);
+                  setMobileDialogOpen(true);
+                }}
+                className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                style={{ color: "var(--fg)" }}
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                <span>Open on mobile</span>
+              </button>
+            ) : null}
             <button
               type="button"
               role="menuitem"
@@ -118,6 +141,15 @@ export function UserMenu() {
           </div>
         </div>
       )}
+      <OpenOnMobileDialog
+        open={mobileDialogOpen}
+        onOpenChange={(nextOpen) => {
+          setMobileDialogOpen(nextOpen);
+          if (!nextOpen) triggerRef.current?.focus();
+        }}
+        source="user_menu"
+        restoreFocusRef={triggerRef}
+      />
     </div>
   );
 }

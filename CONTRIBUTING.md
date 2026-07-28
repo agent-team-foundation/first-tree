@@ -73,6 +73,31 @@ Highlights:
 - If the PR changes the command surface, `docs/cli-reference.md` is
   updated in the same PR.
 
+## Contributor license agreement
+
+Every human commit author on a pull request must be covered by a Contributor
+License Agreement before the change can be merged. Automated bot accounts are
+exempt.
+
+- **Individual contributors:** read the
+  [Individual Contributor License Agreement (ICLA) v1.0](https://gist.githubusercontent.com/bestony/5a32ba8d5daa68b95adab6a9bba9c1cc/raw/dffb751c6fcb4c0d3b6df087e2353f149ab0e24b/icla.md),
+  then post this exact comment on the pull request:
+  `I have read the CLA Document and I hereby sign the CLA`.
+- **Contributors signing for an organization:** have an authorized signatory
+  complete the
+  [Corporate Contributor License Agreement (CCLA) v1.0](https://gist.githubusercontent.com/bestony/5a32ba8d5daa68b95adab6a9bba9c1cc/raw/dffb751c6fcb4c0d3b6df087e2353f149ab0e24b/ccla.md)
+  and email it to `legal@first-tree.ai`. The Foundation must verify the CCLA
+  and the GitHub usernames listed in its Schedule A before those contributors
+  are treated as covered.
+
+The `CLA` workflow records ICLA signature metadata in
+`signatures/version1/cla.json` on the dedicated `cla-signatures` branch. That
+record includes the GitHub username and stable account, comment, repository,
+and pull-request identifiers; the signature timestamp; and the profile name
+and public email exposed by GitHub at signing time. The branch is only a
+signature ledger; source changes continue to go through pull requests against
+`main`.
+
 ## Filing issues
 
 Bugs, feature ideas, and questions are all welcome. Please include:

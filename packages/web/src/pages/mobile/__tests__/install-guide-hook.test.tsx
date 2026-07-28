@@ -26,6 +26,15 @@ function fireBeforeInstallPrompt(): ReturnType<typeof vi.fn> {
   return preventDefault;
 }
 
+function fireRejectingBeforeInstallPrompt(): void {
+  const event = new Event("beforeinstallprompt");
+  Object.assign(event, {
+    prompt: () => Promise.reject(new Error("stale prompt")),
+    userChoice: Promise.resolve({ outcome: "accepted", platform: "web" }),
+  });
+  window.dispatchEvent(event);
+}
+
 // Fresh module per test: the capture is a module singleton, so we reset modules
 // and re-import to get a clean deferredPrompt/installed state each time.
 async function renderModeProbe() {
@@ -36,6 +45,19 @@ async function renderModeProbe() {
   }
   harness.render(<ModeProbe />);
   return () => harness.container.querySelector('[data-testid="mode"]')?.getAttribute("data-mode") ?? null;
+}
+
+async function renderInstallProbe(onOutcome: (outcome: string) => void) {
+  const mod = await import("../use-install-guide.js");
+  function InstallProbe() {
+    const { install, mode } = mod.useInstallPrompt();
+    return (
+      <button type="button" data-mode={mode ?? "null"} onClick={() => void install().then(onOutcome)}>
+        install
+      </button>
+    );
+  }
+  harness.render(<InstallProbe />);
 }
 
 beforeEach(() => {
@@ -94,5 +116,21 @@ describe("install prompt capture lifecycle", () => {
     await harness.flush();
 
     expect(readMode()).toBe("null");
+  });
+
+  it("clears a stale native prompt and returns the manual fallback when prompting rejects", async () => {
+    setUserAgent(ANDROID_UA);
+    const onOutcome = vi.fn();
+    await renderInstallProbe(onOutcome);
+
+    act(() => fireRejectingBeforeInstallPrompt());
+    await harness.flush();
+    expect(harness.container.querySelector("button")?.dataset.mode).toBe("native");
+
+    await act(async () => harness.container.querySelector("button")?.click());
+    await harness.flush();
+
+    expect(onOutcome).toHaveBeenCalledWith("unavailable");
+    expect(harness.container.querySelector("button")?.dataset.mode).toBe("android-manual");
   });
 });

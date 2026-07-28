@@ -349,6 +349,11 @@
      under .dark and would yield dark-on-color in dark mode. */
   --fg-on-vivid: oklch(0.985 0 0);
 
+  /* QR modules must stay absolute black-on-white in every theme so phone
+     cameras get maximum contrast. These intentionally do not invert in .dark. */
+  --qr-fg: oklch(0 0 0);
+  --qr-bg: oklch(1 0 0);
+
   /* Per-agent avatar palette. Eight perceptually-balanced OkLCH hues
      at matched lightness/chroma so every avatar reads with the same
      visual weight. Consumed via `pickAvatarHue(agentId)` in

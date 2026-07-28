@@ -1,5 +1,7 @@
 import { ArrowUpRight } from "lucide-react";
+import { useMobileExperienceState } from "../hooks/use-mobile-experience.js";
 import { DISCORD_INVITE_URL, WECHAT_QR_SRC } from "../lib/community.js";
+import { MobileInstallCard } from "./mobile-install-promotion.js";
 
 /**
  * Discord's official mark (simple-icons path), monochrome via currentColor so
@@ -33,9 +35,20 @@ function DiscordMark({ size }: { size: number }) {
  * SupportMenu so the surfaces stay visually consistent. Design language per
  * DESIGN.md: hairline border, neutral ink, no brand colors.
  */
-export function CommunityChannels() {
+export function CommunityChannels({ includeMobile = false }: { includeMobile?: boolean }) {
+  if (includeMobile) return <CommunityChannelsWithMobile />;
+  return <ChannelGrid showMobile={false} />;
+}
+
+function CommunityChannelsWithMobile() {
+  const mobileExperience = useMobileExperienceState();
+  return <ChannelGrid showMobile={mobileExperience.settled && mobileExperience.enabled} />;
+}
+
+function ChannelGrid({ showMobile }: { showMobile: boolean }) {
   return (
-    <div className="grid grid-cols-2" style={{ gap: "var(--sp-3)" }}>
+    <div className={showMobile ? "grid grid-cols-2 sm:grid-cols-3" : "grid grid-cols-2"} style={{ gap: "var(--sp-3)" }}>
+      {showMobile ? <MobileInstallCard /> : null}
       <ChannelCard
         href={WECHAT_QR_SRC}
         name="WeChat group"
@@ -89,7 +102,7 @@ function ChannelCard({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex flex-col items-center rounded-[var(--radius-panel)] border border-border transition-colors hover:bg-accent/30"
+      className="flex flex-col items-center rounded-[var(--radius-panel)] border border-border transition-colors hover:bg-accent/30 focus-visible:border-ring focus-visible:outline-none"
       style={{ gap: "var(--sp-2)", padding: "var(--sp-3)", textDecoration: "none" }}
     >
       <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
