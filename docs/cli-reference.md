@@ -1673,6 +1673,53 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
 
+**Browser security policy:**
+
+The server adds the enforced browser security headers to API responses, health
+responses, static assets, SPA fallbacks, and route errors. CSP origin lists are
+exact credential-free origins. Each variable accepts either a JSON array or a
+comma-separated list; wildcards and paths are rejected. Setting a list replaces
+that directive's third-party defaults, so keep every origin required by the
+deployed web bundle when overriding it. Use `[]` to clear a default list; an
+empty environment value is treated as unset. The default third-party entries follow the
+[Microsoft Clarity CSP guidance](https://learn.microsoft.com/en-us/clarity/setup-and-installation/clarity-csp)
+and [Google Tag Manager CSP guidance](https://developers.google.com/tag-platform/security/guides/csp).
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_SECURITY_CSP_SCRIPT_SRC` | Allowed origins for `script-src`; setting this replaces the default list. | Google Tag Manager and Microsoft Clarity |
+| `FIRST_TREE_SECURITY_CSP_CONNECT_SRC` | Allowed API/analytics/WebSocket origins; setting this replaces the default list. The configured server origin and its matching `ws` or `wss` origin are added automatically. | Google Analytics collection origins, `www.clarity.ms`, `c.bing.com`, and each exact regional origin from `a.clarity.ms` through `z.clarity.ms` |
+| `FIRST_TREE_SECURITY_CSP_IMG_SRC` | Allowed remote image origins; same-origin, data, and blob images remain available; setting this replaces the default list. | GitHub/Google avatar origins, Google Analytics image origins, `www.clarity.ms`, `c.bing.com`, and each exact regional Clarity origin |
+| `FIRST_TREE_SECURITY_CSP_FONT_SRC` | Allowed font origins; setting this replaces the default list. | none |
+| `FIRST_TREE_SECURITY_CSP_STYLE_SRC` | Allowed stylesheet origins; setting this replaces the default list. Inline style attributes remain enabled for the existing React UI. | none |
+| `FIRST_TREE_SECURITY_CSP_FRAME_SRC` | Allowed child-frame origins; setting this replaces the default list. The default is `frame-src 'none'`. | none |
+| `FIRST_TREE_SECURITY_CSP_MEDIA_SRC` | Allowed audio/video origins; setting this replaces the default list. | none |
+| `FIRST_TREE_SECURITY_CSP_WORKER_SRC` | Allowed worker origins; setting this replaces the default list. | none |
+| `FIRST_TREE_SECURITY_CSP_FORM_ACTION` | Allowed form submission origins; setting this replaces the default list. | none |
+
+When a deployment adds an object-storage host for document previews, copy the
+corresponding deployed default lists, append the exact object-storage origin to
+`FIRST_TREE_SECURITY_CSP_CONNECT_SRC` and
+`FIRST_TREE_SECURITY_CSP_IMG_SRC`, and set the complete replacement lists in
+deployment configuration rather than editing the web bundle.
+
+If the web build enables Sentry, add the origin from its `VITE_SENTRY_DSN` to
+`FIRST_TREE_SECURITY_CSP_CONNECT_SRC` as well. The DSN is a build-time web
+setting, so the runtime server intentionally does not infer it from the
+compiled bundle.
+
+The policy also sends `Strict-Transport-Security`,
+`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and both
+`frame-ancestors 'none'` and `X-Frame-Options: DENY`. Verify a running
+deployment with:
+
+```bash
+curl -sI https://<first-tree-host>/ \
+  | grep -iE 'content-security-policy|strict-transport-security|x-content-type-options|referrer-policy|permissions-policy|x-frame-options'
+curl -sI https://<first-tree-host>/api/v1/health \
+  | grep -iE 'content-security-policy|strict-transport-security|x-content-type-options|referrer-policy|permissions-policy|x-frame-options'
+```
+
 **Command update advertisement:**
 
 There is no `FIRST_TREE_UPDATE_CHANNEL`. Published channels have separate npm

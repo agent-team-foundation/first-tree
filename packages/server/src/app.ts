@@ -94,6 +94,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { buildSecurityHeaders, registerSecurityHeaders } from "./security/headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -178,6 +179,7 @@ export async function buildApp(config: Config) {
   // first App JWT call hours later. Cheap; only fires when the App
   // block is present.
   assertBootConfigValid(config);
+  const securityHeaders = buildSecurityHeaders(config);
 
   applyLoggerConfig({
     level: config.observability.logging.level,
@@ -197,6 +199,10 @@ export async function buildApp(config: Config) {
     // upstream proxy chain.
     trustProxy: config.trustProxy,
   });
+  // Install the enforced browser policy before tracing, API scopes, and
+  // static-file serving. Root hooks also cover route misses and the SPA
+  // fallback, keeping API and browser responses on one security contract.
+  registerSecurityHeaders(app, securityHeaders);
 
   // Loud security reminder: trustProxy=true makes Fastify trust ANY upstream's
   // x-forwarded-for header. Safe iff the First Tree container only receives traffic

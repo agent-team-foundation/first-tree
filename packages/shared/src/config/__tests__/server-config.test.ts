@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initConfig } from "../resolver.js";
-import { createServerConfigSchema, getServerConfig, serverConfigSchema } from "../server-config.js";
+import {
+  createServerConfigSchema,
+  DEFAULT_SECURITY_CSP,
+  getServerConfig,
+  serverConfigSchema,
+} from "../server-config.js";
 import { resetConfig, setConfig } from "../singleton.js";
 
 describe("server config", () => {
@@ -174,6 +179,66 @@ describe("server config", () => {
         configDir,
       }),
     ).rejects.toThrow(/gitlab|array/iu);
+  });
+
+  it("loads browser CSP origins from JSON or comma-separated environment values", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_SECURITY_CSP_IMG_SRC", "https://cdn.example.test, https://objects.example.test");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.security?.csp.imgSrc).toEqual(["https://cdn.example.test", "https://objects.example.test"]);
+    expect(config.security?.csp.scriptSrc).toContain("https://www.googletagmanager.com");
+  });
+
+  it("allows an explicit JSON empty list to remove a directive's defaults", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_SECURITY_CSP_SCRIPT_SRC", "[]");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.security?.csp.scriptSrc).toEqual([]);
+    expect(config.security?.csp.connectSrc).toContain("https://www.googletagmanager.com");
+  });
+
+  it("enumerates regional Clarity and Google image defaults without wildcards", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(DEFAULT_SECURITY_CSP.connectSrc).toContain("https://a.clarity.ms");
+    expect(DEFAULT_SECURITY_CSP.connectSrc).toContain("https://z.clarity.ms");
+    expect(DEFAULT_SECURITY_CSP.imgSrc).toContain("https://c.bing.com");
+    expect(DEFAULT_SECURITY_CSP.imgSrc).toContain("https://www.googletagmanager.com");
+  });
+
+  it("rejects wildcard or path-bearing browser CSP origins", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_SECURITY_CSP_CONNECT_SRC", '["https://*.example.test"]');
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/CSP origins|wildcards/iu);
   });
 
   it("rejects partial Google OAuth configuration", async () => {

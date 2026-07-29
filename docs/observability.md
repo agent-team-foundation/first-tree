@@ -91,7 +91,9 @@ artifact.
 The Docker release workflow passes `VITE_SENTRY_DSN` and
 `VITE_SENTRY_ENVIRONMENT` from GitHub repository/environment variables into
 the Web build, which makes Sentry enabled by default for the managed release
-path without committing the public DSN to the repo.
+path without committing the public DSN to the repo. Add the DSN origin to the
+server's `FIRST_TREE_SECURITY_CSP_CONNECT_SRC` list when Sentry is enabled; the
+server cannot safely infer a build-time DSN from the static bundle.
 
 ### Client configuration
 
@@ -121,12 +123,14 @@ provider prompts, model output, tool output, stdout, and stderr are redacted.
 The Web Console loads Microsoft Clarity for production session insights. The
 project id is `xj2f9syfng`.
 
-Clarity is loaded from `packages/web/index.html` only when
-`window.location.hostname` is `cloud.first-tree.ai`. Local development hosts and
-staging hosts such as `dev.cloud.first-tree.ai` do not fetch the Clarity SDK and
-do not write into the production project. This mirrors the GA4 host gate in the
-same SPA shell and avoids requiring a Vite env var, Docker build argument, or
-secret for this fixed production tag.
+Clarity is loaded from the external `packages/web/src/bootstrap.ts` module only
+when `window.location.hostname` is `cloud.first-tree.ai`. Local development
+hosts and staging hosts such as `dev.cloud.first-tree.ai` do not fetch the
+Clarity SDK and do not write into the production project. This mirrors the GA4
+host gate in the same SPA shell and avoids requiring a Vite env var, Docker
+build argument, or secret for this fixed production tag. Keeping the bootstrap
+external also lets the server enforce `script-src 'self'` without an inline
+script exception.
 
 The Web Console treats Clarity as layout/session telemetry, not content
 telemetry. The React root (`#root`) carries `data-clarity-mask="true"` so chat

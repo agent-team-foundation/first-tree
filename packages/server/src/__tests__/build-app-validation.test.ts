@@ -209,9 +209,22 @@ describe("buildApp — retired feedback route boundary", () => {
       expect(apiMiss.statusCode).toBe(404);
       expect(apiMiss.json()).toEqual({ error: "Not found" });
 
+      const api = await app.inject({ method: "GET", url: "/api/v1/health" });
+      expect(api.statusCode).toBe(200);
+
       const assetMiss = await app.inject({ method: "GET", url: "/assets/missing.js" });
       expect(assetMiss.statusCode).toBe(404);
       expect(assetMiss.json()).toEqual({ error: "Not found" });
+
+      for (const response of [spa, api, feedback, apiMiss, assetMiss]) {
+        expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+        expect(response.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
+        expect(response.headers["x-content-type-options"]).toBe("nosniff");
+        expect(response.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+        expect(response.headers["permissions-policy"]).toContain("camera=()");
+        expect(response.headers["x-frame-options"]).toBe("DENY");
+      }
+      expect(spa.headers["content-security-policy"]).not.toMatch(/script-src[^;]*unsafe-(?:inline|eval)/u);
     } finally {
       await safeClose(app);
       await rm(webRoot, { recursive: true, force: true });

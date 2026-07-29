@@ -14,6 +14,116 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
 
+/**
+ * Browser origins used by the server-owned Content-Security-Policy.
+ *
+ * The list is deliberately origin-only. Paths, credentials, wildcards, and
+ * arbitrary CSP keywords are rejected so an operator cannot accidentally turn
+ * an allowlist into a broad host or policy injection surface. Environment
+ * variables accept either a JSON array or a comma-separated list.
+ */
+function parseCspOriginList(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Fall back to the operator-friendly comma-separated form below.
+  }
+  return trimmed
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+}
+
+const cspOriginSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((raw, ctx) => {
+    if (raw.includes("*") || raw.includes(";")) {
+      ctx.addIssue({
+        code: "custom",
+        message: "CSP origins must be exact origins (wildcards and policy separators are not allowed)",
+      });
+      return z.NEVER;
+    }
+    try {
+      const parsed = new URL(raw);
+      if (
+        !["http:", "https:", "ws:", "wss:"].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== "/" ||
+        parsed.search ||
+        parsed.hash
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "CSP origins must be credential-free HTTP(S) or WebSocket origins without a path",
+        });
+        return z.NEVER;
+      }
+      return parsed.origin.toLowerCase();
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        message: "CSP origins must be valid HTTP(S) or WebSocket origins",
+      });
+      return z.NEVER;
+    }
+  });
+
+const cspOriginListSchema = z.preprocess(
+  parseCspOriginList,
+  z.array(cspOriginSchema).max(64, "CSP origin lists may contain at most 64 entries").default([]),
+);
+
+const GOOGLE_ANALYTICS_SCRIPT_ORIGINS = ["https://www.googletagmanager.com"];
+const GOOGLE_ANALYTICS_CONNECT_ORIGINS = [
+  "https://www.googletagmanager.com",
+  "https://www.google-analytics.com",
+  "https://region1.google-analytics.com",
+  "https://analytics.google.com",
+  "https://region1.analytics.google.com",
+];
+const GOOGLE_ANALYTICS_IMAGE_ORIGINS = [
+  "https://www.googletagmanager.com",
+  "https://www.google-analytics.com",
+  "https://region1.google-analytics.com",
+];
+const CLARITY_SCRIPT_ORIGINS = ["https://www.clarity.ms", "https://scripts.clarity.ms"];
+// Clarity load-balances collection across these exact hosts. CSP wildcards are
+// intentionally not accepted by the operator schema, so keep the set explicit.
+const CLARITY_REGIONAL_ORIGINS = Array.from("abcdefghijklmnopqrstuvwxyz", (region) => `https://${region}.clarity.ms`);
+const CLARITY_DATA_ORIGINS = ["https://www.clarity.ms", "https://c.bing.com", ...CLARITY_REGIONAL_ORIGINS];
+
+/**
+ * Defaults cover the browser dependencies shipped by the web console today.
+ * Deployments can replace any list through `security.csp.*`; adding a future
+ * object-storage or CDN host therefore changes configuration, not application
+ * code.
+ */
+export const DEFAULT_SECURITY_CSP = {
+  scriptSrc: [...GOOGLE_ANALYTICS_SCRIPT_ORIGINS, ...CLARITY_SCRIPT_ORIGINS],
+  connectSrc: [...GOOGLE_ANALYTICS_CONNECT_ORIGINS, ...CLARITY_DATA_ORIGINS],
+  imgSrc: [
+    "https://avatars.githubusercontent.com",
+    "https://github.com",
+    "https://lh3.googleusercontent.com",
+    ...GOOGLE_ANALYTICS_IMAGE_ORIGINS,
+    ...CLARITY_DATA_ORIGINS,
+  ],
+  fontSrc: [],
+  styleSrc: [],
+  frameSrc: [],
+  mediaSrc: [],
+  workerSrc: [],
+  formAction: [],
+} as const;
+
 const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
   .refine((provider) => provider === "codex" || provider === "claude-code", {
     message: "Landing campaign runtime provider must be codex or claude-code",
@@ -238,6 +348,44 @@ export const serverConfigSchema = defineConfig({
      */
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
   },
+  /**
+   * Browser security policy for both the API and the static SPA. The group is
+   * optional to preserve the lightweight local/test config shape; the server
+   * applies `DEFAULT_SECURITY_CSP` when no override is supplied. Each
+   * explicitly configured list replaces its corresponding default; omitted
+   * sibling lists still receive their safe defaults.
+   */
+  security: optional({
+    csp: {
+      scriptSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.scriptSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_SCRIPT_SRC",
+      }),
+      connectSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.connectSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_CONNECT_SRC",
+      }),
+      imgSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.imgSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_IMG_SRC",
+      }),
+      fontSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.fontSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_FONT_SRC",
+      }),
+      styleSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.styleSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_STYLE_SRC",
+      }),
+      frameSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.frameSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_FRAME_SRC",
+      }),
+      mediaSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.mediaSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_MEDIA_SRC",
+      }),
+      workerSrc: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.workerSrc]), {
+        env: "FIRST_TREE_SECURITY_CSP_WORKER_SRC",
+      }),
+      formAction: field(cspOriginListSchema.default([...DEFAULT_SECURITY_CSP.formAction]), {
+        env: "FIRST_TREE_SECURITY_CSP_FORM_ACTION",
+      }),
+    },
+  }),
   workspace: {
     // Lazy default (function form): zod's `.default(value)` evaluates
     // `value` at schema-definition time, which would module-load-bake

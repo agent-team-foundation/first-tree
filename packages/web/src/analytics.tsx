@@ -2,9 +2,10 @@ import { useEffect } from "react";
 import { useLocation } from "react-router";
 
 /**
- * GA4 analytics for the cloud SPA. The gtag snippet + config live in
- * index.html (property G-BHG918MZ02, cross-domain linker, send_page_view off).
- * This module reports SPA navigations and exposes a typed event helper.
+ * GA4 analytics for the cloud SPA. The gtag queue + config are initialized by
+ * the external `bootstrap.ts` module (property G-BHG918MZ02, cross-domain
+ * linker, send_page_view off). This module reports SPA navigations and exposes
+ * a typed event helper.
  *
  * Why manual page_view: gtag fires page_view once on initial load. A
  * react-router app changes the URL without a full load, so without this every
@@ -53,8 +54,9 @@ type GtagArgs =
 function gtag(...args: GtagArgs): void {
   if (!analyticsEnabled()) return;
   const w = window as unknown as { gtag?: (...a: GtagArgs) => void };
-  // gtag is defined inline in index.html; guard in case the snippet is absent
-  // (e.g. an ad-blocker removed it) so analytics never breaks the app.
+  // gtag is defined by the external bootstrap module; guard in case the
+  // snippet is absent (e.g. an ad-blocker removed it) so analytics never
+  // breaks the app.
   w.gtag?.(...args);
 }
 
