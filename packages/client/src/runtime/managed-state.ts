@@ -14,6 +14,11 @@
 // (names in `current` and not in `prev`) is handled by the existing
 // installer (`installFirstTreeSkills`), which already (re)materialises
 // everything it expects to be present.
+//
+// Trust: this file lives inside the agent workspace and is agent-writable,
+// so every read treats it as untrusted input — `skills` entries are checked
+// against {@link isManagedSkillName} before they can reach any filesystem
+// operation (#1610).
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -39,6 +44,28 @@ const RUNTIME_DIR = ".first-tree-workspace";
 export const MANAGED_STATE_REL = join(RUNTIME_DIR, "managed.json");
 
 /**
+ * Strict slug schema for a managed skill name: a single lowercase
+ * kebab-case path segment (max 63 chars). Matches the slug convention used
+ * across the repo (e.g. `packages/shared/src/schemas/organization.ts`) and
+ * covers every current and historical First Tree skill name. Anything else
+ * — absolute paths, `..` segments, path separators, control characters,
+ * drive letters — is rejected, so an accepted name can never escape its
+ * parent directory when joined into a path.
+ */
+const MANAGED_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * Whether `name` is a valid managed skill slug. The managed-state file is
+ * agent-writable and therefore untrusted input (#1610): every name read
+ * from it must pass this check before reaching a filesystem operation.
+ * Rejection is fail-safe — an unrecognised name is simply never
+ * auto-removed and stays on disk.
+ */
+export function isManagedSkillName(name: string): boolean {
+  return MANAGED_SKILL_NAME_PATTERN.test(name);
+}
+
+/**
  * Schema-versioned record of the resources the CLI currently manages in a
  * workspace. `schemaVersion` is checked on read; anything else makes the
  * read return null (treated as "first run", no deletions performed).
@@ -60,6 +87,11 @@ export type ManagedState = {
  * unreadable, malformed JSON, or written by a future schema this code
  * doesn't understand — callers treat null as "first run on this workspace"
  * and perform no deletions.
+ *
+ * The file is agent-writable, so its content is untrusted input (#1610):
+ * `skills` entries that are not valid skill slugs ({@link isManagedSkillName})
+ * are dropped on read, keeping path-traversal names away from the reconcile
+ * deletion path.
  */
 export function readManagedState(workspacePath: string): ManagedState | null {
   const path = join(workspacePath, MANAGED_STATE_REL);
@@ -73,7 +105,7 @@ export function readManagedState(workspacePath: string): ManagedState | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const record = parsed as Record<string, unknown>;
   if (record.schemaVersion !== 1) return null;
-  const skills = readStringArray(record.skills);
+  const skills = readStringArray(record.skills).filter(isManagedSkillName);
   const cliVersion = typeof record.cliVersion === "string" ? record.cliVersion : null;
   const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : new Date(0).toISOString();
   return { schemaVersion: 1, cliVersion, updatedAt, skills };

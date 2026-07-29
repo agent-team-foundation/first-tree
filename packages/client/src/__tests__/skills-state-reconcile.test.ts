@@ -9,12 +9,21 @@
 // Helper-level coverage of the installer copy logic lives in
 // `bootstrap.test.ts`; this file proves the reconcile wiring in PR #869.
 
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFirstTreeSkills, TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
-import { readManagedState, writeManagedState } from "../runtime/managed-state.js";
+import { MANAGED_STATE_REL, readManagedState, writeManagedState } from "../runtime/managed-state.js";
 
 /**
  * Build a bundled-skills root mirroring the shape `installFirstTreeSkills`
@@ -160,5 +169,47 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
     for (const name of TREE_SKILL_NAMES) {
       expect(existsSync(join(workspace, ".agents", "skills", name, "SKILL.md"))).toBe(true);
     }
+  });
+
+  it("never deletes outside the skills roots for hostile names in prev state (#1610)", () => {
+    // Sentinel OUTSIDE the workspace, reachable only through a traversal
+    // name: `join(workspace, ".agents/skills", "../../../outside-payload")`
+    // would normalize to `<tmpBase>/outside-payload` without validation.
+    const outsidePayload = join(tmpBase, "outside-payload");
+    mkdirSync(outsidePayload, { recursive: true });
+    writeFileSync(join(outsidePayload, "sentinel.txt"), "do not delete");
+
+    // A legitimate stale skill the reconcile must still remove.
+    plantManagedSkill(workspace, "legacy-foo");
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      skills: [
+        ...TREE_SKILL_NAMES,
+        "legacy-foo",
+        "../../../outside-payload",
+        "../..", // resolves to the workspace root itself
+        "..", // resolves to `.agents/` / `.claude/`
+        ".", // the skills root itself
+        "",
+        "/etc",
+      ],
+    });
+
+    installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
+
+    // Traversal targets outside the skills roots are untouched …
+    expect(readFileSync(join(outsidePayload, "sentinel.txt"), "utf-8")).toBe("do not delete");
+    // … the workspace itself survived "../.." …
+    expect(existsSync(join(workspace, MANAGED_STATE_REL))).toBe(true);
+    // … the skills roots survived ".." and "." …
+    expect(existsSync(join(workspace, ".agents", "skills"))).toBe(true);
+    expect(existsSync(join(workspace, ".claude", "skills"))).toBe(true);
+    // … and the legitimate stale skill was still removed.
+    expect(existsSync(join(workspace, ".agents", "skills", "legacy-foo"))).toBe(false);
+    expect(() => lstatSync(join(workspace, ".claude", "skills", "legacy-foo"))).toThrow();
+    // State rolls forward to the current bundle set as usual.
+    expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
   });
 });
