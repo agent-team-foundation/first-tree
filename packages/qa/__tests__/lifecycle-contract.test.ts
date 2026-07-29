@@ -53,6 +53,19 @@ describe("first-tree-qa lifecycle contract", () => {
     expect(planTemplate).toContain("Create only after the complete harness is `QA READY`.");
   });
 
+  it("keeps ordinary Web QA on an isolated headless agent-browser session", () => {
+    const setupBriefing = readRepoFile("packages/qa/briefings/setup.md");
+    const executeBriefing = readRepoFile("packages/qa/briefings/execute.md");
+
+    expect(setupBriefing).toContain("agent-browser skills get core --full");
+    expect(setupBriefing).toContain("agent-browser session id --scope worktree --prefix first-tree-qa");
+    expect(setupBriefing).toContain("explicit `--headed false`");
+    expect(setupBriefing).toContain("operator's foreground browser");
+    expect(setupBriefing).toContain("`agent-browser --auto-connect`");
+    expect(executeBriefing).toContain("run-scoped, headless `agent-browser` session");
+    expect(executeBriefing).toContain("Never use an operator Web session");
+  });
+
   it("keeps every case disposition aligned in the skill and report template", () => {
     const skill = readRepoFile("skills/first-tree-qa/SKILL.md");
     const reportTemplate = readRepoFile("packages/qa/templates/qa-report.md");

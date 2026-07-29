@@ -7,6 +7,12 @@ Use this briefing after `QA READY` and a run-local plan exist.
 - Confirm the relevant harness capabilities and reset paths remain ready.
 - Exercise final artifacts through CLI, HTTP, Web, SDK/client, daemon/runtime, provider, installer, and persisted-state
   boundaries selected by the plan.
+- Drive ordinary Web scenarios through the run-scoped, headless `agent-browser` session established during setup. Take a
+  fresh interactive snapshot before acting and reacquire refs after navigation, reload, upload/download, or rerender;
+  save relevant screenshots, console/network evidence, and traces under the run artifact directory.
+- Treat the browser only as a driver for the isolated product under test. Never use an operator Web session to deliver
+  reports, attachments, or chat messages, and never switch to the foreground browser when the isolated session is
+  missing state; deliver QA results through the QA agent's own First Tree chat command.
 - Use source and internal logs for risk discovery and diagnosis, not as the only evidence for product behavior.
 - Verify meaningful preconditions and use independent readback or restart boundaries when needed.
 - Save evidence and record findings as they occur; do not reconstruct the run from memory at the end.

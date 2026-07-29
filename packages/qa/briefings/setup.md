@@ -20,6 +20,26 @@ A formal run has a temporary run root, run-local bare clone and detached worktre
 networks/volumes/homes, and an external artifact directory. Build and start all formal surfaces, not only those suggested
 by the eventual task scope. Use native, device, or provider bridges where Docker cannot credibly host a surface.
 
+## Web Browser Drive
+
+Use the installed `agent-browser` CLI as the default driver for First Tree Web surfaces. Before driving the page, read
+its version-matched core guide with `agent-browser skills get core --full`, verify the binary/version, and establish a
+run-scoped wrapper modeled on:
+
+- a stable session from `agent-browser session id --scope worktree --prefix first-tree-qa`;
+- a disposable profile, download directory, screenshot directory, and any restored state inside the run root;
+- `--content-boundaries` plus explicit `--headed false`, so host config cannot open a visible browser window; and
+- the candidate Web loopback URL and run-local test identities, never operator credentials or production browser state.
+
+The operator's foreground browser, existing Chrome tabs/profiles, Codex in-app Browser, Chrome control, CDP attachment
+to an existing browser, and `agent-browser --auto-connect` are not QA harness resources. Do not switch to one of them to
+work around missing selectors, authentication, or state. If a surface genuinely requires a visible native browser,
+extension, PWA, OAuth, or device interaction, record it as a separate explicit bridge; use a disposable QA-only profile
+when authorized, otherwise report that capability `BLOCKED` rather than opening or claiming the operator's browser.
+
+Define browser cleanup before readiness and close the run-scoped `agent-browser` session after evidence capture. Retain
+only the redacted run artifacts required by the report.
+
 ## Setup Rules
 
 - Resolve the run root with `realpath` before sharing paths with Docker.
