@@ -138,6 +138,15 @@ export function buildContextEnableNextActions(
       `Run \`${binName} context status --provider codex\` to verify every layer remains connected.`,
     ];
   }
+  if (hook.trust === "trusted" && hook.enabled === false) {
+    return [
+      "Open Codex in this checkout.",
+      "Run `/hooks`.",
+      "Find First Tree Context → SessionStart and enable its checkbox.",
+      "Exit and start a new Codex session in this checkout.",
+      `Run \`${binName} context status --provider codex\`; confirm Hook trusted/enabled are Yes and Live activation is Connected.`,
+    ];
+  }
   return [
     "Open Codex in this checkout.",
     "Run `/hooks`.",

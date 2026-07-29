@@ -64,12 +64,17 @@ export function renderHookTrust(hook: ProviderHookProbe): string {
   if (hook.trust === "review_required") {
     return "No — review First Tree SessionStart in Codex `/hooks`";
   }
-  return "Unknown";
+  return hook.source === "unavailable" ? "Not available" : "Unknown";
 }
 
 export function renderHookEnabled(hook: ProviderHookProbe): string {
   if (hook.enabled === true) return "Yes";
-  if (hook.enabled === false) return "No — enable First Tree SessionStart in Codex `/hooks`";
+  if (hook.enabled === false) {
+    return hook.source === "provider_managed"
+      ? "No — enable the First Tree Context Plugin in Claude Code"
+      : "No — enable First Tree SessionStart in Codex `/hooks`";
+  }
+  if (hook.source === "unavailable") return "Not available";
   return hook.source === "provider_managed" ? "Managed by provider" : "Unknown";
 }
 

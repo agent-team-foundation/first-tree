@@ -3,6 +3,7 @@ import type {
   ContextIntegrationBinding,
   ContextIntegrationProvider,
 } from "@first-tree/shared";
+import semver from "semver";
 import { channelConfig } from "../channel.js";
 import type { ContextActivationValidator } from "./activation.js";
 import {
@@ -124,13 +125,18 @@ export async function inspectContextIntegrationStatus(
     pluginName,
     cwd,
   });
+  const minimumVersion = health.release?.manifest.providers[driver.provider].minimumVersion ?? driver.minimumVersion;
 
   const providerStatus = {
     name: driver.provider,
     available: plugin.binaryAvailable,
     version: plugin.version,
-    minimumVersion: health.release?.manifest.providers[driver.provider].minimumVersion ?? driver.minimumVersion,
-    compatible: plugin.compatible,
+    minimumVersion,
+    compatible:
+      plugin.binaryAvailable &&
+      plugin.version !== null &&
+      semver.valid(plugin.version) !== null &&
+      semver.gte(plugin.version, minimumVersion),
   };
   const pluginStatus = {
     installed: plugin.installed,

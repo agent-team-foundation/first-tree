@@ -11,6 +11,7 @@ import type {
   ContextIntegrationProviderDriver,
   ProviderPluginProbe,
 } from "../core/context-integration/provider-driver.js";
+import { ClaudeCodeContextIntegrationDriver } from "../core/context-integration/providers/claude-code.js";
 import { inspectContextIntegrationStatus } from "../core/context-integration/status.js";
 
 function pluginProbe(overrides: Partial<ProviderPluginProbe> = {}): ProviderPluginProbe {
@@ -95,6 +96,64 @@ describe("Context integration layered status", () => {
       checkout: { state: "ready", root: "/work/repo" },
       binding: { state: "exact", organizationId: "org_acme" },
       activation: { state: "connected", team: { displayName: "Acme" } },
+    });
+  });
+
+  it("uses the release manifest minimum when computing provider compatibility", async () => {
+    const value = await inspectContextIntegrationStatus(
+      driver(),
+      validator({
+        schemaVersion: 1,
+        outcome: "connected",
+        team: {
+          organizationId: "org_acme",
+          displayName: "Acme",
+          role: "admin",
+        },
+      }),
+      "/work/repo",
+      {
+        inspectRuntime: (runtimeDriver) => ({
+          provider: "codex",
+          healthy: false,
+          issues: ["codex 0.146.0 must be upgraded to 0.147.0 or newer."],
+          install: null,
+          release: {
+            root: "/release",
+            manifest: {
+              schemaVersion: 1,
+              version: "0.5.18",
+              channel: "dev",
+              bundleDigest: `sha256:${"1".repeat(64)}`,
+              policyDigest: `sha256:${"2".repeat(64)}`,
+              providers: {
+                "claude-code": {
+                  adapterDigest: `sha256:${"3".repeat(64)}`,
+                  minimumVersion: "2.1.121",
+                },
+                codex: {
+                  adapterDigest: `sha256:${"4".repeat(64)}`,
+                  minimumVersion: "0.147.0",
+                },
+              },
+            },
+          },
+          probe: runtimeDriver.probe("first-tree-dev", "first-tree-context"),
+        }),
+        inspectPreflight: () => {
+          throw new ContextClientPreflightError(
+            contextClientPreflightErrorCode.notGitCheckout,
+            "The current directory is not a Git checkout.",
+            "Run this command inside the target Git checkout.",
+          );
+        },
+      },
+    );
+
+    expect(value.provider).toMatchObject({
+      version: "0.146.0",
+      minimumVersion: "0.147.0",
+      compatible: false,
     });
   });
 
@@ -217,5 +276,52 @@ describe("Context enable Hook guidance", () => {
     expect(actions.join(" ")).not.toContain("/hooks");
     expect(renderHookTrust({ trust: "trusted", enabled: true, source: "provider_api", issues: [] })).toBe("Yes");
     expect(renderHookEnabled({ trust: "trusted", enabled: true, source: "provider_api", issues: [] })).toBe("Yes");
+  });
+
+  it("asks only for enablement when the Codex Hook is already trusted", () => {
+    const actions = buildContextEnableNextActions(
+      "codex",
+      {
+        trust: "trusted",
+        enabled: false,
+      },
+      "first-tree-staging",
+    );
+
+    expect(actions.join(" ")).toContain("enable its checkbox");
+    expect(actions.join(" ")).not.toContain("choose Trust");
+  });
+});
+
+describe("provider-aware Hook rendering", () => {
+  it("renders a disabled Claude Hook as Plugin-managed", () => {
+    const hook = {
+      trust: "provider_managed" as const,
+      enabled: false,
+      source: "provider_managed" as const,
+      issues: [],
+    };
+
+    expect(renderHookTrust(hook)).toBe("Managed by provider");
+    expect(renderHookEnabled(hook)).toBe("No — enable the First Tree Context Plugin in Claude Code");
+  });
+
+  it("does not claim a provider-managed Hook when the Claude Plugin is absent", async () => {
+    const claudeDriver = new ClaudeCodeContextIntegrationDriver(() => ({ stdout: "", stderr: "" }));
+    const hook = await claudeDriver.inspectHook({
+      marketplaceName: "first-tree-dev",
+      pluginName: "first-tree-context",
+      cwd: "/work/repo",
+      plugin: { installed: false, enabled: false },
+    });
+
+    expect(hook).toEqual({
+      trust: "unknown",
+      enabled: null,
+      source: "unavailable",
+      issues: [],
+    });
+    expect(renderHookTrust(hook)).toBe("Not available");
+    expect(renderHookEnabled(hook)).toBe("Not available");
   });
 });

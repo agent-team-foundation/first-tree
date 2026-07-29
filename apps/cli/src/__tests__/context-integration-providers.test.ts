@@ -93,6 +93,37 @@ describe("Context provider drivers", () => {
     ]);
   });
 
+  it("reports Claude Hook state only when the provider-managed Plugin exists", async () => {
+    const driver = new ClaudeCodeContextIntegrationDriver(fakeRunner("claude").run);
+
+    await expect(
+      driver.inspectHook({
+        marketplaceName: "first-tree-dev",
+        pluginName: "first-tree-context",
+        cwd: "/work/repo",
+        plugin: { installed: false, enabled: false },
+      }),
+    ).resolves.toEqual({
+      trust: "unknown",
+      enabled: null,
+      source: "unavailable",
+      issues: [],
+    });
+    await expect(
+      driver.inspectHook({
+        marketplaceName: "first-tree-dev",
+        pluginName: "first-tree-context",
+        cwd: "/work/repo",
+        plugin: { installed: true, enabled: false },
+      }),
+    ).resolves.toEqual({
+      trust: "provider_managed",
+      enabled: false,
+      source: "provider_managed",
+      issues: [],
+    });
+  });
+
   it("uses Codex JSON Plugin lifecycle without bypassing native Hook trust", () => {
     const fake = fakeRunner("codex");
     const driver = new CodexContextIntegrationDriver(fake.run);

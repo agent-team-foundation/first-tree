@@ -56,9 +56,17 @@ export class ClaudeCodeContextIntegrationDriver implements ContextIntegrationPro
   }
 
   async inspectHook(request: ProviderHookInspectRequest): Promise<ProviderHookProbe> {
+    if (!request.plugin.installed) {
+      return {
+        trust: "unknown",
+        enabled: null,
+        source: "unavailable",
+        issues: [],
+      };
+    }
     return {
       trust: "provider_managed",
-      enabled: request.plugin.installed ? request.plugin.enabled : null,
+      enabled: request.plugin.enabled,
       source: "provider_managed",
       issues: [],
     };
