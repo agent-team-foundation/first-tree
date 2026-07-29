@@ -95,6 +95,16 @@ export class AuthRefreshRateLimitedError extends Error {
   }
 }
 
+class AuthRefreshHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number) {
+    super(`Refresh request failed with status ${statusCode}.`);
+    this.name = "AuthRefreshHttpError";
+    this.statusCode = statusCode;
+  }
+}
+
 /**
  * Parse an HTTP `Retry-After` header. Accepts either an integer seconds
  * value (the form fastify-rate-limit emits) or an RFC 7231 HTTP-date.
@@ -114,13 +124,24 @@ function parseRetryAfterMs(header: string | null): number | null {
 }
 
 /**
- * In-flight refresh promise. Multiple callers (WS handshake, proactive
+ * In-flight refresh operation. Multiple callers (WS handshake, proactive
  * refresh timer, every SDK request) can see an expired token within the same
  * millisecond — without dedupe each would fire an independent `/auth/refresh`
  * round-trip and race to write `credentials.json`. Share one in-flight
- * promise so N concurrent callers resolve from a single HTTP call.
+ * request so N concurrent callers resolve from a single HTTP call.
+ *
+ * Each caller can still carry its own deadline. The underlying request is
+ * aborted once every waiter has abandoned it; one short-lived caller never
+ * aborts a refresh that another live caller still needs.
  */
-let inflightRefresh: Promise<string> | null = null;
+type InflightRefresh = {
+  controller: AbortController;
+  promise: Promise<string>;
+  settled: boolean;
+  waiters: number;
+};
+
+let inflightRefresh: InflightRefresh | null = null;
 
 /** Default freshness window for HTTP callers: refresh if token expires within 30s. */
 const DEFAULT_MIN_VALIDITY_MS = 30_000;
@@ -143,7 +164,8 @@ const DEFAULT_MIN_VALIDITY_MS = 30_000;
  * losing the sliding behaviour against that backend, not a correctness
  * regression.
  */
-export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }): Promise<string> {
+export async function ensureFreshAccessToken(opts?: { minValidityMs?: number; signal?: AbortSignal }): Promise<string> {
+  opts?.signal?.throwIfAborted();
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
@@ -151,50 +173,110 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   }
 
   if (!isTokenStale(creds.accessToken, minValidityMs)) {
+    opts?.signal?.throwIfAborted();
     return creds.accessToken;
   }
 
-  if (inflightRefresh) {
-    return inflightRefresh;
+  if (!inflightRefresh) {
+    inflightRefresh = startRefresh(creds);
+  }
+  return waitForRefresh(inflightRefresh, opts?.signal);
+}
+
+function startRefresh(creds: StoredCredentials): InflightRefresh {
+  const controller = new AbortController();
+  const refresh: InflightRefresh = {
+    controller,
+    promise: Promise.resolve(""),
+    settled: false,
+    waiters: 0,
+  };
+
+  refresh.promise = performRefresh(creds, controller.signal).finally(() => {
+    refresh.settled = true;
+    if (inflightRefresh === refresh) {
+      inflightRefresh = null;
+    }
+  });
+  return refresh;
+}
+
+async function performRefresh(creds: StoredCredentials, cancellation: AbortSignal): Promise<string> {
+  const signal = AbortSignal.any([cancellation, AbortSignal.timeout(10_000)]);
+  const res = await cliFetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken: creds.refreshToken }),
+    signal,
+  });
+
+  if (res.status === 401) {
+    throw new AuthRefreshFailedError(
+      `Refresh token rejected by server. Re-run \`${channelConfig.binName} login <code>\` ` +
+        "(get a fresh token from the Web Computers page → New Connection).",
+    );
+  }
+  if (res.status === 429) {
+    const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after")) ?? 30_000;
+    throw new AuthRefreshRateLimitedError(retryAfterMs);
+  }
+  if (!res.ok) {
+    throw new AuthRefreshHttpError(res.status);
   }
 
-  inflightRefresh = (async () => {
-    const res = await cliFetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: creds.refreshToken }),
-      signal: AbortSignal.timeout(10_000),
-    });
+  const data = (await res.json()) as { accessToken: string; refreshToken?: string };
+  saveCredentials({
+    ...creds,
+    accessToken: data.accessToken,
+    // Older servers won't echo a rotated refreshToken back — keep the existing one.
+    refreshToken: data.refreshToken ?? creds.refreshToken,
+  });
+  return data.accessToken;
+}
 
-    if (res.status === 401) {
-      throw new AuthRefreshFailedError(
-        `Refresh token rejected by server. Re-run \`${channelConfig.binName} login <code>\` ` +
-          "(get a fresh token from the Web Computers page → New Connection).",
-      );
-    }
-    if (res.status === 429) {
-      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after")) ?? 30_000;
-      throw new AuthRefreshRateLimitedError(retryAfterMs);
-    }
-    if (!res.ok) {
-      throw new Error(`Refresh request failed with status ${res.status}.`);
-    }
-
-    const data = (await res.json()) as { accessToken: string; refreshToken?: string };
-    saveCredentials({
-      ...creds,
-      accessToken: data.accessToken,
-      // Older servers won't echo a rotated refreshToken back — keep the existing one.
-      refreshToken: data.refreshToken ?? creds.refreshToken,
-    });
-    return data.accessToken;
-  })();
-
+async function waitForRefresh(refresh: InflightRefresh, signal: AbortSignal | undefined): Promise<string> {
+  refresh.waiters++;
   try {
-    return await inflightRefresh;
+    if (!signal) return await refresh.promise;
+    signal.throwIfAborted();
+    return await waitForPromiseWithSignal(refresh.promise, signal);
   } finally {
-    inflightRefresh = null;
+    refresh.waiters--;
+    if (signal?.aborted && refresh.waiters === 0 && !refresh.settled) {
+      if (inflightRefresh === refresh) {
+        inflightRefresh = null;
+      }
+      refresh.controller.abort(signal.reason);
+    }
   }
+}
+
+function waitForPromiseWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const onAbort = () => {
+      finish(() => reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError")));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        finish(() => resolve(value));
+      },
+      (error: unknown) => {
+        finish(() => reject(error));
+      },
+    );
+    if (signal.aborted) onAbort();
+  });
 }
 
 /** Back-compat alias retained so existing call sites keep compiling. */

@@ -48,6 +48,48 @@ describe("SDK Context activation", () => {
     );
   });
 
+  it("uses one attempt signal for token acquisition and the activation request", async () => {
+    let tokenSignal: AbortSignal | undefined;
+    const getAccessToken = vi.fn((options?: { signal?: AbortSignal }) => {
+      tokenSignal = options?.signal;
+      return "member-token";
+    });
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBe(tokenSignal);
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 1,
+          outcome: "connected",
+          team: {
+            organizationId: "org_acme",
+            displayName: "Acme",
+            role: "member",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: "https://first-tree.example",
+      getAccessToken,
+    });
+
+    await expect(
+      sdk.validateMemberContextActivation(
+        "org_acme",
+        {
+          schemaVersion: 1,
+          repositoryKey: "github.com/acme/payments",
+        },
+        { retry: false, timeoutMs: 5_000 },
+      ),
+    ).resolves.toMatchObject({ outcome: "connected" });
+    expect(tokenSignal).toBeInstanceOf(AbortSignal);
+    expect(getAccessToken).toHaveBeenCalledWith({ signal: tokenSignal });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails on an unknown Server outcome", async () => {
     vi.stubGlobal(
       "fetch",

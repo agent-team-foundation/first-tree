@@ -363,7 +363,7 @@ function writeSessionStartHook(pluginRoot, provider) {
                 provider === "codex"
                   ? `"\${PLUGIN_ROOT}/bin/context-session-start" --release-digest __RELEASE_DIGEST__`
                   : `"\${CLAUDE_PLUGIN_ROOT}/bin/context-session-start" --release-digest __RELEASE_DIGEST__`,
-              timeout: 3,
+              timeout: 5,
               statusMessage: "Connecting First Tree Context",
               additionalContextLimit: 2048,
             },

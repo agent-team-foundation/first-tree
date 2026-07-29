@@ -3,19 +3,15 @@ import type {
   ContextIntegrationBinding,
   ContextIntegrationProvider,
 } from "@first-tree/shared";
+import {
+  type ContextActivationValidator,
+  type ExternalContextAuthorityMode,
+  validateExternalContextAuthority,
+} from "./authority.js";
 import { inspectContextClientPreflight } from "./client-preflight.js";
 import { findContextBinding } from "./context-binding-store.js";
 
-export type ContextActivationValidator = {
-  validateMemberContextActivation(
-    organizationId: string,
-    data: {
-      schemaVersion: 1;
-      repositoryKey: string;
-    },
-    options: { retry: false; timeoutMs: number },
-  ): Promise<ContextActivationResponse>;
-};
+export type { ContextActivationValidator } from "./authority.js";
 
 type ConnectedContextActivationResponse = Extract<ContextActivationResponse, { outcome: "connected" }>;
 
@@ -37,6 +33,9 @@ export async function activateExternalContext(
   dependencies: {
     inspect?: typeof inspectContextClientPreflight;
     findBinding?: typeof findContextBinding;
+  } = {},
+  options: {
+    authorityMode?: ExternalContextAuthorityMode;
   } = {},
 ): Promise<ExternalContextActivation> {
   const inspect = dependencies.inspect ?? inspectContextClientPreflight;
@@ -73,24 +72,16 @@ export async function activateExternalContext(
     };
   }
 
-  let response: ContextActivationResponse;
-  try {
-    response = await validator.validateMemberContextActivation(
-      binding.organizationId,
-      {
-        schemaVersion: 1,
-        repositoryKey: binding.repositoryKey,
-      },
-      { retry: false, timeoutMs: 2_000 },
-    );
-  } catch {
-    return {
-      outcome: "unavailable",
-      reasonCode: "authority_unavailable",
-      systemMessage:
-        "First Tree Context is temporarily unavailable. Normal coding can continue; no cached Team authority was used.",
-    };
+  const authority = await validateExternalContextAuthority(
+    validator,
+    binding.organizationId,
+    binding.repositoryKey,
+    options.authorityMode ?? "session-start",
+  );
+  if (authority.outcome === "unavailable") {
+    return authority;
   }
+  const response = authority.response;
 
   if (response.outcome === "disabled") {
     return {
@@ -159,7 +150,9 @@ export async function requireConnectedExternalContext(
   team: ConnectedContextActivationResponse["team"];
   binding: ContextIntegrationBinding;
 }> {
-  const activation = await activateExternalContext(validator, input, dependencies);
+  const activation = await activateExternalContext(validator, input, dependencies, {
+    authorityMode: "explicit",
+  });
   if (activation.outcome !== "connected") {
     throw new ExternalContextActivationRequiredError(
       activation.outcome,

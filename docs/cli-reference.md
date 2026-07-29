@@ -1092,14 +1092,23 @@ when nothing still uses it. Provider-native hook trust remains provider-owned.
 
 `context activate` is an internal SessionStart bridge and is intentionally
 hidden from help. It always allows the provider session to continue, even when
-First Tree is offline or activation fails.
+First Tree is offline or activation fails. Its single two-second authority
+attempt covers both access-token refresh and the validator request, and runs
+inside a five-second provider hook budget so First Tree can return a controlled
+unavailable result instead of being terminated by the provider.
 
 The external Plugin also uses hidden `context read` and `context write`
 bridges. They do not accept `--team`: each derives Team from the exact current
 provider + checkout binding, repeats live membership and selected-Team
 repository validation, and only then delegates to the ordinary `tree read` or
-`tree write` implementation. Managed and clean explicit-Team callers continue
-to use the public `tree` commands directly.
+`tree write` implementation. Status and these explicit routes use five-second
+authority attempts covering token refresh plus validation, and retry the same
+exact Team + repository once only after a timeout, network failure, or HTTP 5xx
+response. Authentication, authorization, binding, scope, and typed disabled
+results do not retry.
+Failures retain stable timeout, network, server, or rejection reason codes
+without using cached authority. Managed and clean explicit-Team callers
+continue to use the public `tree` commands directly.
 
 ---
 

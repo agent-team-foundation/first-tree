@@ -42,6 +42,16 @@ manifest also records both adapter digests and the canonical Policy digest.
   push, and PR/MR creation.
 - Activation failure never blocks ordinary provider work and never falls back
   to another Team or cached authority.
+- SessionStart uses one non-retrying two-second live-authority attempt covering
+  access-token refresh and the validator request inside a five-second provider
+  hook budget, so timeout or network failure can return a controlled
+  unavailable envelope instead of being killed by the provider. Explicit
+  status, Read, and Write activation use a five-second attempt covering the
+  same two stages and retry the same exact Team + repository once only for
+  timeout, network, or HTTP 5xx failures. Authentication, authorization,
+  binding, scope, and typed disabled results never retry. Failures expose
+  stable timeout, network, server, or rejection reason codes without returning
+  cached authority.
 - Read does not depend on Reviewer readiness. A new official Write fails before
   remote mutation when Automatic Review is absent, disabled, structurally
   incomplete, or offline.

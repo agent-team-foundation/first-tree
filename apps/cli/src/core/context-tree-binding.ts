@@ -1,6 +1,7 @@
 import { createLogger, SdkError } from "@first-tree/client";
 import { contextTreeActiveBindingSchema, contextTreeInfoSchema } from "@first-tree/shared";
 import { AuthRefreshFailedError } from "./bootstrap.js";
+import { classifyCliTransportError } from "./transport-error.js";
 
 export type ContextTreeBindingResult =
   | { status: "bound"; repo: string; branch: string }
@@ -35,21 +36,6 @@ type ContextTreeUnreadableOptions = {
   exitCode: 1 | 3 | 6;
   httpStatus?: number;
 };
-
-const CONNECTION_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EHOSTUNREACH",
-  "ENETDOWN",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 
 export class ContextTreeUnreadableError extends Error {
   readonly code = "CONTEXT_TREE_UNREADABLE";
@@ -180,7 +166,7 @@ export function classifyContextTreeReadError(error: unknown): ContextTreeUnreada
     );
   }
 
-  const transportCategory = classifyTransportError(error);
+  const transportCategory = classifyCliTransportError(error);
   if (transportCategory === "timeout") {
     return new ContextTreeUnreadableError("Timed out while reading the Context Tree binding.", {
       category: "timeout",
@@ -205,48 +191,6 @@ function invalidResponseError(): ContextTreeUnreadableError {
     category: "invalid-response",
     exitCode: 1,
   });
-}
-
-function classifyTransportError(error: unknown): "connection" | "timeout" | null {
-  let current: unknown = error;
-  let sawConnectionError = false;
-
-  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth++) {
-    const name = readStringProperty(current, "name");
-    const code = readStringProperty(current, "code");
-    const message = readStringProperty(current, "message");
-
-    if (
-      name === "AbortError" ||
-      name === "TimeoutError" ||
-      code === "ERR_ABORTED" ||
-      code?.includes("TIMEOUT") ||
-      message?.toLowerCase().includes("timed out") ||
-      message?.toLowerCase().includes("timeout")
-    ) {
-      return "timeout";
-    }
-    if (code && CONNECTION_ERROR_CODES.has(code)) {
-      if (code === "ETIMEDOUT") return "timeout";
-      sawConnectionError = true;
-    }
-    if (message?.toLowerCase().includes("fetch failed")) {
-      sawConnectionError = true;
-    }
-    if (current instanceof TypeError && hasProperty(current, "cause")) {
-      sawConnectionError = true;
-    }
-
-    current = readProperty(current, "cause");
-  }
-
-  return sawConnectionError ? "connection" : null;
-}
-
-function hasProperty(value: unknown, property: string): boolean {
-  return (typeof value === "object" && value !== null) || typeof value === "function"
-    ? Reflect.has(value, property)
-    : false;
 }
 
 function readProperty(value: unknown, property: string): unknown {

@@ -79,7 +79,7 @@ import { createLogger } from "./observability/logger.js";
  * proactive-refresh path would reuse a cached token that is about to expire
  * and immediately get kicked off with `auth:expired`.
  */
-export type AccessTokenProvider = (opts?: { minValidityMs?: number }) => string | Promise<string>;
+export type AccessTokenProvider = (opts?: { minValidityMs?: number; signal?: AbortSignal }) => string | Promise<string>;
 export type RuntimeSessionTokenProvider = () => string | undefined;
 
 export type SdkConfig = {
@@ -1038,7 +1038,11 @@ export class FirstTreeHubSDK {
 
   private async doFetchOnce(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<Response> {
     const url = `${this._baseUrl}${path}`;
-    const token = await this.getAccessToken();
+    const timeout = AbortSignal.timeout(opts?.timeoutMs ?? FETCH_TIMEOUT_MS);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    signal.throwIfAborted();
+    const token = await this.getAccessToken({ signal });
+    signal.throwIfAborted();
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
     };
@@ -1063,8 +1067,6 @@ export class FirstTreeHubSDK {
     if (init?.headers) {
       Object.assign(headers, init.headers as Record<string, string>);
     }
-    const timeout = AbortSignal.timeout(opts?.timeoutMs ?? FETCH_TIMEOUT_MS);
-    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     return fetch(url, { ...init, headers, signal });
   }
 

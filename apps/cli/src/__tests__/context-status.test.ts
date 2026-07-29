@@ -208,10 +208,11 @@ describe("Context integration layered status", () => {
   });
 
   it("keeps exact binding visible when live activation is unavailable", async () => {
+    const validate = vi.fn(async () => {
+      throw new Error("network timeout");
+    });
     const unavailable: ContextActivationValidator = {
-      validateMemberContextActivation: vi.fn(async () => {
-        throw new Error("network timeout");
-      }),
+      validateMemberContextActivation: validate,
     };
     const value = await inspectContextIntegrationStatus(driver(), unavailable, "/work/repo", {
       inspectRuntime: (runtimeDriver) => ({
@@ -238,8 +239,28 @@ describe("Context integration layered status", () => {
     expect(value.binding).toMatchObject({ state: "exact", organizationId: "org_acme" });
     expect(value.activation).toMatchObject({
       state: "unavailable",
-      message: expect.stringContaining("network timeout"),
+      reasonCode: "authority_timeout",
+      message: expect.stringContaining("timed out"),
     });
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(validate).toHaveBeenNthCalledWith(
+      1,
+      "org_acme",
+      {
+        schemaVersion: 1,
+        repositoryKey: "github.com/acme/repo",
+      },
+      { retry: false, timeoutMs: 5_000 },
+    );
+    expect(validate).toHaveBeenNthCalledWith(
+      2,
+      "org_acme",
+      {
+        schemaVersion: 1,
+        repositoryKey: "github.com/acme/repo",
+      },
+      { retry: false, timeoutMs: 5_000 },
+    );
   });
 });
 

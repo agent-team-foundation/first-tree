@@ -130,14 +130,83 @@ describe("ensureFreshAccessToken — safety margin", () => {
     await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree-dev login/);
   });
 
-  it("throws a generic Error (not AuthRefreshFailedError) on non-401 failures so transient outages still retry", async () => {
+  it("preserves the refresh HTTP status on non-401 failures so callers can classify transient 5xx", async () => {
     const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 60 });
     await writeCredentials(stale);
 
     fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
 
     const { ensureFreshAccessToken, AuthRefreshFailedError } = await import("../core/bootstrap.js");
-    await expect(ensureFreshAccessToken()).rejects.not.toThrow(AuthRefreshFailedError);
+    const error = await ensureFreshAccessToken().catch((caught) => caught);
+    expect(error).not.toBeInstanceOf(AuthRefreshFailedError);
+    expect(error).toMatchObject({ name: "AuthRefreshHttpError", statusCode: 503 });
+  });
+
+  it("propagates a caller deadline into refresh fetch and aborts the underlying request", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+    await writeCredentials(stale);
+    let refreshSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          refreshSignal = init?.signal ?? undefined;
+          const rejectForAbort = () => {
+            reject(refreshSignal?.reason ?? new DOMException("This operation was aborted", "AbortError"));
+          };
+          if (refreshSignal?.aborted) rejectForAbort();
+          else refreshSignal?.addEventListener("abort", rejectForAbort, { once: true });
+        }),
+    );
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    const caller = new AbortController();
+    const result = ensureFreshAccessToken({ signal: caller.signal });
+    await vi.waitFor(() => {
+      expect(refreshSignal).toBeDefined();
+    });
+
+    caller.abort(new DOMException("The operation timed out", "TimeoutError"));
+    await expect(result).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.waitFor(() => {
+      expect(refreshSignal?.aborted).toBe(true);
+    });
+  });
+
+  it("keeps a shared refresh alive while another deadline-bound caller still waits", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale);
+    let refreshSignal: AbortSignal | undefined;
+    let finishRefresh: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          refreshSignal = init?.signal ?? undefined;
+          finishRefresh = resolve;
+          refreshSignal?.addEventListener(
+            "abort",
+            () => reject(refreshSignal?.reason ?? new DOMException("This operation was aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    const firstCaller = new AbortController();
+    const secondCaller = new AbortController();
+    const first = ensureFreshAccessToken({ signal: firstCaller.signal });
+    const second = ensureFreshAccessToken({ signal: secondCaller.signal });
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    firstCaller.abort(new DOMException("The operation timed out", "TimeoutError"));
+    await expect(first).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(refreshSignal?.aborted).toBe(false);
+
+    finishRefresh(new Response(JSON.stringify({ accessToken: refreshed })));
+    await expect(second).resolves.toBe(refreshed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("throws AuthRefreshRateLimitedError carrying server's Retry-After on 429", async () => {

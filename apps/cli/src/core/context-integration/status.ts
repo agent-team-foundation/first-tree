@@ -6,6 +6,7 @@ import type {
 import semver from "semver";
 import { channelConfig } from "../channel.js";
 import type { ContextActivationValidator } from "./activation.js";
+import { validateExternalContextAuthority } from "./authority.js";
 import {
   ContextClientPreflightError,
   type ContextClientPreflightErrorCode,
@@ -70,6 +71,7 @@ type LiveActivationStatus =
     }
   | {
       state: "unavailable";
+      reasonCode: string;
       message: string;
       nextAction: string;
     }
@@ -233,39 +235,29 @@ export async function inspectContextIntegrationStatus(
     organizationId: binding.organizationId,
     repositoryKey: binding.repositoryKey,
   };
-  try {
-    const response = await validator.validateMemberContextActivation(
-      binding.organizationId,
-      {
-        schemaVersion: 1,
-        repositoryKey: binding.repositoryKey,
-      },
-      { retry: false, timeoutMs: 2_000 },
-    );
-    return {
-      provider: providerStatus,
-      plugin: pluginStatus,
-      hook,
-      runtime,
-      checkout,
-      binding: bindingStatus,
-      activation: activationStatus(response),
-    };
-  } catch (error) {
-    return {
-      provider: providerStatus,
-      plugin: pluginStatus,
-      hook,
-      runtime,
-      checkout,
-      binding: bindingStatus,
-      activation: {
-        state: "unavailable",
-        message: `First Tree live activation could not be checked: ${message(error)}`,
-        nextAction: `Check the First Tree connection and rerun \`${channelConfig.binName} context status --provider ${driver.provider}\`.`,
-      },
-    };
-  }
+  const authority = await validateExternalContextAuthority(
+    validator,
+    binding.organizationId,
+    binding.repositoryKey,
+    "explicit",
+  );
+  return {
+    provider: providerStatus,
+    plugin: pluginStatus,
+    hook,
+    runtime,
+    checkout,
+    binding: bindingStatus,
+    activation:
+      authority.outcome === "validated"
+        ? activationStatus(authority.response)
+        : {
+            state: "unavailable",
+            reasonCode: authority.reasonCode,
+            message: authority.systemMessage,
+            nextAction: `Check the First Tree connection and rerun \`${channelConfig.binName} context status --provider ${driver.provider}\`.`,
+          },
+  };
 }
 
 function inspectProviderHook(

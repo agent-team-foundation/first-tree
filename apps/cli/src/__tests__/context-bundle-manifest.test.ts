@@ -64,9 +64,13 @@ describe("context integration bundle", () => {
     const projectedSkills = new Map<string, { read: string; write: string }>();
     for (const provider of ["claude-code", "codex"]) {
       const pluginRoot = join(root, provider, "plugins", "first-tree-context");
+      const hook = readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8");
       const readSkill = readFileSync(join(pluginRoot, "skills", "first-tree-read", "SKILL.md"), "utf8");
       const writeSkill = readFileSync(join(pluginRoot, "skills", "first-tree-write", "SKILL.md"), "utf8");
       projectedSkills.set(provider, { read: readSkill, write: writeSkill });
+      expect(hook).toContain('"timeout": 5');
+      expect(hook).not.toContain('"timeout": 3');
+      expect(hook).toContain('"matcher": "startup|resume|clear|compact"');
       expect(readSkill).toContain(`context read --provider ${provider}`);
       expect(writeSkill).toContain(`context write --provider ${provider}`);
       expect(readSkill).toContain("read\n`references/context-tree-policy.md` completely");
