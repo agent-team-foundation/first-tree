@@ -5,6 +5,8 @@ import semver from "semver";
 import type {
   ContextIntegrationProviderDriver,
   ProviderCommandRunner,
+  ProviderHookInspectRequest,
+  ProviderHookProbe,
   ProviderPluginProbe,
 } from "../provider-driver.js";
 import { parseProviderVersion, pluginIdentity } from "../provider-driver.js";
@@ -49,8 +51,16 @@ export class ClaudeCodeContextIntegrationDriver implements ContextIntegrationPro
       version,
       compatible: version !== null && semver.gte(version, this.minimumVersion),
       ...plugin,
-      hookTrust: "provider_managed",
       issues,
+    };
+  }
+
+  async inspectHook(request: ProviderHookInspectRequest): Promise<ProviderHookProbe> {
+    return {
+      trust: "provider_managed",
+      enabled: request.plugin.installed ? request.plugin.enabled : null,
+      source: "provider_managed",
+      issues: [],
     };
   }
 

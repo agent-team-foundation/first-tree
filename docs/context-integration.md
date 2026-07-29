@@ -46,6 +46,32 @@ manifest also records both adapter digests and the canonical Policy digest.
   remote mutation when Automatic Review is absent, disabled, structurally
   incomplete, or offline.
 
+## Codex Hook consent and verification
+
+Codex owns Hook consent. First Tree installs the Plugin but never bypasses,
+pre-approves, or silently enables the SessionStart Hook. After the first
+`context enable --provider codex`:
+
+1. open Codex in the enabled checkout;
+2. run `/hooks`;
+3. find **First Tree Context → SessionStart**, enable its checkbox, and choose
+   **Trust**;
+4. exit and start a new Codex session in that checkout;
+5. run `first-tree context status --provider codex` and confirm **Hook trusted**
+   and **Hook enabled** are `Yes`, and **Live activation** is `Connected`.
+
+Both `context enable` and `context status` query Codex's provider-owned
+`hooks/list` API after installation. They report trust and enablement
+separately, including a Hook that changed after approval. A previously trusted
+and enabled Hook therefore does not receive another review prompt.
+
+Status output also keeps machine/user/provider and repository authority
+separate: provider compatibility, Plugin installation, Plugin enablement,
+Hook trust, Hook enablement, current checkout, exact binding, and live Team
+activation each have their own row. Checkout failures preserve their actual
+cause and repair action: signed out, outside a Git checkout, or missing/invalid
+`origin`.
+
 ## Upgrade, rollback, and disable
 
 `first-tree context repair --provider <provider>` validates the embedded

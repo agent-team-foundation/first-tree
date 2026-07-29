@@ -8,8 +8,23 @@ export type ProviderPluginProbe = {
   installed: boolean;
   enabled: boolean;
   installedPath: string | null;
-  hookTrust: "provider_managed" | "review_required" | "unknown";
   issues: string[];
+};
+
+export type ProviderHookTrust = "trusted" | "review_required" | "modified" | "provider_managed" | "unknown";
+
+export type ProviderHookProbe = {
+  trust: ProviderHookTrust;
+  enabled: boolean | null;
+  source: "provider_api" | "provider_managed" | "unavailable";
+  issues: string[];
+};
+
+export type ProviderHookInspectRequest = {
+  marketplaceName: string;
+  pluginName: string;
+  cwd: string;
+  plugin: Pick<ProviderPluginProbe, "installed" | "enabled">;
 };
 
 export type ProviderInstallRequest = {
@@ -30,6 +45,7 @@ export interface ContextIntegrationProviderDriver {
   readonly executable: string;
   readonly minimumVersion: string;
   probe(marketplaceName: string, pluginName: string): ProviderPluginProbe;
+  inspectHook(request: ProviderHookInspectRequest): Promise<ProviderHookProbe>;
   validateMarketplace(marketplaceRoot: string): void;
   install(request: ProviderInstallRequest): ProviderPluginProbe;
   uninstall(request: Omit<ProviderInstallRequest, "marketplaceRoot">): void;

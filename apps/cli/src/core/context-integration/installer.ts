@@ -390,8 +390,7 @@ function sameProviderProbe(left: ProviderPluginProbe, right: ProviderPluginProbe
     left.compatible === right.compatible &&
     left.installed === right.installed &&
     left.enabled === right.enabled &&
-    left.installedPath === right.installedPath &&
-    left.hookTrust === right.hookTrust
+    left.installedPath === right.installedPath
   );
 }
 

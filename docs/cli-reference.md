@@ -1054,9 +1054,19 @@ exact provider + checkout/repository → Team binding in
 Chat, Computer, or runtime session; normal `login` and the existing daemon own
 the Computer connection.
 
-`context status` checks the local provider/version/Plugin manifest, the actual
-provider-installed Skill/Policy/hook bytes, and the current checkout's live
-Team activation. `context repair` revalidates and reinstalls only First Tree's
+For Codex, installation does not grant Hook consent. After the first enable,
+open Codex in the checkout, run `/hooks`, find **First Tree Context →
+SessionStart**, enable its checkbox, choose **Trust**, and start a new session.
+Then run `context status --provider codex` to verify the result.
+
+`context status` reports provider compatibility, Plugin installed/enabled,
+Hook trusted/enabled, current checkout, exact binding, and live Team activation
+as separate layers. It reads Codex Hook state from the provider-owned
+`hooks/list` API and distinguishes trusted, changed, review-required, and
+disabled states. A checkout failure states whether First Tree is signed out,
+the directory is not a Git checkout, or `origin` is unreadable/invalid, with a
+specific repair action. It also checks the Plugin manifest and the actual
+provider-installed Skill/Policy/hook bytes. `context repair` revalidates and reinstalls only First Tree's
 Plugin through the same durable operation journal used by enable/disable, with
 rollback to the prior provider cache on failure. Context mutations and local
 Client account switching are mutually exclusive; incomplete operations retain

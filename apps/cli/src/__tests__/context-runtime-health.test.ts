@@ -54,7 +54,6 @@ function providerProbe(overrides: Partial<ProviderPluginProbe> = {}): ProviderPl
     installed: true,
     enabled: true,
     installedPath: "/provider/cache/first-tree-context",
-    hookTrust: "review_required",
     issues: [],
     ...overrides,
   };
@@ -66,6 +65,7 @@ function driver(probe: ProviderPluginProbe): ContextIntegrationProviderDriver {
     executable: "codex",
     minimumVersion: "0.144.0",
     probe: () => probe,
+    inspectHook: async () => ({ trust: "trusted", enabled: true, source: "provider_api", issues: [] }),
     validateMarketplace: () => undefined,
     install: () => probe,
     uninstall: () => undefined,

@@ -93,7 +93,7 @@ describe("Context provider drivers", () => {
     ]);
   });
 
-  it("uses Codex JSON Plugin lifecycle and preserves native hook trust", () => {
+  it("uses Codex JSON Plugin lifecycle without bypassing native Hook trust", () => {
     const fake = fakeRunner("codex");
     const driver = new CodexContextIntegrationDriver(fake.run);
     const probe = driver.install({
@@ -105,7 +105,6 @@ describe("Context provider drivers", () => {
       installed: true,
       enabled: true,
       compatible: true,
-      hookTrust: "review_required",
     });
     expect(fake.calls.map((call) => call.args)).toContainEqual([
       "plugin",
@@ -114,6 +113,80 @@ describe("Context provider drivers", () => {
       "--json",
     ]);
     expect(fake.calls.flatMap((call) => call.args)).not.toContain("--dangerously-bypass-hook-trust");
+  });
+
+  it("reads trusted and enabled Codex SessionStart state from the provider API", async () => {
+    const fake = fakeRunner("codex");
+    const driver = new CodexContextIntegrationDriver(fake.run, {
+      readHookState: async () => ({
+        data: [
+          {
+            cwd: "/work/repo",
+            hooks: [
+              {
+                pluginId: "first-tree-context@first-tree-dev",
+                eventName: "sessionStart",
+                handlerType: "command",
+                trustStatus: "trusted",
+                enabled: true,
+              },
+            ],
+            warnings: [],
+            errors: [],
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      driver.inspectHook({
+        marketplaceName: "first-tree-dev",
+        pluginName: "first-tree-context",
+        cwd: "/work/repo",
+        plugin: { installed: true, enabled: true },
+      }),
+    ).resolves.toEqual({
+      trust: "trusted",
+      enabled: true,
+      source: "provider_api",
+      issues: [],
+    });
+  });
+
+  it("distinguishes modified trust from a disabled Codex Hook", async () => {
+    const fake = fakeRunner("codex");
+    const driver = new CodexContextIntegrationDriver(fake.run, {
+      readHookState: async () => ({
+        data: [
+          {
+            cwd: "/work/repo",
+            hooks: [
+              {
+                pluginId: "first-tree-context@first-tree-dev",
+                eventName: "sessionStart",
+                handlerType: "command",
+                trustStatus: "modified",
+                enabled: false,
+              },
+            ],
+            warnings: [],
+            errors: [],
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      driver.inspectHook({
+        marketplaceName: "first-tree-dev",
+        pluginName: "first-tree-context",
+        cwd: "/work/repo",
+        plugin: { installed: true, enabled: true },
+      }),
+    ).resolves.toMatchObject({
+      trust: "modified",
+      enabled: false,
+    });
   });
 
   it("resolves Codex's provider-owned cache path for safe update rollback", () => {

@@ -58,6 +58,9 @@ describe("Context/client-switch account-state interlock", () => {
       probe: () => {
         throw new Error("must not probe");
       },
+      inspectHook: async () => {
+        throw new Error("must not inspect");
+      },
       validateMarketplace: () => undefined,
       install: () => {
         throw new Error("must not install");

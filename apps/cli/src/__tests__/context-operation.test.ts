@@ -56,7 +56,6 @@ function probe(installed: boolean): ProviderPluginProbe {
     installed,
     enabled: installed,
     installedPath: installed ? "/provider/cache/first-tree-context" : null,
-    hookTrust: installed ? "review_required" : "unknown",
     issues: [],
   };
 }
@@ -74,6 +73,12 @@ function driver(installed: boolean) {
     executable: "codex",
     minimumVersion: "0.144.0",
     probe: () => probe(installed),
+    inspectHook: async () => ({
+      trust: installed ? "trusted" : "unknown",
+      enabled: installed ? true : null,
+      source: installed ? "provider_api" : "unavailable",
+      issues: [],
+    }),
     validateMarketplace: () => undefined,
     install,
     uninstall,
@@ -111,6 +116,7 @@ describe("Context integration cross-resource operation", () => {
       executable: "codex",
       minimumVersion: "0.144.0",
       probe: () => ({ ...probe(true), enabled: false }),
+      inspectHook: async () => ({ trust: "trusted", enabled: false, source: "provider_api", issues: [] }),
       validateMarketplace: () => undefined,
       install,
       uninstall,

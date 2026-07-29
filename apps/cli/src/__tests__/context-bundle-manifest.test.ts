@@ -166,7 +166,6 @@ describe("context integration bundle", () => {
       installed: true,
       enabled: true,
       installedPath,
-      hookTrust: "provider_managed",
       issues: [],
     };
     const installedMarketplaces: string[] = [];
@@ -175,6 +174,7 @@ describe("context integration bundle", () => {
       executable: "codex",
       minimumVersion: "0.144.1",
       probe: () => probe,
+      inspectHook: async () => ({ trust: "trusted", enabled: true, source: "provider_api", issues: [] }),
       validateMarketplace: () => undefined,
       install: ({ marketplaceRoot }) => {
         installedMarketplaces.push(marketplaceRoot);
@@ -213,9 +213,9 @@ describe("context integration bundle", () => {
         installed: true,
         enabled: true,
         installedPath: "/provider/cache/first-tree-context",
-        hookTrust: "review_required",
         issues: [],
       }),
+      inspectHook: async () => ({ trust: "trusted", enabled: true, source: "provider_api", issues: [] }),
       validateMarketplace: () => undefined,
       install: () => {
         throw new Error("not used");
@@ -260,7 +260,6 @@ describe("context integration bundle", () => {
       installed: false,
       enabled: false,
       installedPath: null,
-      hookTrust: "provider_managed",
       issues: [],
     };
     const driver: ContextIntegrationProviderDriver = {
@@ -268,6 +267,7 @@ describe("context integration bundle", () => {
       executable: "codex",
       minimumVersion: "0.144.0",
       probe: () => probe,
+      inspectHook: async () => ({ trust: "unknown", enabled: null, source: "unavailable", issues: [] }),
       validateMarketplace: () => undefined,
       install: ({ marketplaceRoot }) => {
         expect(marketplaceRoot).toBe(contextIntegrationMarketplaceSourcePath("codex"));
@@ -316,7 +316,6 @@ describe("context integration bundle", () => {
       installed: false,
       enabled: false,
       installedPath: null,
-      hookTrust: "provider_managed",
       issues: [],
     };
     const driver: ContextIntegrationProviderDriver = {
@@ -324,6 +323,7 @@ describe("context integration bundle", () => {
       executable: "codex",
       minimumVersion: "0.144.0",
       probe: () => initialProbe,
+      inspectHook: async () => ({ trust: "unknown", enabled: null, source: "unavailable", issues: [] }),
       validateMarketplace: () => undefined,
       install: ({ marketplaceRoot }) => {
         cpSync(join(marketplaceRoot, "plugins", "first-tree-context"), installedPath, { recursive: true });
@@ -373,9 +373,9 @@ describe("context integration bundle", () => {
         installed: probeCount++ > 0,
         enabled: true,
         installedPath: null,
-        hookTrust: "review_required",
         issues: [],
       }),
+      inspectHook: async () => ({ trust: "trusted", enabled: true, source: "provider_api", issues: [] }),
       validateMarketplace: () => undefined,
       install,
       uninstall: () => undefined,
@@ -421,9 +421,9 @@ describe("context integration bundle", () => {
         installed: false,
         enabled: false,
         installedPath: null,
-        hookTrust: "unknown",
         issues: ["Codex 0.100.0 is older than the required 0.144.0."],
       }),
+      inspectHook: async () => ({ trust: "unknown", enabled: null, source: "unavailable", issues: [] }),
       validateMarketplace: () => undefined,
       install,
       uninstall: () => undefined,
@@ -465,9 +465,9 @@ describe("context integration bundle", () => {
         installed: true,
         enabled: false,
         installedPath: "/provider/cache/first-tree-context",
-        hookTrust: "review_required",
         issues: [],
       }),
+      inspectHook: async () => ({ trust: "trusted", enabled: false, source: "provider_api", issues: [] }),
       validateMarketplace: () => undefined,
       install,
       uninstall: () => undefined,
@@ -501,6 +501,9 @@ describe("context integration bundle", () => {
       minimumVersion: "0.144.0",
       probe: () => {
         throw new Error("must not probe");
+      },
+      inspectHook: async () => {
+        throw new Error("must not inspect");
       },
       validateMarketplace: () => undefined,
       install: () => {
