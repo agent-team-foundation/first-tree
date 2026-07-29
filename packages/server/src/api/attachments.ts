@@ -51,7 +51,6 @@ export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
       .header("Content-Length", meta.sizeBytes)
       .header("Cache-Control", "private, max-age=31536000, immutable")
       .header("ETag", etag)
-      .header("X-Content-Type-Options", "nosniff")
       .header("Content-Disposition", `inline; filename="${encodeRfc6266Filename(meta.filename)}"`);
     return reply.send(data);
   });
