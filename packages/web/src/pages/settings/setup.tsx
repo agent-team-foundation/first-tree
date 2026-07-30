@@ -42,7 +42,6 @@ import { ContextPersonalAccess } from "./context-enablement.js";
 import { setupBlockerCopy } from "./setup-blocker-copy.js";
 import { SetupContextTreeControls } from "./setup-context-tree-controls.js";
 import { SetupReviewerControls } from "./setup-reviewer-controls.js";
-import { SetupTeamAgentControls } from "./setup-team-agent-controls.js";
 
 type Fact<T> =
   | { state: "loading" }
@@ -85,7 +84,7 @@ export type SetupFacts = {
 };
 
 export type SetupRowModel = {
-  key: "work-access" | "computer" | "agent" | "repositories" | "repository-automation" | "team-agent" | "context-tree";
+  key: "work-access" | "computer" | "agent" | "repositories" | "repository-automation" | "context-tree";
   title: string;
   description: string;
   icon: LucideIcon;
@@ -97,7 +96,7 @@ export type SetupRowModel = {
   action?: {
     label: string;
     to: string;
-    intent?: "resume-onboarding" | "open-context-tree-controls" | "open-team-agent-controls";
+    intent?: "resume-onboarding" | "open-context-tree-controls";
   };
 };
 
@@ -183,7 +182,7 @@ const ACTION_DESTINATIONS = {
   open_agent_owner_flow: "/team",
   manage_review_agent: "/settings/setup#context-tree",
   configure_github_app: "/settings/integrations/github",
-  select_team_agent: "/settings/setup#team-agent",
+  select_team_agent: "/settings/integrations/github#task-routing",
 } satisfies Record<SetupActionKind, string>;
 
 const ACTION_LABELS = {
@@ -198,7 +197,7 @@ const ACTION_LABELS = {
   open_agent_owner_flow: "Manage agents",
   manage_review_agent: "Manage reviewer",
   configure_github_app: "Configure GitHub App",
-  select_team_agent: "Choose Team Agent",
+  select_team_agent: "Choose GitHub Task Agent",
 } satisfies Record<SetupActionKind, string>;
 
 function blockerDetail(blockers: SetupBlocker[], isAdmin: boolean): string | undefined {
@@ -650,20 +649,6 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
       action: capabilities ? providerAction(capabilities.repositoryAutomation.providers, isAdmin) : undefined,
     },
     {
-      key: "team-agent",
-      title: "Team Agent",
-      description: "Handles GitHub App requests outside the Context Tree repository.",
-      icon: Bot,
-      status: {
-        label: "Optional",
-        detail: "Configured independently from Context Review",
-        kind: "optional",
-      },
-      action: isAdmin
-        ? { label: "Manage", to: "/settings/setup#team-agent", intent: "open-team-agent-controls" }
-        : undefined,
-    },
-    {
       key: "context-tree",
       title: "Context Tree",
       description: "Shared decisions and constraints available to agents.",
@@ -796,6 +781,12 @@ export function SettingsSetupPage() {
     expandedOwnerControl?.organizationId === organizationId ? expandedOwnerControl.key : null;
 
   useEffect(() => {
+    if (location.hash === "#team-agent") {
+      navigate("/settings/integrations/github#task-routing", { replace: true });
+    }
+  }, [location.hash, navigate]);
+
+  useEffect(() => {
     if (previousOrganizationId.current !== null && previousOrganizationId.current !== organizationId) {
       setExpandedOwnerControl(null);
       handledOwnerHash.current = null;
@@ -804,12 +795,7 @@ export function SettingsSetupPage() {
   }, [organizationId]);
 
   useEffect(() => {
-    const key =
-      location.hash === "#context-tree" || location.hash === "#automatic-review"
-        ? "context-tree"
-        : location.hash === "#team-agent"
-          ? "team-agent"
-          : null;
+    const key = location.hash === "#context-tree" || location.hash === "#automatic-review" ? "context-tree" : null;
     if (!key || !organizationId || facts.capabilities.state !== "ready") return;
 
     const hashKey = `${organizationId}:${location.hash}`;
@@ -821,12 +807,7 @@ export function SettingsSetupPage() {
   }, [facts.capabilities.state, location.hash, organizationId, personalContextAccessReady, role]);
 
   useEffect(() => {
-    const key =
-      location.hash === "#context-tree" || location.hash === "#automatic-review"
-        ? "context-tree"
-        : location.hash === "#team-agent"
-          ? "team-agent"
-          : null;
+    const key = location.hash === "#context-tree" || location.hash === "#automatic-review" ? "context-tree" : null;
     if (!key || facts.capabilities.state !== "ready") return;
     const canOpenForHash = role === "admin" || (location.hash === "#context-tree" && personalContextAccessReady);
     if (canOpenForHash && expandedOwnerControlKey !== key) return;
@@ -840,11 +821,6 @@ export function SettingsSetupPage() {
     facts.capabilities.state !== "ready"
       ? {}
       : {
-          ...(expandedOwnerControlKey === "team-agent"
-            ? {
-                "team-agent": <SetupTeamAgentControls key={`team-agent-${organizationId}`} />,
-              }
-            : {}),
           ...(expandedOwnerControlKey === "context-tree" && contextTree.state === "ready"
             ? {
                 "context-tree":
@@ -1067,8 +1043,7 @@ function SetupRow({
         className={cn("flex", !narrow && "justify-end")}
         style={narrow ? { paddingLeft: "var(--sp-11)" } : undefined}
       >
-        {(row.action?.intent === "open-context-tree-controls" || row.action?.intent === "open-team-agent-controls") &&
-        onToggleOwnerControl ? (
+        {row.action?.intent === "open-context-tree-controls" && onToggleOwnerControl ? (
           <button
             type="button"
             aria-expanded={Boolean(ownerControl)}

@@ -334,7 +334,7 @@ describe("GitHub App task reply publisher", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("revokes publication when the selected Team Agent or installation permission changes", async () => {
+  it("revokes publication when the selected GitHub Task Agent or installation permission changes", async () => {
     const fixture = await createRunFixture(getApp());
     const replacement = await createAgent(fixture.app.db, {
       name: `replacement-${randomUUID().slice(0, 8)}`,
@@ -560,7 +560,7 @@ async function createRunFixture(
   const agent = await createAgent(app.db, {
     name: `team-agent-${randomUUID().slice(0, 8)}`,
     type: "agent",
-    displayName: "Team Agent",
+    displayName: "GitHub Task Agent",
     managerId: admin.memberId,
     clientId: admin.clientId,
   });

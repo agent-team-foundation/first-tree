@@ -18,7 +18,7 @@ import { getOrgSetting } from "./org-settings.js";
 export class TeamAgentSettingsError extends ConflictError {
   constructor(
     readonly blocker: SetupBlocker,
-    message = "Team Agent is not ready",
+    message = "GitHub Task Agent is not ready",
   ) {
     super(message, { code: blocker.code });
     this.name = "TeamAgentSettingsError";
@@ -151,7 +151,7 @@ export async function putTeamAgentAssignment(
   if (agentUuid !== null && !options.appSlug?.trim()) {
     throw new TeamAgentSettingsError(
       blocker("github_app_slug_missing", null, "operator"),
-      "GitHub App login is required before selecting a Team Agent",
+      "GitHub App login is required before selecting a GitHub Task Agent",
     );
   }
 
@@ -172,7 +172,7 @@ export async function putTeamAgentAssignment(
       if (reviewerAgentUuid === agentUuid) {
         throw new TeamAgentSettingsError(
           blocker("team_agent_conflicts_context_reviewer", "select_team_agent"),
-          "Context Reviewer and Team Agent must be different Agents",
+          "Context Reviewer and GitHub Task Agent must be different Agents",
         );
       }
       const agent = await loadValidContextReviewerAgent(tx, {
@@ -182,7 +182,7 @@ export async function putTeamAgentAssignment(
       if (!agent) {
         throw new TeamAgentSettingsError(
           blocker("context_review_agent_missing", "select_team_agent"),
-          "Team Agent must be an active organization-visible non-human Agent with a managed runtime",
+          "GitHub Task Agent must be an active organization-visible non-human Agent with a managed runtime",
         );
       }
     }

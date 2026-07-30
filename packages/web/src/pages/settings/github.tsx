@@ -1,11 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Check } from "lucide-react";
-import { Link, useSearchParams } from "react-router";
+import { useEffect, useRef } from "react";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { getGithubAppInstallation } from "../../api/github-app.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { GithubAppInstallationPanel } from "../github-app-installation-panel.js";
+import { GithubTaskAgentControls } from "./github-task-agent-controls.js";
+
+const CONNECTION_HASH = "#connection";
+const TASK_ROUTING_HASH = "#task-routing";
 
 /**
  * Settings → Integrations → GitHub. Members can read the team's GitHub
@@ -22,8 +27,26 @@ import { GithubAppInstallationPanel } from "../github-app-installation-panel.js"
  */
 export function SettingsGithubPage() {
   const { role, organizationId } = useAuth();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const fromContext = searchParams.get("from") === "context";
+  const connectionRef = useRef<HTMLElement>(null);
+  const taskRoutingRef = useRef<HTMLElement>(null);
+
+  // React Router updates the fragment but not the app shell's persistent
+  // overflow container. Position and focus the requested GitHub section.
+  useEffect(() => {
+    if (role === null) return;
+    const target =
+      location.hash === CONNECTION_HASH
+        ? connectionRef.current
+        : location.hash === TASK_ROUTING_HASH
+          ? taskRoutingRef.current
+          : null;
+    if (!target) return;
+    target.scrollIntoView({ block: "start" });
+    target.focus({ preventScroll: true });
+  }, [location.hash, role]);
 
   // Only needed to drive the "back to building" return for the Context round
   // trip. Shares the query key the connection panel invalidates on connect, so
@@ -48,9 +71,31 @@ export function SettingsGithubPage() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
       {fromContext ? <ContextReturn connected={connected} /> : null}
-      <Section title="Connection">
-        <GithubAppInstallationPanel readOnly={!isAdmin} />
-      </Section>
+      <section
+        ref={connectionRef}
+        id={CONNECTION_HASH.slice(1)}
+        tabIndex={-1}
+        aria-label="GitHub connection"
+        style={{ scrollMarginTop: "var(--sp-4)" }}
+      >
+        <Section title="Connection">
+          <GithubAppInstallationPanel readOnly={!isAdmin} />
+        </Section>
+      </section>
+      <section
+        ref={taskRoutingRef}
+        id={TASK_ROUTING_HASH.slice(1)}
+        tabIndex={-1}
+        aria-label="GitHub task routing"
+        style={{ scrollMarginTop: "var(--sp-4)" }}
+      >
+        <Section
+          title="Task routing"
+          description="Choose who handles requests sent directly to the First Tree GitHub App."
+        >
+          <GithubTaskAgentControls />
+        </Section>
+      </section>
     </div>
   );
 }

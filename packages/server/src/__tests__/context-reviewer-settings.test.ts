@@ -955,13 +955,13 @@ describe("Context Reviewer assignment/readiness contract", () => {
   });
 });
 
-describe("Team Agent assignment contract", () => {
+describe("GitHub Task Agent assignment contract", () => {
   const getApp = useTestApp();
 
   it("is configurable without a Context Tree and requires a verified App login", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
-    const teamAgent = await createReviewer(app, admin, { displayName: "Team Agent" });
+    const teamAgent = await createReviewer(app, admin, { displayName: "GitHub Task Agent" });
 
     await expect(
       listTeamAgentCandidates(app.db, {
@@ -971,7 +971,7 @@ describe("Team Agent assignment contract", () => {
         staleSeconds: 60,
       }),
     ).resolves.toMatchObject({
-      items: [expect.objectContaining({ uuid: teamAgent.uuid, displayName: "Team Agent" })],
+      items: [expect.objectContaining({ uuid: teamAgent.uuid, displayName: "GitHub Task Agent" })],
       blockers: [],
     });
     await expect(
@@ -1048,10 +1048,10 @@ describe("Team Agent assignment contract", () => {
     });
   });
 
-  it("blocks Team Agent configuration when the connected App cannot publish both Issue and PR comments", async () => {
+  it("blocks GitHub Task Agent configuration when the connected App cannot publish both Issue and PR comments", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
-    const teamAgent = await createReviewer(app, admin, { displayName: "Team Agent" });
+    const teamAgent = await createReviewer(app, admin, { displayName: "GitHub Task Agent" });
     await upsertInstallationFromMetadata(app.db, {
       installation: {
         id: Number(`8${Math.floor(Math.random() * 1_000_000)}`),
@@ -1093,10 +1093,10 @@ describe("Team Agent assignment contract", () => {
     });
   });
 
-  it("exposes dedicated Team Agent endpoints to Team admins", async () => {
+  it("exposes dedicated GitHub Task Agent endpoints to Team admins", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
-    const teamAgent = await createReviewer(app, admin, { displayName: "Team Agent" });
+    const teamAgent = await createReviewer(app, admin, { displayName: "GitHub Task Agent" });
     const baseUrl = `/api/v1/orgs/${admin.organizationId}/team-agent`;
 
     const candidates = await app.inject({

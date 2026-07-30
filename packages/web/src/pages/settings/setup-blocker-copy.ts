@@ -30,7 +30,7 @@ const SETUP_BLOCKER_COPY = {
     "The configured reviewer needs a supported runtime on a usable Computer owned by its manager.",
   context_review_agent_runtime_unavailable: "The configured reviewer's runtime is currently unavailable.",
   context_review_state_changed: "Reviewer settings changed while this request was in progress.",
-  team_agent_conflicts_context_reviewer: "The Team Agent and Context Reviewer must be different Agents.",
+  team_agent_conflicts_context_reviewer: "The GitHub Task Agent and Context Reviewer must be different Agents.",
 } satisfies Record<SetupBlockerCode, string>;
 
 export function setupBlockerCopy(code: SetupBlockerCode): string {

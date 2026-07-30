@@ -21,10 +21,11 @@ together without a GitHub-specific post-delivery branch.
   requests read/write permissions. Use a disposable repository and test identities; do not point a production App at
   the run cell.
 - Create a chat with an eligible human/delegate pair and follow one disposable issue or pull request in that chat.
-- Select different active, organization-visible managed Agents for Context Reviewer and Team Agent. Confirm Setup rejects
-  either assignment when it would reuse the other role's Agent. Leave Automatic Review off for the first non-Context
+- Select different active, organization-visible managed Agents for Context Reviewer and GitHub Task Agent. Use Settings
+  → Setup for Context Reviewer and Settings → Integrations → GitHub → Task routing for GitHub Task Agent; confirm each
+  surface rejects an assignment that would reuse the other role's Agent. Leave Automatic Review off for the first non-Context
   repository observations so ordinary delegation is proven independently from Context Review.
-- Bind the Team's Context Tree to one GitHub repository. Use a second disposable GitHub repository for Team Agent
+- Bind the Team's Context Tree to one GitHub repository. Use a second disposable GitHub repository for GitHub Task Agent
   observations. A GitLab Context Tree binding can be used as an additional negative control.
 - Keep a matching client runtime connected if the plan includes observing the agent wake. A missing provider credential
   may block the later model turn, but it must not prevent card and inbox evidence.
@@ -45,24 +46,25 @@ together without a GitHub-specific post-delivery branch.
   `COLLABORATOR` Issue or PR author/commenter. Do not require GitHub's native mention picker: an ordinary GitHub App bot is
   not currently selectable there. Cover the structured App-assignee contract only with a correctly signed synthetic
   webhook payload or programmable provider mock; do not list assigning the ordinary App bot in the GitHub UI as a live
-  PASS prerequisite. Confirm each supported request creates or reuses one entity chat for the selected Team Agent, wakes
+  PASS prerequisite. Confirm each supported request creates or reuses one entity chat for the selected GitHub Task Agent, wakes
   that exact Agent, and persists
   `teamAgentTask: { agentUuid: "<selected UUID>", runId: "<server run>" }` on both the card and message metadata.
   Repeat a text mention from an untrusted public contributor and confirm no App-directed
   attention line, task marker, or Agent wake is created; normal followed-chat delivery must remain intact. Treat the
   structured assignee event as trusted independently of textual `author_association`.
 - Repeat the non-Context request where the GitHub actor already maps the entity to a different delegate. Confirm the
-  selected Team Agent is added as a chat participant and is woken, while the existing delegate remains unwoken and does
+  selected GitHub Task Agent is added as a chat participant and is woken, while the existing delegate remains unwoken and does
   not receive an executable task marker. Repeat with unrelated attention lines in the same chat and confirm task
   identity remains recipient-scoped.
 - In the bound GitHub Context Tree repository, make the same authorized App request and confirm only the Context Reviewer
   is targeted. Confirm repository matching tolerates canonical URL spelling, case, and `.git` differences. Verify the
-  second GitHub repository still targets Team Agent, and that a GitLab Context Tree binding does not classify any GitHub
+  second GitHub repository still targets GitHub Task Agent, and that a GitLab Context Tree binding does not classify any GitHub
   repository as the Context repository.
 - Remove or invalidate each role selection in turn and confirm only its App-directed attention line is skipped; existing
-  human targets and subscriptions still receive ordinary cards. Remove the verified App slug/login and confirm Setup
-  exposes a readiness blocker and assignment fails closed instead of silently degrading.
-- Let the Team Agent finish one App-targeted task. Confirm it inspects and acts through the normal host GitHub identity,
+  human targets and subscriptions still receive ordinary cards. Remove the verified App slug/login and confirm Settings
+  → Integrations → GitHub → Task routing exposes a GitHub Task Agent readiness blocker and assignment fails closed instead
+  of silently degrading.
+- Let the GitHub Task Agent finish one App-targeted task. Confirm it inspects and acts through the normal host GitHub identity,
   then uses `first-tree github reply --run <runId> --body-file <path>` for the terminal outcome. Observe an App-authored
   comment on the fixed originating Issue or PR; its hidden run marker is present, the visible body does not mention the
   App, and no delegated loop occurs. A First Tree chat-only result or a terminal host-identity comment is incomplete.
@@ -78,7 +80,7 @@ together without a GitHub-specific post-delivery branch.
   Discussion and commit events return `GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED`, while a missing accepted write grant returns
   `GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED`. Both omit the task run and GitHub mutation while independent followed lines
   remain delivered.
-- Redeliver an App mention with a fresh delivery id on the same entity. Confirm the existing Team Agent chat/attention
+- Redeliver an App mention with a fresh delivery id on the same entity. Confirm the existing GitHub Task Agent chat/attention
   line is reused rather than creating another chat.
 - Enable Context Reviewer and include one supported Context Tree PR trigger. Confirm it reuses its dedicated reviewer
   chat and retains trusted review publication authority only for that path. The ordinary App-target card must not gain

@@ -15,7 +15,7 @@ const candidates = teamAgentCandidatesOutputSchema.parse({
     {
       uuid: "agent-1",
       name: "team-agent",
-      displayName: "Team Agent",
+      displayName: "GitHub Task Agent",
       visibility: "organization",
       runtime: { health: "ready", blockers: [] },
     },
@@ -29,7 +29,7 @@ const features = orgGithubFeaturesOutputSchema.parse({
     agent: {
       uuid: "agent-1",
       name: "team-agent",
-      displayName: "Team Agent",
+      displayName: "GitHub Task Agent",
     },
   },
 });
@@ -40,8 +40,8 @@ beforeEach(() => {
   vi.mocked(api.put).mockResolvedValue(features);
 });
 
-describe("Team Agent owner API", () => {
-  it("uses the independent GitHub Team Agent namespace", async () => {
+describe("GitHub Task Agent owner API", () => {
+  it("uses the stable team-agent namespace", async () => {
     await expect(getTeamAgentCandidates("org/one")).resolves.toEqual(candidates);
     await expect(putTeamAgentAssignment("org/one", "agent-1")).resolves.toEqual(features);
 

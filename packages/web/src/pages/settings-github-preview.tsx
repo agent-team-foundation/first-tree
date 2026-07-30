@@ -1,6 +1,8 @@
 import { Building2, ChevronRight, ExternalLink, PauseCircle, User } from "lucide-react";
 import { useState } from "react";
 import { PageHeader } from "../components/ui/page-header.js";
+import { Section } from "../components/ui/section.js";
+import { Select } from "../components/ui/select.js";
 
 /**
  * DEV-only visual review for Settings → GitHub (the connected GitHub App
@@ -18,9 +20,9 @@ import { PageHeader } from "../components/ui/page-header.js";
  *   - **Not installed**         — the "Install on GitHub" CTA.
  *   - **Loading**               — the initial fetch state.
  *
- * Only the bound card draws a top hairline; the not-installed / loading states
- * sit flush under the page header (matching the real panel). The markup here
- * is a faithful copy of the real panel's; keep them in sync.
+ * Connection and task routing are separate provider-owned sections. The
+ * markup here mirrors the real page closely enough to review their hierarchy
+ * without a live GitHub installation.
  */
 
 const MOCK = {
@@ -142,12 +144,60 @@ function ConnectionDetails({ defaultOpen = false }: { defaultOpen?: boolean }) {
   );
 }
 
-/** PageHeader + content padding — the shell every state renders inside. */
+function TaskRoutingPreview() {
+  const [agentUuid, setAgentUuid] = useState("dev-agent");
+  const agentName = agentUuid === "release-agent" ? "Release Agent" : "Dev Assistant";
+
+  return (
+    <div
+      className="flex flex-col"
+      style={{
+        gap: "var(--sp-3)",
+        padding: "var(--sp-4)",
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-panel)",
+        background: "var(--bg-sunken)",
+      }}
+    >
+      <div>
+        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+          GitHub Task Agent
+        </span>
+        <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
+          {agentName} handles GitHub App mentions and assignments outside the Context Tree repository.
+        </div>
+      </div>
+      <Select
+        aria-label="GitHub Task Agent"
+        value={agentUuid}
+        onChange={setAgentUuid}
+        options={[
+          { value: "dev-agent", label: "Dev Assistant", hint: "Runtime ready" },
+          { value: "release-agent", label: "Release Agent", hint: "Runtime ready" },
+        ]}
+      />
+      <div className="text-caption" style={{ color: "var(--fg-4)" }}>
+        The GitHub Task Agent and Context Reviewer must be different Agents. Automatic Review does not control this
+        delegation.
+      </div>
+    </div>
+  );
+}
+
+/** PageHeader + provider-owned sections — the shell every state renders inside. */
 function PageShell({ children }: { children: React.ReactNode }) {
   return (
     <div>
       <PageHeader title="GitHub" subtitle="Connected GitHub App" />
-      <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>{children}</div>
+      <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+        <Section title="Connection">{children}</Section>
+        <Section
+          title="Task routing"
+          description="Choose who handles requests sent directly to the First Tree GitHub App."
+        >
+          <TaskRoutingPreview />
+        </Section>
+      </div>
     </div>
   );
 }
@@ -157,8 +207,6 @@ function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?:
     <PageShell>
       <div
         style={{
-          borderTop: "var(--hairline) solid var(--border)",
-          paddingTop: "var(--sp-4)",
           display: "flex",
           flexDirection: "column",
           gap: "var(--sp-4)",
@@ -213,8 +261,7 @@ function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?:
 }
 
 /**
- * Not-installed CTA — flush under the header, no hairline (matches the real
- * panel). `waiting` mirrors the post-click state: the install opened in a new
+ * Not-installed CTA. `waiting` mirrors the post-click state: the install opened in a new
  * tab, the CTA is locked (a second mint would clobber the in-flight nonce
  * cookie), and this tab shows the "waiting + start over" affordance while it
  * polls for the install to land.
@@ -273,7 +320,7 @@ function NotInstalledCard({ waiting = false }: { waiting?: boolean }) {
   );
 }
 
-/** Loading — flush under the header, no hairline. */
+/** Loading connection state. */
 function LoadingCard() {
   return (
     <PageShell>
@@ -329,8 +376,8 @@ export function SettingsGithubPreviewPage() {
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Lean default: who's connected + Manage on GitHub. Permissions, subscribed events, and the installation id sit
-          behind a collapsed "Connection details" disclosure (click to toggle). Only the bound card carries a top
-          hairline; not-installed and loading sit flush under the header.
+          behind a collapsed "Connection details" disclosure (click to toggle). GitHub Task Agent lives in the adjacent
+          Task routing section instead of appearing as a standalone Setup capability.
         </p>
       </div>
 
@@ -346,7 +393,7 @@ export function SettingsGithubPreviewPage() {
         <InstalledCard suspended />
       </Frame>
 
-      <Frame label="Not installed" note="the Install on GitHub CTA — flush under the header, no orphaned rule">
+      <Frame label="Not installed" note="the Install on GitHub CTA alongside provider-owned task routing">
         <NotInstalledCard />
       </Frame>
 
@@ -357,7 +404,7 @@ export function SettingsGithubPreviewPage() {
         <NotInstalledCard waiting />
       </Frame>
 
-      <Frame label="Loading" note="initial fetch — flush under the header">
+      <Frame label="Loading" note="initial connection fetch with task routing retained below">
         <LoadingCard />
       </Frame>
     </div>

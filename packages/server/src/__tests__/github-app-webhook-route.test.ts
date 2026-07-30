@@ -1730,7 +1730,7 @@ describe("POST /webhooks/github-app", () => {
       expectedReason: "assigned",
       expectedLogin: "test-app-slug[bot]",
     },
-  ])("delegates an App $label to the selected Team Agent and wakes it", async (scenario) => {
+  ])("delegates an App $label to the selected GitHub Task Agent and wakes it", async (scenario) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = scenario.action === "opened" ? 100032 : 100033;
@@ -1741,7 +1741,7 @@ describe("POST /webhooks/github-app", () => {
       .from(agents)
       .where(eq(agents.uuid, admin.humanAgentUuid))
       .limit(1);
-    if (!managerHuman?.name) throw new Error("Team Agent manager human is missing a GitHub-compatible name");
+    if (!managerHuman?.name) throw new Error("GitHub Task Agent manager human is missing a GitHub-compatible name");
 
     const payload = {
       action: scenario.action,
@@ -2081,7 +2081,7 @@ describe("POST /webhooks/github-app", () => {
     expect(reviewerNotification?.notify).toBe(true);
   });
 
-  it("reuses an existing human mapping, adds the Team Agent, and preserves the surviving followed wake", async () => {
+  it("reuses an existing human mapping, adds the GitHub Task Agent, and preserves the surviving followed wake", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100034;
@@ -2169,7 +2169,7 @@ describe("POST /webhooks/github-app", () => {
       .from(agents)
       .where(eq(agents.uuid, admin.humanAgentUuid))
       .limit(1);
-    if (!managerHuman?.name) throw new Error("Team Agent manager human is missing a GitHub-compatible name");
+    if (!managerHuman?.name) throw new Error("GitHub Task Agent manager human is missing a GitHub-compatible name");
 
     const historicalDelegate = await seedAgent(app, {
       orgId: admin.organizationId,

@@ -284,7 +284,7 @@ export async function putContextReviewerAssignment(
     if (teamAgent.teamAgent.agentUuid === agent.uuid) {
       fail(
         blocker("team_agent_conflicts_context_reviewer", "select_team_agent"),
-        "Context Reviewer and Team Agent must be different Agents",
+        "Context Reviewer and GitHub Task Agent must be different Agents",
       );
     }
     const sameAgent = current.contextReviewer.agentUuid === agent.uuid;

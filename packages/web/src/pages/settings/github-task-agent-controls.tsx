@@ -11,7 +11,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Select } from "../../components/ui/select.js";
 import { setupBlockerCopy } from "./setup-blocker-copy.js";
 
-export function SetupTeamAgentControls({
+export function GithubTaskAgentControls({
   loadSetting = getGithubFeaturesSetting,
   loadCandidates = getTeamAgentCandidates,
   assignTeamAgent = putTeamAgentAssignment,
@@ -29,7 +29,7 @@ export function SetupTeamAgentControls({
     queryKey: ["team-agent", "setting", organizationId],
     queryFn: () =>
       organizationId ? loadSetting(organizationId) : Promise.reject(new Error("organization not loaded")),
-    enabled: isAdmin && !!organizationId,
+    enabled: (role === "admin" || role === "member") && !!organizationId,
   });
   const candidatesQuery = useQuery({
     queryKey: ["team-agent", "candidates", organizationId],
@@ -59,7 +59,29 @@ export function SetupTeamAgentControls({
     },
   });
 
-  if (!isAdmin) return null;
+  if (!isAdmin) {
+    const projectedAgent = settingQuery.data?.teamAgent.agent ?? null;
+    return (
+      <div
+        data-github-task-agent-controls="read-only"
+        className="flex flex-col"
+        style={{ gap: "var(--sp-1)", paddingTop: "var(--sp-3)" }}
+      >
+        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+          GitHub Task Agent
+        </span>
+        <span className="text-label" style={{ color: "var(--fg-3)" }}>
+          {settingQuery.isLoading
+            ? "Loading configured Agent…"
+            : settingQuery.error
+              ? "First Tree could not load the configured Agent."
+              : projectedAgent
+                ? `${projectedAgent.displayName} handles GitHub App mentions and assignments outside the Context Tree repository.`
+                : "Not configured. An admin can choose the Agent that handles GitHub App mentions and assignments outside the Context Tree repository."}
+        </span>
+      </div>
+    );
+  }
 
   const candidates = candidatesQuery.data?.items ?? [];
   const selectedCandidate = candidates.find((candidate) => candidate.uuid === selectedAgentUuid) ?? null;
@@ -70,7 +92,7 @@ export function SetupTeamAgentControls({
   const options = [
     {
       value: "",
-      label: selectedAgentUuid ? "No Team Agent selected" : "Select an eligible Team Agent",
+      label: selectedAgentUuid ? "No GitHub Task Agent selected" : "Select an eligible Agent",
       disabled: !selectedAgentUuid,
     },
     ...candidates.map((candidate) => ({
@@ -91,7 +113,7 @@ export function SetupTeamAgentControls({
 
   return (
     <div
-      data-setup-owner-controls="team-agent"
+      data-github-task-agent-controls="admin"
       className="flex flex-col"
       style={{
         gap: "var(--sp-3)",
@@ -103,7 +125,7 @@ export function SetupTeamAgentControls({
     >
       <div>
         <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          Team Agent
+          GitHub Task Agent
         </span>
         <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
           {selectedLabel
@@ -122,8 +144,12 @@ export function SetupTeamAgentControls({
           {manageGithubInstallation ? (
             <>
               {" "}
-              <Link to="/settings/integrations/github" className="font-medium" style={{ color: "var(--fg-2)" }}>
-                Manage GitHub
+              <Link
+                to="/settings/integrations/github#connection"
+                className="font-medium"
+                style={{ color: "var(--fg-2)" }}
+              >
+                Review connection
               </Link>
             </>
           ) : !appSlugMissing ? (
@@ -138,7 +164,7 @@ export function SetupTeamAgentControls({
       ) : (
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
           <Select
-            aria-label="Team Agent"
+            aria-label="GitHub Task Agent"
             value={selectedAgentUuid ?? ""}
             onChange={(agentUuid) => {
               const next = agentUuid || null;
@@ -147,11 +173,11 @@ export function SetupTeamAgentControls({
             }}
             disabled={assignmentMutation.isPending}
             options={options}
-            placeholder="Select an eligible Team Agent"
+            placeholder="Select an eligible Agent"
             searchable={candidates.length > 6}
           />
           <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-            The Team Agent and Context Reviewer must be different Agents. Automatic Review does not control this
+            The GitHub Task Agent and Context Reviewer must be different Agents. Automatic Review does not control this
             delegation.
           </div>
         </div>
@@ -176,7 +202,7 @@ function teamAgentMutationError(error: unknown): string {
     const code = setupBlockerCodeSchema.safeParse(error.code);
     if (code.success) return setupBlockerCopy(code.data);
   }
-  return error instanceof Error ? error.message : "Failed to update Team Agent";
+  return error instanceof Error ? error.message : "Failed to update GitHub Task Agent";
 }
 
 function runtimeLabel(health: "not_observed" | "pending_verification" | "ready" | "degraded" | "unavailable"): string {

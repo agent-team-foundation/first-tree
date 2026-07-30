@@ -174,7 +174,7 @@ export const githubEventCardSchema = z.object({
   /**
    * Server-authored signal that this directed card exists because the
    * configured GitHub App itself was mentioned or assigned. The selected
-   * Team Agent treats it as work to complete and answer on GitHub.
+   * GitHub Task Agent treats it as work to complete and answer on GitHub.
    */
   teamAgentTask: githubAgentTaskSchema.optional(),
 });

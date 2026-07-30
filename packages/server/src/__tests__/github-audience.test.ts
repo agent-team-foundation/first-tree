@@ -253,7 +253,7 @@ describe("resolveAudience", () => {
   it.each([
     ["mentioned", "test-app-slug"],
     ["assigned", "test-app-slug[bot]"],
-  ] as const)("routes an App %s target to the selected Team Agent while Automatic Review is off", async (reason, externalUsername) => {
+  ] as const)("routes an App %s target to the selected GitHub Task Agent while Automatic Review is off", async (reason, externalUsername) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const teamAgentUuid = await configureTeamAgent(app, admin);
@@ -284,7 +284,7 @@ describe("resolveAudience", () => {
     ]);
   });
 
-  it("does not treat the App login as a human target when no Team Agent is selected", async () => {
+  it("does not treat the App login as a human target when no GitHub Task Agent is selected", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
@@ -352,7 +352,7 @@ describe("resolveAudience", () => {
     expect(resolution.appTaskBlocker).toBe(blocker);
   });
 
-  it("routes the bound GitHub Context Tree repo to the Context Reviewer and other repos to the Team Agent", async () => {
+  it("routes the bound GitHub Context Tree repo to the Context Reviewer and other repos to the GitHub Task Agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const teamAgentUuid = await configureTeamAgent(app, admin);
