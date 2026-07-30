@@ -86,7 +86,7 @@ export function buildByoSetupPrompt({
     "",
     bootstrapCommand,
     "",
-    "If the login step fails because its code is expired or already used, stop and ask me for a fresh setup prompt from First Tree Settings — never reuse an old code. If login reports this computer is signed in as a different First Tree user, stop and ask me before any switch.",
+    "If the login step fails because its code is expired or already used, stop and ask me for a fresh setup prompt from First Tree Settings — never reuse an old code. If login reports this computer is signed in as a different First Tree user, stop and ask me before any switch; that check consumes the code, so if I approve the switch, ask me for a fresh setup prompt and run its login line with `--force-switch` appended.",
     "",
     ...commandInstructions,
     "",
@@ -100,6 +100,6 @@ export function buildByoSetupPrompt({
         ]
       : []),
     "",
-    `The enable command verifies the whole setup and its output tells you what to do — follow it exactly. Setup is successful only when it reports "Setup: Complete". ${completion}`,
+    `The enable command verifies the whole setup and its output tells you what to do — follow it exactly. Setup is successful only when the enable command reports "Setup: Complete"; if it reports Incomplete, finish its Next steps and re-run the same enable command until it does. ${completion}`,
   ].join("\n");
 }

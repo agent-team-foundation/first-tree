@@ -1,6 +1,11 @@
 import type { ContextActivationResponse } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import { buildContextEnableNextActions, collectMissingSetupLayers } from "../commands/context/enable.js";
+import {
+  buildContextEnableNextActions,
+  collectMissingSetupLayers,
+  collectSetupRecoveryActions,
+  renderSetupVerdictLine,
+} from "../commands/context/enable.js";
 import { renderHookEnabled, renderHookTrust } from "../commands/context/status.js";
 import type { ContextActivationValidator } from "../core/context-integration/activation.js";
 import {
@@ -280,7 +285,7 @@ describe("Context enable Hook guidance", () => {
       "Run `/hooks`.",
       "Find First Tree Context → SessionStart, enable its checkbox, and choose Trust.",
       "Exit and start a new Codex session in this checkout.",
-      "Run `first-tree-staging context status --provider codex`; confirm Hook trusted/enabled are Yes and Live activation is Connected.",
+      "Re-run the same `first-tree-staging context enable` command; setup is complete only when it reports Setup: Complete.",
     ]);
   });
 
@@ -316,8 +321,10 @@ describe("Context enable Hook guidance", () => {
 
 describe("Context enable setup verdict", () => {
   const greenVerification = {
+    provider: { name: "codex" as const, available: true, version: "1.0.0", minimumVersion: "0.5.0", compatible: true },
     plugin: { installed: true, enabled: true, installedPath: "/tmp/plugin" },
     hook: { trust: "trusted" as const, enabled: true, source: "provider_api" as const, issues: [] },
+    runtime: { healthy: true, issues: [] },
     binding: { state: "exact" as const, organizationId: "org-1", repositoryKey: "github.com/acme/repo" },
     activation: {
       state: "connected" as const,
@@ -348,6 +355,91 @@ describe("Context enable setup verdict", () => {
         activation: { state: "not_checked", reason: "binding missing" },
       }),
     ).toEqual(["Exact binding: missing", "Live activation: not_checked"]);
+  });
+
+  it("renders the literal verdict anchor the setup prompt requires", () => {
+    expect(renderSetupVerdictLine({ complete: true, missingLayers: [] })).toBe(
+      "Setup: Complete — every layer verified",
+    );
+    expect(renderSetupVerdictLine({ complete: false, missingLayers: ["Hook trusted: No", "Hook enabled: No"] })).toBe(
+      "Setup: Incomplete — Hook trusted: No; Hook enabled: No",
+    );
+  });
+
+  it("stays Incomplete when the installed payload is unhealthy despite green plugin flags", () => {
+    expect(
+      collectMissingSetupLayers("claude-code", {
+        ...greenVerification,
+        runtime: { healthy: false, issues: ["The installed Plugin payload does not match the current release."] },
+      }),
+    ).toEqual(["Plugin payload healthy: No"]);
+    expect(
+      collectMissingSetupLayers("codex", {
+        ...greenVerification,
+        provider: { ...greenVerification.provider, compatible: false },
+      }),
+    ).toEqual(["Provider compatible: No"]);
+  });
+});
+
+describe("Context enable recovery actions", () => {
+  const greenVerification = {
+    provider: { name: "codex" as const, available: true, version: "1.0.0", minimumVersion: "0.5.0", compatible: true },
+    runtime: { healthy: true, issues: [] },
+    binding: { state: "exact" as const, organizationId: "org-1", repositoryKey: "github.com/acme/repo" },
+    activation: {
+      state: "connected" as const,
+      team: { organizationId: "org-1", displayName: "Acme", role: "member" as const },
+    },
+  };
+
+  it("returns nothing when every layer is green", () => {
+    expect(collectSetupRecoveryActions("claude-code", greenVerification, "first-tree-staging")).toEqual([]);
+  });
+
+  it("surfaces a repair step for an unhealthy payload", () => {
+    const actions = collectSetupRecoveryActions(
+      "claude-code",
+      {
+        ...greenVerification,
+        runtime: { healthy: false, issues: ["The installed Plugin payload does not match the current release."] },
+      },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      "The installed Plugin payload does not match the current release. Run `first-tree-staging context repair --provider claude-code`.",
+    ]);
+  });
+
+  it("keeps a transient activation failure actionable", () => {
+    const actions = collectSetupRecoveryActions(
+      "claude-code",
+      {
+        ...greenVerification,
+        activation: {
+          state: "unavailable",
+          reasonCode: "validation_unavailable",
+          message: "First Tree could not validate Team Context.",
+          nextAction: "Check connectivity and re-run this command.",
+        },
+      },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      "First Tree could not validate Team Context. Check connectivity and re-run this command.",
+    ]);
+  });
+
+  it("passes through the binding repair instruction", () => {
+    const actions = collectSetupRecoveryActions(
+      "codex",
+      {
+        ...greenVerification,
+        binding: { state: "missing", nextAction: "Run context enable from the target checkout." },
+      },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual(["Run context enable from the target checkout."]);
   });
 });
 

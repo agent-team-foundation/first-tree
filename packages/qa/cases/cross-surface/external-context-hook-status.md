@@ -34,6 +34,9 @@ repository/Team activation.
   disposable checkout.
 - Follow only the displayed consent steps: open Codex, run `/hooks`, find First
   Tree Context → SessionStart, enable it, trust it, and start a new session.
+- Re-run the same Team-authored enable command after consent, in human and JSON
+  modes; capture its `Setup:` verdict line, next actions, and Team Context
+  block.
 - Run `context status --provider codex` in human and JSON modes before consent,
   after enabling without trust, after trust, and after starting the new
   session.
@@ -47,6 +50,16 @@ repository/Team activation.
 
 - Enable never passes a trust-bypass flag or writes trusted Hook state. Its
   output gives the `/hooks` path as ordered, verifiable steps.
+- Enable ends with one literal verdict line: `Setup: Complete` only when every
+  layer including provider compatibility and payload health is green, otherwise
+  `Setup: Incomplete — <missing layers>` with an actionable recovery step for
+  every red layer (never an empty next-step list). Before Hook consent the
+  verdict is `Incomplete`; after consent, re-running enable is what produces
+  `Setup: Complete`.
+- On connected live activation, enable prints the same Team Context block a
+  SessionStart injects (JSON `activationContext`), headed by the instruction to
+  adopt it in the current session; the `setup` object in JSON mirrors the
+  verdict.
 - Provider compatibility, Plugin installed, Plugin enabled, Hook trusted, Hook
   enabled, checkout, exact binding, and live activation are separate fields in
   human and JSON output.

@@ -99,7 +99,10 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
       : null;
   const missingLayers = collectMissingSetupLayers(provider, verification);
   const setup = { complete: missingLayers.length === 0, missingLayers };
-  const nextActions = buildContextEnableNextActions(provider, verification.hook);
+  const nextActions = [
+    ...collectSetupRecoveryActions(provider, verification),
+    ...buildContextEnableNextActions(provider, verification.hook),
+  ];
   const result = {
     provider,
     team: activation.team,
@@ -130,10 +133,7 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
         ? `Connected — ${verification.activation.team.displayName}`
         : verification.activation.state,
     );
-    print.status(
-      "Setup",
-      setup.complete ? "Complete — every layer verified" : `Incomplete — ${setup.missingLayers.join("; ")}`,
-    );
+    print.line(`\n${renderSetupVerdictLine(setup)}\n`);
     if (activationContext) {
       print.line(
         setup.complete
@@ -150,21 +150,73 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
 
 /**
  * Layered setup verdict: every layer the BYO setup prompt tells the agent to
- * trust must be green before the command reports `Setup: Complete`. The hook
- * layers apply only to Codex; Claude Code hooks are provider-managed.
+ * trust must be green before the command reports `Setup: Complete`, including
+ * provider compatibility and the installed payload's runtime health — a
+ * damaged or mismatched payload must not verify. The hook layers apply only
+ * to Codex; Claude Code hooks are provider-managed.
  */
 export function collectMissingSetupLayers(
   provider: "claude-code" | "codex",
-  verification: Pick<ContextIntegrationStatus, "plugin" | "hook" | "binding" | "activation">,
+  verification: Pick<ContextIntegrationStatus, "provider" | "plugin" | "hook" | "runtime" | "binding" | "activation">,
 ): string[] {
   return [
+    ...(verification.provider.available ? [] : ["Provider available: No"]),
+    ...(verification.provider.compatible ? [] : ["Provider compatible: No"]),
     ...(verification.plugin.installed ? [] : ["Plugin installed: No"]),
     ...(verification.plugin.enabled ? [] : ["Plugin enabled: No"]),
+    ...(verification.runtime.healthy ? [] : ["Plugin payload healthy: No"]),
     ...(provider === "codex" && verification.hook.trust !== "trusted" ? ["Hook trusted: No"] : []),
     ...(provider === "codex" && verification.hook.enabled !== true ? ["Hook enabled: No"] : []),
     ...(verification.binding.state === "exact" ? [] : [`Exact binding: ${verification.binding.state}`]),
     ...(verification.activation.state === "connected" ? [] : [`Live activation: ${verification.activation.state}`]),
   ];
+}
+
+/**
+ * The literal verdict line the BYO setup prompt anchors on: agents accept
+ * setup only when the rendered output contains exactly `Setup: Complete`.
+ */
+export function renderSetupVerdictLine(setup: { complete: boolean; missingLayers: string[] }): string {
+  return setup.complete
+    ? "Setup: Complete — every layer verified"
+    : `Setup: Incomplete — ${setup.missingLayers.join("; ")}`;
+}
+
+/**
+ * Every red layer must surface an actionable recovery step; the BYO setup
+ * prompt delegates all recovery to this command's output, so an Incomplete
+ * verdict with no next step is a dead end.
+ */
+export function collectSetupRecoveryActions(
+  provider: "claude-code" | "codex",
+  verification: Pick<ContextIntegrationStatus, "provider" | "runtime" | "binding" | "activation">,
+  binName = channelConfig.binName,
+): string[] {
+  const actions: string[] = [];
+  if (!verification.provider.available) {
+    actions.push(
+      `Install the ${provider} CLI (minimum ${verification.provider.minimumVersion}), then re-run this command.`,
+    );
+  } else if (!verification.provider.compatible) {
+    actions.push(`Upgrade ${provider} to at least ${verification.provider.minimumVersion}, then re-run this command.`);
+  }
+  if (!verification.runtime.healthy) {
+    actions.push(
+      `${verification.runtime.issues.join(" ")} Run \`${binName} context repair --provider ${provider}\`.`.trimStart(),
+    );
+  }
+  if (verification.binding.state === "missing" || verification.binding.state === "repository_mismatch") {
+    actions.push(verification.binding.nextAction);
+  }
+  if (verification.activation.state === "disabled" || verification.activation.state === "needs_admin") {
+    actions.push(
+      verification.activation.message +
+        (verification.activation.settingsUrl ? ` (${verification.activation.settingsUrl})` : ""),
+    );
+  } else if (verification.activation.state === "unavailable") {
+    actions.push(`${verification.activation.message} ${verification.activation.nextAction}`);
+  }
+  return actions;
 }
 
 export function buildContextEnableNextActions(
@@ -184,7 +236,7 @@ export function buildContextEnableNextActions(
       "Run `/hooks`.",
       "Find First Tree Context → SessionStart and enable its checkbox.",
       "Exit and start a new Codex session in this checkout.",
-      `Run \`${binName} context status --provider codex\`; confirm Hook trusted/enabled are Yes and Live activation is Connected.`,
+      `Re-run the same \`${binName} context enable\` command; setup is complete only when it reports Setup: Complete.`,
     ];
   }
   return [
@@ -192,7 +244,7 @@ export function buildContextEnableNextActions(
     "Run `/hooks`.",
     "Find First Tree Context → SessionStart, enable its checkbox, and choose Trust.",
     "Exit and start a new Codex session in this checkout.",
-    `Run \`${binName} context status --provider codex\`; confirm Hook trusted/enabled are Yes and Live activation is Connected.`,
+    `Re-run the same \`${binName} context enable\` command; setup is complete only when it reports Setup: Complete.`,
   ];
 }
 
