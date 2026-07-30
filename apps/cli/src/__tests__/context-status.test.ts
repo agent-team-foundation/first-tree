@@ -499,8 +499,9 @@ describe("Context enable recovery actions", () => {
       "first-tree-staging",
     );
     expect(actions).toEqual([
-      `${reason} Repair or remove that binding config, then re-run this \`first-tree-staging context enable\` command.`,
+      `${reason} Re-run this \`first-tree-staging context enable\` command; if the failure persists, do not delete the binding config — it also holds bindings for other providers and checkouts. Back it up, then repair its file permissions or YAML together with the member before retrying.`,
     ]);
+    expect(actions[0]).not.toMatch(/remove/i);
   });
 
   it("keeps the binding diagnostic ahead of the trusted-Hook Codex status reminder", () => {
@@ -517,9 +518,10 @@ describe("Context enable recovery actions", () => {
       "first-tree-staging",
     );
     expect(actions).toEqual([
-      `${reason} Repair or remove that binding config, then re-run this \`first-tree-staging context enable\` command.`,
+      `${reason} Re-run this \`first-tree-staging context enable\` command; if the failure persists, do not delete the binding config — it also holds bindings for other providers and checkouts. Back it up, then repair its file permissions or YAML together with the member before retrying.`,
       "Run `first-tree-staging context status --provider codex` to verify every layer remains connected.",
     ]);
+    expect(actions[0]).not.toMatch(/remove/i);
   });
 
   it("never leaves an Incomplete verdict without a next step", () => {

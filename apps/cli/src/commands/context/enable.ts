@@ -63,8 +63,21 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
 
   const driver = createContextIntegrationDriver(provider);
   const installPlan = planContextIntegrationInstall(driver);
-  const expectedConfig = readContextIntegrationConfig();
-  const previousBinding = findContextBinding(provider, preflight.checkoutRoot);
+  let expectedConfig: ReturnType<typeof readContextIntegrationConfig>;
+  let previousBinding: ReturnType<typeof findContextBinding>;
+  try {
+    expectedConfig = readContextIntegrationConfig();
+    previousBinding = findContextBinding(provider, preflight.checkoutRoot);
+  } catch (error) {
+    // Fail closed before displaying a plan built on unknown previous
+    // bindings; the shared config must never be deleted to recover.
+    print.fail(
+      "CONTEXT_BINDING_CONFIG_UNREADABLE",
+      `${error instanceof Error ? error.message : String(error)} Do not delete the binding config — it also holds bindings for other providers and checkouts. Back it up, then repair its file permissions or YAML together with the member before re-running this command.`,
+      1,
+    );
+    throw error;
+  }
   print.status("Provider", provider);
   print.status("Plugin", installPlan.operation);
   print.status("Repository", preflight.repositoryKey);
@@ -214,9 +227,11 @@ export function collectSetupRecoveryActions(
   } else if (verification.binding.state === "not_checked" && verification.checkout.state === "ready") {
     // A binding-read failure carries its diagnostic (including the config
     // path) only in `reason`; activation `not_checked` is the dependent layer
-    // and needs no separate action.
+    // and needs no separate action. The config is one account-scoped store
+    // for every provider and checkout, so recovery must stay
+    // preservation-safe and never suggest deleting the file.
     actions.push(
-      `${verification.binding.reason} Repair or remove that binding config, then re-run this \`${binName} context enable\` command.`,
+      `${verification.binding.reason} Re-run this \`${binName} context enable\` command; if the failure persists, do not delete the binding config — it also holds bindings for other providers and checkouts. Back it up, then repair its file permissions or YAML together with the member before retrying.`,
     );
   }
   if (verification.activation.state === "disabled" || verification.activation.state === "needs_admin") {
