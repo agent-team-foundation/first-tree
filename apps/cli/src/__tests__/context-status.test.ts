@@ -483,21 +483,53 @@ describe("Context enable recovery actions", () => {
     ]);
   });
 
-  it("never leaves an Incomplete verdict without a next step", () => {
+  it("surfaces the unreadable-binding diagnostic for Claude Code", () => {
+    const reason =
+      "The exact checkout binding could not be read: Invalid First Tree Context binding config at /home/u/.first-tree/config/context.yaml.";
     const verification = {
       ...greenVerification,
       hook: { trust: "provider_managed" as const, enabled: false, source: "provider_managed" as const, issues: [] },
-      binding: { state: "not_checked" as const, reason: "binding config unreadable" },
-      activation: { state: "not_checked" as const, reason: "binding not readable" },
+      binding: { state: "not_checked" as const, reason },
+      activation: { state: "not_checked" as const, reason },
     };
-    const missingLayers = collectMissingSetupLayers("claude-code", {
-      ...verification,
-      plugin: { installed: true, enabled: true, installedPath: "/tmp/plugin" },
-    });
     const actions = buildSetupNextActions(
       "claude-code",
       verification,
-      { complete: false, missingLayers },
+      { complete: false, missingLayers: ["Exact binding: not_checked", "Live activation: not_checked"] },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      `${reason} Repair or remove that binding config, then re-run this \`first-tree-staging context enable\` command.`,
+    ]);
+  });
+
+  it("keeps the binding diagnostic ahead of the trusted-Hook Codex status reminder", () => {
+    const reason = "The exact checkout binding could not be read: EACCES: permission denied.";
+    const verification = {
+      ...greenVerification,
+      binding: { state: "not_checked" as const, reason },
+      activation: { state: "not_checked" as const, reason },
+    };
+    const actions = buildSetupNextActions(
+      "codex",
+      verification,
+      { complete: false, missingLayers: ["Exact binding: not_checked", "Live activation: not_checked"] },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      `${reason} Repair or remove that binding config, then re-run this \`first-tree-staging context enable\` command.`,
+      "Run `first-tree-staging context status --provider codex` to verify every layer remains connected.",
+    ]);
+  });
+
+  it("never leaves an Incomplete verdict without a next step", () => {
+    const actions = buildSetupNextActions(
+      "claude-code",
+      {
+        ...greenVerification,
+        hook: { trust: "provider_managed" as const, enabled: false, source: "provider_managed" as const, issues: [] },
+      },
+      { complete: false, missingLayers: ["Plugin enabled: No"] },
       "first-tree-staging",
     );
     expect(actions).toEqual([

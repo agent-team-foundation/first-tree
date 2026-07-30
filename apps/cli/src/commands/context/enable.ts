@@ -211,6 +211,13 @@ export function collectSetupRecoveryActions(
   }
   if (verification.binding.state === "missing" || verification.binding.state === "repository_mismatch") {
     actions.push(verification.binding.nextAction);
+  } else if (verification.binding.state === "not_checked" && verification.checkout.state === "ready") {
+    // A binding-read failure carries its diagnostic (including the config
+    // path) only in `reason`; activation `not_checked` is the dependent layer
+    // and needs no separate action.
+    actions.push(
+      `${verification.binding.reason} Repair or remove that binding config, then re-run this \`${binName} context enable\` command.`,
+    );
   }
   if (verification.activation.state === "disabled" || verification.activation.state === "needs_admin") {
     actions.push(
