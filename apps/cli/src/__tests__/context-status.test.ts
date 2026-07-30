@@ -2,6 +2,7 @@ import type { ContextActivationResponse } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildContextEnableNextActions,
+  buildSetupNextActions,
   collectMissingSetupLayers,
   collectSetupRecoveryActions,
   renderSetupVerdictLine,
@@ -325,6 +326,7 @@ describe("Context enable setup verdict", () => {
     plugin: { installed: true, enabled: true, installedPath: "/tmp/plugin" },
     hook: { trust: "trusted" as const, enabled: true, source: "provider_api" as const, issues: [] },
     runtime: { healthy: true, issues: [] },
+    checkout: { state: "ready" as const, root: "/work/repo", repositoryKey: "github.com/acme/repo" },
     binding: { state: "exact" as const, organizationId: "org-1", repositoryKey: "github.com/acme/repo" },
     activation: {
       state: "connected" as const,
@@ -380,12 +382,30 @@ describe("Context enable setup verdict", () => {
       }),
     ).toEqual(["Provider compatible: No"]);
   });
+
+  it("flags an unavailable checkout as its own layer", () => {
+    expect(
+      collectMissingSetupLayers("claude-code", {
+        ...greenVerification,
+        checkout: {
+          state: "unavailable",
+          reason: "not_signed_in",
+          message: "First Tree is not signed in.",
+          nextAction: "Run `first-tree-staging login <code>`, then rerun this command.",
+        },
+        binding: { state: "not_checked", reason: "checkout unavailable" },
+        activation: { state: "not_checked", reason: "checkout unavailable" },
+      }),
+    ).toEqual(["Checkout: unavailable", "Exact binding: not_checked", "Live activation: not_checked"]);
+  });
 });
 
 describe("Context enable recovery actions", () => {
   const greenVerification = {
     provider: { name: "codex" as const, available: true, version: "1.0.0", minimumVersion: "0.5.0", compatible: true },
     runtime: { healthy: true, issues: [] },
+    hook: { trust: "trusted" as const, enabled: true, source: "provider_api" as const, issues: [] },
+    checkout: { state: "ready" as const, root: "/work/repo", repositoryKey: "github.com/acme/repo" },
     binding: { state: "exact" as const, organizationId: "org-1", repositoryKey: "github.com/acme/repo" },
     activation: {
       state: "connected" as const,
@@ -440,6 +460,49 @@ describe("Context enable recovery actions", () => {
       "first-tree-staging",
     );
     expect(actions).toEqual(["Run context enable from the target checkout."]);
+  });
+
+  it("surfaces the checkout repair when the second preflight fails", () => {
+    const actions = collectSetupRecoveryActions(
+      "claude-code",
+      {
+        ...greenVerification,
+        checkout: {
+          state: "unavailable",
+          reason: "not_signed_in",
+          message: "First Tree is not signed in.",
+          nextAction: "Run `first-tree-staging login <code>`, then rerun this command.",
+        },
+        binding: { state: "not_checked", reason: "checkout unavailable" },
+        activation: { state: "not_checked", reason: "checkout unavailable" },
+      },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      "First Tree is not signed in. Run `first-tree-staging login <code>`, then rerun this command.",
+    ]);
+  });
+
+  it("never leaves an Incomplete verdict without a next step", () => {
+    const verification = {
+      ...greenVerification,
+      hook: { trust: "provider_managed" as const, enabled: false, source: "provider_managed" as const, issues: [] },
+      binding: { state: "not_checked" as const, reason: "binding config unreadable" },
+      activation: { state: "not_checked" as const, reason: "binding not readable" },
+    };
+    const missingLayers = collectMissingSetupLayers("claude-code", {
+      ...verification,
+      plugin: { installed: true, enabled: true, installedPath: "/tmp/plugin" },
+    });
+    const actions = buildSetupNextActions(
+      "claude-code",
+      verification,
+      { complete: false, missingLayers },
+      "first-tree-staging",
+    );
+    expect(actions).toEqual([
+      "Fix the layers listed in the Setup line, then re-run this `first-tree-staging context enable` command.",
+    ]);
   });
 });
 

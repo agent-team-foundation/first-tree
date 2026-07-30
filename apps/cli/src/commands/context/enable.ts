@@ -99,10 +99,7 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
       : null;
   const missingLayers = collectMissingSetupLayers(provider, verification);
   const setup = { complete: missingLayers.length === 0, missingLayers };
-  const nextActions = [
-    ...collectSetupRecoveryActions(provider, verification),
-    ...buildContextEnableNextActions(provider, verification.hook),
-  ];
+  const nextActions = buildSetupNextActions(provider, verification, setup);
   const result = {
     provider,
     team: activation.team,
@@ -157,7 +154,10 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
  */
 export function collectMissingSetupLayers(
   provider: "claude-code" | "codex",
-  verification: Pick<ContextIntegrationStatus, "provider" | "plugin" | "hook" | "runtime" | "binding" | "activation">,
+  verification: Pick<
+    ContextIntegrationStatus,
+    "provider" | "plugin" | "hook" | "runtime" | "checkout" | "binding" | "activation"
+  >,
 ): string[] {
   return [
     ...(verification.provider.available ? [] : ["Provider available: No"]),
@@ -167,6 +167,7 @@ export function collectMissingSetupLayers(
     ...(verification.runtime.healthy ? [] : ["Plugin payload healthy: No"]),
     ...(provider === "codex" && verification.hook.trust !== "trusted" ? ["Hook trusted: No"] : []),
     ...(provider === "codex" && verification.hook.enabled !== true ? ["Hook enabled: No"] : []),
+    ...(verification.checkout.state === "ready" ? [] : ["Checkout: unavailable"]),
     ...(verification.binding.state === "exact" ? [] : [`Exact binding: ${verification.binding.state}`]),
     ...(verification.activation.state === "connected" ? [] : [`Live activation: ${verification.activation.state}`]),
   ];
@@ -189,7 +190,7 @@ export function renderSetupVerdictLine(setup: { complete: boolean; missingLayers
  */
 export function collectSetupRecoveryActions(
   provider: "claude-code" | "codex",
-  verification: Pick<ContextIntegrationStatus, "provider" | "runtime" | "binding" | "activation">,
+  verification: Pick<ContextIntegrationStatus, "provider" | "runtime" | "checkout" | "binding" | "activation">,
   binName = channelConfig.binName,
 ): string[] {
   const actions: string[] = [];
@@ -205,6 +206,9 @@ export function collectSetupRecoveryActions(
       `${verification.runtime.issues.join(" ")} Run \`${binName} context repair --provider ${provider}\`.`.trimStart(),
     );
   }
+  if (verification.checkout.state === "unavailable") {
+    actions.push(`${verification.checkout.message} ${verification.checkout.nextAction}`);
+  }
   if (verification.binding.state === "missing" || verification.binding.state === "repository_mismatch") {
     actions.push(verification.binding.nextAction);
   }
@@ -215,6 +219,28 @@ export function collectSetupRecoveryActions(
     );
   } else if (verification.activation.state === "unavailable") {
     actions.push(`${verification.activation.message} ${verification.activation.nextAction}`);
+  }
+  return actions;
+}
+
+/**
+ * Assemble the full Next list for an enable run. Guarantees the contract the
+ * BYO setup prompt relies on: an Incomplete verdict never ships without at
+ * least one next step, even for layer states with no specific recovery
+ * (for example `not_checked` binding/activation variants).
+ */
+export function buildSetupNextActions(
+  provider: "claude-code" | "codex",
+  verification: Pick<ContextIntegrationStatus, "provider" | "runtime" | "hook" | "checkout" | "binding" | "activation">,
+  setup: { complete: boolean; missingLayers: string[] },
+  binName = channelConfig.binName,
+): string[] {
+  const actions = [
+    ...collectSetupRecoveryActions(provider, verification, binName),
+    ...buildContextEnableNextActions(provider, verification.hook, binName),
+  ];
+  if (!setup.complete && actions.length === 0) {
+    actions.push(`Fix the layers listed in the Setup line, then re-run this \`${binName} context enable\` command.`);
   }
   return actions;
 }
