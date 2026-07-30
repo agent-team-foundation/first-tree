@@ -407,7 +407,7 @@ describe("settings panels", () => {
     const desktopLinks = [...desktop.container.querySelectorAll<HTMLAnchorElement>("aside a")].map(
       (link) => link.textContent,
     );
-    expect(desktopLinks).toEqual(["Account", "Setup", "Computers", "Repositories", "Resources", "Integrations"]);
+    expect(desktopLinks).toEqual(["Account", "Setup", "Computers", "Repositories", "Resources", "GitHub & GitLab"]);
     expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
 
@@ -424,7 +424,7 @@ describe("settings panels", () => {
     expect(narrow.container.textContent).toContain("Computers");
     expect(narrow.container.textContent).toContain("Repositories");
     expect(narrow.container.textContent).toContain("TEAM");
-    expect(narrow.container.textContent).toContain("Integrations");
+    expect(narrow.container.textContent).toContain("GitHub & GitLab");
     expect(narrow.container.textContent).not.toContain("Setup");
     expect(narrow.container.querySelector('a[href="/settings/setup"]')).toBeNull();
     await act(async () => narrow.root.unmount());

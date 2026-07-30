@@ -56,8 +56,8 @@ const RESOURCES_ITEM: Item = {
 };
 const INTEGRATIONS_ITEM: Item = {
   to: "/settings/integrations",
-  label: "Integrations",
-  description: "Connect providers for webhooks, identity, and event routing.",
+  label: "GitHub & GitLab",
+  description: "Connect GitHub and GitLab for repository events, identity, and task routing.",
 };
 const ITEMS: Item[] = [ACCOUNT_ITEM, SETUP_ITEM, COMPUTERS_ITEM, REPOSITORIES_ITEM, RESOURCES_ITEM, INTEGRATIONS_ITEM];
 
