@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildByoSetupPrompt } from "../../lib/byo-setup-prompt.js";
+import { COPY_FEEDBACK_MS } from "../../lib/use-copy-feedback.js";
 import { ContextPersonalAccess, OnboardingContextPersonalAccess } from "../settings/context-enablement.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,7 +107,8 @@ describe("personal Context access", () => {
     expect(copiedPrompt).toContain("First Tree Web owns onboarding completion separately.");
     expect(copiedPrompt).not.toContain("onboarding completion has been recorded");
     expect(promptPreview()).toBeNull();
-    expect(host.textContent).toContain("Copied — paste it into the Claude Code or Codex chat you just opened.");
+    expect(host.textContent).toContain("Setup prompt copied.");
+    expect(host.textContent).not.toContain("Copied — paste it into");
   });
 
   it("stays absent until Team Context prerequisites are ready", async () => {
@@ -243,8 +245,10 @@ describe("personal Context access", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(host.textContent).toContain("Use Team Context in Claude Code or Codex");
-    expect(host.textContent).toContain("Open the project you want to use with Team Context");
+    expect(host.textContent).toContain("Use with Claude Code or Codex");
+    expect(host.textContent).toContain(
+      "Open your project in Claude Code or Codex, then copy and paste the setup prompt.",
+    );
     expect(host.textContent).not.toContain("context enable --provider");
     await clickAndFlush(buttonByText(host, "Preview prompt"));
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
@@ -261,7 +265,8 @@ describe("personal Context access", () => {
     expect(copiedPrompt).toContain("--provider 'codex' --team 'org-1'");
     expect(copiedPrompt).toContain("Do not run both and do not add, remove, or change command flags.");
     expect(copiedPrompt).toContain("Do not mark onboarding complete.");
-    expect(host.textContent).toContain("Copied — paste it into the Claude Code or Codex chat you just opened.");
+    expect(host.textContent).toContain("Setup prompt copied.");
+    expect(host.textContent).not.toContain("Copied — paste it into");
     expect(activityMocks.generateConnectToken).toHaveBeenCalledTimes(1);
     expect(apiMocks.getContextEnablementHandoff).toHaveBeenCalledTimes(2);
   });
@@ -343,9 +348,52 @@ describe("personal Context access", () => {
     await clickAndFlush(buttonByText(host, "Copy setup prompt"));
 
     expect(promptPreview()).toBeNull();
-    expect(host.textContent).toContain("Copied — paste it into the Claude Code or Codex chat you just opened.");
+    expect(host.textContent).toContain("Setup prompt copied.");
+    expect(host.textContent).not.toContain("Copied — paste it into");
     expect(preparePrompt).toHaveBeenCalledTimes(2);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("ready-prompt");
+  });
+
+  it("keeps successful copy feedback transient without adding a visible helper row", async () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const preparePrompt = vi.fn().mockResolvedValue("ready-prompt");
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <ContextPersonalAccess organizationId="org-1" preparePrompt={preparePrompt} />
+          </QueryClientProvider>,
+        );
+        await Promise.resolve();
+      });
+
+      const actions = host.querySelector<HTMLElement>("[data-byo-prompt-actions]");
+      const actionChildCount = actions?.childElementCount;
+      await act(async () => {
+        buttonByText(host, "Copy setup prompt")?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(host.querySelector("svg.lucide-check")).not.toBeNull();
+      expect(host.textContent).toContain("Setup prompt copied.");
+      expect(actions?.childElementCount).toBe(actionChildCount);
+      expect(actions?.querySelector('span.sr-only[aria-live="polite"]')?.textContent).toBe("Setup prompt copied.");
+      expect(actions?.querySelector('p[aria-live="polite"]')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(COPY_FEEDBACK_MS);
+      });
+
+      expect(host.querySelector("svg.lucide-check")).toBeNull();
+      expect(host.querySelector("svg.lucide-clipboard")).not.toBeNull();
+      expect(host.textContent).not.toContain("Setup prompt copied.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a reopened prompt intact when an earlier clipboard write resolves late", async () => {

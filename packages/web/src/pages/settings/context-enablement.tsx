@@ -113,11 +113,10 @@ export function ContextPersonalAccess({
     >
       <div className="min-w-0" style={{ flex: "1 1 28rem" }}>
         <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          Use Team Context in Claude Code or Codex
+          Use with Claude Code or Codex
         </div>
         <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
-          Open the project you want to use with Team Context in Claude Code or Codex, then copy and paste the setup
-          prompt. Your coding agent handles the setup.
+          Open your project in Claude Code or Codex, then copy and paste the setup prompt.
         </div>
       </div>
       <ByoSetupPromptActions

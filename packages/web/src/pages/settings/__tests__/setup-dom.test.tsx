@@ -1036,8 +1036,10 @@ describe("Settings Setup overview", () => {
     const { controls } = await openContextTreeControls(view);
     const personalAccess = await waitForSelector<HTMLElement>(controls, "[data-setup-personal-access]");
 
-    expect(personalAccess.textContent).toContain("Use Team Context in Claude Code or Codex");
-    expect(personalAccess.textContent).toContain("Open the project you want to use with Team Context");
+    expect(personalAccess.textContent).toContain("Use with Claude Code or Codex");
+    expect(personalAccess.textContent).toContain(
+      "Open your project in Claude Code or Codex, then copy and paste the setup prompt.",
+    );
     expect(personalAccess.textContent).toContain("Copy setup prompt");
     expect(personalAccess.textContent).toContain("Preview prompt");
     expect(personalAccess.textContent).not.toContain("context enable --provider");
@@ -1101,7 +1103,7 @@ describe("Settings Setup overview", () => {
     const openContext = [...controls.querySelectorAll<HTMLAnchorElement>("a")].find(
       (link) => link.textContent === "Open Context →",
     );
-    expect(personalAccess.textContent).toContain("Use Team Context in Claude Code or Codex");
+    expect(personalAccess.textContent).toContain("Use with Claude Code or Codex");
     expect(personalAccess.textContent).toContain("Copy setup prompt");
     expect(personalAccess.textContent).toContain("Preview prompt");
     expect(openContext?.getAttribute("href")).toBe("/context");

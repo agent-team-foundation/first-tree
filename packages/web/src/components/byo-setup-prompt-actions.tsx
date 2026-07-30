@@ -19,7 +19,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
   const [prepareFailed, setPrepareFailed] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [copyingPreview, setCopyingPreview] = useState(false);
   const prepareAttempt = useRef(0);
   const copyAttempt = useRef(0);
@@ -36,7 +35,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
     setPrepareFailed(false);
     setPrompt(null);
     setOpen(false);
-    setCopied(false);
     setCopyingPreview(false);
     copyFeedback.reset();
     return () => {
@@ -60,7 +58,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
     const renderedResetKey = resetKey;
     setPendingAction(action);
     setPrepareFailed(false);
-    setCopied(false);
     copyFeedback.reset();
     void (async () => {
       try {
@@ -74,7 +71,7 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
         }
 
         const copy = ++copyAttempt.current;
-        const result = await copyFeedback.copy(nextPrompt);
+        await copyFeedback.copy(nextPrompt);
         if (
           prepareAttempt.current !== attempt ||
           copyAttempt.current !== copy ||
@@ -83,7 +80,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
           return;
         }
         setPendingAction(null);
-        if (result === "copied") setCopied(true);
       } catch {
         if (prepareAttempt.current !== attempt || activeResetKey.current !== renderedResetKey) return;
         setPendingAction(null);
@@ -103,7 +99,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
       if (copyAttempt.current !== copy || activeResetKey.current !== renderedResetKey) return;
       setCopyingPreview(false);
       if (result === "copied") {
-        setCopied(true);
         setOpen(false);
         setPrompt(null);
       }
@@ -121,7 +116,11 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
         style={{ gap: "var(--sp-1)" }}
       >
         <Button type="button" size="sm" disabled={pendingAction !== null} onClick={() => prepare("copy")}>
-          {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Clipboard className="h-3.5 w-3.5" aria-hidden />}
+          {copyFeedback.status === "copied" ? (
+            <Check className="h-3.5 w-3.5" aria-hidden />
+          ) : (
+            <Clipboard className="h-3.5 w-3.5" aria-hidden />
+          )}
           {pendingAction === "copy" ? "Preparing…" : "Copy setup prompt"}
         </Button>
         <Button
@@ -134,6 +133,9 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
           <Eye className="h-3.5 w-3.5" aria-hidden />
           {pendingAction === "preview" ? "Preparing…" : "Preview prompt"}
         </Button>
+        <span aria-live="polite" className="sr-only">
+          {copyFeedback.status === "copied" ? "Setup prompt copied." : ""}
+        </span>
       </div>
 
       {prepareFailed ? (
@@ -143,10 +145,6 @@ export function ByoSetupPromptActions({ align = "start", preparePrompt, resetKey
       ) : copyFeedback.status === "failed" ? (
         <p role="alert" className="text-label" style={{ margin: 0, color: "var(--state-error)" }}>
           Could not copy the setup prompt.
-        </p>
-      ) : copied ? (
-        <p aria-live="polite" className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
-          Copied — paste it into the Claude Code or Codex chat you just opened.
         </p>
       ) : null}
 

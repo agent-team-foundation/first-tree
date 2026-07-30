@@ -2240,7 +2240,7 @@ describe("web DOM interaction coverage", () => {
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
     const inviteeNoTree = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
     await waitForText("Start your first Agent Chat", inviteeNoTree.container);
-    expect(inviteeNoTree.container.textContent).not.toContain("Use Team Context in Claude Code or Codex");
+    expect(inviteeNoTree.container.textContent).not.toContain("Use with Claude Code or Codex");
     expect(inviteeNoTree.container.textContent).not.toContain("Needs Admin");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
     await click(findButton(inviteeNoTree.container, "Start chat"));
@@ -2263,7 +2263,7 @@ describe("web DOM interaction coverage", () => {
       activeStep: "start-chat",
     });
     await waitForText("Start your first Agent Chat", inviteeNoRepo.container);
-    expect(inviteeNoRepo.container.textContent).not.toContain("Use Team Context in Claude Code or Codex");
+    expect(inviteeNoRepo.container.textContent).not.toContain("Use with Claude Code or Codex");
     expect(inviteeNoRepo.container.textContent).not.toContain("Needs Admin");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
     await unmountRoot(inviteeNoRepo.root);
@@ -2283,7 +2283,7 @@ describe("web DOM interaction coverage", () => {
       activeStep: "start-chat",
     });
     await waitForText("Start your first Agent Chat", inviteeNoInstall.container);
-    expect(inviteeNoInstall.container.textContent).not.toContain("Use Team Context in Claude Code or Codex");
+    expect(inviteeNoInstall.container.textContent).not.toContain("Use with Claude Code or Codex");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
     expect(findButton(inviteeNoInstall.container, "Start your first Agent Chat")).toBeNull();
     await click(findButton(inviteeNoInstall.container, "Start chat"));
@@ -2301,7 +2301,7 @@ describe("web DOM interaction coverage", () => {
       activeStep: "start-chat",
     });
     await waitForText("Start your first Agent Chat", inviteeProbeFail.container);
-    expect(inviteeProbeFail.container.textContent).not.toContain("Use Team Context in Claude Code or Codex");
+    expect(inviteeProbeFail.container.textContent).not.toContain("Use with Claude Code or Codex");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
     expect(findButton(inviteeProbeFail.container, "Start your first Agent Chat")).toBeNull();
     await unmountRoot(inviteeProbeFail.root);
@@ -2311,7 +2311,7 @@ describe("web DOM interaction coverage", () => {
     contextEnablementMocks.getContextEnablementHandoff.mockClear();
     const inviteeReady = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
     await waitForText("Start your first Agent Chat", inviteeReady.container);
-    expect(inviteeReady.container.textContent).not.toContain("Use Team Context in Claude Code or Codex");
+    expect(inviteeReady.container.textContent).not.toContain("Use with Claude Code or Codex");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
     await click(findButton(inviteeReady.container, "Start chat"));
     // Ready invitee also lands in a value-first work chat, not the tree setup

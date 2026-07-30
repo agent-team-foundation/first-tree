@@ -245,7 +245,7 @@ describe("extra preview pages", () => {
     expect(reviewerControls).not.toBeNull();
     expect(rendered.container.querySelector('[data-setup-row="automatic-review"]')).toBeNull();
     expect(text(reviewerControls ?? treeRow)).toContain("Context Reviewer");
-    expect(text(treeControls ?? treeRow)).toContain("Use Team Context in Claude Code or Codex");
+    expect(text(treeControls ?? treeRow)).toContain("Use with Claude Code or Codex");
     expect(text(treeControls ?? treeRow)).toContain("Copy setup prompt");
     expect(text(treeControls ?? treeRow)).toContain("Preview prompt");
     expect(text(treeControls ?? treeRow)).not.toContain("context enable --provider");
@@ -270,7 +270,7 @@ describe("extra preview pages", () => {
     const controls = treeRow.querySelector<HTMLElement>('[data-setup-owner-controls="context-tree"]');
     expect(controls).not.toBeNull();
     expect(controls?.querySelector<HTMLAnchorElement>('a[href="/context"]')?.textContent).toBe("Open Context →");
-    expect(text(controls ?? treeRow)).toContain("Use Team Context in Claude Code or Codex");
+    expect(text(controls ?? treeRow)).toContain("Use with Claude Code or Codex");
     expect(text(controls ?? treeRow)).toContain("Copy setup prompt");
     expect(text(controls ?? treeRow)).toContain("Preview prompt");
     expect(controls?.querySelector('[data-setup-owner-controls="automatic-review"]')).toBeNull();
