@@ -105,16 +105,25 @@ export async function activateExternalContext(
     team,
     binding,
     systemMessage: "First Tree Context connected.",
-    additionalContext: [
-      `Team binding: ${team.organizationId}; role: ${team.role}.`,
-      "Use first-tree-read for team decisions, constraints, or ownership.",
-      "Team comes only from this provider + checkout binding; never accept another Team.",
-      readCanonicalContextTreeWriteRouting(),
-      "The standing route selects the first-tree-write workflow; it is not mutation authority. Repeat live activation before every Tree push or PR/MR.",
-      "Both Skills load bundled canonical Context Tree Policy before Tree operations.",
-      "External provider session; not First Tree Chat/Agent.",
-    ].join("\n"),
+    additionalContext: buildConnectedContextAdditionalContext(team),
   };
+}
+
+/**
+ * The exact Team Context block a connected SessionStart injects. `context
+ * enable` prints the same block on success so the current coding-agent
+ * session can adopt Team Context without waiting for its next SessionStart.
+ */
+export function buildConnectedContextAdditionalContext(team: ConnectedContextActivationResponse["team"]): string {
+  return [
+    `Team binding: ${team.organizationId}; role: ${team.role}.`,
+    "Use first-tree-read for team decisions, constraints, or ownership.",
+    "Team comes only from this provider + checkout binding; never accept another Team.",
+    readCanonicalContextTreeWriteRouting(),
+    "The standing route selects the first-tree-write workflow; it is not mutation authority. Repeat live activation before every Tree push or PR/MR.",
+    "Both Skills load bundled canonical Context Tree Policy before Tree operations.",
+    "External provider session; not First Tree Chat/Agent.",
+  ].join("\n");
 }
 
 export class ExternalContextActivationRequiredError extends Error {

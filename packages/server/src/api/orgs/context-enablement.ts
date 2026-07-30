@@ -24,10 +24,13 @@ export async function orgContextEnablementRoutes(app: FastifyInstance): Promise<
         `${executable} context enable`,
         `--provider ${shellQuote(query.provider)}`,
         `--team ${shellQuote(scope.organizationId)}`,
-        ...(query.intent === "onboarding" ? ["--yes"] : []),
+        // Both intents run inside a non-TTY coding-agent session, where an
+        // interactive plan confirmation would stall; pasting the prompt is the
+        // member's acceptance of the displayed plan.
+        "--yes",
       ].join(" "),
       workingDirectoryInstruction:
-        "Run this once from the root of the code repository where this Team's Context should be enabled.",
+        "Run this once from inside the code repository where this Team's Context should be enabled; any subdirectory works.",
     });
   });
 }

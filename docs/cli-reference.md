@@ -1168,6 +1168,13 @@ exact provider + checkout/repository → Team binding in
 Chat, Computer, or runtime session; normal `login` and the existing daemon own
 the Computer connection.
 
+Enable ends with a layered verification and a single `Setup` verdict —
+`Complete` when every layer is green, or `Incomplete` with the missing layers.
+When live activation is connected it also prints the same Team Context block a
+SessionStart would inject, so the current coding-agent session can adopt Team
+Context immediately; future sessions in that checkout activate automatically.
+In `--json` mode the same facts appear as `setup` and `activationContext`.
+
 For Codex, installation does not grant Hook consent. After the first enable,
 open Codex in the checkout, run `/hooks`, find **First Tree Context →
 SessionStart**, enable its checkbox, choose **Trust**, and start a new session.

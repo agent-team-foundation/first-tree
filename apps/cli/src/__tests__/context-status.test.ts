@@ -1,6 +1,6 @@
 import type { ContextActivationResponse } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import { buildContextEnableNextActions } from "../commands/context/enable.js";
+import { buildContextEnableNextActions, collectMissingSetupLayers } from "../commands/context/enable.js";
 import { renderHookEnabled, renderHookTrust } from "../commands/context/status.js";
 import type { ContextActivationValidator } from "../core/context-integration/activation.js";
 import {
@@ -311,6 +311,43 @@ describe("Context enable Hook guidance", () => {
 
     expect(actions.join(" ")).toContain("enable its checkbox");
     expect(actions.join(" ")).not.toContain("choose Trust");
+  });
+});
+
+describe("Context enable setup verdict", () => {
+  const greenVerification = {
+    plugin: { installed: true, enabled: true, installedPath: "/tmp/plugin" },
+    hook: { trust: "trusted" as const, enabled: true, source: "provider_api" as const, issues: [] },
+    binding: { state: "exact" as const, organizationId: "org-1", repositoryKey: "github.com/acme/repo" },
+    activation: {
+      state: "connected" as const,
+      team: { organizationId: "org-1", displayName: "Acme", role: "member" as const },
+    },
+  };
+
+  it("reports complete only when every layer is green", () => {
+    expect(collectMissingSetupLayers("codex", greenVerification)).toEqual([]);
+    expect(collectMissingSetupLayers("claude-code", greenVerification)).toEqual([]);
+  });
+
+  it("lists the missing Codex hook layers", () => {
+    expect(
+      collectMissingSetupLayers("codex", {
+        ...greenVerification,
+        hook: { trust: "review_required", enabled: false, source: "provider_api", issues: [] },
+      }),
+    ).toEqual(["Hook trusted: No", "Hook enabled: No"]);
+  });
+
+  it("ignores hook layers for Claude Code and flags binding and activation drift", () => {
+    expect(
+      collectMissingSetupLayers("claude-code", {
+        ...greenVerification,
+        hook: { trust: "provider_managed", enabled: false, source: "provider_managed", issues: [] },
+        binding: { state: "missing", nextAction: "Run context enable from the target checkout." },
+        activation: { state: "not_checked", reason: "binding missing" },
+      }),
+    ).toEqual(["Exact binding: missing", "Live activation: not_checked"]);
   });
 });
 

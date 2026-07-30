@@ -2,6 +2,7 @@ import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { channelConfig } from "../../core/channel.js";
 import { readActiveContextAccountClientId } from "../../core/context-integration/account-state-guard.js";
+import { buildConnectedContextAdditionalContext } from "../../core/context-integration/activation.js";
 import { inspectContextClientPreflight } from "../../core/context-integration/client-preflight.js";
 import {
   findContextBinding,
@@ -10,7 +11,10 @@ import {
 import { planContextIntegrationInstall } from "../../core/context-integration/installer.js";
 import { enableContextIntegrationOperation } from "../../core/context-integration/operation.js";
 import type { ProviderHookProbe } from "../../core/context-integration/provider-driver.js";
-import { inspectContextIntegrationStatus } from "../../core/context-integration/status.js";
+import {
+  type ContextIntegrationStatus,
+  inspectContextIntegrationStatus,
+} from "../../core/context-integration/status.js";
 import { print } from "../../core/output.js";
 import { createMemberSdk } from "../_shared/member.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
@@ -89,6 +93,12 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
   );
 
   const verification = await inspectContextIntegrationStatus(driver, sdk, preflight.checkoutRoot);
+  const activationContext =
+    verification.activation.state === "connected"
+      ? buildConnectedContextAdditionalContext(verification.activation.team)
+      : null;
+  const missingLayers = collectMissingSetupLayers(provider, verification);
+  const setup = { complete: missingLayers.length === 0, missingLayers };
   const nextActions = buildContextEnableNextActions(provider, verification.hook);
   const result = {
     provider,
@@ -97,6 +107,8 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
     repositoryKey: preflight.repositoryKey,
     plugin: installPlan.operation,
     verification,
+    setup,
+    activationContext,
     nextActions,
   };
   if (context.options.json) print.result(result);
@@ -118,10 +130,41 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
         ? `Connected — ${verification.activation.team.displayName}`
         : verification.activation.state,
     );
+    print.status(
+      "Setup",
+      setup.complete ? "Complete — every layer verified" : `Incomplete — ${setup.missingLayers.join("; ")}`,
+    );
+    if (activationContext) {
+      print.line(
+        setup.complete
+          ? "\nAdopt this Team Context in your current coding-agent session and follow it from now on; future sessions in this repository activate automatically:\n\n"
+          : "\nAdopt this Team Context in your current coding-agent session; finish the Next steps below so future sessions activate automatically:\n\n",
+      );
+      print.line(`${activationContext}\n`);
+    }
     nextActions.forEach((action, index) => {
       print.status(`Next ${index + 1}`, action);
     });
   }
+}
+
+/**
+ * Layered setup verdict: every layer the BYO setup prompt tells the agent to
+ * trust must be green before the command reports `Setup: Complete`. The hook
+ * layers apply only to Codex; Claude Code hooks are provider-managed.
+ */
+export function collectMissingSetupLayers(
+  provider: "claude-code" | "codex",
+  verification: Pick<ContextIntegrationStatus, "plugin" | "hook" | "binding" | "activation">,
+): string[] {
+  return [
+    ...(verification.plugin.installed ? [] : ["Plugin installed: No"]),
+    ...(verification.plugin.enabled ? [] : ["Plugin enabled: No"]),
+    ...(provider === "codex" && verification.hook.trust !== "trusted" ? ["Hook trusted: No"] : []),
+    ...(provider === "codex" && verification.hook.enabled !== true ? ["Hook enabled: No"] : []),
+    ...(verification.binding.state === "exact" ? [] : [`Exact binding: ${verification.binding.state}`]),
+    ...(verification.activation.state === "connected" ? [] : [`Live activation: ${verification.activation.state}`]),
+  ];
 }
 
 export function buildContextEnableNextActions(
@@ -130,13 +173,10 @@ export function buildContextEnableNextActions(
   binName = channelConfig.binName,
 ): string[] {
   if (provider === "claude-code") {
-    return ["Start a new Claude Code local session in this repository."];
+    return [];
   }
   if (hook.trust === "trusted" && hook.enabled === true) {
-    return [
-      "Start a new Codex session in this checkout so SessionStart can connect Context.",
-      `Run \`${binName} context status --provider codex\` to verify every layer remains connected.`,
-    ];
+    return [`Run \`${binName} context status --provider codex\` to verify every layer remains connected.`];
   }
   if (hook.trust === "trusted" && hook.enabled === false) {
     return [

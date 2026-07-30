@@ -21,7 +21,7 @@ describe("Context enablement handoff", () => {
       role: "admin",
     });
     expect(response.json().command).toBe(
-      `'first-tree-staging' context enable --provider 'codex' --team '${admin.organizationId}'`,
+      `'first-tree-staging' context enable --provider 'codex' --team '${admin.organizationId}' --yes`,
     );
     expect(response.body).not.toContain("--no-start");
   });

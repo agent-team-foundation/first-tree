@@ -59,7 +59,7 @@ export function buildByoSetupPrompt({
   const commandInstructions =
     handoffs.length === 1
       ? [
-          `Then enable Team Context for this exact repository checkout with the server-provided ${providerNames[0]} command:`,
+          `Then enable Team Context for this repository with the server-provided ${providerNames[0]} command:`,
           "",
           handoffs[0]?.command ?? "",
         ]
@@ -74,23 +74,25 @@ export function buildByoSetupPrompt({
         ];
   const completion =
     intent === "onboarding"
-      ? "Only tell me setup is ready after First Tree verifies the provider integration, the exact-checkout Team binding, and live Team Context activation. First Tree Web owns onboarding completion separately."
-      : "After First Tree verifies the provider integration, the exact-checkout Team binding, and live Team Context activation, tell me the exact next step for starting a fresh coding-agent session. Do not mark onboarding complete.";
+      ? "Only tell me setup is ready after that. First Tree Web owns onboarding completion separately."
+      : "Do not mark onboarding complete. First Tree verifies completion separately.";
 
   return [
     `Set up First Tree Team Context for this repository in ${target}.`,
     "",
-    "Complete the whole setup inside this coding-agent session. Do not ask me to open Terminal.",
+    "Complete the whole setup inside this coding-agent session. Do not ask me to open Terminal. Setup is user-scoped: do not modify repository files — Team Context does not live in the repository.",
     "",
-    "First inspect this machine locally. If First Tree is missing or this computer is not signed in to my First Tree account, use this server-provided bootstrap:",
+    "First run this server-provided bootstrap. It installs or updates First Tree and signs this computer in, and every step is safe to re-run:",
     "",
     bootstrapCommand,
+    "",
+    "If the login step fails because its code is expired or already used, stop and ask me for a fresh setup prompt from First Tree Settings — never reuse an old code. If login reports this computer is signed in as a different First Tree user, stop and ask me before any switch.",
     "",
     ...commandInstructions,
     "",
     `Target Team ID: ${organizationId}`,
     "",
-    "Run the enable command from this repository's root. If this session is not at the repository root, stop and tell me where to reopen it. If First Tree detects a different local account, ask me before switching. Do not create a First Tree agent or open First Tree Chat, and do not modify repository files.",
+    "Run the enable command from inside this repository; any subdirectory works. If this session is not inside the target repository, stop and tell me where to reopen it.",
     ...(providers.has("codex")
       ? [
           "",
@@ -98,6 +100,6 @@ export function buildByoSetupPrompt({
         ]
       : []),
     "",
-    completion,
+    `The enable command verifies the whole setup and its output tells you what to do — follow it exactly. Setup is successful only when it reports "Setup: Complete". ${completion}`,
   ].join("\n");
 }
