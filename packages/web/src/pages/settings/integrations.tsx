@@ -22,18 +22,10 @@ export function SettingsIntegrationsLayout() {
 
   return (
     <div>
-      <div style={{ padding: "var(--sp-2) var(--sp-5) 0" }}>
-        <h2 className="text-title font-semibold m-0" style={{ color: "var(--fg)" }}>
-          Connections
-        </h2>
-        <p className="text-label m-0" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
-          Connect providers for webhooks, identity, and event routing.
-        </p>
-      </div>
       <nav
-        aria-label="Connection provider"
+        aria-label="Git provider"
         className="flex"
-        style={{ gap: "var(--sp-1)", padding: "var(--sp-3) var(--sp-5) 0", overflowX: "auto" }}
+        style={{ gap: "var(--sp-1)", padding: "var(--sp-2) var(--sp-5) 0", overflowX: "auto" }}
       >
         {PROVIDERS.map((provider) => (
           <NavLink

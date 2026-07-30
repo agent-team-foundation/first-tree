@@ -38,15 +38,17 @@ afterEach(() => {
 });
 
 describe("SettingsIntegrationsLayout", () => {
-  it("keeps Integrations focused on provider connections", async () => {
+  it("uses direct provider tabs without repeating generic integration copy", async () => {
     const { container, root } = await renderLayout();
 
-    expect(container.querySelector("h2")?.textContent).toBe("Connections");
-    expect(container.textContent).toContain("Connect providers for webhooks, identity, and event routing.");
+    expect(container.querySelector("h2")).toBeNull();
+    expect(container.textContent).not.toContain("Connections");
+    expect(container.textContent).not.toContain("Connect providers");
+    expect(container.querySelector('nav[aria-label="Git provider"]')).not.toBeNull();
     expect(container.textContent).toContain("GitHub connection content");
     expect(container.textContent).not.toContain("Code repositories");
 
-    const nav = container.querySelector('nav[aria-label="Connection provider"]');
+    const nav = container.querySelector('nav[aria-label="Git provider"]');
     expect(nav).not.toBeNull();
     expect(nav?.querySelector('a[href="/settings/integrations/github"]')?.getAttribute("aria-current")).toBe("page");
     expect(nav?.querySelector('a[href="/settings/integrations/gitlab"]')).not.toBeNull();
@@ -60,7 +62,7 @@ describe("SettingsIntegrationsLayout", () => {
     expect(container.textContent).not.toContain("Code repositories");
     expect(
       container
-        .querySelector('nav[aria-label="Connection provider"] a[href="/settings/integrations/gitlab"]')
+        .querySelector('nav[aria-label="Git provider"] a[href="/settings/integrations/gitlab"]')
         ?.getAttribute("aria-current"),
     ).toBe("page");
     await act(async () => root.unmount());
