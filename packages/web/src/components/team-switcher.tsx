@@ -21,6 +21,13 @@ import { Input } from "./ui/input.js";
 // frame. Tunable by feel during QA.
 const MIN_SHOW_MS = 300;
 
+// One row grid for every menu action (Invite / Leave / Switch / Create /
+// Join): same gutter, same icon column, same full-bleed hover hit area,
+// so the groups can't drift apart again. Per-row color and disabled opacity
+// stay on the row's own `style`.
+const MENU_ROW_CLASS =
+  "flex w-full items-center gap-2 px-3.5 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]";
+
 /**
  * Header-left team anchor: the always-present "which team am I in" marker and
  * the entry point for switching teams + team management. Consolidates the
@@ -367,15 +374,17 @@ export function TeamSwitcher({
             style={{ width: "var(--sp-70)", borderColor: "var(--border)" }}
           >
             {/* ① Current team identity and membership actions — always shown. */}
-            <div role="presentation" className="border-b px-3.5 py-2.5" style={{ borderColor: "var(--border)" }}>
+            <div role="presentation" className="border-b pb-1" style={{ borderColor: "var(--border)" }}>
               <div
                 aria-hidden="true"
                 className="text-eyebrow"
-                style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1_5)" }}
+                style={{ color: "var(--fg-3)", padding: "var(--sp-1_25) var(--sp-3_5) var(--sp-0_75)" }}
               >
                 Current team
               </div>
-              <div role="presentation" className="flex items-start gap-2.5">
+              {/* Identity row: taller than an action row (avatar + two text
+                  lines), but on the same gutter as every other row. */}
+              <div role="presentation" className="flex items-start gap-2.5 px-3.5 py-1.5">
                 <Avatar seed={currentOrg.id} name={currentOrg.displayName} size={26} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-subtitle" title={currentOrg.displayName} style={{ color: "var(--fg)" }}>
@@ -416,7 +425,7 @@ export function TeamSwitcher({
                   setOpen(false);
                   setInviteOpen(true);
                 }}
-                className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius-input)] px-2 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                className={MENU_ROW_CLASS}
                 style={{ color: "var(--fg)", opacity: askAgentNavLocked ? 0.5 : undefined }}
               >
                 <UserPlus className="h-3.5 w-3.5" />
@@ -428,7 +437,7 @@ export function TeamSwitcher({
                 tabIndex={-1}
                 onClick={openLeaveConfirm}
                 disabled={askAgentNavLocked}
-                className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius-input)] px-2 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                className={MENU_ROW_CLASS}
                 style={{ color: "var(--state-error)", opacity: askAgentNavLocked ? 0.5 : undefined }}
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -464,7 +473,7 @@ export function TeamSwitcher({
                         disabled={!!switchingOrg || askAgentNavLocked}
                         aria-busy={isBusy}
                         onClick={() => void handleSwitch(o)}
-                        className="flex w-full items-center gap-2 px-3.5 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                        className={MENU_ROW_CLASS}
                         style={{
                           color: "var(--fg)",
                           opacity: (switchingOrg || askAgentNavLocked) && !isBusy ? 0.45 : undefined,
@@ -520,7 +529,7 @@ export function TeamSwitcher({
                   setOpen(false);
                   setSetupAction("create");
                 }}
-                className="flex w-full items-center gap-2 px-3.5 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                className={MENU_ROW_CLASS}
                 style={{ color: "var(--fg)", opacity: askAgentNavLocked ? 0.5 : undefined }}
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -536,7 +545,7 @@ export function TeamSwitcher({
                   setOpen(false);
                   setSetupAction("join");
                 }}
-                className="flex w-full items-center gap-2 px-3.5 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                className={MENU_ROW_CLASS}
                 style={{ color: "var(--fg)", opacity: askAgentNavLocked ? 0.5 : undefined }}
               >
                 <Link2 className="h-3.5 w-3.5" />

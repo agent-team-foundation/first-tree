@@ -266,6 +266,40 @@ describe("TeamSwitcher", () => {
     await act(async () => root.unmount());
   });
 
+  it("aligns every menu action row and eyebrow on one shared grid across groups", async () => {
+    const { container, root } = await renderHarness(vi.fn(async () => {}));
+
+    await click(anchorOf(container));
+
+    const rows = [
+      buttonByText(container, "Invite teammates"),
+      buttonByText(container, "Leave team"),
+      buttonByText(container, "Globex"),
+      buttonByText(container, "Create team"),
+      buttonByText(container, "Join with invite link"),
+    ];
+    if (rows.some((row) => !row)) throw new Error("menu action rows missing");
+
+    // One shared row grid across Current team / Switch team / Add or join:
+    // same gutter, icon column, and full-bleed hover hit area — no
+    // Current-team-only inset, rounding, or extra row spacing.
+    const rowClasses = new Set(rows.flatMap((row) => (row ? [row.className] : [])));
+    expect(rowClasses.size).toBe(1);
+    const [rowClass] = rowClasses;
+    expect(rowClass).toContain("px-3.5");
+    expect(rowClass).toContain("py-1.5");
+    expect(rowClass).not.toContain("mt-2");
+    expect(rowClass).not.toContain("px-2");
+    expect(rowClass).not.toContain("rounded");
+
+    // All three section eyebrows share the same section padding.
+    const eyebrows = [...container.querySelectorAll<HTMLElement>(".text-eyebrow")];
+    expect(eyebrows.map((eyebrow) => eyebrow.textContent)).toEqual(["Current team", "Switch team", "Add or join"]);
+    expect(new Set(eyebrows.map((eyebrow) => eyebrow.style.padding)).size).toBe(1);
+
+    await act(async () => root.unmount());
+  });
+
   it("lets admins rename the current team in a dialog and refreshes auth state", async () => {
     const refreshMe = vi.fn(async () => {});
     const { container, root } = await renderHarness(
