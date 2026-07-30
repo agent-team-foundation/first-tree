@@ -329,9 +329,12 @@ describe("Settings Setup overview", () => {
       "Your computer",
       "Your agent",
       "Code repositories",
-      "Repository automation",
+      "GitHub & GitLab",
       "Context Tree",
     ]);
+    expect(view.host.querySelector('[data-setup-row="repository-automation"]')?.textContent).toContain(
+      "Repository events, identity, and GitHub task routing.",
+    );
     expect(view.host.querySelector('[data-setup-row="automatic-review"]')).toBeNull();
     expect(view.host.querySelector('[data-setup-row="work-access"] .lucide-message-circle')).not.toBeNull();
     const readyMarks = view.host.querySelectorAll("[data-setup-status-kind='ready'] .lucide-circle-check");
