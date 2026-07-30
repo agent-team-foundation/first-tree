@@ -395,19 +395,20 @@ function AskAgentProbe() {
 
 describe("useAskAgent navigation lock publishing", () => {
   it("locks while a clarification awaits a reply and unlocks when the reply lands", async () => {
+    const startedAt = Date.now();
     const clarification = message({
       id: "clarification-1",
       senderId: "human-1",
       inReplyTo: "req-1",
       metadata: { askAgent: { requestId: "req-1", agentId: "agent-1" } },
-      createdAt: "2026-07-28T10:01:00.000Z",
+      createdAt: new Date(startedAt).toISOString(),
     });
     const reply = message({
       id: "reply-1",
       senderId: "agent-1",
       inReplyTo: clarification.id,
       content: "The migration keeps the old API compatible.",
-      createdAt: "2026-07-28T10:02:00.000Z",
+      createdAt: new Date(startedAt + 1_000).toISOString(),
     });
     chatMocks.listRequestThread.mockResolvedValue({ items: [clarification] });
     agentStatusMocks.fetchChatAgentStatuses.mockResolvedValue([]);
