@@ -1,0 +1,58 @@
+-- ACK-through cursor window index for inbox_entries.
+--
+-- `ackThroughEntryIdForBoundAgents` commits the contiguous notify=true prefix
+-- of an (inbox_id, chat_id) partition up to an acked cursor. Before this index
+-- no index matched that query: the planner fell back to the primary key and
+-- scanned — and, under FOR UPDATE, locked — every notify row ever written to
+-- the chat, including long-acked ones that can never change the outcome. Cost
+-- per ACK was therefore O(chat history) and lifetime cost O(N^2), with lock
+-- contention growing to match.
+--
+-- The index is partial on `status <> 'acked'` because `acked` is terminal:
+-- nothing resets an acked row back to pending/delivered, so the non-acked set
+-- is exactly the live in-flight window. That keeps the index sized to
+-- concurrent traffic rather than to history — measured at 48 kB on a 2.7M-row
+-- table whose comparable full index (idx_inbox_chat_silent) was 26 MB.
+--
+-- Column order is load-bearing:
+--
+--   inbox_id, chat_id  — the partition the ACK commits within.
+--   notify             — kept in the key rather than in the predicate. A
+--                        partial index only applies when the planner can prove
+--                        the query implies its predicate, and under a generic
+--                        plan a bound parameter proves nothing. The service
+--                        passes `notify` as a parameter, so a `WHERE notify =
+--                        true` predicate would silently stop matching; as a key
+--                        column that same parameter is an ordinary index
+--                        condition.
+--   id                 — last, so `id <= cursor` is a range condition and
+--                        `ORDER BY id` needs no sort (which also preserves the
+--                        ascending FOR UPDATE lock order).
+--
+-- The predicate is spelled `status <> 'acked'` so the service's WHERE clause
+-- can match it verbatim. The service must also pass that clause as a literal
+-- rather than a bind parameter, for the same reason `notify` is not in the
+-- predicate: under a generic plan PostgreSQL cannot prove a Param-based clause
+-- implies a partial-index predicate, and the scan silently degrades back to
+-- whole-partition. This index therefore depends on exactly one inlined
+-- literal, and that literal is the fix itself. See services/inbox.ts.
+--
+-- ──────────────── Operator note ────────────────
+--
+-- Drizzle migrator wraps every migration file in a single transaction (see the
+-- comment block in 0020_unified_user_token.sql), so `CREATE INDEX
+-- CONCURRENTLY` cannot be used here. The regular form below holds a SHARE lock
+-- that blocks writes to `inbox_entries` (including message fan-out) for the
+-- duration of one heap scan: measured at 30 ms for 400k rows and 73 ms for
+-- 2.7M rows on a warm table, and proportional to table size on a cold one.
+--
+-- For a large production table, the runbook is:
+--
+--   1. Stop applying new migrations briefly.
+--   2. Manually run, OUTSIDE a transaction:
+--        CREATE INDEX CONCURRENTLY idx_inbox_unacked_cursor
+--          ON inbox_entries (inbox_id, chat_id, notify, id)
+--          WHERE status <> 'acked';
+--   3. Re-run `pnpm db:migrate`. The `IF NOT EXISTS` clause below detects the
+--      existing index and the statement becomes a no-op.
+CREATE INDEX IF NOT EXISTS "idx_inbox_unacked_cursor" ON "inbox_entries" USING btree ("inbox_id","chat_id","notify","id") WHERE status <> 'acked';

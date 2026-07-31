@@ -55,6 +55,35 @@ export const inboxEntries = pgTable(
      * pending; keeping message_id first bounds that lookup by page size.
      */
     index("idx_inbox_entries_message_status").on(table.messageId, table.status),
+    /**
+     * ACK-through cursor window. `ackThroughEntryIdForBoundAgents` walks the
+     * `(inbox_id, chat_id)` partition up to the acked cursor; without this
+     * index the planner falls back to the primary key and scans — and locks —
+     * every notify row ever written to the chat, which is what made ACK cost
+     * O(history) and lifetime cost O(N^2).
+     *
+     * `acked` is a terminal state (nothing resets an acked row back to
+     * `pending`/`delivered`), so restricting the index to non-acked rows keeps
+     * it sized to the live in-flight window instead of to chat history.
+     *
+     * Shape notes, all load-bearing:
+     *   - `notify` sits in the key rather than in the predicate on purpose.
+     *     A partial index is only usable when the planner can prove the query
+     *     implies its predicate, and under a generic plan a bound parameter
+     *     proves nothing. The service passes `notify` as a parameter
+     *     (`eq(inboxEntries.notify, true)`), so a `WHERE notify = true`
+     *     predicate would silently stop matching; as a key column the same
+     *     parameter is just an ordinary index condition. This keeps the index
+     *     dependent on exactly one inlined literal instead of two.
+     *   - `id` is the last key column, so `id <= cursor` is an index range
+     *     condition and `ORDER BY id` needs no sort.
+     *   - The predicate is spelled `status <> 'acked'` to match the query
+     *     clause verbatim; see the `NOT_ACKED_PREFIX_ROW` note in
+     *     services/inbox.ts for why that clause must stay a literal.
+     */
+    index("idx_inbox_unacked_cursor")
+      .on(table.inboxId, table.chatId, table.notify, table.id)
+      .where(sql`status <> 'acked'`),
     check("ck_inbox_entries_status", sql`${table.status} IN ('pending', 'delivered', 'acked')`),
   ],
 );

@@ -28,6 +28,26 @@ describe("inbox delivery indexes", () => {
     expect(rows[0]?.indexdef).toContain("USING btree (message_id, status)");
   });
 
+  it("creates the partial index the ACK-through cursor scan depends on", async () => {
+    const rows = await getDb().execute<{ indexdef: string }>(sql`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'inbox_entries'
+        AND indexname = 'idx_inbox_unacked_cursor'
+    `);
+
+    expect(rows).toHaveLength(1);
+    // Both halves are load-bearing and pinned deliberately. The key order lets
+    // `id <= cursor` be a range condition (no sort, ascending FOR UPDATE lock
+    // order), and the predicate has to stay spelled exactly this way so the
+    // service's literal `status <> 'acked'` clause can match it — a differently
+    // spelled predicate would still be correct SQL but would stop the planner
+    // from proving the implication, silently restoring the O(history) scan.
+    expect(rows[0]?.indexdef).toContain("USING btree (inbox_id, chat_id, notify, id)");
+    expect(rows[0]?.indexdef).toContain("WHERE (status <> 'acked'::text)");
+  });
+
   it("constrains inbox entry status to active delivery states", async () => {
     const rows = await getDb().execute<{ definition: string }>(sql`
       SELECT pg_get_constraintdef(oid) AS definition

@@ -575,6 +575,48 @@ async function collectPrecedingContext(
   return result;
 }
 
+/** Prefix row shape the ACK-through commit reasons about. */
+type AckPrefixRow = Pick<ClaimedEntry, "id" | "status" | "deliveredAt">;
+
+/**
+ * Restricts the ACK prefix scan to rows that can still change state.
+ *
+ * Spelled as an inline literal instead of `ne(inboxEntries.status, "acked")`
+ * on purpose, and this is load-bearing rather than stylistic. A partial index
+ * is usable only when the planner can prove the query implies its predicate.
+ * `connectDatabase` leaves postgres-js on its default `prepare: true`, so
+ * queries become named prepared statements and PostgreSQL may switch to a
+ * generic plan after five executions; a generic plan keeps a bound parameter
+ * as a `Param` node, which proves nothing. The scan then falls back to
+ * `idx_inbox_chat_silent` and filters the whole partition — restoring the
+ * O(history) behavior in production, silently, while every benchmark that
+ * passes constants still looks fast. Observed on the default
+ * `plan_cache_mode = auto` (not only under `force_generic_plan`):
+ *
+ *   status <> 'acked'  ->  Index Scan using idx_inbox_unacked_cursor
+ *   status <> $n       ->  Index Scan using idx_inbox_chat_silent,
+ *                          Rows Removed by Filter: <entire chat history>
+ *
+ * Do not "normalize" this into a Drizzle comparison helper. Exported so
+ * `inbox-ack-scaling.test.ts` can assert it still compiles to zero bind
+ * parameters.
+ *
+ * The *exclusion* spelling is load-bearing too, independently of the planner.
+ * `status IN ('pending', 'delivered')` selects the same rows today and would
+ * match the same partial index, but it is an allow-list: `ck_inbox_entries_status`
+ * is NOT VALID, so a legacy row can carry a status outside today's enum, and an
+ * allow-list would drop that row from the prefix entirely — the gap check would
+ * never see it and the commit would silently step over it. Excluding only
+ * `acked` keeps every unexpected status visible to the gap check, which is
+ * where it must be handled.
+ *
+ * Finally, this has to stay a plain inequality against a NOT NULL column: SQL's
+ * `<>` is three-valued and would drop a NULL status, whereas the JS gap check
+ * below treats an unexpected status as a gap. `inbox_entries.status` is NOT
+ * NULL, so the two agree; relaxing that column would reintroduce a divergence.
+ */
+export const NOT_ACKED_PREFIX_ROW = sql`${inboxEntries.status} <> 'acked'`;
+
 /**
  * Commit inbox progress through the supplied entry id from the WS data plane,
  * scoped to the inboxes the connected socket has bound.
@@ -584,6 +626,15 @@ async function collectPrecedingContext(
  * id must already be `acked` or `delivered`. Delivered rows in that contiguous
  * prefix are atomically marked `acked`; non-committable gaps reject the commit
  * so the database cannot persist `A pending, B acked`.
+ *
+ * **Delta scan.** The prefix scan reads only rows that are not yet `acked`.
+ * Already-acked rows contribute nothing to any of the three decisions made
+ * below — they never trigger a gap, are never committable, and are never
+ * reset-from-pending — so excluding them in SQL is an exact equivalence, not
+ * an approximation. This is what keeps per-ACK cost proportional to the
+ * in-flight window instead of to chat history, and it holds only because
+ * `acked` is terminal: `recoverUnackedForScope` and `resetDeliveredForInboxes`
+ * reset `delivered` rows, never `acked` ones.
  *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
@@ -607,27 +658,41 @@ export async function ackThroughEntryIdForBoundAgents(
 
       const chatPredicate = entry.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, entry.chatId);
       const prefixRows = await tx
-        .select()
+        .select({ id: inboxEntries.id, status: inboxEntries.status, deliveredAt: inboxEntries.deliveredAt })
         .from(inboxEntries)
         .where(
           and(
             eq(inboxEntries.inboxId, entry.inboxId),
             chatPredicate,
             eq(inboxEntries.notify, true),
+            NOT_ACKED_PREFIX_ROW,
             sql`${inboxEntries.id} <= ${entryId}`,
           ),
         )
         .orderBy(asc(inboxEntries.id))
         .for("update");
 
-      const isResetDeliveredRow = (row: ClaimedEntry): boolean => row.status === "pending" && row.deliveredAt !== null;
+      const isResetDeliveredRow = (row: AckPrefixRow): boolean => row.status === "pending" && row.deliveredAt !== null;
+      // `status !== "acked"` is unreachable now that the SQL excludes acked
+      // rows, and is kept only as defensive redundancy — it is not what
+      // protects legacy out-of-enum rows. That protection lives in the SQL
+      // being an exclusion rather than an allow-list; see NOT_ACKED_PREFIX_ROW.
       if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered" && !isResetDeliveredRow(row))) {
         return { ok: false, reason: "prefix_gap" };
       }
 
-      const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
-      const resetPendingIds = prefixRows.filter(isResetDeliveredRow).map((row) => row.id);
-      const committableIds = [...deliveredIds, ...resetPendingIds];
+      // Single pass over the id-ordered prefix, so `committableIds` is
+      // ascending by construction rather than by two concatenated filters.
+      const committableIds: number[] = [];
+      let resetFromPendingCount = 0;
+      for (const row of prefixRows) {
+        if (row.status === "delivered") {
+          committableIds.push(row.id);
+        } else if (isResetDeliveredRow(row)) {
+          committableIds.push(row.id);
+          resetFromPendingCount++;
+        }
+      }
       const ackedAt = new Date();
       const drainPendingSilentRows = async (): Promise<void> => {
         await tx
@@ -661,11 +726,15 @@ export async function ackThroughEntryIdForBoundAgents(
         .where(and(inArray(inboxEntries.id, committableIds), inArray(inboxEntries.status, ["delivered", "pending"])))
         .returning();
       await drainPendingSilentRows();
+      // UPDATE ... RETURNING has no defined row order, so sort explicitly:
+      // the WS layer treats `ackedEntryIds` as an ascending cursor list when
+      // it clears same-socket in-flight accounting.
+      updated.sort((a, b) => a.id - b.id);
       const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
         throughEntry: updatedThroughEntry,
-        disposition: resetPendingIds.length > 0 ? "accepted_from_pending" : "acked",
+        disposition: resetFromPendingCount > 0 ? "accepted_from_pending" : "acked",
         ackedCount: updated.length,
         ackedEntryIds: updated.map((row) => row.id),
       };

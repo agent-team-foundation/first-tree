@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -726,6 +726,73 @@ describe("inbox WS data-plane claim helpers", () => {
     if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
     expect(accepted.ackedCount).toBe(1);
     expect(accepted.ackedEntryIds).toEqual([second.id]);
+  });
+
+  it("ackEntryByIdForBoundAgents returns ackedEntryIds ascending when delivered and reset rows interleave", async () => {
+    // The commit list is assembled from two different row classes (delivered,
+    // and delivered-then-reset-to-pending by recovery). Interleave them so a
+    // future refactor that appends the classes as separate groups — or that
+    // trusts RETURNING's undefined row order — produces a visibly wrong order.
+    // `ws-client.ts` consumes this array as an ascending cursor list.
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 4);
+    if (rows.length !== 4) throw new Error("expected four inbox rows");
+
+    for (const messageId of messageIds) {
+      await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
+    }
+    // Rows 0 and 2 look like recovery-reset deliveries; 1 and 3 stay delivered.
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "pending" })
+      .where(inArray(inboxEntries.id, [rows[0]?.id ?? 0, rows[2]?.id ?? 0]));
+
+    const last = rows[3];
+    if (!last) throw new Error("expected a fourth inbox row");
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, last.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.disposition).toBe("accepted_from_pending");
+    expect(accepted.ackedEntryIds).toEqual(rows.map((row) => row.id));
+    expect(accepted.ackedEntryIds).toEqual([...accepted.ackedEntryIds].sort((a, b) => a - b));
+  });
+
+  it("ackEntryByIdForBoundAgents still rejects a prefix row whose status is outside the delivery enum", async () => {
+    // `ck_inbox_entries_status` is NOT VALID, so a legacy row can carry a
+    // status the current enum does not describe. This pins the prefix scan as
+    // an *exclusion* (`status <> 'acked'`) rather than an allow-list
+    // (`status IN ('pending','delivered')`): an allow-list drops such a row
+    // from the prefix entirely, so the gap check never sees it and the commit
+    // silently steps over it. Verified — swapping the clause to the allow-list
+    // form makes this case return ok:true instead of prefix_gap.
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 2);
+    const first = rows[0];
+    const second = rows[1];
+    if (!first || !second) throw new Error("expected two inbox rows");
+
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+
+    // NOT VALID exempts pre-existing rows but still polices new writes, so the
+    // only way to reproduce a legacy row is to lift the constraint for the
+    // write and restore its exact definition afterwards.
+    const [constraint] = await app.db.execute<{ definition: string }>(sql`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint WHERE conrelid = 'inbox_entries'::regclass AND conname = 'ck_inbox_entries_status'
+    `);
+    const definition = constraint?.definition;
+    if (!definition) throw new Error("ck_inbox_entries_status not found");
+
+    await app.db.execute(sql`ALTER TABLE inbox_entries DROP CONSTRAINT ck_inbox_entries_status`);
+    try {
+      await app.db.execute(sql`UPDATE inbox_entries SET status = 'failed' WHERE id = ${first.id}`);
+
+      const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+      expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
+    } finally {
+      await app.db.execute(sql`UPDATE inbox_entries SET status = 'pending' WHERE id = ${first.id}`);
+      await app.db.execute(sql.raw(`ALTER TABLE inbox_entries ADD CONSTRAINT ck_inbox_entries_status ${definition}`));
+    }
   });
 
   it("ackEntryByIdForBoundAgents acks only entries in the supplied inbox set", async () => {
