@@ -55,6 +55,27 @@ export const inboxEntries = pgTable(
      * pending; keeping message_id first bounds that lookup by page size.
      */
     index("idx_inbox_entries_message_status").on(table.messageId, table.status),
+    /**
+     * ACK-through delta scan (`ackThroughEntryIdForBoundAgents`). Committing a
+     * cursor has to inspect the notify=true rows at or below it inside one
+     * `(inbox_id, chat_id)` partition — but rows already `acked` are terminal:
+     * they can neither open a prefix gap nor be committed a second time.
+     * Excluding them makes this a compact ACK ledger whose size tracks
+     * in-flight delivery depth rather than chat history, so an ACK costs
+     * O(uncommitted) instead of O(history) and a duplicate ACK probes zero
+     * index tuples.
+     *
+     * `id` is the third key column so the scan is bounded by the ack cursor
+     * and already ordered — no sort, no heap visit for rows above the cursor.
+     *
+     * The predicate is spelled with literals, and the query side must match it
+     * literally too: PostgreSQL only applies a partial index when it can prove
+     * the query clauses imply the index predicate, and that proof works on
+     * constants. See `uncommittedNotifyPrefixWhere` in `services/inbox.ts`.
+     */
+    index("idx_inbox_ack_prefix")
+      .on(table.inboxId, table.chatId, table.id)
+      .where(sql`notify = true AND status <> 'acked'`),
     check("ck_inbox_entries_status", sql`${table.status} IN ('pending', 'delivered', 'acked')`),
   ],
 );

@@ -4,7 +4,7 @@ import {
   messageSourceSchema,
   type PrecedingMessage,
 } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, type SQL, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -575,6 +575,38 @@ async function collectPrecedingContext(
   return result;
 }
 
+/** Narrowed projection of the ACK-through delta scan. Only the three columns
+ *  the commit decision reads — the scan runs on every ACK, so it must not
+ *  materialize whole rows. */
+type UncommittedPrefixRow = { id: number; status: string; deliveredAt: Date | null };
+
+/**
+ * WHERE clause selecting the still-uncommitted notify=true rows at or below
+ * `throughId` inside one `(inboxId, chatId)` partition.
+ *
+ * Rows already `acked` are deliberately excluded. They are terminal — an acked
+ * row can neither open a prefix gap nor be committed a second time — so
+ * dropping them makes each ACK cost O(uncommitted) rather than O(chat
+ * history). Scanning (and `FOR UPDATE`-locking) the acked tail was what made
+ * a chat's lifetime ACK work quadratic and stretched lock contention across
+ * rows nobody could act on.
+ *
+ * `notify` and `status` are compared against SQL literals rather than bound
+ * parameters on purpose. `idx_inbox_ack_prefix` is a partial index, and
+ * PostgreSQL only uses one when it can prove the query's clauses imply the
+ * index predicate — a proof that operates on constants. Written as
+ * `notify = $1`, the proof fails for a generic plan and the scan silently
+ * degrades back to walking the whole history. Keep these literal and keep
+ * them matching the index predicate.
+ *
+ * Exported so the scan-cost regression test can EXPLAIN the exact predicate
+ * the ACK path runs instead of a hand-copied lookalike that can drift.
+ */
+export function uncommittedNotifyPrefixWhere(opts: { inboxId: string; chatId: string | null; throughId: number }): SQL {
+  const chatPredicate = opts.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, opts.chatId);
+  return sql`${eq(inboxEntries.inboxId, opts.inboxId)} AND ${chatPredicate} AND ${inboxEntries.notify} = true AND ${inboxEntries.status} <> 'acked' AND ${inboxEntries.id} <= ${opts.throughId}`;
+}
+
 /**
  * Commit inbox progress through the supplied entry id from the WS data plane,
  * scoped to the inboxes the connected socket has bound.
@@ -587,6 +619,12 @@ async function collectPrecedingContext(
  *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
+ *
+ * **Cost contract**: the prefix scan reads and locks only the *uncommitted*
+ * part of that prefix (see `uncommittedNotifyPrefixWhere`), so one ACK is
+ * O(in-flight depth) and independent of how long the chat has been running.
+ * A duplicate ACK reads zero rows. Reintroducing already-acked rows into this
+ * scan restores the O(history) per ACK / O(N^2) per chat behavior of #1671.
  */
 export async function ackThroughEntryIdForBoundAgents(
   db: Database,
@@ -607,21 +645,19 @@ export async function ackThroughEntryIdForBoundAgents(
 
       const chatPredicate = entry.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, entry.chatId);
       const prefixRows = await tx
-        .select()
+        .select({ id: inboxEntries.id, status: inboxEntries.status, deliveredAt: inboxEntries.deliveredAt })
         .from(inboxEntries)
-        .where(
-          and(
-            eq(inboxEntries.inboxId, entry.inboxId),
-            chatPredicate,
-            eq(inboxEntries.notify, true),
-            sql`${inboxEntries.id} <= ${entryId}`,
-          ),
-        )
+        .where(uncommittedNotifyPrefixWhere({ inboxId: entry.inboxId, chatId: entry.chatId, throughId: entryId }))
         .orderBy(asc(inboxEntries.id))
         .for("update");
 
-      const isResetDeliveredRow = (row: ClaimedEntry): boolean => row.status === "pending" && row.deliveredAt !== null;
-      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered" && !isResetDeliveredRow(row))) {
+      const isResetDeliveredRow = (row: UncommittedPrefixRow): boolean =>
+        row.status === "pending" && row.deliveredAt !== null;
+      // Every row here is uncommitted by construction, so a gap is any row the
+      // client was never actually shown: still `pending` with no delivery
+      // stamp. Recovery-reset rows (`pending` but previously delivered) are
+      // committable, not gaps.
+      if (prefixRows.some((row) => row.status !== "delivered" && !isResetDeliveredRow(row))) {
         return { ok: false, reason: "prefix_gap" };
       }
 
@@ -737,6 +773,41 @@ export async function resetDeliveredForInboxes(db: Database, inboxIds: string[])
  *  ever picked up are physically deleted. */
 export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
+/** Rows removed per DELETE statement by `pruneStaleSilentEntries`. Bounds both
+ *  the row locks a single statement holds and the id array it materializes in
+ *  JS — an unbounded delete over a long-dormant deployment's backlog would do
+ *  both at whatever size the backlog happens to be. */
+export const SILENT_ROW_GC_BATCH_SIZE = 2_000;
+
+/** Safety valve on the batch loop. Hitting it leaves the remainder for the
+ *  next background tick rather than letting one GC pass run unbounded. */
+const SILENT_ROW_GC_MAX_BATCHES = 200;
+
+/**
+ * Delete rows matching `predicate` in bounded batches, returning the total
+ * removed. Each statement re-selects against the live predicate, so a second
+ * instance running the same GC is harmless: rows it already took just aren't
+ * there, the batch comes back short, and this pass stops early and leaves the
+ * remainder to the next tick.
+ */
+async function deleteSilentEntriesInBatches(db: Database, predicate: SQL): Promise<number> {
+  let deleted = 0;
+  for (let batch = 0; batch < SILENT_ROW_GC_MAX_BATCHES; batch++) {
+    const removed = await db
+      .delete(inboxEntries)
+      .where(
+        inArray(
+          inboxEntries.id,
+          db.select({ id: inboxEntries.id }).from(inboxEntries).where(predicate).limit(SILENT_ROW_GC_BATCH_SIZE),
+        ),
+      )
+      .returning({ id: inboxEntries.id });
+    deleted += removed.length;
+    if (removed.length < SILENT_ROW_GC_BATCH_SIZE) break;
+  }
+  return deleted;
+}
+
 /**
  * Garbage-collect silent inbox rows so the table doesn't grow forever in
  * chats where a `mention_only` agent is never @mentioned.
@@ -756,28 +827,28 @@ export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
  *
  * Returns the number of rows deleted in each bucket so the background task
  * can log meaningful counts.
+ *
+ * Both buckets are drained in `SILENT_ROW_GC_BATCH_SIZE` batches. This is the
+ * counterweight to ACK-through: the drain that ACK performs is bounded by the
+ * *pending* silent rows in a chat, so letting this GC fall behind is what lets
+ * that set grow. Batching keeps the catch-up pass from taking one huge lock
+ * set when it finally runs.
  */
 export async function pruneStaleSilentEntries(
   db: Database,
   maxAgeSeconds = SILENT_ROW_GC_MAX_AGE_SECONDS,
 ): Promise<{ ackedDeleted: number; stalePendingDeleted: number }> {
-  const ackedDeleted = await db
-    .delete(inboxEntries)
-    .where(and(eq(inboxEntries.notify, false), eq(inboxEntries.status, "acked")))
-    .returning({ id: inboxEntries.id });
+  const ackedDeleted = await deleteSilentEntriesInBatches(
+    db,
+    sql`${eq(inboxEntries.notify, false)} AND ${eq(inboxEntries.status, "acked")}`,
+  );
 
-  const stalePendingDeleted = await db
-    .delete(inboxEntries)
-    .where(
-      and(
-        eq(inboxEntries.notify, false),
-        eq(inboxEntries.status, "pending"),
-        sql`${inboxEntries.createdAt} < NOW() - make_interval(secs => ${maxAgeSeconds})`,
-      ),
-    )
-    .returning({ id: inboxEntries.id });
+  const stalePendingDeleted = await deleteSilentEntriesInBatches(
+    db,
+    sql`${eq(inboxEntries.notify, false)} AND ${eq(inboxEntries.status, "pending")} AND ${inboxEntries.createdAt} < NOW() - make_interval(secs => ${maxAgeSeconds})`,
+  );
 
-  return { ackedDeleted: ackedDeleted.length, stalePendingDeleted: stalePendingDeleted.length };
+  return { ackedDeleted, stalePendingDeleted };
 }
 
 export async function assertInboxOwner(inboxId: string, agentInboxId: string): Promise<void> {

@@ -1,0 +1,36 @@
+-- Compact ACK ledger for inbox_entries.
+--
+-- `ackThroughEntryIdForBoundAgents` commits a cursor by scanning (and
+-- `FOR UPDATE`-locking) the notify=true rows at or below it in one
+-- `(inbox_id, chat_id)` partition. It used to include rows that were already
+-- `acked`, which are terminal — they can neither open a prefix gap nor be
+-- committed again — so per-ACK cost tracked the whole chat history and a
+-- chat's lifetime ACK work grew quadratically. See issue #1671.
+--
+-- This partial index holds only the uncommitted rows, so it stays small no
+-- matter how long a chat runs, and `(inbox_id, chat_id, id)` lets the scan be
+-- bounded by the ack cursor and returned already ordered. A duplicate ACK
+-- probes zero index tuples.
+--
+-- The service-side predicate is spelled with literals (`notify = true`,
+-- `status <> 'acked'`) rather than bound parameters, because PostgreSQL only
+-- applies a partial index when it can prove the query clauses imply the index
+-- predicate — a proof that operates on constants. Keep the two in sync.
+--
+-- ──────────────── Operator note ────────────────
+--
+-- Drizzle wraps every migration file in a single transaction, so
+-- `CREATE INDEX CONCURRENTLY` is not usable here (PG rejects it inside a tx).
+-- A plain `CREATE INDEX` takes a SHARE lock that blocks writes to
+-- `inbox_entries` for its duration — fine on a small table, an outage on a
+-- large production one. Same runbook as 0025_inbox_silent_entries.sql:
+--
+--   1. Pause migrations briefly.
+--   2. Run, OUTSIDE a transaction:
+--        CREATE INDEX CONCURRENTLY idx_inbox_ack_prefix
+--          ON inbox_entries (inbox_id, chat_id, id)
+--          WHERE notify = true AND status <> 'acked';
+--   3. Re-run `pnpm db:migrate`. The `IF NOT EXISTS` below detects the
+--      pre-created index and skips it.
+
+CREATE INDEX IF NOT EXISTS "idx_inbox_ack_prefix" ON "inbox_entries" USING btree ("inbox_id","chat_id","id") WHERE notify = true AND status <> 'acked';

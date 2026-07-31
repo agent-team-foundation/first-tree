@@ -28,6 +28,23 @@ describe("inbox delivery indexes", () => {
     expect(rows[0]?.indexdef).toContain("USING btree (message_id, status)");
   });
 
+  it("creates the partial ACK-prefix index that keeps ack cost off chat history", async () => {
+    const rows = await getDb().execute<{ indexdef: string }>(sql`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'inbox_entries'
+        AND indexname = 'idx_inbox_ack_prefix'
+    `);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.indexdef).toContain("USING btree (inbox_id, chat_id, id)");
+    // The predicate is the contract: `uncommittedNotifyPrefixWhere` spells the
+    // same two clauses as literals so PostgreSQL can prove this index applies.
+    // Drift here silently sends ACK back to scanning the whole chat history.
+    expect(rows[0]?.indexdef).toContain("WHERE ((notify = true) AND (status <> 'acked'::text))");
+  });
+
   it("constrains inbox entry status to active delivery states", async () => {
     const rows = await getDb().execute<{ definition: string }>(sql`
       SELECT pg_get_constraintdef(oid) AS definition
