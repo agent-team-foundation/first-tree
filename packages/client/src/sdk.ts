@@ -832,7 +832,18 @@ export class FirstTreeHubSDK {
    * work without scanning local runtime transcripts.
    */
   async listAgentContextTreeIo(options?: AgentContextTreeIoQuery): Promise<AgentContextTreeIoResponse> {
-    return this.requestJson<AgentContextTreeIoResponse>(`/api/v1/agent/context-tree/io${this.queryString(options)}`);
+    // Built here rather than through `queryString()`, which serializes only
+    // `limit` / `cursor`. Every filter below must reach the server, otherwise
+    // a caller that asked for one chat silently receives the whole feed.
+    const params = new URLSearchParams();
+    if (options?.chatId) params.set("chatId", options.chatId);
+    if (options?.action) params.set("action", options.action);
+    if (options?.since) params.set("since", options.since);
+    if (options?.until) params.set("until", options.until);
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    return this.requestJson<AgentContextTreeIoResponse>(`/api/v1/agent/context-tree/io${query ? `?${query}` : ""}`);
   }
 
   /** Bind Context Tree configuration for this SDK's authenticated agent organization. */

@@ -1,10 +1,11 @@
 import { agentContextTreeIoQuerySchema } from "@first-tree/shared";
 import type { Command } from "commander";
 import { isJsonMode, print } from "../../core/output.js";
-import { createMemberSdk } from "../_shared/member.js";
+import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 
 type TreeIoOptions = {
+  agent?: string;
   chat?: string;
   action?: string;
   since?: string;
@@ -19,6 +20,7 @@ const MAX_ALL_PAGES = 50;
 
 function configureTreeIoCommand(command: Command): void {
   command
+    .option("--agent <name>", "local agent whose IO feed to read (defaults to FIRST_TREE_AGENT_ID)")
     .option("--chat <chat-id>", "restrict to one Chat")
     .option("--action <action>", "restrict to `read` or `write`")
     .option("--since <rfc3339>", "only events at or after this timestamp")
@@ -43,22 +45,28 @@ export async function runTreeIoCommand(context: CommandContext): Promise<void> {
     throw new Error(`Invalid option: ${issue ? `${issue.path.join(".")} ${issue.message}` : "bad request"}`);
   }
 
-  const sdk = createMemberSdk();
+  // The feed is a Class D route: it needs `X-Agent-Id` plus this agent's
+  // runtime-session proof, which only the agent-scoped SDK attaches.
+  const sdk = createSdk(options.agent);
   const items: unknown[] = [];
   let cursor = parsed.data.cursor;
   let pages = 0;
   let truncated = false;
 
-  do {
-    const page = await sdk.listAgentContextTreeIo({ ...parsed.data, ...(cursor ? { cursor } : {}) });
-    items.push(...page.items);
-    cursor = page.nextCursor ?? undefined;
-    pages += 1;
-    if (options.all && cursor && pages >= MAX_ALL_PAGES) {
-      truncated = true;
-      break;
-    }
-  } while (options.all && cursor);
+  try {
+    do {
+      const page = await sdk.listAgentContextTreeIo({ ...parsed.data, ...(cursor ? { cursor } : {}) });
+      items.push(...page.items);
+      cursor = page.nextCursor ?? undefined;
+      pages += 1;
+      if (options.all && cursor && pages >= MAX_ALL_PAGES) {
+        truncated = true;
+        break;
+      }
+    } while (options.all && cursor);
+  } catch (error) {
+    handleSdkError(error);
+  }
 
   if (context.options.json || isJsonMode()) {
     print.result({

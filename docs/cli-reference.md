@@ -1249,8 +1249,8 @@ continue to use the public `tree` commands directly.
 
 Context Tree task-read activation, source-backed write and Seed preflight,
 GitHub App-backed review publication, provider-aware creation/adoption,
-structural validation, and hierarchy browsing. The `tree` namespace carries `read`, `write`, `review`, `seed`,
-`verify`, `tree`, and `init`; the rest (`migrate` / `upgrade` / `status` /
+structural validation, hierarchy browsing, and durable IO readback. The `tree` namespace carries `read`, `write`, `review`, `seed`,
+`verify`, `tree`, `init`, and `io`; the rest (`migrate` / `upgrade` / `status` /
 `codeowners` / `claude-hook` / `inject` / `automation` / `skill` groups) was
 retired in the 2026-06 cleanup because the cloud now owns workspace + tree
 provisioning and the client runtime inlines its own skill payload install.
@@ -1269,7 +1269,10 @@ first-tree tree
 │        [--confirm-source URL] \
 │        [--expected-source-key KEY]          # preflight and optional Admin-confirmed source batch
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
-└── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
+├── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
+└── io [--chat ID] [--action read|write] \
+│      [--since TS] [--until TS] \
+│      [--limit N] [--cursor C] [--all]    # this agent's own Context Tree read/write events
 ```
 
 `first-tree tree read` is the BYO Working Agent activation boundary for one
@@ -1735,6 +1738,33 @@ structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `description`, and `owners`. Human tree text and branch warnings are not
 written to stderr in JSON mode, so stdout stays reserved for machine-readable
 JSON.
+
+`first-tree tree io` lists the **calling agent's own** durable Context Tree
+read/write events. It is the supported way to recover which tree nodes an agent
+actually opened, instead of mining local runtime transcripts. The underlying
+`context_tree_io_events` rows are recorded at tool-execution time across every
+runtime and deliberately outlive session timeline rows, which are dropped when a
+session is terminated or its agent switches runtime.
+
+This command speaks on the runtime agent's behalf: it resolves the local agent
+(`--agent <name>`, otherwise `FIRST_TREE_AGENT_ID`) and sends that agent's
+selector plus its runtime-session proof. It is self-scoped by construction — an
+agent reads its own IO and never another agent's. Team-wide aggregation stays on
+the member-authenticated Context Tree snapshot surface.
+
+Filters are `--chat`, `--action read|write`, `--since`, and `--until`
+(RFC 3339). `--limit` accepts 1-200 and defaults to 50. Results are newest
+first, paginated by an opaque `--cursor`; human mode prints the continuation
+cursor when more results exist. `--all` follows pagination automatically but
+stops after 50 pages and says so, so one invocation can never walk an unbounded
+feed.
+
+Human output is one line per event: timestamp, action, target kind, target
+path, and derivation source. JSON mode returns `{ items, nextCursor }`, adding
+`truncated: true` when `--all` hit its page bound. Each item carries
+`treeHeadCommit` when the runtime observed one, which identifies the candidate
+commit for recovering the node content that was read; it is not a claim that a
+dirty working file matched that commit.
 
 ## Environment variables
 
