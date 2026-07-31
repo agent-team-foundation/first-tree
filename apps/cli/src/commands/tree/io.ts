@@ -78,7 +78,7 @@ export async function runTreeIoCommand(context: CommandContext): Promise<void> {
   }
 
   if (items.length === 0) {
-    print.line("No Context Tree IO events for this agent in the requested range.");
+    print.line("No Context Tree IO events for this agent in the requested range.\n");
     return;
   }
   for (const item of items as Array<{
@@ -89,11 +89,11 @@ export async function runTreeIoCommand(context: CommandContext): Promise<void> {
     source: string;
   }>) {
     print.line(
-      `${item.createdAt}  ${item.action.padEnd(5)}  ${item.targetKind.padEnd(9)}  ${item.targetPath}  (${item.source})`,
+      `${item.createdAt}  ${item.action.padEnd(5)}  ${item.targetKind.padEnd(9)}  ${item.targetPath}  (${item.source})\n`,
     );
   }
-  if (cursor) print.line(`\nMore results — continue with --cursor ${cursor}`);
-  if (truncated) print.line(`Stopped after ${MAX_ALL_PAGES} pages; rerun with --cursor to continue.`);
+  if (cursor) print.line(`\nMore results — continue with --cursor ${cursor}\n`);
+  if (truncated) print.line(`Stopped after ${MAX_ALL_PAGES} pages; rerun with --cursor to continue.\n`);
 }
 
 export const treeIoCommand: SubcommandModule = {
