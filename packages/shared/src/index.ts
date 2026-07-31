@@ -469,6 +469,7 @@ export {
 export {
   type AgentContextTreeIoEvent,
   type AgentContextTreeIoQuery,
+  type AgentContextTreeIoQueryInput,
   type AgentContextTreeIoResponse,
   agentContextTreeIoEventSchema,
   agentContextTreeIoQuerySchema,

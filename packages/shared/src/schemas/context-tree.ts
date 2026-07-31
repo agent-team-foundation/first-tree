@@ -487,6 +487,10 @@ export const agentContextTreeIoQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().min(1).optional(),
 });
+// Caller input: `limit` carries a schema default, so the parsed OUTPUT type
+// makes it required. Consumers building a query must be able to omit it.
+export type AgentContextTreeIoQueryInput = z.input<typeof agentContextTreeIoQuerySchema>;
+// Parsed output, where `limit` is always a concrete number.
 export type AgentContextTreeIoQuery = z.infer<typeof agentContextTreeIoQuerySchema>;
 
 export const agentContextTreeIoEventSchema = z.object({

@@ -66,6 +66,18 @@ describe("FirstTreeHubSDK.listAgentContextTreeIo", () => {
     expect(headers.get("authorization")).toBe("Bearer member-jwt");
   });
 
+  it("accepts a filter without an explicit limit and still defers to the server default", async () => {
+    const fetchMock = stubFeed();
+    // Regression: the options type must be the schema INPUT type. With the
+    // parsed output type, `limit` is required by its `.default(50)` and this
+    // call would not compile even though the server supplies the default.
+    await agentSdk().listAgentContextTreeIo({ action: "read" });
+
+    const url = requestedUrl(fetchMock);
+    expect(url.searchParams.get("action")).toBe("read");
+    expect(url.searchParams.has("limit")).toBe(false);
+  });
+
   it("omits the query string entirely when no filter is supplied", async () => {
     const fetchMock = stubFeed();
     await agentSdk().listAgentContextTreeIo();

@@ -3,7 +3,7 @@ import {
   AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type Agent,
-  type AgentContextTreeIoQuery,
+  type AgentContextTreeIoQueryInput,
   type AgentContextTreeIoResponse,
   type AgentRuntimeConfig,
   type AgentVisibility,
@@ -831,7 +831,7 @@ export class FirstTreeHubSDK {
    * answer "which nodes did this agent actually open, and when" for historical
    * work without scanning local runtime transcripts.
    */
-  async listAgentContextTreeIo(options?: AgentContextTreeIoQuery): Promise<AgentContextTreeIoResponse> {
+  async listAgentContextTreeIo(options?: AgentContextTreeIoQueryInput): Promise<AgentContextTreeIoResponse> {
     // Built here rather than through `queryString()`, which serializes only
     // `limit` / `cursor`. Every filter below must reach the server, otherwise
     // a caller that asked for one chat silently receives the whole feed.
