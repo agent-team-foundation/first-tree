@@ -1,0 +1,1 @@
+CREATE INDEX "idx_inbox_unacked_cursor" ON "inbox_entries" USING btree ("inbox_id","chat_id","notify","id") WHERE status IN ('pending', 'delivered');

@@ -728,6 +728,65 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(accepted.ackedEntryIds).toEqual([second.id]);
   });
 
+  it("ackEntryByIdForBoundAgents merges delivered and reset rows into one ordered delta", async () => {
+    // PERF-008 shape: the commit is issued as two targeted UPDATEs (delivered
+    // promotion + reset-delivered promotion). When both kinds interleave in
+    // id order, the reported delta must still come back as a single ascending
+    // ackedEntryIds list with the reset disposition.
+    const app = getApp();
+    const { a2, rows } = await seedDeliverables(app, 4);
+    const [first, second, third, fourth] = rows;
+    if (!first || !second || !third || !fourth) throw new Error("expected four inbox rows");
+
+    const drained = await inboxService.claimBacklogForPush(app.db, a2.agent.inboxId, 10);
+    expect(drained).toHaveLength(4);
+    // Simulate recovery on the 2nd row: back to pending, deliveredAt kept.
+    await app.db.update(inboxEntries).set({ status: "pending" }).where(eq(inboxEntries.id, second.id));
+
+    const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, fourth.id, [a2.agent.inboxId]);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(accepted.disposition).toBe("accepted_from_pending");
+    expect(accepted.ackedCount).toBe(4);
+    expect(accepted.ackedEntryIds).toEqual([first.id, second.id, third.id, fourth.id]);
+    expect(accepted.throughEntry.id).toBe(fourth.id);
+    expect(accepted.throughEntry.status).toBe("acked");
+  });
+
+  it("ackEntryByIdForBoundAgents leaves committed history untouched when acking new rows", async () => {
+    // PERF-008: acked rows are the committed high-water ledger — a later ACK
+    // in the same chat must neither re-report them in the delta nor rewrite
+    // their ackedAt stamps.
+    const app = getApp();
+    const { a2, messageIds, rows } = await seedDeliverables(app, 3);
+    const [first, second, third] = rows;
+    if (!first || !second || !third) throw new Error("expected three inbox rows");
+
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[0] ?? "");
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[1] ?? "");
+    const committed = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
+    expect(committed.ok).toBe(true);
+    const historyBefore = await app.db
+      .select({ id: inboxEntries.id, ackedAt: inboxEntries.ackedAt })
+      .from(inboxEntries)
+      .where(inArray(inboxEntries.id, [first.id, second.id]))
+      .orderBy(asc(inboxEntries.id));
+
+    await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageIds[2] ?? "");
+    const delta = await inboxService.ackEntryByIdForBoundAgents(app.db, third.id, [a2.agent.inboxId]);
+    expect(delta.ok).toBe(true);
+    if (!delta.ok) throw new Error("ack-through unexpectedly rejected");
+    expect(delta.disposition).toBe("acked");
+    expect(delta.ackedEntryIds).toEqual([third.id]);
+
+    const historyAfter = await app.db
+      .select({ id: inboxEntries.id, ackedAt: inboxEntries.ackedAt })
+      .from(inboxEntries)
+      .where(inArray(inboxEntries.id, [first.id, second.id]))
+      .orderBy(asc(inboxEntries.id));
+    expect(historyAfter).toEqual(historyBefore);
+  });
+
   it("ackEntryByIdForBoundAgents acks only entries in the supplied inbox set", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);

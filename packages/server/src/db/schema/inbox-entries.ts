@@ -55,6 +55,18 @@ export const inboxEntries = pgTable(
      * pending; keeping message_id first bounds that lookup by page size.
      */
     index("idx_inbox_entries_message_status").on(table.messageId, table.status),
+    /**
+     * ACK-through / recovery hot path (PERF-008). ACK commits are delta
+     * scans over rows that are still in flight — `pending` gap probing,
+     * `delivered` → `acked` promotion, and silent-row draining all carry a
+     * `status` predicate implied by this partial index. Excluding `acked`
+     * rows keeps every per-ACK scan bounded by the in-flight window instead
+     * of the full chat history, and keeps the index itself small and hot no
+     * matter how much acked history a chat accumulates.
+     */
+    index("idx_inbox_unacked_cursor")
+      .on(table.inboxId, table.chatId, table.notify, table.id)
+      .where(sql`status IN ('pending', 'delivered')`),
     check("ck_inbox_entries_status", sql`${table.status} IN ('pending', 'delivered', 'acked')`),
   ],
 );

@@ -4,7 +4,7 @@ import {
   messageSourceSchema,
   type PrecedingMessage,
 } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -585,6 +585,18 @@ async function collectPrecedingContext(
  * prefix are atomically marked `acked`; non-committable gaps reject the commit
  * so the database cannot persist `A pending, B acked`.
  *
+ * Cost model (PERF-008): the commit is a delta scan, not a prefix scan. Only
+ * rows still in flight — `pending` (gap probe) and `delivered` /
+ * delivered-then-reset (promotion) — are ever read or locked; already-acked
+ * history is never touched, so per-ACK work is bounded by the in-flight
+ * window regardless of chat length, and a duplicate ACK finds an empty delta.
+ * The `acked` status itself is the committed high-water ledger: `id <=
+ * cursor AND status <> 'acked'` is exactly the uncommitted delta, served by
+ * the `idx_inbox_unacked_cursor` partial index. This relies on `acked` being
+ * terminal and on `deliveredAt` never being cleared once set (recovery resets
+ * `status` only), so no row can re-enter the gap set behind a committed
+ * cursor; bigserial ids keep late inserts strictly above it.
+ *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
  */
@@ -606,29 +618,41 @@ export async function ackThroughEntryIdForBoundAgents(
       if (!entry.notify) return { ok: false, reason: "non_notify" };
 
       const chatPredicate = entry.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, entry.chatId);
-      const prefixRows = await tx
-        .select()
+      const notifyCursorScope = and(
+        eq(inboxEntries.inboxId, entry.inboxId),
+        chatPredicate,
+        eq(inboxEntries.notify, true),
+        sql`${inboxEntries.id} <= ${entryId}`,
+      );
+
+      // Gap probe: only never-delivered pending rows make the prefix
+      // non-committable (recovery resets keep their `deliveredAt` and stay
+      // committable). `FOR UPDATE` preserves the old blocking semantics — if
+      // a concurrent claim holds one of these rows mid-flight, we wait and PG
+      // re-evaluates the predicate on the committed version, so a row that
+      // just became `delivered` stops counting as a gap instead of racing us.
+      const [gapRow] = await tx
+        .select({ id: inboxEntries.id })
         .from(inboxEntries)
-        .where(
-          and(
-            eq(inboxEntries.inboxId, entry.inboxId),
-            chatPredicate,
-            eq(inboxEntries.notify, true),
-            sql`${inboxEntries.id} <= ${entryId}`,
-          ),
-        )
+        .where(and(notifyCursorScope, eq(inboxEntries.status, "pending"), isNull(inboxEntries.deliveredAt)))
         .orderBy(asc(inboxEntries.id))
+        .limit(1)
         .for("update");
+      if (gapRow) return { ok: false, reason: "prefix_gap" };
 
-      const isResetDeliveredRow = (row: ClaimedEntry): boolean => row.status === "pending" && row.deliveredAt !== null;
-      if (prefixRows.some((row) => row.status !== "acked" && row.status !== "delivered" && !isResetDeliveredRow(row))) {
-        return { ok: false, reason: "prefix_gap" };
-      }
-
-      const deliveredIds = prefixRows.filter((row) => row.status === "delivered").map((row) => row.id);
-      const resetPendingIds = prefixRows.filter(isResetDeliveredRow).map((row) => row.id);
-      const committableIds = [...deliveredIds, ...resetPendingIds];
       const ackedAt = new Date();
+      const ackedDelivered = await tx
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt })
+        .where(and(notifyCursorScope, eq(inboxEntries.status, "delivered")))
+        .returning();
+      const ackedFromReset = await tx
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt })
+        .where(and(notifyCursorScope, eq(inboxEntries.status, "pending"), isNotNull(inboxEntries.deliveredAt)))
+        .returning();
+      const updated = [...ackedDelivered, ...ackedFromReset].sort((a, b) => a.id - b.id);
+
       const drainPendingSilentRows = async (): Promise<void> => {
         await tx
           .update(inboxEntries)
@@ -644,7 +668,7 @@ export async function ackThroughEntryIdForBoundAgents(
           );
       };
 
-      if (committableIds.length === 0) {
+      if (updated.length === 0) {
         await drainPendingSilentRows();
         return {
           ok: true,
@@ -655,17 +679,12 @@ export async function ackThroughEntryIdForBoundAgents(
         };
       }
 
-      const updated = await tx
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt })
-        .where(and(inArray(inboxEntries.id, committableIds), inArray(inboxEntries.status, ["delivered", "pending"])))
-        .returning();
       await drainPendingSilentRows();
       const updatedThroughEntry = updated.find((row) => row.id === entryId) ?? entry;
       return {
         ok: true,
         throughEntry: updatedThroughEntry,
-        disposition: resetPendingIds.length > 0 ? "accepted_from_pending" : "acked",
+        disposition: ackedFromReset.length > 0 ? "accepted_from_pending" : "acked",
         ackedCount: updated.length,
         ackedEntryIds: updated.map((row) => row.id),
       };
