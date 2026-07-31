@@ -474,3 +474,44 @@ export const contextTreeInstallationInfoResponseSchema = z.object({
   suspended: z.boolean(),
 });
 export type ContextTreeInstallationInfoResponse = z.infer<typeof contextTreeInstallationInfoResponseSchema>;
+
+// Agent-scoped Context Tree IO feed. A runtime agent reads back its OWN
+// durable read/write facts so a value audit can join them against the work
+// that followed, without scanning local runtime transcripts. Org-wide
+// aggregation stays on the member-authenticated snapshot endpoint.
+export const agentContextTreeIoQuerySchema = z.object({
+  chatId: z.string().min(1).optional(),
+  action: contextTreeIoActionSchema.optional(),
+  since: z.string().datetime({ offset: true }).optional(),
+  until: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  cursor: z.string().min(1).optional(),
+});
+export type AgentContextTreeIoQuery = z.infer<typeof agentContextTreeIoQuerySchema>;
+
+export const agentContextTreeIoEventSchema = z.object({
+  id: z.string(),
+  chatId: z.string(),
+  action: contextTreeIoActionSchema,
+  source: contextTreeIoSourceSchema,
+  runtimeProvider: z.string(),
+  targetKind: contextTreeIoTargetKindSchema,
+  targetPath: z.string(),
+  treeRepoUrl: z.string(),
+  treeBranch: z.string(),
+  // Local checkout HEAD observed for the event, when the client reported one.
+  // Identifies the candidate snapshot for recovering the node's content; it is
+  // not a claim that a dirty working file matched that commit.
+  treeHeadCommit: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .nullable(),
+  createdAt: z.string(),
+});
+export type AgentContextTreeIoEvent = z.infer<typeof agentContextTreeIoEventSchema>;
+
+export const agentContextTreeIoResponseSchema = z.object({
+  items: z.array(agentContextTreeIoEventSchema),
+  nextCursor: z.string().nullable(),
+});
+export type AgentContextTreeIoResponse = z.infer<typeof agentContextTreeIoResponseSchema>;

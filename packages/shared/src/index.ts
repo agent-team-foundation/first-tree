@@ -467,6 +467,12 @@ export {
   contextReviewerEnablementInputSchema,
 } from "./schemas/context-reviewer-settings.js";
 export {
+  type AgentContextTreeIoEvent,
+  type AgentContextTreeIoQuery,
+  type AgentContextTreeIoResponse,
+  agentContextTreeIoEventSchema,
+  agentContextTreeIoQuerySchema,
+  agentContextTreeIoResponseSchema,
   CONTEXT_TREE_CHANGE_TYPES,
   CONTEXT_TREE_EDGE_KINDS,
   CONTEXT_TREE_NODE_KINDS,

@@ -3,6 +3,8 @@ import {
   AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type Agent,
+  type AgentContextTreeIoQuery,
+  type AgentContextTreeIoResponse,
   type AgentRuntimeConfig,
   type AgentVisibility,
   type ArchiveChatResponse,
@@ -820,6 +822,17 @@ export class FirstTreeHubSDK {
   /** Read the live bound Tree plus Reviewer assignment as one runtime tuple. */
   async getAgentContextReviewConfig(): Promise<ContextReviewRuntimeConfig> {
     return this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
+  }
+
+  /**
+   * Read this authenticated agent's own durable Context Tree read/write facts.
+   *
+   * `context_tree_io_events` outlives `session_events`, so a value audit can
+   * answer "which nodes did this agent actually open, and when" for historical
+   * work without scanning local runtime transcripts.
+   */
+  async listAgentContextTreeIo(options?: AgentContextTreeIoQuery): Promise<AgentContextTreeIoResponse> {
+    return this.requestJson<AgentContextTreeIoResponse>(`/api/v1/agent/context-tree/io${this.queryString(options)}`);
   }
 
   /** Bind Context Tree configuration for this SDK's authenticated agent organization. */

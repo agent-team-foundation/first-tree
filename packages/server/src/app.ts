@@ -15,6 +15,7 @@ import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
+import { agentContextTreeIoRoutes } from "./api/agent/context-tree-io.js";
 import { agentCronJobRoutes } from "./api/agent/cron-jobs.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentGithubTaskRunRoutes } from "./api/agent/github-task-runs.js";
@@ -645,6 +646,7 @@ export async function buildApp(config: Config, options: BuildAppOptions = {}) {
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
+          await scope.register(agentContextTreeIoRoutes);
           if (config.docs.enabled) {
             await scope.register(agentDocumentRoutes);
           }
