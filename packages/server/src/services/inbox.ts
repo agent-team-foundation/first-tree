@@ -1,4 +1,5 @@
 import {
+  INBOX_ENTRY_STATUSES,
   type InboxEntryWithMessage,
   inboxEntryStatusSchema,
   messageSourceSchema,
@@ -17,6 +18,23 @@ import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 /** Claimed `inbox_entries` row, typed via Drizzle `$inferSelect` so column-mode
  *  conversions (bigserial → number, timestamp → Date) flow through. */
 type ClaimedEntry = typeof inboxEntries.$inferSelect;
+
+/**
+ * The statuses whose rows can still change an ACK-through decision.
+ *
+ * Derived from the shared status domain minus the terminal one rather than
+ * written out as a literal pair. The direction matters: if a fourth status is
+ * ever added, a derived set keeps scanning it — so an unknown status can still
+ * reject the commit as a prefix gap, exactly as the original status-agnostic
+ * query did. A hand-written `["pending", "delivered"]` would instead start
+ * skipping those rows and let the ACK through, turning a safe rejection into
+ * silent data loss. The table's status domain has changed once already (a
+ * legacy `failed` value, normalised by migration 0066), and its CHECK
+ * constraint was added `NOT VALID`, so this is not a hypothetical.
+ */
+export const ACK_PREFIX_SCAN_STATUSES = inboxEntryStatusSchema.options.filter(
+  (status) => status !== INBOX_ENTRY_STATUSES.ACKED,
+);
 
 export type AckEntryResult =
   | {
@@ -606,6 +624,32 @@ export async function ackThroughEntryIdForBoundAgents(
       if (!entry.notify) return { ok: false, reason: "non_notify" };
 
       const chatPredicate = entry.chatId === null ? isNull(inboxEntries.chatId) : eq(inboxEntries.chatId, entry.chatId);
+      // Scan only the rows that can still change the outcome. Already-acked
+      // rows flip none of the three decisions made below: they never form a
+      // prefix gap, are never committable, and are never reset-from-pending.
+      // Excluding them is therefore an exact equivalence rather than an
+      // approximation, and it holds because `acked` is terminal for status
+      // transitions — every UPDATE against this table is guarded on 'pending'
+      // or 'delivered', and the single statement that touches acked rows at
+      // all is the GC DELETE in `pruneStaleSilentEntries`, restricted to
+      // notify=false.
+      //
+      // This clause is also what bounds the scan. `idx_inbox_chat_silent` is
+      // (inbox_id, chat_id, notify, status); leaving `status` unconstrained
+      // used only three of its four equality columns, so the planner had to
+      // walk every row of the partition and re-check `id <= cursor` as a
+      // filter — O(chat history) per ACK and O(N^2) over a chat's life, even
+      // for a duplicate ACK that commits nothing. It has to be a positive IN:
+      // `status <> 'acked'` is not sargable, stays a filter, and saves only
+      // the row locks.
+      //
+      // Operational caveat: on PostgreSQL 16 the index condition is only
+      // reached under a custom plan. Measured stable under the default
+      // `plan_cache_mode = auto` on 16.14 and 17.10 — the generic estimate is
+      // far more expensive, so the planner keeps rejecting it — but a
+      // deployment that forces `force_generic_plan` globally would silently
+      // return this scan to O(history) on 16. PostgreSQL 17 uses the bound
+      // parameters as an index condition either way.
       const prefixRows = await tx
         .select()
         .from(inboxEntries)
@@ -614,6 +658,7 @@ export async function ackThroughEntryIdForBoundAgents(
             eq(inboxEntries.inboxId, entry.inboxId),
             chatPredicate,
             eq(inboxEntries.notify, true),
+            inArray(inboxEntries.status, ACK_PREFIX_SCAN_STATUSES),
             sql`${inboxEntries.id} <= ${entryId}`,
           ),
         )
