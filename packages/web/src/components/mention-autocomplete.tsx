@@ -192,7 +192,17 @@ export function AgentOption({
  * host row's width) instead of stretching the chip across — or past —
  * the composer; hover discloses the full identity via `title`.
  */
-export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidate; onRemove?: () => void }) {
+export function AgentToken({
+  candidate,
+  onRemove,
+  mobile = false,
+}: {
+  candidate: MentionCandidate;
+  onRemove?: () => void;
+  /** Touch surface: the remove × is always visible (no hover on touch) and its
+   *  tap target is enlarged. Desktop keeps the hover-revealed compact ×. */
+  mobile?: boolean;
+}) {
   const label = candidate.displayName ?? candidate.name ?? candidate.agentId.slice(0, 8);
   return (
     <span
@@ -220,7 +230,10 @@ export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidat
           type="button"
           onClick={onRemove}
           title="Remove participant"
-          className="opacity-0 transition-opacity group-hover:opacity-100"
+          aria-label={`Remove ${label}`}
+          // Touch has no hover, so the × must stay visible on mobile; desktop
+          // keeps it hover-revealed to keep the chip row calm.
+          className={mobile ? "transition-opacity" : "opacity-0 transition-opacity group-hover:opacity-100"}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -229,9 +242,13 @@ export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidat
             padding: 0,
             cursor: "pointer",
             color: "var(--fg-3)",
+            // Mobile: a full 44 touch target that clears the minimum the composer
+            // controls use; the × glyph stays small, just centered in the box.
+            // Desktop keeps the compact, hover-revealed × unchanged.
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
-          <X className="h-3 w-3" />
+          <X className={mobile ? "h-4 w-4" : "h-3 w-3"} />
         </button>
       )}
     </span>
