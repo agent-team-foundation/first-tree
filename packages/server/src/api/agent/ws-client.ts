@@ -67,6 +67,7 @@ import {
   storeSessionCommandRpcResult,
 } from "../../services/session-command-rpc.js";
 import * as sessionEventService from "../../services/session-event.js";
+import { KeyedOperationQueue } from "../../utils/keyed-operation-queue.js";
 
 /**
  * Default per-agent in-flight fuse when `server.inbox.maxInFlightPerAgent` is
@@ -829,18 +830,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       // FIFO per session so session:event persistence happens before any
       // subsequent eviction's clearEvents — without this, the message handler
       // is async and the next message can race the previous one's DB write.
-      const sessionOpQueues = new Map<string, Promise<void>>();
+      const sessionOpQueue = new KeyedOperationQueue();
       function chainSessionOp(agentId: string, chatId: string, op: () => Promise<void>): Promise<void> {
         const key = `${agentId}:${chatId}`;
-        const prev = sessionOpQueues.get(key) ?? Promise.resolve();
-        const next = prev.then(op, op);
-        sessionOpQueues.set(
-          key,
-          next.finally(() => {
-            if (sessionOpQueues.get(key) === next) sessionOpQueues.delete(key);
-          }),
-        );
-        return next;
+        return sessionOpQueue.run(key, op);
       }
 
       let authTimeout: NodeJS.Timeout | null = null;
@@ -2155,6 +2148,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         lastInboxRepairDrainAtByAgent.clear();
         inboxInFlightByAgent.clear();
         inboxInFlightOwnersByEntryId.clear();
+        sessionOpQueue.clear();
 
         if (clientId) {
           // Reconnect-race guard. A typical `systemctl restart` produces this
