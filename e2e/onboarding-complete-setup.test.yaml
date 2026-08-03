@@ -1,0 +1,41 @@
+fileType: momentic/test/v2
+id: early-firm-harbor-dreams-poorly
+description: A new user completes onboarding end to end and lands in the workspace
+defaultEnv: first-tree-local
+steps:
+  # ── Sign up ─────────────────────────────────────────────────────────────────
+  - module:
+      path: ./modules/sign-up-fresh-user.module.yaml
+
+  # ── Step 1 of 3 — create the team (name comes prefilled from the username) ──
+  - click: Continue button
+
+  # ── Step 2 of 3 — connect a computer ────────────────────────────────────────
+  # The product waits here for a client daemon to report in. See
+  # seed-connected-computer.js for why that machine is a fixture in this test.
+  - javascript:
+      code: ./scripts/seed-connected-computer.js
+      environment: node
+      saveAs: FIXTURE_CLIENT_ID
+  # Gate on the UI actually observing the computer (it polls every 5s) so the
+  # click below lands on an enabled button rather than racing the poll.
+  - assert: the connect-computer step reports a connected computer and lists
+      Claude Code as a ready coding agent on it
+  - click: Continue button
+
+  # ── Step 3 of 3 — create the first agent ────────────────────────────────────
+  - click: Create agent button
+  # Without a real daemon the new agent never binds, so presence is seeded to
+  # let the run reach the end of onboarding instead of the "taking longer than
+  # usual" fallback. The script polls until the agent row exists.
+  - javascript:
+      code: ./scripts/seed-agent-online.js
+      environment: node
+      saveAs: FIXTURE_AGENT_ID
+  - click: Start chat button
+
+  # ── Landing — onboarding is done and the user is in the workspace ───────────
+  - waitForUrl: /?c=
+  - assert: the workspace is open on a chat named Get started with First Tree,
+      whose first message asks the user's new assistant agent for help getting
+      started, and a message composer addressed to that agent is available

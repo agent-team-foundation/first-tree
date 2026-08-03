@@ -1,0 +1,17 @@
+fileType: momentic/module/v2
+description: Register a brand-new First Tree user through the local dev GitHub
+  callback and land on the onboarding flow
+id: twin-swept-bark-walks-nimbly
+steps:
+  # A fresh identity per run — see new-test-identity.js for why reuse would
+  # silently sign in as the previous run's user instead of registering.
+  - javascript:
+      code: ../scripts/new-test-identity.js
+      environment: node
+      saveAs: NEW_USER
+  # First Tree has no password sign-up: accounts are created through GitHub /
+  # Google OAuth. `dev-callback` is the product's own localhost-only stub for
+  # that exchange (enabled by FIRST_TREE_DEV_CALLBACK_ENABLED in the server dev
+  # script), so this is the real registration path minus the github.com hop.
+  - navigate: /api/v1/auth/github/dev-callback?githubId={{env.GH_ID}}&login={{env.GH_LOGIN}}
+  - waitForUrl: /onboarding
