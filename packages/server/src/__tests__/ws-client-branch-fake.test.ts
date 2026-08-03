@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { AUTH_REJECTED_CODES, type ClientMessage, type InboxEntryWithMessage } from "@first-tree/shared";
 import { SignJWT } from "jose";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { clientWsRoutes } from "../api/agent/ws-client.js";
 import type { inboxEntries } from "../db/schema/inbox-entries.js";
 import * as activityService from "../services/activity.js";
@@ -57,6 +57,45 @@ function queuedDb(results: unknown[][]): unknown {
   return {
     select: vi.fn(() => queryChain(results.shift() ?? [])),
     update: vi.fn(() => queryChain(results.shift() ?? [])),
+  };
+}
+
+/** Projection keys unique to the bound-agent route re-validation query. */
+function isRouteValidationProjection(projection: unknown): boolean {
+  if (!projection || typeof projection !== "object") return false;
+  const keys = Object.keys(projection);
+  return keys.includes("uuid") && keys.includes("runtimeProvider") && keys.includes("metadata");
+}
+
+/**
+ * Fake db that answers by projection shape rather than call order.
+ *
+ * `queuedDb`'s positional queue can't serve a multi-agent socket: the
+ * post-bind backlog drain runs detached, so its route-validation SELECT
+ * interleaves non-deterministically with the next `agent:bind` lookup and
+ * shifts every later slot. Routing by projection keeps each query family on
+ * its own queue.
+ */
+function projectionRoutedDb(opts: {
+  /** Auth-time user lookup — stable for the whole socket. */
+  authUser: unknown[];
+  /** Client row read at register and again on every `agent:bind`. */
+  bindingClient: unknown[];
+  /** Agent row per `agent:bind`, in bind order. */
+  binds: unknown[][];
+  /** Rows every bound-agent route re-validation resolves against. */
+  routeRows: unknown[];
+}): unknown {
+  const binds = [...opts.binds];
+  return {
+    select: vi.fn((projection?: unknown) => {
+      if (isRouteValidationProjection(projection)) return queryChain(opts.routeRows);
+      const keys = projection && typeof projection === "object" ? Object.keys(projection) : [];
+      if (keys.includes("displayName") && keys.includes("clientUserId")) return queryChain(binds.shift() ?? []);
+      if (keys.includes("retiredAt")) return queryChain(opts.bindingClient);
+      return queryChain(opts.authUser);
+    }),
+    update: vi.fn(() => queryChain([])),
   };
 }
 
@@ -326,6 +365,10 @@ describe("Agent client WS branch fakes", () => {
   function activeAgentRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       id: "agent_1",
+      // Same column as `id` above (`agents.uuid`), under the alias the batched
+      // route re-validation selects it as — that path keys rows by uuid rather
+      // than taking the first row positionally.
+      uuid: "agent_1",
       displayName: "Agent",
       type: "agent",
       organizationId: "org_1",
@@ -372,14 +415,24 @@ describe("Agent client WS branch fakes", () => {
 
   async function bindAgent(socket: FakeSocket, handler: WsHandler, ref = "bind-ok"): Promise<void> {
     await authenticateAndRegister(socket, handler);
+    await emitBind(socket, "agent_1", ref);
+  }
+
+  /** Bind an already-authenticated socket to one more agent. */
+  async function emitBind(socket: FakeSocket, agentId: string, ref: string): Promise<void> {
     await emitMessage(socket, {
       type: "agent:bind",
-      agentId: "agent_1",
+      agentId,
       ref,
       runtimeType: "claude-code",
       runtimeVersion: "test",
     });
-    await waitUntil(() => socket.sent.some((frame) => (frame as { type?: string }).type === "agent:bound"));
+    await waitUntil(() =>
+      socket.sent.some((frame) => {
+        const bound = frame as { type?: string; ref?: string };
+        return bound.type === "agent:bound" && bound.ref === ref;
+      }),
+    );
   }
 
   it("rejects first-bind races when the claim update returns no row", async () => {
@@ -552,6 +605,47 @@ describe("Agent client WS branch fakes", () => {
     await emitMessage(socket, { type: "session:state", agentId: "agent_1", chatId: "chat_1", state: "active" });
 
     expect(socket.sent).toContainEqual({ type: "error", message: "Agent not bound" });
+  });
+
+  it("re-validates every bound agent's route in one query per heartbeat", async () => {
+    // PERF-061: heartbeat used to probe each bound agent with its own SELECT,
+    // and a client has no hard agent-count cap. Pin the batched form — the
+    // assertion is on query count, so a regression to the sequential loop
+    // fails here even though both shapes produce the same routed set.
+    mockSuccessfulBindServices();
+    // No restored agents → the repair pass is skipped, leaving exactly one
+    // route re-validation per heartbeat to assert on.
+    vi.spyOn(runtimeLivenessService, "recordClientHeartbeat").mockResolvedValue({
+      clientUpdated: true,
+      restoredAgentIds: [],
+    });
+    const agentRow2 = activeAgentRow({ id: "agent_2", uuid: "agent_2", inboxId: "inbox_2" });
+    const db = projectionRoutedDb({
+      authUser: [{ id: "user_1", status: "active" }],
+      bindingClient: [{ userId: "user_1", retiredAt: null }],
+      binds: [[activeAgentRow()], [agentRow2]],
+      // Every route re-validation resolves against both agents, so a batched
+      // caller gets one answer and a sequential caller would get two.
+      routeRows: [activeAgentRow(), agentRow2],
+    }) as { select: Mock };
+    const { handler } = routeHarness(db);
+    const socket = new FakeSocket();
+    await bindAgent(socket, handler, "bind-batch-1");
+    await emitBind(socket, "agent_2", "bind-batch-2");
+
+    const routeValidationCalls = (): unknown[][] =>
+      db.select.mock.calls.filter(([projection]) => isRouteValidationProjection(projection));
+
+    db.select.mockClear();
+    await emitMessage(socket, { type: "heartbeat" });
+    await waitUntil(() => socket.sent.some((frame) => (frame as { type?: string }).type === "heartbeat:ack"));
+
+    expect(routeValidationCalls()).toHaveLength(1);
+    // …and that single statement really did validate both agents.
+    expect(runtimeLivenessService.recordClientHeartbeat).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ routedAgentIds: expect.arrayContaining(["agent_1", "agent_2"]) }),
+    );
   });
 
   it("throttles heartbeat-triggered inbox repair when the last repair is recent", async () => {

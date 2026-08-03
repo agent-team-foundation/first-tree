@@ -1,8 +1,11 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
 import type { FastifyInstance } from "fastify";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import * as schema from "../db/schema/index.js";
 import { createAgent, getAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import * as inboxService from "../services/inbox.js";
@@ -813,5 +816,128 @@ describe("inbox WS data-plane claim helpers", () => {
     const app = getApp();
     const res = await inboxService.ackEntryByIdForBoundAgents(app.db, 1, []);
     expect(res).toEqual({ ok: false, reason: "not_found_or_not_bound" });
+  });
+
+  it("bundles trigger-relative context for every trigger of a multi-chat batch drain", async () => {
+    // PERF-061 moved preceding-context assembly from one query per trigger to a
+    // single set-based statement. The old shape walked chats sequentially and
+    // carried the previous-trigger cursor in a JS loop variable; the batched
+    // shape resolves every window in one LATERAL. This drains three triggers
+    // across two chats at once — the first multi-trigger, multi-chat claim in
+    // the suite — so a cursor that leaks across chats, or a chat's first
+    // trigger that forgets its already-delivered predecessor, fails here.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `batch-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `batch-obs-${uid}` });
+    const chatA = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+    const chatB = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    const silent = (chatId: string, content: string) =>
+      sendMessage(
+        app.db,
+        chatId,
+        human.agent.uuid,
+        { source: "api", format: "text", content },
+        { allowRecipientlessSend: true },
+      );
+    const trigger = (chatId: string, content: string) =>
+      sendMessage(app.db, chatId, human.agent.uuid, {
+        source: "api",
+        format: "text",
+        content,
+        metadata: { mentions: [observer.agent.uuid] },
+      });
+
+    // Chat A opens with a trigger claimed on its own, so the batch's first
+    // chat-A trigger has to resolve its lower bound from the table rather than
+    // from the batch — the COALESCE fallback in the batched statement.
+    await silent(chatA.id, "a-before-earlier-trigger");
+    await trigger(chatA.id, "a-earlier-trigger");
+    const earlier = await inboxService.claimBacklogForPush(app.db, observer.agent.inboxId, 1);
+    expect(earlier.map((e) => e.message.content)).toEqual(["a-earlier-trigger"]);
+
+    await silent(chatA.id, "a-silent-1");
+    await trigger(chatA.id, "a-trigger-1");
+    await silent(chatA.id, "a-silent-2");
+    await trigger(chatA.id, "a-trigger-2");
+    await silent(chatB.id, "b-silent-1");
+    await trigger(chatB.id, "b-trigger-1");
+
+    const claimed = await inboxService.claimBacklogForPush(app.db, observer.agent.inboxId, 10);
+    const precedingByTrigger = new Map(
+      claimed.map((entry) => [entry.message.content as string, entry.message.precedingMessages.map((p) => p.content)]),
+    );
+
+    expect([...precedingByTrigger.keys()].sort()).toEqual(["a-trigger-1", "a-trigger-2", "b-trigger-1"]);
+    // Bounded below by the already-delivered `a-earlier-trigger`, so the silent
+    // row that preceded it stays out.
+    expect(precedingByTrigger.get("a-trigger-1")).toEqual(["a-silent-1"]);
+    // Bounded below by the trigger claimed alongside it in this same batch.
+    expect(precedingByTrigger.get("a-trigger-2")).toEqual(["a-silent-2"]);
+    // Chat B has no earlier trigger at all, and chat A's cursor must not bleed
+    // into it.
+    expect(precedingByTrigger.get("b-trigger-1")).toEqual(["b-silent-1"]);
+  });
+
+  it("keeps drain statement count flat as the trigger batch grows", async () => {
+    // The N+1 guard for PERF-061: a drain's statement count must not scale with
+    // the number of claimed triggers. Asserting equality between a small and a
+    // large batch pins that directly — the pre-fix code issued one
+    // previous-notify query per chat plus one context query per trigger, so
+    // these two counts differed by four.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `count-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `count-obs-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    async function seedAndDrain(triggerCount: number): Promise<number> {
+      for (let i = 0; i < triggerCount; i++) {
+        await sendMessage(
+          app.db,
+          chat.id,
+          human.agent.uuid,
+          { source: "api", format: "text", content: `silent-${uid}-${i}` },
+          { allowRecipientlessSend: true },
+        );
+        await sendMessage(app.db, chat.id, human.agent.uuid, {
+          source: "api",
+          format: "text",
+          content: `trigger-${uid}-${i}`,
+          metadata: { mentions: [observer.agent.uuid] },
+        });
+      }
+      // Count on a dedicated connection so the shared app pool's traffic can't
+      // bleed into the sample.
+      const statements: string[] = [];
+      const client = postgres(process.env.DATABASE_URL ?? "", {
+        max: 1,
+        debug: (_connection, query) => {
+          statements.push(query);
+        },
+      });
+      try {
+        const db = Object.assign(drizzle(client, { schema }), { end: () => client.end() });
+        const claimed = await inboxService.claimBacklogForPush(db as never, observer.agent.inboxId, 100);
+        expect(claimed).toHaveLength(triggerCount);
+      } finally {
+        await client.end();
+      }
+      return statements.length;
+    }
+
+    const smallBatch = await seedAndDrain(2);
+    const largeBatch = await seedAndDrain(6);
+    expect(largeBatch).toBe(smallBatch);
   });
 });
