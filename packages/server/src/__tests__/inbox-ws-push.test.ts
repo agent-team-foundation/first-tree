@@ -366,6 +366,84 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(afterAck.map((row) => row.status)).toEqual(["acked", "acked"]);
   });
 
+  it("splits per-trigger silent context inside one multi-chat batch claim", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `batch-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `batch-obs-${uid}` });
+    const chatA = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+    const chatB = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    // Chat A timeline: silent → trigger one → silent → trigger two, with a
+    // chat B silent + trigger interleaved so one claim spans both chats and
+    // multiple same-chat triggers.
+    await sendMessage(
+      app.db,
+      chatA.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "chatA silent one" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(app.db, chatA.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "chatA trigger one",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+    await sendMessage(
+      app.db,
+      chatA.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "chatA silent two" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chatB.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "chatB silent one" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(app.db, chatA.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "chatA trigger two",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+    await sendMessage(app.db, chatB.id, human.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "chatB trigger",
+      metadata: { mentions: [observer.agent.uuid] },
+    });
+
+    const drained = await inboxService.claimBacklogForPush(app.db, observer.agent.inboxId, 10);
+    expect(drained).toHaveLength(3);
+    const byContent = new Map(drained.map((entry) => [entry.message.content, entry]));
+    expect(byContent.get("chatA trigger one")?.message.precedingMessages.map((p) => p.content)).toEqual([
+      "chatA silent one",
+    ]);
+    expect(byContent.get("chatA trigger two")?.message.precedingMessages.map((p) => p.content)).toEqual([
+      "chatA silent two",
+    ]);
+    expect(byContent.get("chatB trigger")?.message.precedingMessages.map((p) => p.content)).toEqual([
+      "chatB silent one",
+    ]);
+
+    // Bundling is not consumption: every silent row stays pending until the
+    // client ACKs through its notify trigger.
+    const silentA = await loadSilentRows(app, observer.agent.inboxId, chatA.id);
+    const silentB = await loadSilentRows(app, observer.agent.inboxId, chatB.id);
+    expect(silentA.map((row) => row.status)).toEqual(["pending", "pending"]);
+    expect(silentB.map((row) => row.status)).toEqual(["pending"]);
+  });
+
   it("ack-through drains silent rows excluded from preceding context by cap or trigger-relative window", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);

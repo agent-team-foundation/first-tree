@@ -501,34 +501,75 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         app.log.info({ clientId, agentId, reason }, "dropped stale local agent binding");
       }
 
-      async function ensureAgentStillRoutedHere(agentId: string): Promise<boolean> {
-        if (!isAgentStillRoutedHere(agentId)) return false;
-        const info = boundAgents.get(agentId);
-        if (!info || !clientId) return false;
-        const [row] = await app.db
+      /**
+       * Revalidate local agent routes against the authoritative `agents`
+       * table in one set-based SELECT, so ACK and heartbeat cost stays flat
+       * as the number of bound agents grows (PERF-061); a client has no hard
+       * agent-count cap.
+       *
+       * Returns the subset of `agentIds` still authoritatively routed to this
+       * socket's client. Candidates that no longer match (client reassigned,
+       * agent deleted / suspended, runtime switched) get their local binding
+       * dropped — except the runtime-switch "claimed" grace state, which
+       * stays bound but is reported as not routed so in-flight delivery
+       * pauses until the switch resolves.
+       */
+      async function filterAgentsStillRoutedHere(agentIds: Iterable<string>): Promise<Set<string>> {
+        const stillRouted = new Set<string>();
+        // Snapshot each candidate's bound runtimeProvider before the SELECT:
+        // the comparison contract is "row vs the binding as it was probed".
+        const candidates: Array<{ agentId: string; runtimeProvider: string }> = [];
+        for (const agentId of agentIds) {
+          if (!isAgentStillRoutedHere(agentId)) continue;
+          const info = boundAgents.get(agentId);
+          if (!info || !clientId) continue;
+          candidates.push({ agentId, runtimeProvider: info.runtimeProvider });
+        }
+        if (candidates.length === 0) return stillRouted;
+
+        const rows = await app.db
           .select({
+            uuid: agents.uuid,
             clientId: agents.clientId,
             runtimeProvider: agents.runtimeProvider,
             status: agents.status,
             metadata: agents.metadata,
           })
           .from(agents)
-          .where(eq(agents.uuid, agentId))
-          .limit(1);
-        if (row?.clientId === clientId && row.status === "active" && row.runtimeProvider === info.runtimeProvider) {
-          return true;
+          .where(
+            inArray(
+              agents.uuid,
+              candidates.map((candidate) => candidate.agentId),
+            ),
+          );
+        const rowByAgentId = new Map(rows.map((row) => [row.uuid, row]));
+
+        for (const candidate of candidates) {
+          const row = rowByAgentId.get(candidate.agentId);
+          if (
+            row?.clientId === clientId &&
+            row.status === "active" &&
+            row.runtimeProvider === candidate.runtimeProvider
+          ) {
+            stillRouted.add(candidate.agentId);
+            continue;
+          }
+          const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
+          if (
+            row?.status === "suspended" &&
+            switchClaim?.phase === "claimed" &&
+            switchClaim.oldClientId === clientId &&
+            switchClaim.oldRuntimeProvider === candidate.runtimeProvider
+          ) {
+            continue;
+          }
+          dropLocalAgentBinding(candidate.agentId, "authoritative_route_changed");
         }
-        const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
-        if (
-          row?.status === "suspended" &&
-          switchClaim?.phase === "claimed" &&
-          switchClaim.oldClientId === clientId &&
-          switchClaim.oldRuntimeProvider === info.runtimeProvider
-        ) {
-          return false;
-        }
-        dropLocalAgentBinding(agentId, "authoritative_route_changed");
-        return false;
+        return stillRouted;
+      }
+
+      async function ensureAgentStillRoutedHere(agentId: string): Promise<boolean> {
+        return (await filterAgentsStillRoutedHere([agentId])).has(agentId);
       }
 
       function inboxInFlightCount(agentId: string): number {
@@ -1794,12 +1835,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               await chainInboxDelivery("__socket", async () => {
                 try {
-                  const routedBoundAgents = [];
-                  for (const agent of boundAgents.values()) {
-                    if (await ensureAgentStillRoutedHere(agent.agentId)) {
-                      routedBoundAgents.push(agent);
-                    }
-                  }
+                  // One set-based route check for every bound agent; the
+                  // surviving entries keep their inbox-to-agent ownership
+                  // mapping for the owner lookup below.
+                  const routedAgentIds = await filterAgentsStillRoutedHere(boundAgents.keys());
+                  const routedBoundAgents = [...boundAgents.values()].filter((agent) =>
+                    routedAgentIds.has(agent.agentId),
+                  );
                   const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                     app.db,
                     entryId,
@@ -2070,10 +2112,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "heartbeat") {
               if (clientId && connectionManager.isActiveClientConnection(clientId, socket)) {
-                const routedAgentIds = [];
-                for (const id of boundAgents.keys()) {
-                  if (await ensureAgentStillRoutedHere(id)) routedAgentIds.push(id);
-                }
+                const routedAgentIds = [...(await filterAgentsStillRoutedHere(boundAgents.keys()))];
                 const pausedReason =
                   msg && typeof msg === "object" && "pausedReason" in msg
                     ? ((msg as { pausedReason?: "auth_rejected" | "auth_refresh_failed" | null }).pausedReason ?? null)
@@ -2085,8 +2124,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   pausedReason,
                 });
                 const repairableAgentIds = new Set(liveness.restoredAgentIds);
-                for (const info of boundAgents.values()) {
-                  if (repairableAgentIds.has(info.agentId) && (await ensureAgentStillRoutedHere(info.agentId))) {
+                // Re-validate restored agents in one batch: the liveness write
+                // above may have raced a route change, so the pre-heartbeat
+                // check cannot be reused here.
+                const repairCandidates = [...boundAgents.values()].filter((info) =>
+                  repairableAgentIds.has(info.agentId),
+                );
+                const repairableRouted = await filterAgentsStillRoutedHere(
+                  repairCandidates.map((info) => info.agentId),
+                );
+                for (const info of repairCandidates) {
+                  if (repairableRouted.has(info.agentId)) {
                     maybeRepairInboxBacklog(info.agentId, info.inboxId);
                   }
                 }

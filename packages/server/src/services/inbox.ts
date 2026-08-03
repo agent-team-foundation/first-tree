@@ -5,7 +5,7 @@ import {
   messageSourceSchema,
   type PrecedingMessage,
 } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -30,7 +30,7 @@ export type AckEntryResult =
   | { ok: false; reason: "not_found_or_not_bound" | "non_notify" | "prefix_gap" };
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
-type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
+type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert" | "execute">;
 
 /** Wider DB shape that matches both the concrete `Database` and the
  *  `PgDatabase` widening used by sibling services (e.g. participant-mode).
@@ -455,15 +455,22 @@ export async function claimBacklogForPushFair(
 }
 
 /**
- * Per claimed trigger: SELECT silent (notify=false) pending rows in the same
- * chat that occurred between the previous trigger in this batch (or beginning
- * of time) and this trigger, capped by `PRECEDING_CONTEXT_MAX_ENTRIES` and
- * `PRECEDING_CONTEXT_WINDOW_SECONDS`. Returned messages are oldest-first.
+ * Per claimed trigger: collect silent (notify=false) pending rows in the same
+ * chat that occurred between the previous trigger in this batch (or the
+ * previous notify row on record) and this trigger, capped by
+ * `PRECEDING_CONTEXT_MAX_ENTRIES` and `PRECEDING_CONTEXT_WINDOW_SECONDS`.
+ * Returned messages are oldest-first.
  *
  * This function intentionally does not ACK silent rows. Bundling is not
  * consumption: recovery must be able to reset the notify trigger and rebuild
  * the same trigger-relative context window. Silent rows are drained only when
  * the client ACKs the consumed notify entry.
+ *
+ * The whole batch resolves in two set-based statements regardless of how many
+ * chats/triggers were claimed (PERF-061). The previous shape issued one
+ * previous-notify query per chat plus one context query per trigger, all
+ * sequentially inside the claim transaction, so DB latency and row-lock hold
+ * time grew linearly with drain size.
  */
 async function collectPrecedingContext(
   tx: TxLike,
@@ -480,97 +487,160 @@ async function collectPrecedingContext(
     list.push(t);
     byChat.set(t.chatId, list);
   }
+  if (byChat.size === 0) return result;
 
+  // One spec row per trigger. `lower_bound_id` is the in-batch cursor: the
+  // previous trigger of the same chat in this batch. It is null exactly for
+  // each chat's first trigger, whose cursor instead comes from the DB via the
+  // `prev_notify` lateral below — the latest notify row before it, even if
+  // that trigger was delivered in an earlier unacked batch.
+  const specs: Array<{
+    trigger_id: number;
+    chat_id: string;
+    lower_bound_id: number | null;
+    window_start: string;
+  }> = [];
   for (const [chatId, chatTriggers] of byChat) {
     chatTriggers.sort((a, b) => a.id - b.id);
-
-    const firstTrigger = chatTriggers[0];
-    if (!firstTrigger) continue;
-    const [previousNotify] = await tx
-      .select({ id: inboxEntries.id })
-      .from(inboxEntries)
-      .where(
-        and(
-          eq(inboxEntries.inboxId, inboxId),
-          eq(inboxEntries.chatId, chatId),
-          eq(inboxEntries.notify, true),
-          lt(inboxEntries.id, firstTrigger.id),
-        ),
-      )
-      .orderBy(desc(inboxEntries.id))
-      .limit(1);
-
-    // For each trigger, fetch silent context strictly before it (and after
-    // the previous notify trigger cursor, even if that trigger was delivered
-    // in an earlier unacked batch). Window: 24h before the trigger.
-    //
-    // Order matters: when there are MORE than `PRECEDING_CONTEXT_MAX_ENTRIES`
-    // candidates, we want to keep the rows CLOSEST to the trigger (most
-    // contextually relevant) and drop the oldest. So select DESC + LIMIT,
-    // then reverse in JS to get chronological prompt-ready output. Selecting
-    // ASC + LIMIT would drop the recent rows; ACK-through later drains every
-    // silent row behind the consumed notify cursor, including rows excluded by
-    // this cap, so this delivery must choose the most relevant window now.
-    //
-    // We sort by `messages.createdAt` rather than `inboxEntries.createdAt`
-    // because `addParticipant`'s backfill writes 50 inbox rows in one
-    // `INSERT VALUES (...)` — they all share `statement_timestamp()`. The
-    // message rows themselves have distinct, monotonic timestamps (uuidv7
-    // ids are time-ordered, `messages.created_at` is the authoritative
-    // chronology), so ordering by the joined message timestamp is the only
-    // stable contract the prompt-rendered context can rely on.
-    //
-    // Concurrency: `FOR UPDATE OF inboxEntries SKIP LOCKED` prevents two
-    // parallel polls on the same inbox from bundling the same silent row
-    // twice. Without it, poll A picking trigger T1 and poll B picking T2
-    // (T2 > T1) would both include silent rows < T1 in their preceding
-    // context. With SKIP LOCKED, the second poll skips the rows the first
-    // has reserved.
-    let previousNotifyId: number | null = previousNotify?.id ?? null;
+    let previousTriggerId: number | null = null;
     for (const trigger of chatTriggers) {
-      const windowStart = new Date(trigger.createdAt.getTime() - PRECEDING_CONTEXT_WINDOW_SECONDS * 1000);
-      const rows = await tx
-        .select({
-          messageId: messages.id,
-          senderId: messages.senderId,
-          format: messages.format,
-          content: messages.content,
-          metadata: messages.metadata,
-          source: messages.source,
-          createdAt: messages.createdAt,
-        })
-        .from(inboxEntries)
-        .innerJoin(messages, eq(messages.id, inboxEntries.messageId))
-        .where(
-          and(
-            eq(inboxEntries.inboxId, inboxId),
-            eq(inboxEntries.chatId, chatId),
-            eq(inboxEntries.status, "pending"),
-            eq(inboxEntries.notify, false),
-            lt(inboxEntries.id, trigger.id),
-            previousNotifyId === null ? undefined : gt(inboxEntries.id, previousNotifyId),
-            gt(inboxEntries.createdAt, windowStart),
-          ),
-        )
-        .orderBy(desc(messages.createdAt))
-        .limit(PRECEDING_CONTEXT_MAX_ENTRIES)
-        .for("update", { of: inboxEntries, skipLocked: true });
-
-      // Reverse so the prompt-rendered block reads oldest → newest.
-      const preceding: PrecedingMessage[] = rows
-        .map((r) => ({
-          id: r.messageId,
-          senderId: r.senderId,
-          format: r.format,
-          content: r.content,
-          metadata: (r.metadata ?? {}) as Record<string, unknown>,
-          source: messageSourceSchema.nullable().catch(null).parse(r.source),
-          createdAt: r.createdAt.toISOString(),
-        }))
-        .reverse();
-      result.set(trigger.id, preceding);
-      previousNotifyId = trigger.id;
+      result.set(trigger.id, []);
+      specs.push({
+        trigger_id: trigger.id,
+        chat_id: chatId,
+        lower_bound_id: previousTriggerId,
+        window_start: new Date(trigger.createdAt.getTime() - PRECEDING_CONTEXT_WINDOW_SECONDS * 1000).toISOString(),
+      });
+      previousTriggerId = trigger.id;
     }
+  }
+  const specJson = JSON.stringify(specs);
+
+  // Statement 1 — resolve every trigger's context membership in one pass.
+  //
+  // Order matters inside `ctx`: when there are MORE than
+  // `PRECEDING_CONTEXT_MAX_ENTRIES` candidates, we want to keep the rows
+  // CLOSEST to the trigger (most contextually relevant) and drop the oldest.
+  // So select `m.created_at` DESC + LIMIT per trigger. Selecting ASC + LIMIT
+  // would drop the recent rows; ACK-through later drains every silent row
+  // behind the consumed notify cursor, including rows excluded by this cap,
+  // so this delivery must choose the most relevant window now.
+  //
+  // We rank by `messages.created_at` rather than `inbox_entries.created_at`
+  // because `addParticipant`'s backfill writes 50 inbox rows in one
+  // `INSERT VALUES (...)` — they all share `statement_timestamp()`. The
+  // message rows themselves have distinct, monotonic timestamps (uuidv7
+  // ids are time-ordered, `messages.created_at` is the authoritative
+  // chronology), so ordering by the joined message timestamp is the only
+  // stable contract the prompt-rendered context can rely on.
+  //
+  // Concurrency: `FOR UPDATE OF e SKIP LOCKED` prevents two parallel polls
+  // on the same inbox from bundling the same silent row twice. Without it,
+  // poll A picking trigger T1 and poll B picking T2 (T2 > T1) would both
+  // include silent rows < T1 in their preceding context. With SKIP LOCKED,
+  // the second poll skips the rows the first has reserved. Spec ranges are
+  // disjoint per trigger, so the batch cannot double-bundle within itself.
+  //
+  // `execute()` bypasses the driver's type parsers (every column comes back
+  // as text), so this statement returns only ids — the typed re-read below
+  // keeps jsonb / timestamptz mapping on Drizzle.
+  const contextRows = await tx.execute<{ trigger_id: string; entry_id: string }>(sql`
+    WITH trigger_spec AS (
+      SELECT s.trigger_id, s.chat_id, s.lower_bound_id, s.window_start
+        FROM jsonb_to_recordset(${specJson}::jsonb)
+          AS s(trigger_id bigint, chat_id text, lower_bound_id bigint, window_start timestamptz)
+    ),
+    trigger_bounds AS (
+      SELECT
+        trigger_spec.trigger_id,
+        trigger_spec.chat_id,
+        trigger_spec.window_start,
+        COALESCE(trigger_spec.lower_bound_id, prev_notify.id) AS lower_bound_id
+      FROM trigger_spec
+      LEFT JOIN LATERAL (
+        SELECT e.id
+          FROM inbox_entries e
+         WHERE trigger_spec.lower_bound_id IS NULL
+           AND e.inbox_id = ${inboxId}
+           AND e.chat_id = trigger_spec.chat_id
+           AND e.notify = true
+           AND e.id < trigger_spec.trigger_id
+         ORDER BY e.id DESC
+         LIMIT 1
+      ) prev_notify ON true
+    )
+    SELECT trigger_bounds.trigger_id::text AS trigger_id, ctx.entry_id::text AS entry_id
+      FROM trigger_bounds
+      INNER JOIN LATERAL (
+        SELECT e.id AS entry_id
+          FROM inbox_entries e
+          INNER JOIN messages m ON m.id = e.message_id
+         WHERE e.inbox_id = ${inboxId}
+           AND e.chat_id = trigger_bounds.chat_id
+           AND e.status = 'pending'
+           AND e.notify = false
+           AND e.id < trigger_bounds.trigger_id
+           AND (trigger_bounds.lower_bound_id IS NULL OR e.id > trigger_bounds.lower_bound_id)
+           AND e.created_at > trigger_bounds.window_start
+         ORDER BY m.created_at DESC
+         LIMIT ${PRECEDING_CONTEXT_MAX_ENTRIES}
+           FOR UPDATE OF e SKIP LOCKED
+      ) ctx ON true
+  `);
+
+  const contextIdsByTriggerId = new Map<number, number[]>();
+  const allEntryIds: number[] = [];
+  for (const row of contextRows) {
+    const triggerId = Number(row.trigger_id);
+    const entryId = Number(row.entry_id);
+    if (!Number.isSafeInteger(triggerId) || !Number.isSafeInteger(entryId)) {
+      throw new Error(`Unexpected inbox context ids from batch query: ${row.trigger_id}/${row.entry_id}`);
+    }
+    const list = contextIdsByTriggerId.get(triggerId) ?? [];
+    list.push(entryId);
+    contextIdsByTriggerId.set(triggerId, list);
+    allEntryIds.push(entryId);
+  }
+  if (allEntryIds.length === 0) return result;
+
+  // Statement 2 — typed payload re-read for the locked rows.
+  const payloadRows = await tx
+    .select({
+      entryId: inboxEntries.id,
+      messageId: messages.id,
+      senderId: messages.senderId,
+      format: messages.format,
+      content: messages.content,
+      metadata: messages.metadata,
+      source: messages.source,
+      createdAt: messages.createdAt,
+    })
+    .from(inboxEntries)
+    .innerJoin(messages, eq(messages.id, inboxEntries.messageId))
+    .where(inArray(inboxEntries.id, allEntryIds));
+  const payloadByEntryId = new Map(payloadRows.map((r) => [r.entryId, r]));
+
+  for (const [triggerId, entryIds] of contextIdsByTriggerId) {
+    const rows = entryIds.map((entryId) => {
+      const row = payloadByEntryId.get(entryId);
+      if (!row) throw new Error(`Unexpected: bundled context entry ${entryId} lost its message row`);
+      return row;
+    });
+    // Chronological prompt-ready output, oldest → newest. Entry id breaks
+    // (theoretical) same-timestamp ties by enqueue order.
+    rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.entryId - b.entryId);
+    result.set(
+      triggerId,
+      rows.map((r) => ({
+        id: r.messageId,
+        senderId: r.senderId,
+        format: r.format,
+        content: r.content,
+        metadata: (r.metadata ?? {}) as Record<string, unknown>,
+        source: messageSourceSchema.nullable().catch(null).parse(r.source),
+        createdAt: r.createdAt.toISOString(),
+      })),
+    );
   }
 
   return result;

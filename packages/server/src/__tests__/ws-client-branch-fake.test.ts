@@ -326,6 +326,8 @@ describe("Agent client WS branch fakes", () => {
   function activeAgentRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       id: "agent_1",
+      // Route revalidation keys its set-based SELECT rows by `uuid`.
+      uuid: "agent_1",
       displayName: "Agent",
       type: "agent",
       organizationId: "org_1",
@@ -538,6 +540,7 @@ describe("Agent client WS branch fakes", () => {
         [activeAgentRow()],
         [
           {
+            uuid: "agent_1",
             clientId: "client_fake1234",
             status: "suspended",
             runtimeProvider: "claude-code",
