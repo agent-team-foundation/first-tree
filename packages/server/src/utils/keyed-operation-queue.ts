@@ -21,8 +21,4 @@ export class KeyedOperationQueue {
     this.tails.set(key, queued);
     return next;
   }
-
-  clear(): void {
-    this.tails.clear();
-  }
 }

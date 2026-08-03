@@ -39,21 +39,4 @@ describe("KeyedOperationQueue", () => {
 
     expect(queue.size).toBe(0);
   });
-
-  it("clears pending keys when their owner closes", async () => {
-    const queue = new KeyedOperationQueue();
-    let release: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const operation = queue.run("agent-1:chat-1", () => blocked);
-
-    expect(queue.size).toBe(1);
-    queue.clear();
-    expect(queue.size).toBe(0);
-
-    release?.();
-    await operation;
-    expect(queue.size).toBe(0);
-  });
 });

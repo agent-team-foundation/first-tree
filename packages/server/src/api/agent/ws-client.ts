@@ -2148,7 +2148,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         lastInboxRepairDrainAtByAgent.clear();
         inboxInFlightByAgent.clear();
         inboxInFlightOwnersByEntryId.clear();
-        sessionOpQueue.clear();
 
         if (clientId) {
           // Reconnect-race guard. A typical `systemctl restart` produces this

@@ -11,6 +11,7 @@ import * as inboxService from "../services/inbox.js";
 import * as notificationService from "../services/notification.js";
 import * as presenceService from "../services/presence.js";
 import * as runtimeLivenessService from "../services/runtime-liveness.js";
+import * as sessionEventService from "../services/session-event.js";
 
 type WsHandler = (socket: FakeSocket, request: { headers: Record<string, string | undefined>; ip: string }) => unknown;
 
@@ -34,7 +35,7 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-function queryChain(rows: unknown[] = []): unknown {
+function queryChain(rows: unknown[] | Promise<unknown[]> = []): unknown {
   const promise = Promise.resolve(rows);
   const chain = new Proxy(
     function queryProxy(): unknown {
@@ -45,7 +46,10 @@ function queryChain(rows: unknown[] = []): unknown {
         if (prop === "then") return promise.then.bind(promise);
         if (prop === "catch") return promise.catch.bind(promise);
         if (prop === "finally") return promise.finally.bind(promise);
-        if (prop === Symbol.iterator) return rows[Symbol.iterator].bind(rows);
+        if (prop === Symbol.iterator) {
+          const iterableRows = Array.isArray(rows) ? rows : [];
+          return iterableRows[Symbol.iterator].bind(iterableRows);
+        }
         return vi.fn(() => chain);
       },
     },
@@ -53,7 +57,7 @@ function queryChain(rows: unknown[] = []): unknown {
   return chain;
 }
 
-function queuedDb(results: unknown[][]): unknown {
+function queuedDb(results: Array<unknown[] | Promise<unknown[]>>): unknown {
   return {
     select: vi.fn(() => queryChain(results.shift() ?? [])),
     update: vi.fn(() => queryChain(results.shift() ?? [])),
@@ -965,5 +969,60 @@ describe("Agent client WS branch fakes", () => {
       "idle",
       expect.objectContaining({ organizationId: "org_1" }),
     );
+  });
+
+  it("preserves a session FIFO when a routed message resumes after socket close", async () => {
+    mockSuccessfulBindServices();
+    let releaseState: (() => void) | undefined;
+    const stateBlocked = new Promise<void>((resolve) => {
+      releaseState = resolve;
+    });
+    let resumeRouteCheck: ((rows: unknown[]) => void) | undefined;
+    const routeCheckBlocked = new Promise<unknown[]>((resolve) => {
+      resumeRouteCheck = resolve;
+    });
+    const db = queuedDb([
+      [{ id: "user_1", status: "active" }],
+      [{ userId: "user_1", retiredAt: null }],
+      [activeAgentRow()],
+      [activeAgentRow()],
+      [activeAgentRow()],
+      routeCheckBlocked,
+    ]) as { select: ReturnType<typeof vi.fn> };
+    const { handler } = routeHarness(db);
+    const socket = new FakeSocket();
+    const order: string[] = [];
+    vi.mocked(activityService.upsertSessionState).mockImplementation(async () => {
+      order.push("state:start");
+      await stateBlocked;
+      order.push("state:end");
+    });
+    const appendEvent = vi.spyOn(sessionEventService, "appendLiveEvent").mockImplementation(async () => {
+      order.push("event");
+      return null;
+    });
+    await bindAgent(socket, handler);
+
+    await emitMessage(socket, { type: "session:state", agentId: "agent_1", chatId: "chat_1", state: "active" });
+    await waitUntil(() => order.includes("state:start"));
+
+    await emitMessage(socket, {
+      type: "session:event",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      event: { kind: "error", payload: { source: "runtime", message: "test" } },
+    });
+    await waitUntil(() => db.select.mock.calls.length === 6);
+
+    socket.close(1000, "test close");
+    resumeRouteCheck?.([activeAgentRow()]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(appendEvent).not.toHaveBeenCalled();
+    expect(order).toEqual(["state:start"]);
+
+    releaseState?.();
+    await waitUntil(() => appendEvent.mock.calls.length === 1);
+    expect(order).toEqual(["state:start", "state:end", "event"]);
   });
 });
