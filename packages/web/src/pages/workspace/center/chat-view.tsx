@@ -2573,15 +2573,40 @@ export function ChatView({
   // Merge cached + server messages, dedup by id (server wins so updated
   // delivery status / metadata overrides any older cached copy), and
   // sort by createdAt. This is the union the timeline renders from.
+  // `?focus=<agentId>` — a TRANSIENT pair-filter view applied by navigation
+  // (the ask review's "Show earlier chat"). URL-only, never persisted;
+  // re-opening the chat through any ordinary route drops the param, so the
+  // next visit shows all messages again. Declared before the merge below
+  // because the handoff also DEEPENS the loaded window.
+  const focusParam = searchParams.get("focus");
+  const focusAgentId = focusParam && focusParam !== myAgentId ? focusParam : null;
+  // The request the focus handoff was opened for (`?focusMsg=`). Used only to
+  // report honestly when that request is older than the loaded history —
+  // the retired inline preview had the same bounded window and said so.
+  const focusMessageId = searchParams.get("focusMsg");
+  // Supplemental window for the focus handoff: the ordinary timeline loads
+  // only the latest 50 messages, but Need you reviews the OLDEST open
+  // request, whose surrounding conversation may have scrolled past that
+  // window. Match the retired inline preview's reach (the API's 100-row cap)
+  // so the handoff never shows LESS context than the preview it replaced.
+  const { data: focusWindowData, isFetched: focusWindowFetched } = useQuery({
+    queryKey: ["chat-messages-focus", chatId],
+    queryFn: () => listChatMessages(chatId, { limit: 100 }),
+    enabled: focusAgentId !== null,
+    staleTime: 30_000,
+  });
+
   const mergedMessages = useMemo<MessageWithDelivery[]>(() => {
     const fromCache = cachedMessages ?? [];
+    const fromFocusWindow = focusWindowData?.items ?? [];
     const fromServer = messagesData?.items ?? [];
     const byId = new Map<string, MessageWithDelivery>();
     for (const m of fromCache) byId.set(m.id, m);
+    for (const m of fromFocusWindow) byId.set(m.id, m);
     for (const m of fromServer) byId.set(m.id, m);
     const sorted = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return sorted;
-  }, [cachedMessages, messagesData]);
+  }, [cachedMessages, focusWindowData, messagesData]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -2589,19 +2614,13 @@ export function ChatView({
   );
 
   // ── Timeline message filter: "show only my conversation with agent X".
-  // Two sources, one effect:
-  //   - `?focus=<agentId>` — a TRANSIENT view applied by navigation (the ask
-  //     review's "Show earlier chat"). URL-only, never persisted; re-opening
-  //     the chat through any ordinary route drops the param, so the next
-  //     visit shows all messages again.
-  //   - the stored per-user/per-chat choice from the header filter control —
-  //     an explicit user preference that survives reloads (localStorage).
-  // The transient view wins while present; an explicit selection clears it.
+  // Two sources, one effect: the transient `?focus=` view above, and the
+  // stored per-user/per-chat choice from the header filter control — an
+  // explicit user preference that survives reloads (localStorage). The
+  // transient view wins while present; an explicit selection clears it.
   // Filtering affects DISPLAY only: blocking-request derivation, open-request
   // gating, and the ask takeover all keep reading the unfiltered sets, so a
   // question from a filtered-out agent still blocks and stays answerable.
-  const focusParam = searchParams.get("focus");
-  const focusAgentId = focusParam && focusParam !== myAgentId ? focusParam : null;
   // Offering only agents the viewer actually exchanged messages with keeps the
   // option list meaningful; humans are excluded — the filter is about "the
   // agent I am talking to", and the viewer is the human side of the pair.
@@ -2625,9 +2644,10 @@ export function ChatView({
   const setMessageFilter = useCallback(
     (agentId: string | null) => {
       setStoredFilterAgentId(agentId);
-      if (searchParams.has("focus")) {
+      if (searchParams.has("focus") || searchParams.has("focusMsg")) {
         const next = new URLSearchParams(searchParams);
         next.delete("focus");
+        next.delete("focusMsg");
         setSearchParams(next, { replace: true });
       }
     },
@@ -2741,7 +2761,10 @@ export function ChatView({
   const showEarlierChatFromAsk = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.set("showAsk", "false");
-    if (dockRequest) next.set("focus", dockRequest.senderId);
+    if (dockRequest) {
+      next.set("focus", dockRequest.senderId);
+      next.set("focusMsg", dockRequest.id);
+    }
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams, dockRequest]);
   const reopenAskTakeover = useCallback(() => {
@@ -2783,25 +2806,42 @@ export function ChatView({
   // `key`), so chat-view no longer resets per-question selections here.
 
   const timelineSource = inspectAskMode ? blockingMessages : mergedMessages;
-  // Display-only pair filter over the timeline source. Group chats use the
-  // same pair-conversation membership rule as the ask review's earlier-chat
+  // Display-only pair filter over the timeline source. Group-shaped chats use
+  // the same pair-conversation membership rule as the retired earlier-chat
   // preview (sender in the pair AND addressing/replying to the other member),
-  // so "my conversation with X" never leaks X's side conversations.
+  // so "my conversation with X" never leaks X's side conversations. The
+  // "no third party" condition keys on SPEAKER COUNT, not `chats.type`: since
+  // the group-chat convergence every chat is persisted as `type="group"`, so
+  // a two-speaker DM must still keep pair-authored messages that carry no
+  // structured mention/reply (mirrors `computeRequiresMention`; `direct`
+  // survives only on legacy rows).
+  const twoSpeakerChat = (chatDetail?.participants.length ?? 0) === 2 || chatDetail?.type === "direct";
   const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
     if (!filterAgentId || !myAgentId) return timelineSource;
     const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
-    const directChat = chatDetail?.type === "direct";
     return timelineSource.filter((message) =>
       isPairConversationMessage({
         message,
         humanAgentId: myAgentId,
         otherAgentId: filterAgentId,
-        directChat,
+        directChat: twoSpeakerChat,
         senderById,
       }),
     );
-  }, [timelineSource, filterAgentId, myAgentId, chatDetail?.type]);
+  }, [timelineSource, filterAgentId, myAgentId, twoSpeakerChat]);
   const hiddenByFilter = timelineSource.length - timelineMessages.length;
+  // Honest reporting for the focus handoff: when the reviewed request is
+  // older than even the deepened window (`focusMsg` absent from the loaded
+  // HISTORY — `blockingMessages` would mask this by unioning the synthetic
+  // open-request row), the conversation that led to the question is not
+  // shown, and the banner must say so instead of presenting the recent
+  // window as if it were complete. The retired inline preview reported the
+  // same condition as "unavailable".
+  const focusContextMissing =
+    focusAgentId !== null &&
+    focusMessageId !== null &&
+    focusWindowFetched &&
+    !mergedMessages.some((m) => m.id === focusMessageId);
   const items: TimelineItem[] = useMemo(() => {
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
@@ -2831,10 +2871,13 @@ export function ChatView({
     }
 
     for (const [eventAgentId, eventsById] of rawEventsByAgent) {
-      // The pair filter narrows the view to one agent's conversation with the
-      // viewer; other agents' live-work groups and error rows follow their
-      // messages out of the filtered view.
-      if (filterAgentId && eventAgentId !== filterAgentId) continue;
+      // The pair view is messages-only. A `SessionEventRow` carries no
+      // counterpart or triggering-message relationship, so even the selected
+      // agent's workgroups/errors may belong to work another participant
+      // asked for — un-attributable rows would silently break the
+      // no-side-conversation guarantee, so they are all hidden while the
+      // pair filter is active.
+      if (filterAgentId) continue;
       const rawEvents = [...eventsById.values()];
       const visibleEvents = filterEventsForTimeline(rawEvents);
       let lastTurnEndSeq = -1;
@@ -3096,18 +3139,32 @@ export function ChatView({
   // briefly invalidates `sessionHighestId` between renders) — the
   // pill is semantically "remote arrivals you haven't seen", not
   // "anything past the watermark".
+  //
+  // Counted over the VISIBLE projection (`timelineMessages`), not
+  // `mergedMessages`: while the pair filter is active, an arrival
+  // from a filtered-out agent has no row in the DOM, so scrolling
+  // to the bottom could never advance the watermark past it and the
+  // pill would be uncleareable. A hidden arrival surfaces (and then
+  // counts, if still unseen) the moment the filter lifts. Watermark
+  // ordering stays indexed against `mergedMessages` — the watermark
+  // id itself may be a filtered-out row.
   const pillCount = useMemo<number>(() => {
-    if (mergedMessages.length === 0) return 0;
+    if (timelineMessages.length === 0) return 0;
     if (sessionHighestIdx < 0) return 0;
-    let count = 0;
-    for (let i = sessionHighestIdx + 1; i < mergedMessages.length; i++) {
+    const idxById = new Map<string, number>();
+    for (let i = 0; i < mergedMessages.length; i++) {
       const msg = mergedMessages[i];
-      if (!msg) continue;
+      if (msg) idxById.set(msg.id, i);
+    }
+    let count = 0;
+    for (const msg of timelineMessages) {
+      const idx = idxById.get(msg.id);
+      if (idx === undefined || idx <= sessionHighestIdx) continue;
       if (myAgentId && msg.senderId === myAgentId) continue;
       count++;
     }
     return count;
-  }, [mergedMessages, sessionHighestIdx, myAgentId]);
+  }, [timelineMessages, mergedMessages, sessionHighestIdx, myAgentId]);
 
   // Index of the first NON-SELF message strictly newer than the
   // snapshotted anchor — i.e., where the "New Messages" line slots
@@ -4348,6 +4405,11 @@ export function ChatView({
                   ? ` · ${hiddenByFilter} ${hiddenByFilter === 1 ? "message" : "messages"} hidden`
                   : ""}
                 {focusAgentId ? " · temporary view" : ""}
+                {focusContextMissing ? (
+                  <span style={{ display: "block", color: "var(--fg-3)" }}>
+                    This question is older than the loaded history — the conversation before it isn’t shown.
+                  </span>
+                ) : null}
               </span>
               <button
                 type="button"

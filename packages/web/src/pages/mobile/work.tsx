@@ -45,6 +45,7 @@ export function MobileWorkPage() {
       next.delete("review");
       next.delete("showAsk");
       next.delete("focus");
+      next.delete("focusMsg");
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
@@ -58,6 +59,7 @@ export function MobileWorkPage() {
     next.delete("with");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -69,6 +71,7 @@ export function MobileWorkPage() {
     next.delete("c");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
@@ -77,19 +80,27 @@ export function MobileWorkPage() {
     next.delete("review");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
   const openFullChat = useCallback(
-    (chatId: string, focusAgentId?: string) => {
+    (chatId: string, focus?: { agentId: string; requestId: string }) => {
       const next = new URLSearchParams(searchParams);
       next.delete("review");
       next.set("c", chatId);
       next.set("showAsk", "false");
       // "Show earlier chat" applies a transient pair filter on the opened
-      // chat; every other selection path deletes `focus` so it never sticks.
-      if (focusAgentId) next.set("focus", focusAgentId);
-      else next.delete("focus");
+      // chat (`focusMsg` = the reviewed request, for honest out-of-window
+      // reporting); every other selection path deletes both so they never
+      // stick.
+      if (focus) {
+        next.set("focus", focus.agentId);
+        next.set("focusMsg", focus.requestId);
+      } else {
+        next.delete("focus");
+        next.delete("focusMsg");
+      }
       setSearchParams(next);
     },
     [searchParams, setSearchParams],

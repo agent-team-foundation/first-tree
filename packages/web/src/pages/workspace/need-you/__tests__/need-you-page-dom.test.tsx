@@ -198,7 +198,7 @@ describe("NeedYouPage request resolution", () => {
     });
     await flush();
 
-    expect(onOpenFullChat).toHaveBeenCalledWith("chat-1", "asker-1");
+    expect(onOpenFullChat).toHaveBeenCalledWith("chat-1", { agentId: "asker-1", requestId: "request-1" });
     expect(chatMocks.listChatMessages).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());

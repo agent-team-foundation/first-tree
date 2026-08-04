@@ -20,11 +20,13 @@ export function NeedYouPage({
 }: {
   mobile?: boolean;
   onClose: () => void;
-  /** Open the request's chat. With `focusAgentId` the chat opens narrowed to
-   *  the viewer's conversation with that agent — the "Show earlier chat"
-   *  path. The narrowing is a transient URL-carried view, not a stored
-   *  preference: re-opening the chat later shows all messages. */
-  onOpenFullChat: (chatId: string, focusAgentId?: string) => void;
+  /** Open the request's chat. With `focus` the chat opens narrowed to the
+   *  viewer's conversation with that agent — the "Show earlier chat" path.
+   *  `requestId` lets the chat report honestly when the reviewed question is
+   *  older than its loaded history. The narrowing is a transient URL-carried
+   *  view, not a stored preference: re-opening the chat later shows all
+   *  messages. */
+  onOpenFullChat: (chatId: string, focus?: { agentId: string; requestId: string }) => void;
 }) {
   const queryClient = useQueryClient();
   const { organizationId, agentId: humanAgentId } = useAuth();
@@ -80,7 +82,9 @@ export function NeedYouPage({
     if (!reviewLocked) onClose();
   }, [onClose, reviewLocked]);
   const showEarlierChat = useCallback(() => {
-    if (!reviewLocked && item) onOpenFullChat(item.chat.id, item.asker.agentId);
+    if (!reviewLocked && item) {
+      onOpenFullChat(item.chat.id, { agentId: item.asker.agentId, requestId: item.request.id });
+    }
   }, [reviewLocked, item, onOpenFullChat]);
   const { markdownComponents } = useGitlabEntityPresentation(organizationId);
 

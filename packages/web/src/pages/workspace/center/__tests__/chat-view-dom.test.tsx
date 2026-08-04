@@ -3827,10 +3827,117 @@ describe("timeline message filter", () => {
     expect(container.textContent).toContain("temporary view");
     expect(container.textContent).toContain("Deploy checked, all green.");
     expect(container.textContent).not.toContain("Design notes for the banner.");
+    // No focusMsg handoff anchor → no out-of-window warning.
+    expect(container.textContent).not.toContain("older than the loaded history");
+    // The pair view is messages-only: session events carry no pair
+    // attribution, so even the selected agent's rows stay hidden.
+    expect(container.textContent).not.toContain("Example recoverable runtime error");
 
     await click(buttonByText(container, "Show all messages"));
     await waitForText(container, "Design notes for the banner.");
     expect(container.querySelector("[data-message-filter-banner]")).toBeNull();
+    await waitForText(container, "Example recoverable runtime error");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps unaddressed pair messages in a two-speaker group-typed chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // New chats persist as `type: "group"` even for 1-on-1s; the pair filter
+    // must key on the two-speaker SHAPE, or a DM's plain (mention-less)
+    // exchange would vanish under the group addressing rule.
+    const dmDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const dmMessages = messages([
+      message({
+        id: "dm-human",
+        senderId: "human-agent-self",
+        content: "Plain DM line without a mention.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "dm-nova",
+        senderId: "agent-1",
+        content: "Plain DM reply without a mention.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(dmDetail);
+    chatMocks.listChatMessages.mockResolvedValue(dmMessages);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, dmDetail, dmMessages),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("Plain DM line without a mention.");
+    expect(container.textContent).toContain("Plain DM reply without a mention.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("reports when the focused request is older than the loaded history", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1&focusMsg=req-outside-window",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    await waitForText(container, "older than the loaded history");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not strand the new-messages pill on an arrival the pair filter hides", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const lateArrival = message({
+      id: "pf-late-design",
+      senderId: "agent-2",
+      content: "Late design note.",
+      createdAt: "2026-05-28T12:05:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    });
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), FILTER_MESSAGES);
+        // Previous visit left the chat at the newest pair message, so any
+        // later non-self arrival is "new since last visit".
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "pf-design-to-human",
+          latestKnownMessageId: "pf-design-to-human",
+          updatedAt: Date.now(),
+        });
+      },
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Showing your conversation with Nova");
+
+    // A filtered-out agent's message arrives. It has no DOM row, so scrolling
+    // could never advance the watermark past it — the pill must not count it.
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], messages([...FILTER_MESSAGES.items, lateArrival]));
+    });
+    await flush();
+    expect(container.querySelector('button[aria-label$="new message"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="new messages"]')).toBeNull();
+
+    // Lifting the filter surfaces the arrival itself. (The pill's own
+    // clear-on-reach behavior is unchanged; in this harness the read tracker
+    // reaches the new row as soon as it renders, so the pill is not asserted
+    // here — the regression under test is the STUCK pill above.)
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Late design note.");
 
     await act(async () => root.unmount());
   });

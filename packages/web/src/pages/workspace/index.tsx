@@ -251,6 +251,7 @@ export function WorkspaceBody() {
       next.delete("review");
       next.delete("showAsk");
       next.delete("focus");
+      next.delete("focusMsg");
       clearDocPreviewParams(next);
       setSearchParams(next);
       // Auto-dismiss the conversation-list overlay on narrow viewports —
@@ -268,6 +269,7 @@ export function WorkspaceBody() {
     next.delete("review");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     clearDocPreviewParams(next);
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
@@ -278,6 +280,7 @@ export function WorkspaceBody() {
     next.delete("c");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     clearDocPreviewParams(next);
     setSearchParams(next, { replace: true });
     setConvOverlayOpen(false);
@@ -290,6 +293,7 @@ export function WorkspaceBody() {
     next.delete("c");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     clearDocPreviewParams(next);
     setSearchParams(next);
     setConvOverlayOpen(false);
@@ -300,21 +304,29 @@ export function WorkspaceBody() {
     next.delete("review");
     next.delete("showAsk");
     next.delete("focus");
+    next.delete("focusMsg");
     clearDocPreviewParams(next);
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
   const openFullChatFromNeedYou = useCallback(
-    (chatId: string, focusAgentId?: string) => {
+    (chatId: string, focus?: { agentId: string; requestId: string }) => {
       const next = new URLSearchParams(searchParams);
       next.delete("review");
       next.set("c", chatId);
       next.set("showAsk", "false");
       // "Show earlier chat" narrows the opened chat to the viewer's
-      // conversation with the asker. URL-carried and transient: every other
-      // chat-selection path deletes `focus`, so the next visit is unfiltered.
-      if (focusAgentId) next.set("focus", focusAgentId);
-      else next.delete("focus");
+      // conversation with the asker; `focusMsg` carries the reviewed request
+      // so the chat can report when it is older than the loaded history.
+      // URL-carried and transient: every other chat-selection path deletes
+      // both params, so the next visit is unfiltered.
+      if (focus) {
+        next.set("focus", focus.agentId);
+        next.set("focusMsg", focus.requestId);
+      } else {
+        next.delete("focus");
+        next.delete("focusMsg");
+      }
       clearDocPreviewParams(next);
       setSearchParams(next);
     },
