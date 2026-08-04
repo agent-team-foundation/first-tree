@@ -1,0 +1,26 @@
+fileType: momentic/test/v2
+id: p0-need-you-basic-review
+description: A first-run user reviews one pending Need you request, chooses an
+  option, and submits a durable resolution
+defaultEnv: local
+steps:
+  - module:
+      path: ../modules/complete-first-run.module.yaml
+
+  # Establish only the external precondition (an agent-authored open request).
+  # Selection, submission, authorization, persistence, and queue refresh all
+  # run through the real web and server paths below.
+  - javascript:
+      code: ../scripts/seed-need-you-request.js
+      environment: node
+      saveAs: P0_REQUEST_ID
+  - refresh
+
+  - assert: the conversation list shows Need you with exactly 1 question
+  - click: Need you button with 1 question
+  - assert: the Need you review page shows the question "Which P0 flow should
+      the team validate next?" with Workspace flow and Onboarding flow options
+  - click: Workspace flow option
+  - click: Submit button in the question footer
+  - assert: the Need you review page says You're all caught up and explains
+      that new questions will appear here

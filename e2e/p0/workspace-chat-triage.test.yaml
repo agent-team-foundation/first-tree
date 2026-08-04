@@ -1,0 +1,38 @@
+fileType: momentic/test/v2
+id: p0-workspace-chat-triage
+description: A first-run user pins, archives, finds, and restores a workspace
+  conversation through the real conversation-list controls
+defaultEnv: local
+steps:
+  - module:
+      path: ../modules/complete-first-run.module.yaml
+
+  - hover: Get started with First Tree conversation row
+  - click: Manage chat button for the Get started with First Tree conversation
+  - click: Pin menu item
+  - assert: the Get started with First Tree conversation appears in the Pinned
+      section of the conversation list
+
+  - hover: Get started with First Tree conversation row in the Pinned section
+  - click: Manage chat button for the Get started with First Tree conversation
+  - click: Archive menu item
+  - assert: the Get started with First Tree conversation is no longer visible
+      in the active conversation list
+
+  - click: Filter button in the conversation list
+  # Target the visible label row, not its screen-reader-only native input.
+  - click: visible Archived label row under Status
+  - click: Done button in the open filter panel
+  - assert: the archived view lists the Get started with First Tree conversation
+
+  - hover: Get started with First Tree conversation row in the archived view
+  - click: Manage chat button for the Get started with First Tree conversation
+  - click: Unarchive menu item
+  - assert: the Get started with First Tree conversation is no longer visible
+      in the archived view
+
+  - click: Filter button in the conversation list
+  - click: visible Active label row under Status
+  - click: Done button in the open filter panel
+  - assert: the restored Get started with First Tree conversation is visible in
+      the Pinned section of the active conversation list

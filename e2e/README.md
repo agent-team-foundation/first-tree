@@ -10,12 +10,15 @@ unchanged: deterministic behaviour belongs in per-package Vitest suites,
 agent-skill regression in `@first-tree/skill-evals`, and judgment / live /
 cross-surface validation in committed `@first-tree/qa` cases.
 
-The journey these tests walk is owned by the case
-[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md).
-That case remains the contract and the place judgement lives. This directory is
-one way to execute part of it unattended, in the same spirit as the fixtures and
-environment recipes under `packages/qa` — useful for a quick regression pass, not
-a substitute for the case and not a new authority over what "validated" means.
+The journeys these tests walk are owned by the cases
+[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md)
+and
+[`need-you-request-review-journey`](../packages/qa/cases/cross-surface/need-you-request-review-journey.md).
+Those cases remain the contracts and the place judgement lives. This directory
+is one way to execute their browser-observable happy paths unattended, in the
+same spirit as the fixtures and environment recipes under `packages/qa` — useful
+for a quick regression pass, not a substitute for the cases and not a new
+authority over what "validated" means.
 
 Two limits follow from that and are deliberate:
 
@@ -30,7 +33,9 @@ a check here to escape a flaky product test.
 
 Run determinism is maximised where the tool allows: `momentic.config.yaml`
 disables assertion memory and beta failure recovery, so a run executes only the
-steps committed in this directory, and pins the agent versions.
+steps committed in this directory, and pins the agent versions. Local tests also
+create a fresh user for every test, so the P0 suite can run repeatedly against
+the same disposable database without reusing browser identities or chat state.
 
 ## Prerequisites
 
@@ -87,18 +92,46 @@ npx momentic@3.42.0 lint                                  # schema + file refere
 Each test carries its own `defaultEnv`, so the staging smoke check does not need
 the local stack and the local tests do not touch staging.
 
+### P0 local regression
+
+Run the activation checks plus the three daily-work journeys with an explicit
+local target. `--upload-results` creates a shared Momentic run for QA handoff;
+omit it during private authoring when dashboard evidence is not needed.
+
+```bash
+npx momentic@3.42.0 run --env local --upload-results \
+  e2e/registration-new-user.test.yaml \
+  e2e/onboarding-complete-setup.test.yaml \
+  e2e/p0/
+```
+
+For a repeatability qualification, invoke that exact command twice without
+resetting the database between runs. Both runs should pass independently. Each
+test gets a distinct `e2e-user-<ms>` account and its own onboarding chat; rows
+accumulate intentionally, so use a disposable local database and apply the
+team's normal reset procedure when it is safe to discard that data.
+
+The suite remains a team-invoked QA aid: it is deliberately not exposed as a
+package test script and is not a CI merge gate. Keep the pinned Momentic version
+in commands and review runner upgrades separately from product changes.
+
 ## Tests
 
 | Test | Env | Covers |
 | --- | --- | --- |
 | `registration-new-user.test.yaml` | local | A brand-new account is created and lands on onboarding step 1 |
 | `onboarding-complete-setup.test.yaml` | local | The whole first-run journey: sign up → create team → connect a computer → create the first agent → start the kickoff chat → land in the workspace |
+| `p0/workspace-start-new-chat.test.yaml` | local | Start a new workspace work stream and send its initial task to the default agent |
+| `p0/workspace-chat-triage.test.yaml` | local | Pin, archive, find and restore a conversation through the workspace rail |
+| `p0/need-you-basic-review.test.yaml` | local | Review one pending request, choose an option and submit its resolution through Need you |
 | `dev-cloud-sign-in-available.test.yaml` | first-tree-dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
 
-`modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow. Each run
-registers a **new** user (`e2e-user-<ms>`); reusing an identity would sign in as
-the previous run's user instead of registering, so the tests are not idempotent
-by design — they accumulate rows in the local dev database.
+`modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow, and
+`modules/complete-first-run.module.yaml` extends it through onboarding to a
+ready workspace. Each test registers a **new** user (`e2e-user-<ms>`); reusing an
+identity would sign in as the previous run's user instead of registering, so the
+tests are repeatable but not cleanup-idempotent — they accumulate rows in the
+local dev database.
 
 ## Which environment runs what
 
@@ -150,12 +183,22 @@ never reach. `seed-agent-online.js` therefore writes `runtime_state = 'idle'` an
 `runtime_updated_at`, matching `publishAgentPresence` in
 `packages/server/src/services/presence.ts`.
 
-Both fixtures write `last_seen_at` ahead of now on purpose. The server sweeps
+Both presence fixtures write `last_seen_at` ahead of now on purpose. The server sweeps
 connected clients and agents whose heartbeat is older than
 `presenceCleanupSeconds` (60s by default — see `cleanupStaleClients` in
 `packages/server/src/services/client.ts`). Without a heartbeat loop a plain
 `NOW()` would decay mid-run and the flow would regress to "Your computer isn't
 connected".
+
+`scripts/seed-need-you-request.js` replaces a different missing process: the
+online-looking fixture agent has no real runtime to author a question. The
+script mirrors the durable request message plus its per-user list projection,
+then stops. The behaviour under test starts after that boundary: the Web app
+loads the FIFO queue, the human chooses an option, the server authorizes and
+persists the resolving message, and Need you refreshes to the caught-up state.
+It does **not** validate agent request authoring, daemon delivery, attachments,
+Ask agent clarification, version skew, or failure recovery; those branches stay
+in the full `need-you-request-review-journey` case.
 
 If onboarding ever stops depending on a connected daemon, delete the fixtures
 rather than working around them.
