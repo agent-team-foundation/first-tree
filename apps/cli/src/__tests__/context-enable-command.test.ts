@@ -115,30 +115,28 @@ beforeEach(() => {
 describe("context enable v3 command", () => {
   it("keeps plan read-only and fixes the grant-store fingerprint", async () => {
     await runContextEnable(context({ plan: true }));
-    const result = output.result.mock.calls[0]?.[0] as {
-      plan: {
-        planId: string;
-        grantStoreFingerprint: string;
-        choices: Array<{ kind: string; applyCommand: string | null }>;
-      };
-    };
-    expect(result.plan.grantStoreFingerprint).toBe("a".repeat(64));
-    expect(result.plan.planId).toContain(`.${"a".repeat(64)}.`);
-    expect(result.plan.choices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "global",
-          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'global' --plan-id '${result.plan.planId}' --yes`,
+    const planIdPattern = `v1\\.[0-9a-f]{64}\\.${"a".repeat(64)}\\.[0-9a-f]{64}\\.[0-9a-f]{64}`;
+    expect(output.result).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "choice_required",
+        plan: expect.objectContaining({
+          grantStoreFingerprint: "a".repeat(64),
+          planId: expect.stringMatching(new RegExp(planIdPattern, "u")),
+          choices: expect.arrayContaining(
+            ["global", "directory", "session"].map((scope) =>
+              expect.objectContaining({
+                kind: scope,
+                applyCommand: expect.stringMatching(
+                  new RegExp(
+                    `^'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope '${scope}' --plan-id '${planIdPattern}' --yes$`,
+                    "u",
+                  ),
+                ),
+              }),
+            ),
+          ),
         }),
-        expect.objectContaining({
-          kind: "directory",
-          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'directory' --plan-id '${result.plan.planId}' --yes`,
-        }),
-        expect.objectContaining({
-          kind: "session",
-          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'session' --plan-id '${result.plan.planId}' --yes`,
-        }),
-      ]),
+      }),
     );
     expect(mocks.enableOperation).not.toHaveBeenCalled();
     expect(mocks.issueSession).not.toHaveBeenCalled();
@@ -154,13 +152,15 @@ describe("context enable v3 command", () => {
       warning: null,
     });
     await runContextEnable(context({ plan: true, projectRoot: undefined, pathless: true }));
-    const result = output.result.mock.calls[0]?.[0] as {
-      plan: { choices: Array<{ kind: string; available: boolean; applyCommand: string | null }> };
-    };
-    expect(result.plan.choices.find((choice) => choice.kind === "directory")).toMatchObject({
-      available: false,
-      applyCommand: null,
-    });
+    expect(output.result).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: expect.objectContaining({
+          choices: expect.arrayContaining([
+            expect.objectContaining({ kind: "directory", available: false, applyCommand: null }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it("renders exact apply commands in the human-readable plan", async () => {
@@ -176,11 +176,17 @@ describe("context enable v3 command", () => {
     mocks.channelConfig.channel = "staging";
     mocks.channelConfig.binName = "first-tree-staging";
     await runContextEnable(context({ plan: true }));
-    const result = output.result.mock.calls[0]?.[0] as {
-      plan: { choices: Array<{ kind: string; applyCommand: string | null }> };
-    };
-    expect(result.plan.choices.find((choice) => choice.kind === "global")?.applyCommand).toMatch(
-      /^~\/\.local\/bin\/first-tree-staging --json context enable/u,
+    expect(output.result).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: expect.objectContaining({
+          choices: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "global",
+              applyCommand: expect.stringMatching(/^~\/\.local\/bin\/first-tree-staging --json context enable/u),
+            }),
+          ]),
+        }),
+      }),
     );
   });
 

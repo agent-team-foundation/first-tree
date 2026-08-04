@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  type ContextActivationScope,
-  type ContextIntegrationGrant,
-  type ContextIntegrationProvider,
-  portableCliExecutable,
-} from "@first-tree/shared";
+import type { ContextActivationScope, ContextIntegrationGrant, ContextIntegrationProvider } from "@first-tree/shared";
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
-import { channelConfig } from "../../core/channel.js";
 import {
   readActiveContextAccountClientId,
   withAccountStateMutationLockAsync,
@@ -27,8 +21,8 @@ import { planContextIntegrationInstall } from "../../core/context-integration/in
 import { enableContextIntegrationOperation } from "../../core/context-integration/operation.js";
 import { providerPluginRoot, resolveContextIntegrationRelease } from "../../core/context-integration/release.js";
 import { inspectContextIntegrationRuntime } from "../../core/context-integration/runtime-health.js";
+import { buildContextSetupChoices, type ContextSetupChoice } from "../../core/context-integration/setup-plan.js";
 import { print } from "../../core/output.js";
-import { quotePosixShellArg } from "../../core/posix-shell.js";
 import { createMemberSdk } from "../_shared/member.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { createContextIntegrationDriver, parseContextProvider } from "./shared.js";
@@ -53,14 +47,7 @@ type SetupPlan = {
   provider: ContextIntegrationProvider;
   team: { organizationId: string; displayName: string; role: string };
   location: ReturnType<typeof inspectContextSetupLocation>;
-  choices: Array<{
-    kind: "global" | "directory" | "session";
-    label: string;
-    available: boolean;
-    recommended: boolean;
-    description: string;
-    applyCommand: string | null;
-  }>;
+  choices: ContextSetupChoice[];
   [setupPlanAccountClientId]: string;
 };
 
@@ -223,58 +210,6 @@ async function buildSetupPlan(
     }),
     [setupPlanAccountClientId]: accountClientId,
   };
-}
-
-export function buildContextSetupChoices(
-  location: ReturnType<typeof inspectContextSetupLocation>,
-  plan: { provider: ContextIntegrationProvider; teamId: string; planId: string },
-): SetupPlan["choices"] {
-  return [
-    {
-      kind: "global",
-      label: "All sessions",
-      available: true,
-      recommended: !location.temporaryDirectory,
-      description: "Make this Team eligible in every session for this provider.",
-      applyCommand: renderApplyCommand(plan, "global"),
-    },
-    {
-      kind: "directory",
-      label: location.directory ? `This directory: ${location.directory}` : "This directory",
-      available: location.directoryAvailable,
-      recommended: location.directoryAvailable && !location.temporaryDirectory,
-      description: location.directoryAvailable
-        ? "Make this Team eligible in this directory and its descendants."
-        : "Unavailable because the provider did not expose a stable directory.",
-      applyCommand: location.directoryAvailable ? renderApplyCommand(plan, "directory") : null,
-    },
-    {
-      kind: "session",
-      label: "This session only",
-      available: true,
-      recommended: location.temporaryDirectory,
-      description: "Use verified Read/Write Skills now without installing a Plugin, Hook, or persistent grant.",
-      applyCommand: renderApplyCommand(plan, "session"),
-    },
-  ];
-}
-
-function renderApplyCommand(
-  plan: { provider: ContextIntegrationProvider; teamId: string; planId: string },
-  scope: "global" | "directory" | "session",
-): string {
-  const executable =
-    channelConfig.channel === "dev"
-      ? quotePosixShellArg(channelConfig.binName)
-      : portableCliExecutable(channelConfig.binName);
-  return [
-    `${executable} --json context enable`,
-    `--provider ${quotePosixShellArg(plan.provider)}`,
-    `--team ${quotePosixShellArg(plan.teamId)}`,
-    `--scope ${quotePosixShellArg(scope)}`,
-    `--plan-id ${quotePosixShellArg(plan.planId)}`,
-    "--yes",
-  ].join(" ");
 }
 
 function parseActivationScope(scope: string, plan: SetupPlan): ContextActivationScope {
