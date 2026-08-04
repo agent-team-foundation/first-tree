@@ -4153,6 +4153,124 @@ describe("timeline message filter", () => {
     await act(async () => root.unmount());
   });
 
+  it("clamps the persisted scroll anchor below an interleaved hidden message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // visible-A1, hidden-B2, visible-A3: the filtered DOM bottom (A3) is
+    // chronologically AFTER the hidden B2. Persisting A3 as the scroll
+    // anchor would land the next ordinary visit below B2, whose live
+    // bottom-advance would then swallow B2's pill. Both persisted ids must
+    // stay at A1 — the safe side of the oldest hidden row.
+    const interleaved = messages([
+      message({
+        id: "il-nova-a1",
+        senderId: "agent-1",
+        content: "Pair line before the hidden arrival.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "il-design-b2",
+        senderId: "agent-2",
+        content: "Hidden interleaved note.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "il-nova-a3",
+        senderId: "agent-1",
+        content: "Pair line after the hidden arrival.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(interleaved);
+    const { root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), interleaved),
+      "/?focus=agent-1",
+    );
+    await act(async () => root.unmount());
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[1]).toBe("il-nova-a1");
+      expect(call[2]).toBe("il-nova-a1");
+    }
+
+    // Full revisit restored at the clamped anchor: the hidden message is
+    // surfaced as new (divider), not silently digested.
+    readStateMocks.setReadState.mockClear();
+    document.body.innerHTML = "";
+    const { container: revisit, root: revisitRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), interleaved);
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "il-nova-a1",
+          latestKnownMessageId: "il-nova-a1",
+          updatedAt: Date.now(),
+        });
+      },
+      "/",
+    );
+    await waitForText(revisit, "Hidden interleaved note.");
+    await waitForText(revisit, "New Messages");
+    await act(async () => revisitRoot.unmount());
+  });
+
+  it("keeps the watermark at the blocking question while a stored filter is active", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Stored filter + an unanswered ask + a message AFTER the ask. The
+    // blocking truncation hides everything past the question from the DOM,
+    // so the ceiling must stop at the question — "hidden" means NOT
+    // RENDERED, regardless of which layer (pair filter or block truncation)
+    // hid the row. Building the ceiling from the filter projection alone
+    // would persist the never-rendered trailing message as known.
+    window.localStorage.setItem(
+      "first-tree:chat-message-filter:v1",
+      JSON.stringify({ "u:anon:chat:chat-1": { agentId: "agent-1", updatedAt: 1 } }),
+    );
+    const blockedHistory = messages([
+      message({
+        id: "bk-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, run the deploy.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "bk-request",
+        senderId: "agent-1",
+        format: "request",
+        content: "Approve the rollout window?",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+      }),
+      message({
+        id: "bk-after",
+        senderId: "agent-1",
+        content: "Extra evidence after the question.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(blockedHistory);
+    const { root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), blockedHistory),
+      "/",
+    );
+    await act(async () => root.unmount());
+
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[2]).toBe("bk-request");
+      expect(call[1]).not.toBe("bk-after");
+    }
+  });
+
   it("does not advance the read watermark past a hidden arrival on an own send", async () => {
     const { ChatView } = await import("../chat-view.js");
     // The hidden agent-2 message is the NEWEST loaded row; the viewer then

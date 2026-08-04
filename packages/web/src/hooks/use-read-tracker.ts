@@ -25,7 +25,7 @@
  * first-tree-all 120.
  */
 
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useCallback, useEffect, useRef } from "react";
 import { setReadState } from "../api/read-state-store.js";
 
 type Message = { id: string; createdAt: string };
@@ -203,6 +203,36 @@ export function useReadTracker({
   // listeners on every filter toggle.
   const latestKnownOverrideRef = useRef(latestKnownOverride);
   latestKnownOverrideRef.current = latestKnownOverride;
+  // Live message order, for the bottom-anchor clamp below. A ref (not an
+  // effect dep) so the flush path — whose effect is deliberately keyed on
+  // `chatId` alone — can compare positions without rebinding.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // While an override is active, the persisted scroll anchor must not cross
+  // it either: the rendered bottom row can sit chronologically AFTER a
+  // hidden message (interleaved hidden rows, or the viewer's own send), and
+  // restoring the NEXT visit at that later anchor would let the live
+  // session-watermark advance past the hidden message the moment the user
+  // lands there — swallowing its attention state even though the durable
+  // `latestKnownMessageId` correctly stayed below it. Clamping to the
+  // override keeps every persisted anchor on the safe side of the oldest
+  // hidden row; the next unfiltered visit then simply starts just above it.
+  const clampBottomToOverride = useCallback((bottomVisibleId: string): string => {
+    const override = latestKnownOverrideRef.current;
+    if (override === undefined || override === null) return bottomVisibleId;
+    if (bottomVisibleId === override) return bottomVisibleId;
+    const order = messagesRef.current;
+    let bottomIdx = -1;
+    let overrideIdx = -1;
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i]?.id;
+      if (id === bottomVisibleId) bottomIdx = i;
+      if (id === override) overrideIdx = i;
+    }
+    if (bottomIdx < 0 || overrideIdx < 0) return bottomVisibleId;
+    return bottomIdx > overrideIdx ? override : bottomVisibleId;
+  }, []);
 
   // Keep latest callbacks reachable from inside effects below
   // without making the effects re-run on every render.
@@ -277,7 +307,8 @@ export function useReadTracker({
         const bv = bottomVisibleIdRef.current;
         const lkAtFire = latestKnownIdRef.current;
         if (!bv || !lkAtFire) return;
-        void setReadState(chatId, bv, lkAtFire).then(() => onWriteRef.current?.(chatId, bv, lkAtFire));
+        const safeBv = clampBottomToOverride(bv);
+        void setReadState(chatId, safeBv, lkAtFire).then(() => onWriteRef.current?.(chatId, safeBv, lkAtFire));
       }, writeDebounceMs);
     };
 
@@ -320,7 +351,8 @@ export function useReadTracker({
       const bv = bottomVisibleIdRef.current;
       const lk = latestKnownIdRef.current;
       if (!bv || !lk) return;
-      void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
+      const safeBv = clampBottomToOverride(bv);
+      void setReadState(chatId, safeBv, lk).then(() => onWriteRef.current?.(chatId, safeBv, lk));
     };
     const onVis = () => {
       if (document.visibilityState === "hidden") flushNow();
@@ -330,5 +362,5 @@ export function useReadTracker({
       document.removeEventListener("visibilitychange", onVis);
       flushNow();
     };
-  }, [chatId]);
+  }, [chatId, clampBottomToOverride]);
 }

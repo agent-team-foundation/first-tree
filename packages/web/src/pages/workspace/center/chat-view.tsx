@@ -3034,6 +3034,55 @@ export function ChatView({
   });
   const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
 
+  // The highest read anchor that is SAFE while the pair filter is active:
+  // the message just before the OLDEST hidden one in the loaded order.
+  // Everything older than every hidden message can be marked known without
+  // swallowing anything, so a persistently-filtered chat still digests its
+  // read pair messages instead of re-flagging them as new on every visit (a
+  // plain freeze had exactly that noise). When the filter hides nothing, the
+  // ceiling IS the true tip — full normal persistence, including a transient
+  // exact-pair focus visit. `null` when even the first loaded message is
+  // hidden (nothing is safe); `undefined` when no filter is active. The
+  // persisted watermark never regresses: a ceiling below what the stored row
+  // already carries yields the stored value (that message was in the DOM,
+  // unfiltered, when it was persisted — so it is genuinely known).
+  //
+  // The bound applies to EVERY read/attention anchor, not just the durable
+  // `latestKnownMessageId`: the tracker clamps the persisted scroll anchor
+  // to it, and the live session-watermark advance below clamps to it too.
+  // A filtered DOM bottom can sit chronologically AFTER an interleaved
+  // hidden message (visible-A1, hidden-B2, visible-A3), and any anchor that
+  // crosses B2 — restored scroll, session high-water, or durable watermark —
+  // would eventually swallow B2's unread state.
+  //
+  // "Hidden" means NOT ACTUALLY RENDERED, so the visible set is taken from
+  // `visibleItems` — the post-truncation render list — not from the filter
+  // projection alone. Rendering stacks further cuts on top of the pair
+  // filter (the blocking-question truncation hides everything after an
+  // unanswered ask), and a message the user never saw must stay unknown no
+  // matter WHICH layer hid it. The unfiltered DOM path gets this for free
+  // (it reads rendered rows); the override must uphold the same invariant,
+  // including for any truncation layer added later.
+  const latestKnownCeiling = useMemo<string | null | undefined>(() => {
+    if (!filterAgentId) return undefined;
+    const renderedIds = new Set<string>();
+    for (const item of visibleItems) {
+      if (item.kind === "message") renderedIds.add(item.data.id);
+    }
+    let beforeOldestHidden: string | null = null;
+    for (const m of mergedMessages) {
+      if (!renderedIds.has(m.id)) break;
+      beforeOldestHidden = m.id;
+    }
+    const stored = readState?.latestKnownMessageId ?? null;
+    if (stored && stored !== beforeOldestHidden) {
+      const storedIdx = mergedMessages.findIndex((m) => m.id === stored);
+      const ceilingIdx = beforeOldestHidden ? mergedMessages.findIndex((m) => m.id === beforeOldestHidden) : -1;
+      if (storedIdx > ceilingIdx) return stored;
+    }
+    return beforeOldestHidden;
+  }, [filterAgentId, visibleItems, mergedMessages, readState?.latestKnownMessageId]);
+
   // Resolve the stored bottom-visible id against the rendered set
   // so we can decide where to scroll on chat open. If the stored
   // id is gone (deleted message, or not in the current window),
@@ -3201,15 +3250,31 @@ export function ChatView({
   //      until the next forward advance instead.
   useEffect(() => {
     if (!liveBottomVisibleId) return;
-    const newIdx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
+    // While the pair filter hides messages, the DOM bottom is a FILTERED
+    // anchor that can sit chronologically after a hidden arrival (an own
+    // send, or the pair's next visible message). Advancing the session
+    // high-water past the safe bound would leave the hidden message
+    // pill-invisible even after the filter lifts, so the advance is clamped
+    // to `latestKnownCeiling` for the duration.
+    let nextId = liveBottomVisibleId;
+    let newIdx = mergedMessages.findIndex((m) => m.id === nextId);
     if (newIdx < 0) return;
+    if (latestKnownCeiling !== undefined) {
+      if (latestKnownCeiling === null) return;
+      const ceilingIdx = mergedMessages.findIndex((m) => m.id === latestKnownCeiling);
+      if (ceilingIdx < 0) return;
+      if (newIdx > ceilingIdx) {
+        nextId = latestKnownCeiling;
+        newIdx = ceilingIdx;
+      }
+    }
     if (sessionHighestId !== null) {
       const curIdx = mergedMessages.findIndex((m) => m.id === sessionHighestId);
       if (curIdx < 0) return;
       if (newIdx <= curIdx) return;
     }
-    setSessionHighestId(liveBottomVisibleId);
-  }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
+    setSessionHighestId(nextId);
+  }, [liveBottomVisibleId, mergedMessages, sessionHighestId, latestKnownCeiling]);
   // Effective high water index, resolved from `sessionHighestId`
   // against the live `mergedMessages`. Max with the frozen-at-open
   // anchor index covers the re-visit-without-scroll path (no
@@ -3484,36 +3549,6 @@ export function ChatView({
   // `onBottomVisibleChange` publishes the live value so the pill
   // can recompute its count on every scroll event without an IDB
   // round-trip.
-  //
-  // The highest read watermark that is SAFE to persist while the pair
-  // filter is active: the message just before the OLDEST hidden one in the
-  // loaded order. Everything older than every hidden message can be marked
-  // known without swallowing anything, so a persistently-filtered chat
-  // still digests its read pair messages instead of re-flagging them as new
-  // on every visit (a plain freeze had exactly that noise). When the filter
-  // hides nothing, the ceiling IS the true tip — full normal persistence,
-  // including a transient exact-pair focus visit. `null` when even the
-  // first loaded message is hidden (nothing is safe); `undefined` when no
-  // filter is active (the tracker follows the DOM). The persisted watermark
-  // never regresses: a ceiling below what the stored row already carries
-  // yields the stored value (`onWrite` keeps the read-state cache fresh, so
-  // in-session advances are respected too).
-  const latestKnownCeiling = useMemo<string | null | undefined>(() => {
-    if (!filterAgentId) return undefined;
-    const visibleIds = new Set(timelineMessages.map((m) => m.id));
-    let beforeOldestHidden: string | null = null;
-    for (const m of mergedMessages) {
-      if (!visibleIds.has(m.id)) break;
-      beforeOldestHidden = m.id;
-    }
-    const stored = readState?.latestKnownMessageId ?? null;
-    if (stored && stored !== beforeOldestHidden) {
-      const storedIdx = mergedMessages.findIndex((m) => m.id === stored);
-      const ceilingIdx = beforeOldestHidden ? mergedMessages.findIndex((m) => m.id === beforeOldestHidden) : -1;
-      if (storedIdx > ceilingIdx) return stored;
-    }
-    return beforeOldestHidden;
-  }, [filterAgentId, timelineMessages, mergedMessages, readState?.latestKnownMessageId]);
   useReadTracker({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
