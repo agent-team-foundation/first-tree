@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   activateExternalContext,
@@ -81,12 +80,5 @@ describe("neutral multi-Team activation", () => {
   it("keeps standing context safely below the provider hook limit", () => {
     const contextBytes = Buffer.byteLength(buildByoContextAdditionalContext(), "utf8");
     expect(contextBytes).toBeLessThanOrEqual(BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT - 128);
-
-    const bundleSource = readFileSync(
-      new URL("../../../../scripts/build-context-integration-bundle.mjs", import.meta.url),
-      "utf8",
-    );
-    const renderedLimit = bundleSource.match(/additionalContextLimit:\s*([\d_]+)/u)?.[1];
-    expect(Number(renderedLimit?.replaceAll("_", ""))).toBe(BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT);
   });
 });

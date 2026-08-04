@@ -30,6 +30,7 @@ export {
   materializeConnectBootstrapCommand,
   portableCliExecutable,
 } from "./connect-bootstrap.js";
+export { BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT } from "./context-integration-limits.js";
 // -- Document review (docloop) anchor building / locating --
 export {
   type BuildDocAnchorInput,

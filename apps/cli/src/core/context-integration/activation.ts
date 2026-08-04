@@ -1,9 +1,10 @@
 import { readCanonicalContextTreeWriteRouting } from "@first-tree/client";
-import type {
-  ContextActivationV2Response,
-  ContextIntegrationGrant,
-  ContextIntegrationProject,
-  ContextIntegrationProvider,
+import {
+  BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT,
+  type ContextActivationV2Response,
+  type ContextIntegrationGrant,
+  type ContextIntegrationProject,
+  type ContextIntegrationProvider,
 } from "@first-tree/shared";
 import {
   type ContextActivationValidator,
@@ -15,9 +16,6 @@ import { resolveContextGrantCandidates } from "./context-binding-store.js";
 export type { ContextActivationValidator } from "./authority.js";
 
 type ConnectedResponse = Extract<ContextActivationV2Response, { outcome: "connected" }>;
-
-/** Keep aligned with the SessionStart hook declaration in build-context-integration-bundle.mjs. */
-export const BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT = 2_048;
 
 export type ExternalContextActivation = {
   outcome: "connected" | "disabled" | "unavailable" | "needs_admin" | "ambiguous";
@@ -66,6 +64,8 @@ export function buildByoContextAdditionalContext(): string {
     "External BYO provider session; not First Tree Chat/Agent.",
   ].join("\n");
 }
+
+export { BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT };
 
 /** Kept for human-readable live Team diagnostics, not as the BYO router prompt. */
 export function buildConnectedContextAdditionalContext(team: ConnectedResponse["team"]): string {

@@ -6,6 +6,12 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CONTEXT_INTEGRATION_LIMITS = JSON.parse(
+  readFileSync(join(REPO_ROOT, "packages", "shared", "src", "context-integration-limits.json"), "utf8"),
+);
+if (!Number.isSafeInteger(CONTEXT_INTEGRATION_LIMITS.byoAdditionalContextLimit)) {
+  throw new Error("Shared BYO additional-context limit must be a safe integer.");
+}
 const EXTERNAL_SKILLS = ["first-tree-read", "first-tree-write"];
 const PLUGIN_NAME = "first-tree-context";
 const PROVIDERS = ["claude-code", "codex"];
@@ -190,8 +196,7 @@ function writeSessionStartHook(pluginRoot, provider) {
                   : `"\${CLAUDE_PLUGIN_ROOT}/bin/context-session-start" --release-digest __RELEASE_DIGEST__`,
               timeout: 5,
               statusMessage: "Connecting First Tree Context",
-              // Keep aligned with BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT in activation.ts.
-              additionalContextLimit: 2048,
+              additionalContextLimit: CONTEXT_INTEGRATION_LIMITS.byoAdditionalContextLimit,
             },
           ],
         },
