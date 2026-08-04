@@ -48,7 +48,7 @@ CI would additionally need a `MOMENTIC_API_KEY` secret.
 
 **What leaves your machine.** Resolving a natural-language step and evaluating a
 model-backed assertion sends page context — DOM snapshot and screenshot — to
-Momentic's service. Runs against `first-tree-local` therefore transmit whatever
+Momentic's service. Runs against `local` therefore transmit whatever
 is on screen in your local dev app. That is fine for the disposable
 `e2e-user-<ms>` identities these tests create, but do not point this suite at an
 environment holding real user data. `npx momentic results upload` additionally
@@ -68,7 +68,7 @@ pnpm --filter @first-tree/server dev          # :8000, enables the dev callback
 pnpm --filter @first-tree/web dev --host 127.0.0.1   # :5173
 ```
 
-The `first-tree-local` environment in [momentic.config.yaml](../momentic.config.yaml)
+The `local` environment in [momentic.config.yaml](../momentic.config.yaml)
 points at `http://127.0.0.1:5173` (Vite proxies `/api/v1` to the server) and
 passes `DATABASE_URL` through for the fixtures below.
 
@@ -104,7 +104,7 @@ by design — they accumulate rows in the local dev database.
 
 | Environment | Target | Runs |
 | --- | --- | --- |
-| `first-tree-local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
+| `local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
 | `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke check only |
 
 The registration and onboarding tests **cannot** run against a deployed
