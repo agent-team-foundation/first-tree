@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   activateExternalContext,
+  BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT,
   buildByoContextAdditionalContext,
   requireConnectedExternalContext,
 } from "../core/context-integration/activation.js";
@@ -66,9 +68,25 @@ describe("neutral multi-Team activation", () => {
     ).rejects.toMatchObject({ reasonCode: "route_required" });
   });
 
-  it("standing context mandates SCOPE routing and BYO write confirmation", () => {
+  it("standing context keeps trusted mode, fail-closed Read routing, and source-driven Write routing", () => {
     const context = buildByoContextAdditionalContext();
-    expect(context).toContain("SCOPE.md");
-    expect(context).toContain("wait for a new user confirmation");
+    expect(context).toContain("consumerKind: byo");
+    expect(context).toContain("first-tree-read");
+    expect(context).toContain("Selection is fail-closed");
+    expect(context).toContain("first-tree-write");
+    expect(context).toContain("Tree writes are source-driven");
+    expect(context).toContain("External BYO provider session");
+  });
+
+  it("keeps standing context safely below the provider hook limit", () => {
+    const contextBytes = Buffer.byteLength(buildByoContextAdditionalContext(), "utf8");
+    expect(contextBytes).toBeLessThanOrEqual(BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT - 128);
+
+    const bundleSource = readFileSync(
+      new URL("../../../../scripts/build-context-integration-bundle.mjs", import.meta.url),
+      "utf8",
+    );
+    const renderedLimit = bundleSource.match(/additionalContextLimit:\s*([\d_]+)/u)?.[1];
+    expect(Number(renderedLimit?.replaceAll("_", ""))).toBe(BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT);
   });
 });

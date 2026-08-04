@@ -190,6 +190,7 @@ function writeSessionStartHook(pluginRoot, provider) {
                   : `"\${CLAUDE_PLUGIN_ROOT}/bin/context-session-start" --release-digest __RELEASE_DIGEST__`,
               timeout: 5,
               statusMessage: "Connecting First Tree Context",
+              // Keep aligned with BYO_CONTEXT_ADDITIONAL_CONTEXT_LIMIT in activation.ts.
               additionalContextLimit: 2048,
             },
           ],

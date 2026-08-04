@@ -36,6 +36,8 @@ describe("current-session Context handoff", () => {
         skillPath: join(pluginRoot, "skills", name, "SKILL.md"),
       })),
     });
+    expect(handoff.activationContext).toContain("Selection is fail-closed");
+    expect(handoff.activationContext).not.toContain("SCOPE.md never grants write authority");
   });
 
   it("session-only exposes only Read/Write and carries its one candidate", () => {
