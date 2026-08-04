@@ -1223,10 +1223,11 @@ choices:
 - `session`: use it only now, without a Plugin, Hook or persistent grant.
 
 Every available choice includes an authoritative `applyCommand` that is ready
-to execute unchanged. It pins the channel's portable CLI, provider, Team,
-canonical `--project-root` or `--pathless` identity, selected scope, exact
-`planId`, and non-interactive consent flag. An unavailable directory choice has
-`applyCommand: null`; human-readable output omits a command for that choice.
+to execute unchanged. It pins the channel-appropriate executable (the portable
+CLI path outside development), provider, Team, canonical `--project-root` or
+`--pathless` identity, selected scope, exact `planId`, and non-interactive
+consent flag. An unavailable directory choice has `applyCommand: null`;
+human-readable output omits a command for that choice.
 
 The current agent displays the choices and waits for a new user reply, then
 runs only the selected choice's exact command. Apply must use the unchanged
