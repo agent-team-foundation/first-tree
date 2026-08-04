@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
-import type { ContextActivationScope, ContextIntegrationGrant, ContextIntegrationProvider } from "@first-tree/shared";
+import {
+  type ContextActivationScope,
+  type ContextIntegrationGrant,
+  type ContextIntegrationProvider,
+  portableCliExecutable,
+} from "@first-tree/shared";
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
+import { channelConfig } from "../../core/channel.js";
 import {
   readActiveContextAccountClientId,
   withAccountStateMutationLockAsync,
@@ -22,6 +28,7 @@ import { enableContextIntegrationOperation } from "../../core/context-integratio
 import { providerPluginRoot, resolveContextIntegrationRelease } from "../../core/context-integration/release.js";
 import { inspectContextIntegrationRuntime } from "../../core/context-integration/runtime-health.js";
 import { print } from "../../core/output.js";
+import { quotePosixShellArg } from "../../core/posix-shell.js";
 import { createMemberSdk } from "../_shared/member.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { createContextIntegrationDriver, parseContextProvider } from "./shared.js";
@@ -52,6 +59,7 @@ type SetupPlan = {
     available: boolean;
     recommended: boolean;
     description: string;
+    applyCommand: string | null;
   }>;
   [setupPlanAccountClientId]: string;
 };
@@ -200,20 +208,26 @@ async function buildSetupPlan(
       ? contextGrantStoreFingerprintAfterGrant(grantStore, directoryGrant)
       : null,
   };
+  const planId = renderSetupPlanToken(token);
   return {
     schemaVersion: 1,
-    planId: renderSetupPlanToken(token),
+    planId,
     grantStoreFingerprint: grantStore.fingerprint,
     provider,
     team: activation.team,
     location,
-    choices: buildContextSetupChoices(location),
+    choices: buildContextSetupChoices(location, {
+      provider,
+      teamId: activation.team.organizationId,
+      planId,
+    }),
     [setupPlanAccountClientId]: accountClientId,
   };
 }
 
 export function buildContextSetupChoices(
   location: ReturnType<typeof inspectContextSetupLocation>,
+  plan: { provider: ContextIntegrationProvider; teamId: string; planId: string },
 ): SetupPlan["choices"] {
   return [
     {
@@ -222,6 +236,7 @@ export function buildContextSetupChoices(
       available: true,
       recommended: !location.temporaryDirectory,
       description: "Make this Team eligible in every session for this provider.",
+      applyCommand: renderApplyCommand(plan, "global"),
     },
     {
       kind: "directory",
@@ -231,6 +246,7 @@ export function buildContextSetupChoices(
       description: location.directoryAvailable
         ? "Make this Team eligible in this directory and its descendants."
         : "Unavailable because the provider did not expose a stable directory.",
+      applyCommand: location.directoryAvailable ? renderApplyCommand(plan, "directory") : null,
     },
     {
       kind: "session",
@@ -238,8 +254,27 @@ export function buildContextSetupChoices(
       available: true,
       recommended: location.temporaryDirectory,
       description: "Use verified Read/Write Skills now without installing a Plugin, Hook, or persistent grant.",
+      applyCommand: renderApplyCommand(plan, "session"),
     },
   ];
+}
+
+function renderApplyCommand(
+  plan: { provider: ContextIntegrationProvider; teamId: string; planId: string },
+  scope: "global" | "directory" | "session",
+): string {
+  const executable =
+    channelConfig.channel === "dev"
+      ? quotePosixShellArg(channelConfig.binName)
+      : portableCliExecutable(channelConfig.binName);
+  return [
+    `${executable} --json context enable`,
+    `--provider ${quotePosixShellArg(plan.provider)}`,
+    `--team ${quotePosixShellArg(plan.teamId)}`,
+    `--scope ${quotePosixShellArg(scope)}`,
+    `--plan-id ${quotePosixShellArg(plan.planId)}`,
+    "--yes",
+  ].join(" ");
 }
 
 function parseActivationScope(scope: string, plan: SetupPlan): ContextActivationScope {
@@ -439,8 +474,9 @@ function renderPlan(plan: SetupPlan, json: boolean): void {
   if (plan.location.warning) print.status("Warning", plan.location.warning);
   for (const choice of plan.choices) {
     print.status(choice.label, choice.available ? choice.description : `Unavailable — ${choice.description}`);
+    if (choice.applyCommand) print.status("Apply command", choice.applyCommand);
   }
-  print.status("Next", "Choose one scope, then rerun with --scope <scope> --plan-id <planId> --yes.");
+  print.status("Next", "Choose one scope, then run its exact apply command unchanged.");
 }
 
 function renderScope(scope: ContextActivationScope): string {

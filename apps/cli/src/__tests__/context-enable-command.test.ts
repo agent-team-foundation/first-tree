@@ -26,9 +26,11 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   resolveRelease: vi.fn(),
   validateActivation: vi.fn(),
+  channelConfig: { channel: "dev", binName: "first-tree-dev" },
 }));
 
 vi.mock("../core/output.js", () => ({ print: output }));
+vi.mock("../core/channel.js", () => ({ channelConfig: mocks.channelConfig }));
 vi.mock("../core/context-integration/account-state-guard.js", () => ({
   readActiveContextAccountClientId: mocks.readAccount,
   withAccountStateMutationLockAsync: (action: () => Promise<unknown>) => action(),
@@ -76,6 +78,8 @@ const project = { kind: "path" as const, root: "/work/repo" };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.channelConfig.channel = "dev";
+  mocks.channelConfig.binName = "first-tree-dev";
   mocks.readAccount.mockReturnValue("client-1");
   mocks.inspectLocation.mockReturnValue({
     project,
@@ -111,12 +115,73 @@ beforeEach(() => {
 describe("context enable v3 command", () => {
   it("keeps plan read-only and fixes the grant-store fingerprint", async () => {
     await runContextEnable(context({ plan: true }));
-    const result = output.result.mock.calls[0]?.[0] as { plan: { planId: string; grantStoreFingerprint: string } };
+    const result = output.result.mock.calls[0]?.[0] as {
+      plan: {
+        planId: string;
+        grantStoreFingerprint: string;
+        choices: Array<{ kind: string; applyCommand: string | null }>;
+      };
+    };
     expect(result.plan.grantStoreFingerprint).toBe("a".repeat(64));
     expect(result.plan.planId).toContain(`.${"a".repeat(64)}.`);
+    expect(result.plan.choices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "global",
+          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'global' --plan-id '${result.plan.planId}' --yes`,
+        }),
+        expect.objectContaining({
+          kind: "directory",
+          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'directory' --plan-id '${result.plan.planId}' --yes`,
+        }),
+        expect.objectContaining({
+          kind: "session",
+          applyCommand: `'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'session' --plan-id '${result.plan.planId}' --yes`,
+        }),
+      ]),
+    );
     expect(mocks.enableOperation).not.toHaveBeenCalled();
     expect(mocks.issueSession).not.toHaveBeenCalled();
     expect(mocks.assertFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("omits an apply command for an unavailable directory choice", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project: { kind: "pathless" },
+      directory: null,
+      directoryAvailable: false,
+      temporaryDirectory: false,
+      warning: null,
+    });
+    await runContextEnable(context({ plan: true, projectRoot: undefined, pathless: true }));
+    const result = output.result.mock.calls[0]?.[0] as {
+      plan: { choices: Array<{ kind: string; available: boolean; applyCommand: string | null }> };
+    };
+    expect(result.plan.choices.find((choice) => choice.kind === "directory")).toMatchObject({
+      available: false,
+      applyCommand: null,
+    });
+  });
+
+  it("renders exact apply commands in the human-readable plan", async () => {
+    await runContextEnable({ ...context({ plan: true }), options: { json: false, debug: false, quiet: false } });
+    const statusRows = output.status.mock.calls.map(([label, value]) => `${label}: ${value}`).join("\n");
+    expect(statusRows).toContain(
+      `Apply command: 'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'global'`,
+    );
+    expect(statusRows).toContain("Next: Choose one scope, then run its exact apply command unchanged.");
+  });
+
+  it("pins non-dev apply commands to the portable executable without quoting away tilde expansion", async () => {
+    mocks.channelConfig.channel = "staging";
+    mocks.channelConfig.binName = "first-tree-staging";
+    await runContextEnable(context({ plan: true }));
+    const result = output.result.mock.calls[0]?.[0] as {
+      plan: { choices: Array<{ kind: string; applyCommand: string | null }> };
+    };
+    expect(result.plan.choices.find((choice) => choice.kind === "global")?.applyCommand).toMatch(
+      /^~\/\.local\/bin\/first-tree-staging --json context enable/u,
+    );
   });
 
   it("rejects a concurrent grant add/remove before persistent mutation", async () => {
