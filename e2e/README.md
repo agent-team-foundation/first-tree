@@ -1,35 +1,62 @@
 # End-to-end tests (Momentic)
 
 Browser-level tests that drive the real web app against a real server and
-database. They complement — they do not replace — the per-package Vitest suites
-described in [AGENTS.md](../AGENTS.md); deterministic behaviour still belongs in
-product tests.
+database.
 
-## Which environment runs what
+## Where this sits in the QA contract
 
-| Environment | Target | Runs |
-| --- | --- | --- |
-| `first-tree-local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
-| `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke checks only |
+[AGENTS.md](../AGENTS.md) routes each check to a layer: deterministic behaviour to
+per-package Vitest suites, agent-skill regression to `@first-tree/skill-evals`,
+and judgment / live / cross-surface validation to `@first-tree/qa` cases. This
+directory is a fourth thing and does not replace any of them:
 
-The registration and onboarding tests **cannot** run against a deployed
-environment, and this is by design rather than an omission:
+- It is **executable and repeatable**, unlike `packages/qa` cases, which are
+  prose prompts for a human-requested agent run rather than a runner.
+- It is **not deterministic** in the sense product tests are: steps are resolved
+  from natural-language descriptions by a hosted model the first time they run
+  (afterwards from a cache), and some assertions are model-evaluated. A stable
+  invariant that can be asserted in Vitest still belongs in Vitest.
 
-- `auth/github/dev-callback`, the stub the tests sign up through, is gated on
-  `NODE_ENV !== "production"` **and** an explicit `FIRST_TREE_DEV_CALLBACK_ENABLED`
-  opt-in. It 404s on `dev.cloud.first-tree.ai`. Its sign-in page offers only real
-  Google / GitHub OAuth, so automated sign-up there would mean driving a real
-  identity provider with real credentials.
-- The onboarding fixtures below write directly to PostgreSQL, which a deployed
-  environment does not (and should not) expose.
+Consequently it is **not a CI gate today** and is not wired into any workflow.
+It is a maintainer-run check for the first-run journey, which spans the web app,
+the server, the database and the onboarding contract, and therefore has no
+single package where it could live as a product test.
 
-So staging gets what it can support without credentials: that the app is served
-and the sign-in entry point offers both identity providers. That still catches a
-broken deploy, a broken bundle, or a misconfigured auth surface.
+Adopting it as a gate is a separate decision that needs an owner for the account
+below, a policy for classifying model-attributable failures, and agreement on
+where the boundary with `packages/qa` sits. Until then, treat a red run here as a
+signal to investigate rather than as a merge blocker.
+
+Run determinism is maximised where the tool allows: `momentic.config.yaml`
+disables assertion memory and beta failure recovery, so a run executes only the
+steps committed in this directory, and pins the agent versions.
 
 ## Prerequisites
 
-These tests need the full local stack from
+### 1. Momentic account (external service)
+
+The runner is a hosted product, not a local library. You need an account and a
+local login before any of this works:
+
+```bash
+npx momentic@3.42.0 login             # writes ~/.momentic/auth.json
+npx momentic@3.42.0 install-browsers  # one-time browser download
+```
+
+CI would additionally need a `MOMENTIC_API_KEY` secret.
+
+**What leaves your machine.** Resolving a natural-language step and evaluating a
+model-backed assertion sends page context — DOM snapshot and screenshot — to
+Momentic's service. Runs against `first-tree-local` therefore transmit whatever
+is on screen in your local dev app. That is fine for the disposable
+`e2e-user-<ms>` identities these tests create, but do not point this suite at an
+environment holding real user data. `npx momentic results upload` additionally
+publishes a run's screenshots and video to the Momentic dashboard; nothing is
+uploaded unless you run that command.
+
+### 2. Local First Tree stack
+
+The local tests need the full stack from
 [DEVELOPMENT.md](../DEVELOPMENT.md#quickstart) running:
 
 ```bash
@@ -44,12 +71,16 @@ The `first-tree-local` environment in [momentic.config.yaml](../momentic.config.
 points at `http://127.0.0.1:5173` (Vite proxies `/api/v1` to the server) and
 passes `DATABASE_URL` through for the fixtures below.
 
+The runner is intentionally **not** a workspace dependency: it shares transitive
+packages with the product graph, and adding it to the root manifest re-resolved
+unrelated runtime dependencies. Invoke it through a pinned `npx` instead.
+
 ## Running
 
 ```bash
-npx momentic run e2e/                              # everything
-npx momentic run e2e/registration-new-user.test.yaml
-npx momentic lint                                  # schema + file references
+npx momentic@3.42.0 run e2e/                              # everything
+npx momentic@3.42.0 run e2e/registration-new-user.test.yaml
+npx momentic@3.42.0 lint                                  # schema + file references
 ```
 
 Each test carries its own `defaultEnv`, so the staging smoke check does not need
@@ -67,6 +98,29 @@ the local stack and the local tests do not touch staging.
 registers a **new** user (`e2e-user-<ms>`); reusing an identity would sign in as
 the previous run's user instead of registering, so the tests are not idempotent
 by design — they accumulate rows in the local dev database.
+
+## Which environment runs what
+
+| Environment | Target | Runs |
+| --- | --- | --- |
+| `first-tree-local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
+| `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke check only |
+
+The registration and onboarding tests **cannot** run against a deployed
+environment, and this is by design rather than an omission:
+
+- `auth/github/dev-callback`, the stub the tests sign up through, is gated on
+  `NODE_ENV !== "production"` **and** an explicit `FIRST_TREE_DEV_CALLBACK_ENABLED`
+  opt-in. It 404s on `dev.cloud.first-tree.ai`. Its sign-in page offers only real
+  Google / GitHub OAuth, so automated sign-up there would mean driving a real
+  identity provider with real credentials.
+- The onboarding fixtures below write directly to PostgreSQL, which a deployed
+  environment does not (and should not) expose.
+
+Staging therefore only gets what it can support without a First Tree account:
+that the app is served and the sign-in entry point offers both identity
+providers. (A Momentic account is still required, as above.) That still catches a
+broken deploy, a broken bundle, or a misconfigured auth surface.
 
 ## Registration has no password path
 
@@ -88,6 +142,12 @@ The fixtures replace the machine, not the behaviour under test — every screen,
 transition, API call and assertion around them is exercised for real. What they
 do **not** cover is the daemon's own registration handshake and heartbeat; that
 belongs to client/runtime tests.
+
+Because they bypass the server's schema with raw SQL, they must mirror what the
+real write produces or the test would advance through a state the daemon can
+never reach. `seed-agent-online.js` therefore writes `runtime_state = 'idle'` and
+`runtime_updated_at`, matching `publishAgentPresence` in
+`packages/server/src/services/presence.ts`.
 
 Both fixtures write `last_seen_at` ahead of now on purpose. The server sweeps
 connected clients and agents whose heartbeat is older than

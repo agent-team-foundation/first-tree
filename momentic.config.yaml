@@ -12,8 +12,14 @@ browser:
   autoExpandIframes: true
   disableSecondaryCacheResolution: true
 ai:
-  useMemory: true
-  failureRecovery: true
+  # Both default-on features are disabled so a run only ever executes the steps
+  # committed here. Failure recovery (beta) would generate and execute extra
+  # steps after a failure, and assertion memory would carry verdicts between
+  # runs — either one makes a result depend on something outside the repo, which
+  # is not a reasonable basis for blocking a merge.
+  useMemory: false
+  failureRecovery: false
+  # Pinned so a model rollout cannot silently change what a step resolves to.
   agentConfig:
     locator: v4.2
     assertion: v4.1

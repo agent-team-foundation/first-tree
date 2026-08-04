@@ -8,6 +8,13 @@
  * longer than usual to come online" fallback and never reach the end of
  * onboarding.
  *
+ * The row mirrors what the real bind writes (`publishAgentPresence` in
+ * packages/server/src/services/presence.ts): `runtime_state` is `idle`, the only
+ * state a freshly bound runtime can be in — `runtimeStateSchema` allows
+ * `idle | working | blocked | error`, so seeding anything else would advance the
+ * test through a state the daemon can never produce and could mask a
+ * runtime-dependent regression.
+ *
  * `last_seen_at` is dated forward for the same reason as the client fixture —
  * the presence sweep marks stale agents offline.
  *
@@ -23,15 +30,18 @@ try {
   for (let attempt = 0; attempt < 20; attempt++) {
     const { rows } = await db.query(
       `INSERT INTO agent_presence (agent_id, status, client_id, connected_at, last_seen_at,
-                                   runtime_type, runtime_state)
+                                   runtime_type, runtime_state, runtime_updated_at)
        SELECT a.uuid, 'online', a.client_id, NOW(), NOW() + INTERVAL '30 minutes',
-              a.runtime_provider, 'ready'
+              a.runtime_provider, 'idle', NOW()
          FROM agents a
         WHERE a.client_id = $1
        ON CONFLICT (agent_id) DO UPDATE
           SET status = 'online',
               client_id = EXCLUDED.client_id,
-              last_seen_at = EXCLUDED.last_seen_at
+              runtime_type = EXCLUDED.runtime_type,
+              runtime_state = EXCLUDED.runtime_state,
+              last_seen_at = EXCLUDED.last_seen_at,
+              runtime_updated_at = EXCLUDED.runtime_updated_at
        RETURNING agent_id`,
       [clientId],
     );
