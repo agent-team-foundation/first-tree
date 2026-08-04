@@ -42,6 +42,14 @@ export function isPairConversationMessage({
  * in history. While such traces exist, the pair view must keep the group
  * addressing rule; the "keep every pair-authored message" shortcut is safe
  * only for a window that was always a two-person conversation.
+ *
+ * Known bound: detection sees senders and mention targets INSIDE the loaded
+ * window. A mention-less pair-authored reply whose `inReplyTo` target has
+ * rotated out of the window cannot be attributed either way and counts as
+ * pair-only. The exposure is one shortcut-kept plain reply whose parent was
+ * a third party's out-of-window message — accepted rather than treating
+ * every unresolvable reply as a third-party trace, which would break the
+ * shortcut for ordinary long DMs.
  */
 export function historyContainsThirdParty({
   messages,

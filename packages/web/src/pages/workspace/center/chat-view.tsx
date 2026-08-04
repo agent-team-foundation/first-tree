@@ -2116,6 +2116,19 @@ export function ChatView({
     null,
   );
 
+  // True while the pair filter is hiding at least one loaded message. Every
+  // watermark-advancing path — the read tracker's DOM tip, the own-send
+  // durable read-state write, and the own-send session pre-advance — must
+  // check it: an own send is chronologically newer than a hidden arrival, so
+  // advancing any watermark to it would mark the hidden message as seen
+  // (and the IDB write never self-heals). Held in a ref, assigned each
+  // render right after the filtered projection is computed, so async send
+  // callbacks read the CURRENT narrowing (a hidden message may arrive while
+  // a send is in flight — a closure-captured boolean would be stale).
+  // Own sends stay pill-invisible without any advance: the pill and divider
+  // both skip viewer-authored messages outright.
+  const readWatermarkFrozenRef = useRef(false);
+
   // Bundles the optimistic-insert + watermark pre-advance pair into
   // one call so every own-send entry point (text, image, text-after-
   // image, and any future variant like resend or forward) keeps the
@@ -2125,7 +2138,7 @@ export function ChatView({
   const insertOwnOptimisticMessage = useCallback(
     (msg: MessageWithDelivery) => {
       insertOptimisticMessage(msg);
-      setPendingHighWaterAdvance({ chatId, messageId: msg.id });
+      if (!readWatermarkFrozenRef.current) setPendingHighWaterAdvance({ chatId, messageId: msg.id });
     },
     [insertOptimisticMessage, chatId],
   );
@@ -2178,20 +2191,27 @@ export function ChatView({
       // settles. The just-sent message is also the chat tip — so
       // `latestKnownMessageId = saved.id` is both the visual anchor
       // and the freshness marker.
-      const ownSendReadState: ReadState = {
-        chatId,
-        bottomVisibleMessageId: saved.id,
-        latestKnownMessageId: saved.id,
-        updatedAt: Date.now(),
-      };
-      queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
-      void setReadState(chatId, saved.id, saved.id);
-      // Pre-advance the in-memory high water to the new message id
-      // BEFORE initiating the smooth scroll. By the time the new
-      // message commits to `mergedMessages`, `sessionHighestIdx`
-      // already resolves to the new last index → `pillCount = 0` →
-      // pill never flashes for the user's own send.
-      setPendingHighWaterAdvance({ chatId, messageId: saved.id });
+      // While the pair filter hides messages, the own send is NOT the
+      // chat tip the user has seen — a hidden arrival may sit between the
+      // watermark and this send, and advancing past it would swallow its
+      // unread state durably. The pill/divider skip own messages, so no
+      // advance is needed for the no-own-pill behavior.
+      if (!readWatermarkFrozenRef.current) {
+        const ownSendReadState: ReadState = {
+          chatId,
+          bottomVisibleMessageId: saved.id,
+          latestKnownMessageId: saved.id,
+          updatedAt: Date.now(),
+        };
+        queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+        void setReadState(chatId, saved.id, saved.id);
+        // Pre-advance the in-memory high water to the new message id
+        // BEFORE initiating the smooth scroll. By the time the new
+        // message commits to `mergedMessages`, `sessionHighestIdx`
+        // already resolves to the new last index → `pillCount = 0` →
+        // pill never flashes for the user's own send.
+        setPendingHighWaterAdvance({ chatId, messageId: saved.id });
+      }
       // When the user sends a message, scroll all the way to the
       // bottom so they see their own send. ResizeObserver-debounced
       // (non-immediate) variant so the scroll lands after the
@@ -2440,8 +2460,9 @@ export function ChatView({
         // the same reason as in sendMut.onSuccess — pill never
         // flashes for the user's own send. Also persist directly to
         // queryClient cache + IDB so the chat-switch-mid-send case
-        // is durable (see sendMut.onSuccess for rationale).
-        if (lastSentMessageId) {
+        // is durable (see sendMut.onSuccess for rationale; the
+        // narrowed-projection freeze applies identically here).
+        if (lastSentMessageId && !readWatermarkFrozenRef.current) {
           const ownSendReadState: ReadState = {
             chatId,
             bottomVisibleMessageId: lastSentMessageId,
@@ -2644,27 +2665,44 @@ export function ChatView({
     () => new Set((chatDetail?.participants ?? []).filter((p) => p.type === "human").map((p) => p.agentId)),
     [chatDetail?.participants],
   );
+  // The exact condition under which filtering on `agentId` keeps EVERY
+  // loaded message (the "no third party" shortcut): the chat's current
+  // speakers are exactly {viewer, agentId} AND the loaded window carries no
+  // third-party trace. One predicate, two consumers — the projection uses it
+  // to decide the direct-vs-group rule, and the control suppression below
+  // uses it to decide whether the filter would be a no-op. Sharing it is
+  // what keeps them consistent: membership alone says nothing about a
+  // departed speaker's history (see `historyContainsThirdParty`).
+  const pairFilterKeepsEverything = useCallback(
+    (agentId: string, windowMessages: readonly MessageWithDelivery[]) => {
+      if (!myAgentId) return false;
+      const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
+      return (
+        speakerIds.length === 2 &&
+        speakerIds.includes(myAgentId) &&
+        speakerIds.includes(agentId) &&
+        !historyContainsThirdParty({ messages: windowMessages, humanAgentId: myAgentId, otherAgentId: agentId })
+      );
+    },
+    [chatDetail?.participants, myAgentId],
+  );
   const filterCandidateIds = useMemo(() => {
     if (!myAgentId) return [];
     const candidates = listConversedAgentIds({ messages: mergedMessages, humanAgentId: myAgentId }).filter(
       (id) => !humanParticipantIds.has(id),
     );
-    // In a chat whose speakers are exactly {viewer, one agent}, filtering on
-    // that agent is a no-op (the exact-pair rule keeps everything) — a dead
-    // control, so it is not offered. Departed agents in history still
-    // qualify: filtering on THEM is meaningful.
-    const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
-    if (
-      speakerIds.length === 2 &&
-      speakerIds.includes(myAgentId) &&
-      candidates.length === 1 &&
-      candidates[0] !== undefined &&
-      speakerIds.includes(candidates[0])
-    ) {
+    // Offering a filter that would keep everything is a dead control, so the
+    // sole-peer candidate is suppressed ONLY when the projection would be a
+    // genuine no-op under the shared predicate. A departed third party in
+    // history (even one who never addressed the viewer) keeps the control:
+    // filtering on the current peer then meaningfully hides that side
+    // conversation.
+    const sole = candidates.length === 1 ? candidates[0] : undefined;
+    if (sole !== undefined && pairFilterKeepsEverything(sole, mergedMessages)) {
       return [];
     }
     return candidates;
-  }, [mergedMessages, myAgentId, humanParticipantIds, chatDetail?.participants]);
+  }, [mergedMessages, myAgentId, humanParticipantIds, pairFilterKeepsEverything]);
   // A stored choice only applies while it still names someone the viewer has
   // conversed with in the loaded window — a stale entry (agent left, history
   // rotated out) silently falls back to the full view instead of blanking the
@@ -2860,27 +2898,21 @@ export function ChatView({
   const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
     if (!filterAgentId || !myAgentId) return timelineSource;
     const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
-    const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
-    const pairIsWholeChat =
-      speakerIds.length === 2 &&
-      speakerIds.includes(myAgentId) &&
-      speakerIds.includes(filterAgentId) &&
-      !historyContainsThirdParty({
-        messages: timelineSource,
-        humanAgentId: myAgentId,
-        otherAgentId: filterAgentId,
-      });
+    const directChat = pairFilterKeepsEverything(filterAgentId, timelineSource);
     return timelineSource.filter((message) =>
       isPairConversationMessage({
         message,
         humanAgentId: myAgentId,
         otherAgentId: filterAgentId,
-        directChat: pairIsWholeChat,
+        directChat,
         senderById,
       }),
     );
-  }, [timelineSource, filterAgentId, myAgentId, chatDetail?.participants]);
+  }, [timelineSource, filterAgentId, myAgentId, pairFilterKeepsEverything]);
   const hiddenByFilter = timelineSource.length - timelineMessages.length;
+  // Own-send watermark gate (see the ref's declaration): assigned every
+  // render, immediately after the narrowed projection is known.
+  readWatermarkFrozenRef.current = filterAgentId !== null && hiddenByFilter > 0;
   // Honest reporting for the focus handoff: when the reviewed request is
   // older than even the deepened window (`focusMsg` absent from the loaded
   // HISTORY — `blockingMessages` would mask this by unioning the synthetic
@@ -3452,16 +3484,45 @@ export function ChatView({
   // `onBottomVisibleChange` publishes the live value so the pill
   // can recompute its count on every scroll event without an IDB
   // round-trip.
+  //
+  // The highest read watermark that is SAFE to persist while the pair
+  // filter is active: the message just before the OLDEST hidden one in the
+  // loaded order. Everything older than every hidden message can be marked
+  // known without swallowing anything, so a persistently-filtered chat
+  // still digests its read pair messages instead of re-flagging them as new
+  // on every visit (a plain freeze had exactly that noise). When the filter
+  // hides nothing, the ceiling IS the true tip — full normal persistence,
+  // including a transient exact-pair focus visit. `null` when even the
+  // first loaded message is hidden (nothing is safe); `undefined` when no
+  // filter is active (the tracker follows the DOM). The persisted watermark
+  // never regresses: a ceiling below what the stored row already carries
+  // yields the stored value (`onWrite` keeps the read-state cache fresh, so
+  // in-session advances are respected too).
+  const latestKnownCeiling = useMemo<string | null | undefined>(() => {
+    if (!filterAgentId) return undefined;
+    const visibleIds = new Set(timelineMessages.map((m) => m.id));
+    let beforeOldestHidden: string | null = null;
+    for (const m of mergedMessages) {
+      if (!visibleIds.has(m.id)) break;
+      beforeOldestHidden = m.id;
+    }
+    const stored = readState?.latestKnownMessageId ?? null;
+    if (stored && stored !== beforeOldestHidden) {
+      const storedIdx = mergedMessages.findIndex((m) => m.id === stored);
+      const ceilingIdx = beforeOldestHidden ? mergedMessages.findIndex((m) => m.id === beforeOldestHidden) : -1;
+      if (storedIdx > ceilingIdx) return stored;
+    }
+    return beforeOldestHidden;
+  }, [filterAgentId, timelineMessages, mergedMessages, readState?.latestKnownMessageId]);
   useReadTracker({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
-    // While the pair filter narrows the DOM, the tracker's DOM tip is only
-    // the FILTERED tip; persisting it would permanently mark hidden-but-older
-    // messages as known (the IDB row never self-heals). Freeze the
-    // latest-known watermark for the duration; the scroll anchor keeps
-    // tracking the visible DOM.
-    freezeLatestKnown: filterAgentId !== null,
+    // While the pair filter is active, the tracker's DOM tip is only the
+    // FILTERED tip; persisting it would permanently mark hidden-but-older
+    // messages as known (the IDB row never self-heals). Supply the highest
+    // SAFE watermark instead — see `latestKnownCeiling`.
+    latestKnownOverride: latestKnownCeiling,
     onWrite: (cid, bottomVisibleMessageId, latestKnownMessageId) => {
       queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
         chatId: cid,

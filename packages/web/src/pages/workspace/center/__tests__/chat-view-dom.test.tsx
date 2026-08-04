@@ -4006,7 +4006,7 @@ describe("timeline message filter", () => {
     await act(async () => root.unmount());
   });
 
-  it("freezes the persisted read watermark while the pair filter narrows the DOM", async () => {
+  it("caps the persisted read watermark just below the oldest hidden message", async () => {
     const { ChatView } = await import("../chat-view.js");
     chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
     const { root: filteredRoot } = await renderDom(
@@ -4014,13 +4014,18 @@ describe("timeline message filter", () => {
       (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
       "/?focus=agent-1",
     );
-    // Unmount flushes the tracker. The whole visit was filtered, so no
-    // unfiltered tip was ever observed — persisting the filtered DOM tip
-    // would permanently mark the hidden agent-2 message as known, and the
-    // IDB row never self-heals. The write must be skipped entirely.
+    // Unmount flushes the tracker. The filtered DOM tip (pf-nova-reply) sits
+    // AFTER older visible rows but the newest loaded message (agent-2's,
+    // hidden) must never be marked known — the safe watermark is the message
+    // just before the oldest hidden one. Here that happens to equal the
+    // visible tip; the critical assertion is that the hidden id is never
+    // persisted while the read pair messages still get digested (a plain
+    // freeze would re-flag them as new on every future visit).
     await act(async () => filteredRoot.unmount());
-    for (const call of readStateMocks.setReadState.mock.calls) {
-      expect(call[0]).not.toBe("chat-1");
+    const filteredWrites = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(filteredWrites.length).toBeGreaterThan(0);
+    for (const call of filteredWrites) {
+      expect(call[2]).toBe("pf-nova-reply");
     }
 
     // Control: the same visit without the filter persists the true tip.
@@ -4037,6 +4042,145 @@ describe("timeline message filter", () => {
     for (const call of chatWrites) {
       expect(call[2]).toBe("pf-design-to-human");
     }
+  });
+
+  it("persists the true tip when an active focus hides nothing", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Transient exact-pair focus in a genuine two-speaker chat: the full
+    // message DOM renders, so read persistence must behave exactly as an
+    // unfiltered visit — freezing here would strand a stale watermark and
+    // scroll anchor for the next ordinary visit.
+    const dmDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const dmMessages = messages([
+      message({
+        id: "dm-human",
+        senderId: "human-agent-self",
+        content: "Plain DM line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "dm-nova",
+        senderId: "agent-1",
+        content: "Plain DM reply.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(dmDetail);
+    chatMocks.listChatMessages.mockResolvedValue(dmMessages);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, dmDetail, dmMessages),
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Plain DM reply.");
+    await act(async () => root.unmount());
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[2]).toBe("dm-nova");
+    }
+  });
+
+  it("still offers the filter when a departed third party never addressed the viewer", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Current speakers are exactly {viewer, Nova}, and departed agent-2 only
+    // ever talked TO NOVA — so it is not a filter candidate, but its side
+    // conversation is still in history. Filtering on Nova is therefore NOT a
+    // no-op, and the control must stay available (the suppression shares the
+    // projection's own predicate, membership shape alone is not enough).
+    const shrunkDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const history = messages([
+      message({
+        id: "sup-b-to-nova",
+        senderId: "agent-2",
+        content: "Legacy design note for Nova only.",
+        createdAt: "2026-05-28T11:49:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "sup-viewer-plain",
+        senderId: "human-agent-self",
+        content: "Plain unaddressed viewer line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "sup-viewer-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, your turn.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "sup-nova-reply",
+        senderId: "agent-1",
+        content: "On it, boss.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(shrunkDetail);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, shrunkDetail, history),
+      "/",
+    );
+
+    await waitForText(container, "Legacy design note for Nova only.");
+    const trigger = container.querySelector("[data-message-filter-trigger]");
+    expect(trigger).not.toBeNull();
+    await click(trigger);
+    const menu = document.body.querySelector('[role="menu"][aria-label="Filter messages"]');
+    if (!menu) throw new Error("filter menu missing");
+    await click(buttonByText(menu, "Nova"));
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("On it, boss.");
+    expect(container.textContent).not.toContain("Legacy design note for Nova only.");
+    // Third-party trace in history keeps the group rule too.
+    expect(container.textContent).not.toContain("Plain unaddressed viewer line.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not advance the read watermark past a hidden arrival on an own send", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The hidden agent-2 message is the NEWEST loaded row; the viewer then
+    // sends. The own send is chronologically after the hidden arrival, so
+    // neither the durable read-state write nor the session pre-advance may
+    // move the watermark to it.
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Deploy checked, all green.");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await setValue(textarea, "Ping @nova");
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected the send to fire");
+    await flush();
+
+    for (const call of readStateMocks.setReadState.mock.calls) {
+      expect(call[2]).not.toBe("msg-sent");
+    }
+    const cached = queryClient.getQueryData<{ latestKnownMessageId?: string }>(["chat-read-state", "chat-1"]);
+    expect(cached?.latestKnownMessageId).not.toBe("msg-sent");
+
+    await act(async () => root.unmount());
   });
 
   it("reports a failed focus window as a retryable load error, never as request age", async () => {
