@@ -3,29 +3,30 @@
 Browser-level tests that drive the real web app against a real server and
 database.
 
-## Where this sits in the QA contract
+## What this is
 
-[AGENTS.md](../AGENTS.md) routes each check to a layer: deterministic behaviour to
-per-package Vitest suites, agent-skill regression to `@first-tree/skill-evals`,
-and judgment / live / cross-surface validation to `@first-tree/qa` cases. This
-directory is a fourth thing and does not replace any of them:
+Optional tooling, not a QA layer. The QA contract in [AGENTS.md](../AGENTS.md) is
+unchanged: deterministic behaviour belongs in per-package Vitest suites,
+agent-skill regression in `@first-tree/skill-evals`, and judgment / live /
+cross-surface validation in committed `@first-tree/qa` cases.
 
-- It is **executable and repeatable**, unlike `packages/qa` cases, which are
-  prose prompts for a human-requested agent run rather than a runner.
-- It is **not deterministic** in the sense product tests are: steps are resolved
-  from natural-language descriptions by a hosted model the first time they run
-  (afterwards from a cache), and some assertions are model-evaluated. A stable
-  invariant that can be asserted in Vitest still belongs in Vitest.
+The journey these tests walk is owned by the case
+[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md).
+That case remains the contract and the place judgement lives. This directory is
+one way to execute part of it unattended, in the same spirit as the fixtures and
+environment recipes under `packages/qa` — useful for a quick regression pass, not
+a substitute for the case and not a new authority over what "validated" means.
 
-Consequently it is **not a CI gate today** and is not wired into any workflow.
-It is a maintainer-run check for the first-run journey, which spans the web app,
-the server, the database and the onboarding contract, and therefore has no
-single package where it could live as a product test.
+Two limits follow from that and are deliberate:
 
-Adopting it as a gate is a separate decision that needs an owner for the account
-below, a policy for classifying model-attributable failures, and agreement on
-where the boundary with `packages/qa` sits. Until then, treat a red run here as a
-signal to investigate rather than as a merge blocker.
+- It is **not a CI gate** and is not wired into any workflow. Steps resolve from
+  natural-language descriptions through a hosted model and some assertions are
+  model-evaluated, so a red run is a signal to investigate, not a merge blocker.
+- It covers the happy path plus the connect-computer gate — not the negative
+  branches, degraded states and evidence judgement the case asks for.
+
+A stable invariant that Vitest could assert still belongs in Vitest. Do not move
+a check here to escape a flaky product test.
 
 Run determinism is maximised where the tool allows: `momentic.config.yaml`
 disables assertion memory and beta failure recovery, so a run executes only the
