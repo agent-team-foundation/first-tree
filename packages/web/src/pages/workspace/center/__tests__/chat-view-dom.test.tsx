@@ -3881,6 +3881,57 @@ describe("timeline message filter", () => {
     await act(async () => root.unmount());
   });
 
+  it("keeps the group addressing rule when filtering on a departed agent in a two-speaker chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // agent-2 has LEFT: current speakers are {viewer, agent-1}. Focusing the
+    // departed agent-2 (still reachable via history / an old open request)
+    // must NOT trip the exact-pair shortcut — otherwise every viewer message,
+    // including ones addressed to agent-1, would leak into the pair view.
+    const twoSpeakerDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const history = messages([
+      message({
+        id: "dep-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova-only instruction line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "dep-human-to-design",
+        senderId: "human-agent-self",
+        content: "Design, please revisit the banner.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-2"] },
+      }),
+      message({
+        id: "dep-design-reply",
+        senderId: "agent-2",
+        content: "Banner revisited, done.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(twoSpeakerDetail);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, twoSpeakerDetail, history),
+      "/?focus=agent-2",
+    );
+
+    await waitForText(container, "Showing your conversation with Design Critique");
+    expect(container.textContent).toContain("Design, please revisit the banner.");
+    expect(container.textContent).toContain("Banner revisited, done.");
+    expect(container.textContent).not.toContain("Nova-only instruction line.");
+
+    await act(async () => root.unmount());
+  });
+
   it("reports when the focused request is older than the loaded history", async () => {
     const { ChatView } = await import("../chat-view.js");
     chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
@@ -3892,6 +3943,33 @@ describe("timeline message filter", () => {
 
     await waitForText(container, "Showing your conversation with Nova");
     await waitForText(container, "older than the loaded history");
+
+    await act(async () => root.unmount());
+  });
+
+  it("reports a failed focus window as a retryable load error, never as request age", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The ordinary timeline is seeded (staleTime: Infinity), so this rejection
+    // hits ONLY the supplemental focus-window query.
+    chatMocks.listChatMessages.mockRejectedValue(new Error("history unavailable"));
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1&focusMsg=req-outside-window",
+    );
+
+    // A failed fetch is not evidence the request is old: the age line must
+    // stay absent and the failure must be visible + retryable instead.
+    await waitForText(container, "Earlier chat could not be loaded.");
+    expect(container.textContent).not.toContain("older than the loaded history");
+    expect(container.querySelector("[data-focus-window-error]")).not.toBeNull();
+
+    // Retry succeeds; the request is genuinely outside the window, so the
+    // honest age report replaces the error line.
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    await click(buttonByText(container, "Retry"));
+    await waitForText(container, "older than the loaded history");
+    expect(container.querySelector("[data-focus-window-error]")).toBeNull();
 
     await act(async () => root.unmount());
   });

@@ -2589,12 +2589,13 @@ export function ChatView({
   // request, whose surrounding conversation may have scrolled past that
   // window. Match the retired inline preview's reach (the API's 100-row cap)
   // so the handoff never shows LESS context than the preview it replaced.
-  const { data: focusWindowData, isFetched: focusWindowFetched } = useQuery({
+  const focusWindowQuery = useQuery({
     queryKey: ["chat-messages-focus", chatId],
     queryFn: () => listChatMessages(chatId, { limit: 100 }),
     enabled: focusAgentId !== null,
     staleTime: 30_000,
   });
+  const { data: focusWindowData } = focusWindowQuery;
 
   const mergedMessages = useMemo<MessageWithDelivery[]>(() => {
     const fromCache = cachedMessages ?? [];
@@ -2809,26 +2810,35 @@ export function ChatView({
   // Display-only pair filter over the timeline source. Group-shaped chats use
   // the same pair-conversation membership rule as the retired earlier-chat
   // preview (sender in the pair AND addressing/replying to the other member),
-  // so "my conversation with X" never leaks X's side conversations. The
-  // "no third party" condition keys on SPEAKER COUNT, not `chats.type`: since
-  // the group-chat convergence every chat is persisted as `type="group"`, so
-  // a two-speaker DM must still keep pair-authored messages that carry no
-  // structured mention/reply (mirrors `computeRequiresMention`; `direct`
-  // survives only on legacy rows).
-  const twoSpeakerChat = (chatDetail?.participants.length ?? 0) === 2 || chatDetail?.type === "direct";
+  // so "my conversation with X" never leaks X's side conversations.
+  //
+  // The "no third party" shortcut (keep every pair-authored message, even
+  // mention-less ones — a DM's plain exchange must not vanish under the
+  // group addressing rule) applies only when the chat's current speakers are
+  // EXACTLY the selected pair. Neither speaker COUNT nor the retired
+  // `type="direct"` flag is sufficient: a departed agent can still be a
+  // filter target through loaded history (or an old open request), and a
+  // two-speaker chat whose speakers are {viewer, someone else} would
+  // otherwise pour every viewer-authored message — including ones addressed
+  // to the current peer — into the supposed conversation with the departed
+  // agent. Legacy `direct` rows pass the exact-pair check whenever the
+  // shortcut is actually safe, so they need no separate branch.
   const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
     if (!filterAgentId || !myAgentId) return timelineSource;
     const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
+    const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
+    const pairIsWholeChat =
+      speakerIds.length === 2 && speakerIds.includes(myAgentId) && speakerIds.includes(filterAgentId);
     return timelineSource.filter((message) =>
       isPairConversationMessage({
         message,
         humanAgentId: myAgentId,
         otherAgentId: filterAgentId,
-        directChat: twoSpeakerChat,
+        directChat: pairIsWholeChat,
         senderById,
       }),
     );
-  }, [timelineSource, filterAgentId, myAgentId, twoSpeakerChat]);
+  }, [timelineSource, filterAgentId, myAgentId, chatDetail?.participants]);
   const hiddenByFilter = timelineSource.length - timelineMessages.length;
   // Honest reporting for the focus handoff: when the reviewed request is
   // older than even the deepened window (`focusMsg` absent from the loaded
@@ -2837,11 +2847,20 @@ export function ChatView({
   // shown, and the banner must say so instead of presenting the recent
   // window as if it were complete. The retired inline preview reported the
   // same condition as "unavailable".
+  //
+  // The age inference is gated on the supplemental window having loaded
+  // SUCCESSFULLY (`isSuccess`, never `isFetched` — that flips true on a
+  // terminal error too, which would misreport a fetch failure as "the
+  // question is old"). A failed window gets its own retryable error line
+  // below instead, mirroring the retired preview's "could not be loaded"
+  // state; without it the failure would be invisible whenever the request
+  // happens to sit inside the ordinary latest-50 window.
   const focusContextMissing =
     focusAgentId !== null &&
     focusMessageId !== null &&
-    focusWindowFetched &&
+    focusWindowQuery.isSuccess &&
     !mergedMessages.some((m) => m.id === focusMessageId);
+  const focusWindowFailed = focusAgentId !== null && focusWindowQuery.isError;
   const items: TimelineItem[] = useMemo(() => {
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
@@ -4408,6 +4427,26 @@ export function ChatView({
                 {focusContextMissing ? (
                   <span style={{ display: "block", color: "var(--fg-3)" }}>
                     This question is older than the loaded history — the conversation before it isn’t shown.
+                  </span>
+                ) : null}
+                {focusWindowFailed ? (
+                  <span data-focus-window-error style={{ display: "block", color: "var(--state-error)" }}>
+                    Earlier chat could not be loaded.{" "}
+                    <button
+                      type="button"
+                      onClick={() => void focusWindowQuery.refetch()}
+                      className="text-body"
+                      style={{
+                        padding: 0,
+                        border: 0,
+                        background: "transparent",
+                        color: "inherit",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Retry
+                    </button>
                   </span>
                 ) : null}
               </span>
