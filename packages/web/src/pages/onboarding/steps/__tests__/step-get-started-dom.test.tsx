@@ -383,7 +383,8 @@ describe("StepGetStarted", () => {
     expect(buttonByText(container, "Codex")).toBeUndefined();
     expect(buttonByText(container, "Claude Code")).toBeUndefined();
     expect(container.textContent).toContain("--provider 'codex'");
-    expect(container.textContent).toContain("/hooks");
+    expect(container.textContent).toContain("follow `data.nextActions`");
+    expect(container.textContent).not.toContain("/hooks");
     expect(mocks.getContextEnablementHandoff).toHaveBeenCalledWith("org-1", "codex", "onboarding");
   });
 
