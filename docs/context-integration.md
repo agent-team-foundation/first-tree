@@ -36,9 +36,19 @@ opened a project, its real scratch directory is displayed with a warning that
 another session normally receives a different directory; session-only is
 recommended. Truly pathless hosts cannot choose directory scope.
 
-The coding agent must show the choices and wait for a new user reply. Apply
-requires the exact `planId`, so a changed account, Team, provider or project
-identity forces a new plan and a new choice.
+The coding agent must show the choices and wait for a new user reply. Every
+available choice carries a complete `applyCommand` built by the same CLI that
+created the plan; the agent runs the selected command unchanged instead of
+constructing flags from the plan. The command contains the exact `planId`, so a
+changed account, Team, provider or project identity forces a new plan and a new
+choice. An unavailable choice has no apply command.
+
+The Web setup prompt is deliberately limited to the human and agent boundaries:
+host self-identification, a fresh scope choice, JSON-envelope trust, account
+switch consent, and current-session handoff adoption. The CLI owns mechanical
+command construction, handoff validation, and recovery guidance through its
+error envelope and `nextActions`. This keeps prompt and binary behavior on the
+same release contract.
 
 Global and directory choices install one user-scope provider Plugin and add one
 persistent Team grant. Installing another Team is expected: Plugin installation

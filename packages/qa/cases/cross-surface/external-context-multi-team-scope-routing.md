@@ -29,8 +29,8 @@ full Tree is read before one candidate is fixed.
 1. In each provider, run the Web setup plan for Team A. Confirm the agent shows
    the real directory and all three choices and waits for a new user reply.
 2. Apply global, then independently directory and session-only choices. Confirm
-   the exact plan id is required. Repeat setup for Team B; the shared Plugin is
-   not duplicated.
+   the selected CLI-authored `applyCommand` is run unchanged and still enforces
+   the exact plan id. Repeat setup for Team B; the shared Plugin is not duplicated.
 3. In Codex projectless mode, confirm the scratch directory is displayed with
    a temporary-directory warning and session-only is recommended.
 4. For session-only, inspect filesystem/provider state: no grant, Plugin, Hook,
@@ -57,8 +57,9 @@ full Tree is read before one candidate is fixed.
 
 ## Observe
 
-- Planning is read-only. Session-only has `consumerKind: byo`, Read/Write only,
-  an opaque signed candidate, and no persistent state.
+- Planning is read-only. Every available scope has a complete `applyCommand`;
+  an unavailable directory scope has none. Session-only has `consumerKind:
+  byo`, Read/Write only, an opaque signed candidate, and no persistent state.
 - Directory scope includes descendants; all Teams at the deepest matching root
   remain candidates. Global applies only when no session/directory set wins.
 - The batch authority call contains exactly the local highest-priority Team ids.

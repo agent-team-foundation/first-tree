@@ -1026,6 +1026,7 @@ describe("Settings Setup overview", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       expect.stringContaining("first-tree-dev login short-lived-code"),
     );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("exact `applyCommand`"));
 
     await act(async () => view.root.unmount());
   });
@@ -1066,6 +1067,7 @@ describe("Settings Setup overview", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       expect.stringContaining("first-tree-dev login short-lived-code"),
     );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("exact `applyCommand`"));
 
     await act(async () => view.root.unmount());
   });

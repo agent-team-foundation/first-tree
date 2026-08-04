@@ -34,43 +34,54 @@ from the same verified release bundle without installing provider state.
 1. Copy the provider-neutral setup prompt from Web and paste it into the
    already-running Claude Code conversation. Let the agent run bootstrap and
    the server-authored JSON enable plan with its host-confirmed selector. Verify
-   it shows global/directory/session and waits for a new user choice.
+   it shows global/directory/session and waits for a new user choice. Capture
+   the complete `applyCommand` attached to every available choice.
    Confirm the enable command uses the same `~/.local/bin` portable executable
    as bootstrap rather than the older global CLI resolved from `PATH`.
-2. Without restarting or running `/reload-plugins`, ask a task that triggers
+2. With disposable extra login codes, exercise an expired/used code and a code
+   for a different signed-in First Tree user. Confirm the agent relays the CLI's
+   recovery, never reuses a consumed code, and asks for explicit switch approval
+   before requesting a fresh setup prompt with `--force-switch`.
+3. Without restarting or running `/reload-plugins`, ask a task that triggers
    `first-tree-read`. Confirm the same agent reads the exact `skillPath`,
    uses the handoff's immutable provider/project receipt for the first Read,
    activates an exact Context Tree snapshot, and uses the unique Team decision.
-3. Choose directory, then paste a fresh prompt into the already-running Codex
+4. Choose directory, then paste a fresh prompt into the already-running Codex
    attached conversation. Capture the first apply result, run `/hooks`, Enable + Trust First Tree
    Context, return to the original conversation, and reply `continue`.
-4. Confirm that same Codex agent re-runs the exact enable command, consumes the
+5. Confirm that same Codex agent re-runs the exact `applyCommand`, consumes the
    handoff, then completes the same Context read task without exit or a new
    conversation.
-5. Repeat Codex with an already-trusted Hook. Separately choose session-only in
+6. Repeat Codex with an already-trusted Hook. Separately choose session-only in
    a projectless session; it must consume a complete Read/Write handoff without
    installing a Hook or asking for Trust.
-6. After both a path-project and pathless handoff, change shell cwd to a
+7. After both a path-project and pathless handoff, change shell cwd to a
    different bound project (and then to an unbound directory) before the first
    Read. Confirm the path receipt still supplies its original `--project-root`
    and the pathless receipt still supplies `--pathless`; neither may invoke the
    current-cwd classifier or switch Team.
-7. Run a direct human-mode `context enable` and retain its output. Confirm a
+8. Run a direct human-mode `context enable` and retain its output. Confirm a
    Complete verdict includes the full usable handoff JSON with provider,
    project, activation context, and all three Skill catalog entries.
-8. Tamper one installed Skill manifest, remove one Skill, make one manifest a
+9. Tamper one installed Skill manifest, remove one Skill, make one manifest a
    symbolic link, and separately make live authority unavailable. Re-run enable
    for each state, restoring the fixture between attempts.
-9. Start one later attached session for each provider and confirm the existing
+10. Start one later attached session for each provider and confirm the existing
    SessionStart path still activates automatically.
 
 ## Observe
 
 - The Server command places global `--json` before `context enable`, includes
-  the exact provider and Team, and ends in `--plan`; Web adds no flags. Apply
-  uses the unchanged plan id, the chosen scope and `--yes`. On
+  the exact provider and Team, and ends in `--plan`; Web adds no flags. Every
+  available plan choice contains an exact CLI-authored `applyCommand`, and the
+  agent runs the selected one byte-for-byte without constructing scope, plan-id,
+  Team, project, or consent flags. On
   non-dev channels, the command uses bootstrap's `~/.local/bin` portable
   executable even when an older same-channel global CLI shadows it on `PATH`.
+- The Web prompt does not duplicate login recovery, Codex Hook instructions,
+  scope mechanics, or the handoff's deep schema. It relays CLI errors and
+  `nextActions`, while retaining only host choice, human consent, envelope
+  trust, schema-version compatibility, and handoff adoption.
 - Claude Code completes setup in one agent turn. Codex without consent returns
   `setup.complete: false` and `currentSessionHandoff: null`, asks only for
   `/hooks` consent plus return to the original conversation, and re-runs enable
@@ -116,7 +127,8 @@ missing.
 
 ## Evidence
 
-Keep redacted Web prompt/server handoff responses, both enable JSON envelopes,
+Keep redacted Web prompt/server handoff responses, plan choices and exact apply
+commands, login recovery errors, both enable JSON envelopes,
 provider conversation/session identifiers, `/hooks` screenshots and
 `hooks/list` rows, absolute Skill paths plus payload digest evidence, exact Tree
 read receipts, and later SessionStart output. Record CLI/provider versions,

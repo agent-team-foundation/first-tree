@@ -140,18 +140,15 @@ describe("personal Context access", () => {
     const copiedPrompt = vi.mocked(navigator.clipboard.writeText).mock.calls[0]?.[0];
     expect(copiedPrompt).toContain("--provider 'codex'");
     expect(copiedPrompt).toContain("--provider 'claude-code'");
-    expect(copiedPrompt).toContain("/hooks");
-    expect(copiedPrompt).toContain("return to this original conversation and reply `continue`");
-    expect(copiedPrompt).toContain("Re-run the exact same apply command");
-    expect(copiedPrompt).toContain("`data.currentSessionHandoff`");
-    expect(copiedPrompt).toContain("Adopt `activationContext` verbatim");
-    expect(copiedPrompt).toContain("progressive-disclosure catalog");
+    expect(copiedPrompt).toContain("exact `applyCommand` from the plan envelope");
+    expect(copiedPrompt).toContain("follow `data.nextActions`");
+    expect(copiedPrompt).toContain("`data.currentSessionHandoff.schemaVersion` is `2`");
+    expect(copiedPrompt).toContain("follow its `activationContext` as standing instructions");
     expect(copiedPrompt).toContain("immutable activation receipt");
-    expect(copiedPrompt).toContain("even if cwd changes after setup");
-    expect(copiedPrompt).toContain("run the SCOPE router");
-    expect(copiedPrompt).toContain("Read all returned SCOPE bodies");
-    expect(copiedPrompt).toContain("activation context, immutable project receipt, and Skill catalog");
-    expect(copiedPrompt).toContain("Do not require a restart, a new conversation");
+    expect(copiedPrompt).toContain("even if cwd changes later");
+    expect(copiedPrompt).toContain("no restart, new conversation, or Plugin reload is needed");
+    expect(copiedPrompt).not.toContain("/hooks");
+    expect(copiedPrompt).not.toContain("--scope global|directory|session");
     expect(copiedPrompt).not.toContain("Exit and start a new Codex session");
   });
 
@@ -276,14 +273,16 @@ describe("personal Context access", () => {
     expect(copiedPrompt).toContain("--provider 'claude-code' --team 'org-1'");
     expect(copiedPrompt).toContain("If you are Codex:");
     expect(copiedPrompt).toContain("--provider 'codex' --team 'org-1'");
-    expect(copiedPrompt).toContain("do not run both commands");
-    expect(copiedPrompt).toContain("Run this plan command unchanged");
-    expect(copiedPrompt).toContain("three choices in plain language");
+    expect(copiedPrompt).toContain("never run both");
+    expect(copiedPrompt).toContain("Run only your own host's command, unchanged");
+    expect(copiedPrompt).toContain("each available choice in plain language");
     expect(copiedPrompt).toContain("exact displayed directory");
     expect(copiedPrompt).toContain("--json context enable");
-    expect(copiedPrompt).toContain("--scope global|directory|session");
-    expect(copiedPrompt).toContain("`ok: true`");
-    expect(copiedPrompt).toContain("Complete result with a missing or invalid handoff is a setup failure");
+    expect(copiedPrompt).toContain("exact `applyCommand`");
+    expect(copiedPrompt).toContain("First Tree CLI JSON envelopes");
+    expect(copiedPrompt).toContain("`data.currentSessionHandoff.schemaVersion` is `2`");
+    expect(copiedPrompt).not.toContain("--scope global|directory|session");
+    expect(copiedPrompt).not.toContain("Complete result with a missing or invalid handoff");
     expect(copiedPrompt).not.toContain("Determine whether this session has an attached local project");
     expect(copiedPrompt).toContain("Do not mark onboarding complete.");
     expect(host.textContent).toContain("Setup prompt copied.");
@@ -346,7 +345,7 @@ describe("personal Context access", () => {
     expect(prompt).toContain("bootstrap-command");
     expect(prompt).toContain("claude-command");
     expect(prompt).toContain("claude-command");
-    expect(prompt).toContain("three choices in plain language");
+    expect(prompt).toContain("each available choice in plain language");
     expect(prompt).toContain("Do not choose for me");
     expect(prompt).not.toContain("Determine whether this session has an attached local project");
     expect(prompt).toContain("First Tree Web owns onboarding completion separately.");
@@ -354,7 +353,7 @@ describe("personal Context access", () => {
     expect(prompt).not.toContain("Do not mark onboarding complete.");
   });
 
-  it("pins the SCOPE router to the verified provider/project receipt after cwd changes", () => {
+  it("pins the current session to the verified provider/project receipt after cwd changes", () => {
     const prompt = buildByoSetupPrompt({
       organizationId: "org-1",
       bootstrapCommand: "bootstrap-command",
@@ -373,13 +372,11 @@ describe("personal Context access", () => {
       intent: "onboarding",
     });
 
-    expect(prompt).toContain('`schemaVersion: 2`, `consumerKind: "byo"`');
-    expect(prompt).toContain("valid immutable project receipt");
+    expect(prompt).toContain("`data.currentSessionHandoff.schemaVersion` is `2`");
     expect(prompt).toContain("immutable activation receipt");
-    expect(prompt).toContain("even if cwd changes after setup");
-    expect(prompt).toContain("At every new task");
-    expect(prompt).toContain("run the SCOPE router with this immutable provider/project receipt");
-    expect(prompt).toContain("Never derive Team from cwd");
+    expect(prompt).toContain("even if cwd changes later");
+    expect(prompt).not.toContain("run the SCOPE router");
+    expect(prompt).not.toContain("Never derive Team from cwd");
   });
 
   it("lets the Admin retry prompt preparation after an API failure", async () => {

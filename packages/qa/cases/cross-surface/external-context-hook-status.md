@@ -33,7 +33,7 @@ project/Team activation.
 
 - Run the Team-authored `context enable --provider codex ... --plan` handoff
   with the ordinary parent as `--project-root`, choose directory, and apply the
-  exact returned plan id.
+  selected choice's exact CLI-authored `applyCommand` unchanged.
 - Follow only the displayed consent steps: open Codex, run `/hooks`, find First
   Tree Context → SessionStart, enable it, trust it, return to the original
   conversation, and reply `continue` without starting a new session.
@@ -51,7 +51,8 @@ project/Team activation.
 ## Observe
 
 - Enable never passes a trust-bypass flag or writes trusted Hook state. Its
-  output gives the `/hooks` path as ordered, verifiable steps.
+  `nextActions` gives the `/hooks` path as ordered, verifiable steps; the Web
+  prompt does not carry a second copy of those recovery instructions.
 - Enable ends with one literal verdict line: `Setup: Complete` only when every
   layer including provider compatibility and payload health is green, otherwise
   `Setup: Incomplete — <missing layers>` with an actionable recovery step for
