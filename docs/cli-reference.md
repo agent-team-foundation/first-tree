@@ -87,13 +87,22 @@ codes are exchanged against this CLI channel's default server URL
 (`first-tree` → production, `first-tree-staging` → staging, `first-tree-dev` →
 local dev), with `FIRST_TREE_SERVER_URL` as an explicit override for custom
 deployments. Connect URLs are not accepted; only legacy JWT tokens with an
-`iss` claim remain accepted during rollout.
+`iss` claim remain accepted during rollout. Short connect codes are single-use:
+an expired or already-used code requires a fresh setup prompt/code from First
+Tree Settings and must never be retried.
+
 If this machine already has credentials for another user, `login` asks for
 explicit confirmation and switches the active local client after stopping and
-draining the old runtime. In non-TTY automation, `--force-switch` is the only
-confirmation flag; it does not skip supervisor, drain, filesystem, or journal
-safety checks. If credentials are missing, `login` preserves `client.yaml` and
-local agent state so the same user can reconnect after a normal `logout`.
+draining the old runtime. The CLI exchanges the short code before it can compare
+the target account with the active local owner. In non-TTY automation, a
+different-user result therefore consumes that code and stops before switching:
+the coding agent must ask the user to approve the switch, request a fresh
+Settings setup prompt/code after approval, and run that fresh prompt's login
+command with `--force-switch`. The consumed code must not be reused.
+`--force-switch` is only the non-interactive confirmation flag; it does not skip
+supervisor, drain, filesystem, or journal safety checks. If credentials are
+missing, `login` preserves `client.yaml` and local agent state so the same user
+can reconnect after a normal `logout`.
 
 | Flag | Effect |
 |---|---|
