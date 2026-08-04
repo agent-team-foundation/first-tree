@@ -128,7 +128,7 @@ describe("context enable v3 command", () => {
                 kind: scope,
                 applyCommand: expect.stringMatching(
                   new RegExp(
-                    `^'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope '${scope}' --plan-id '${planIdPattern}' --yes$`,
+                    `^'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --project-root '/work/repo' --scope '${scope}' --plan-id '${planIdPattern}' --yes$`,
                     "u",
                   ),
                 ),
@@ -157,6 +157,8 @@ describe("context enable v3 command", () => {
         plan: expect.objectContaining({
           choices: expect.arrayContaining([
             expect.objectContaining({ kind: "directory", available: false, applyCommand: null }),
+            expect.objectContaining({ kind: "global", applyCommand: expect.stringContaining(" --pathless ") }),
+            expect.objectContaining({ kind: "session", applyCommand: expect.stringContaining(" --pathless ") }),
           ]),
         }),
       }),
@@ -167,7 +169,7 @@ describe("context enable v3 command", () => {
     await runContextEnable({ ...context({ plan: true }), options: { json: false, debug: false, quiet: false } });
     const statusRows = output.status.mock.calls.map(([label, value]) => `${label}: ${value}`).join("\n");
     expect(statusRows).toContain(
-      `Apply command: 'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --scope 'global'`,
+      `Apply command: 'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --project-root '/work/repo' --scope 'global'`,
     );
     expect(statusRows).toContain("Next: Choose one scope, then run its exact apply command unchanged.");
   });
@@ -188,6 +190,38 @@ describe("context enable v3 command", () => {
         }),
       }),
     );
+  });
+
+  it("applies an exact generated command with its canonical project root after cwd changes", async () => {
+    await runContextEnable(context({ plan: true, projectRoot: "/requested/../work/repo" }));
+    const command = readApplyCommand("global");
+    expect(command).toContain(" --project-root '/work/repo' ");
+
+    output.result.mockClear();
+    await runContextEnable(context(parseGeneratedApplyCommand(command)));
+
+    expect(mocks.enableOperation).toHaveBeenCalledTimes(1);
+    expect(output.result.mock.calls[0]?.[0]).toMatchObject({ setup: { complete: true } });
+  });
+
+  it("applies an exact generated pathless command without reclassifying the shell cwd", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project: { kind: "pathless" },
+      directory: null,
+      directoryAvailable: false,
+      temporaryDirectory: false,
+      warning: "This provider session did not expose a usable directory.",
+    });
+    await runContextEnable(context({ plan: true, projectRoot: undefined, pathless: true }));
+    const command = readApplyCommand("session");
+    expect(command).toContain(" --pathless ");
+    expect(command).not.toContain("--project-root");
+
+    output.result.mockClear();
+    await runContextEnable(context(parseGeneratedApplyCommand(command)));
+
+    expect(mocks.issueSession).toHaveBeenCalledTimes(1);
+    expect(output.result.mock.calls[0]?.[0]).toMatchObject({ setup: { complete: true } });
   });
 
   it("rejects a concurrent grant add/remove before persistent mutation", async () => {
@@ -364,6 +398,28 @@ async function createPlanId(): Promise<string> {
   output.result.mockClear();
   await runContextEnable(context({ plan: true }));
   return (output.result.mock.calls[0]?.[0] as { plan: { planId: string } }).plan.planId;
+}
+
+function readApplyCommand(kind: "global" | "directory" | "session"): string {
+  const result = output.result.mock.calls.at(-1)?.[0] as {
+    plan: { choices: Array<{ kind: string; applyCommand: string | null }> };
+  };
+  const command = result.plan.choices.find((choice) => choice.kind === kind)?.applyCommand;
+  if (!command) throw new Error(`Missing ${kind} apply command`);
+  return command;
+}
+
+function parseGeneratedApplyCommand(command: string): Record<string, unknown> {
+  const value = (flag: string): string | undefined => new RegExp(`${flag} '([^']+)'`, "u").exec(command)?.[1];
+  return {
+    provider: value("--provider"),
+    team: value("--team"),
+    projectRoot: value("--project-root"),
+    pathless: command.includes(" --pathless "),
+    scope: value("--scope"),
+    planId: value("--plan-id"),
+    yes: command.endsWith(" --yes"),
+  };
 }
 
 function context(options: Record<string, unknown>): CommandContext {
