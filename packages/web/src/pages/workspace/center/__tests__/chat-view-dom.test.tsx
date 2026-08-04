@@ -4317,6 +4317,35 @@ describe("timeline message filter", () => {
     const pill = container.querySelector('button[aria-label$="new messages"], button[aria-label$="new message"]');
     expect(pill).not.toBeNull();
 
+    // A dismissal callback firing AFTER the lift but BEFORE any fresh
+    // unfiltered bottom publication (re-rendering the timeline can trigger
+    // the observer): the observation ref still holds the filtered bottom
+    // (A3) while the clamp now has no ceiling. The provenance gate must
+    // refuse it — B2 keeps its divider and pill.
+    const postLiftDividerObservers = observers.filter((o) =>
+      o.targets.some((t) => t.textContent?.includes("New Messages")),
+    );
+    expect(postLiftDividerObservers.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const o of postLiftDividerObservers) {
+        o.cb(
+          [
+            {
+              rootBounds: { top: 100 } as DOMRectReadOnly,
+              boundingClientRect: { bottom: 0 } as DOMRectReadOnly,
+            } as IntersectionObserverEntry,
+          ],
+          o as unknown as IntersectionObserver,
+        );
+      }
+    });
+    await flush();
+    await flush();
+    expect(container.textContent).toContain("New Messages");
+    expect(
+      container.querySelector('button[aria-label$="new messages"], button[aria-label$="new message"]'),
+    ).not.toBeNull();
+
     await act(async () => root.unmount());
   });
 

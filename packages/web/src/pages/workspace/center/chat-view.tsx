@@ -3424,11 +3424,11 @@ export function ChatView({
   // would disconnect + recreate the IntersectionObserver. Reviewer
   // R3 on PR 652.
   const dividerRef = useRef<HTMLDivElement | null>(null);
-  const liveBottomVisibleIdRef = useRef<string | null>(liveBottomVisibleId);
+  const liveBottomVisibleRef = useRef<{ id: string | null; projection: string | null }>(liveBottomVisible);
   const mergedMessagesRef = useRef<readonly MessageWithDelivery[]>(mergedMessages);
   useEffect(() => {
-    liveBottomVisibleIdRef.current = liveBottomVisibleId;
-  }, [liveBottomVisibleId]);
+    liveBottomVisibleRef.current = liveBottomVisible;
+  }, [liveBottomVisible]);
   useEffect(() => {
     mergedMessagesRef.current = mergedMessages;
   }, [mergedMessages]);
@@ -3470,9 +3470,22 @@ export function ChatView({
             // emitted a bottom-visible). `firstNewItemIdx`
             // transiently stays -1 until the tracker catches up; no
             // harmful flash.
-            const live = liveBottomVisibleIdRef.current;
+            const live = liveBottomVisibleRef.current;
             const msgs = mergedMessagesRef.current;
-            let reached: string | null = live && !live.startsWith("optimistic-") ? live : null;
+            // Provenance gate, same rule as the session high-water: only an
+            // observation measured under the CURRENT projection may drive
+            // the advance. A callback firing around a projection transition
+            // ("Show all messages" re-rendering the timeline can trigger
+            // the observer) would otherwise pair a STALE filtered bottom
+            // with the NEW projection's clamp — no ceiling — and promote
+            // the anchor past a message the old projection hid. While no
+            // current-projection observation exists, do not advance at all:
+            // the chat-tip fallback must not cross a transition boundary
+            // either (it exists only for the pre-tracker first paint, where
+            // the observation is still {null, null} and matches an
+            // unfiltered mount).
+            if (live.projection !== filterAgentIdRef.current) return;
+            let reached: string | null = live.id && !live.id.startsWith("optimistic-") ? live.id : null;
             if (!reached) {
               for (let i = msgs.length - 1; i >= 0; i--) {
                 const m = msgs[i];
