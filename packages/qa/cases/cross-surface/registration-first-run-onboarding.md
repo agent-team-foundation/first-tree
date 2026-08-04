@@ -13,7 +13,8 @@ Confirm that somebody with no First Tree account can arrive, sign up, and finish
 the admin first-run journey to a usable workspace:
 
 - registration creates a fresh user, org and human agent, and lands on onboarding;
-- the team step names the org and advances;
+- the team step confirms the org that sign-in already created, renaming it only
+  when the prefilled name is actually edited;
 - the connect-computer step blocks until a client reports in with a ready runtime,
   then unblocks;
 - the create-agent step binds the agent to that client and waits for it to come
@@ -48,8 +49,13 @@ first user, who becomes an admin and creates the team.
 1. Sign up with a previously unseen identity. Verify a user, an organization and
    a human agent are created, the browser lands on `/onboarding`, and the team
    name is prefilled from the identity.
-2. Continue past the team step. Verify the org is created with the caller as
-   `admin` and an active membership.
+2. Continue past the team step. The organization and the caller's active `admin`
+   membership already exist from sign-in; this screen loads that row rather than
+   creating one, and leaving the prefilled name unchanged performs **no write at
+   all**. Verify it is that same org, and do not expect a creation here — a
+   correct run that accepts the prefilled name would otherwise be failed. Repeat
+   with an edited name and verify only the display name changes
+   (`PATCH /orgs/:orgId`), leaving org identity and membership untouched.
 3. On connect-computer, verify **Continue stays disabled** while no client is
    connected, and that the page offers a bootstrap command plus a paste-able
    agent prompt. This negative half matters: a gate that is open by accident

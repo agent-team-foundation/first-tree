@@ -7,7 +7,10 @@ steps:
   - module:
       path: ./modules/sign-up-fresh-user.module.yaml
 
-  # ── Step 1 of 3 — create the team (name comes prefilled from the username) ──
+  # ── Step 1 of 3 — confirm the team ─────────────────────────────────────────
+  # The org already exists from sign-in; this screen loads it with the name
+  # prefilled and only PATCHes when the name is edited. Accepting it as-is
+  # writes nothing, so there is no creation to assert here.
   - click: Continue button
 
   # ── Step 2 of 3 — connect a computer ────────────────────────────────────────
