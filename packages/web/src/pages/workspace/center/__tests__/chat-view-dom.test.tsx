@@ -4219,6 +4219,107 @@ describe("timeline message filter", () => {
     await act(async () => revisitRoot.unmount());
   });
 
+  it("keeps the hidden arrival marked as new across a same-session filter lift", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The interleaved shape again, but the filter is lifted IN the mounted
+    // view. Two anchors must both hold: the stale filtered live-bottom (A3)
+    // is provenance-gated so it cannot promote the session high-water when
+    // the ceiling releases, and a filtered divider dismissal advances the
+    // divider anchor only to the clamped bound (A1). Either one advancing
+    // to A3 would strip B2's "new" marking without the user reaching it.
+    const observers: Array<{ cb: IntersectionObserverCallback; targets: Element[] }> = [];
+    class RecordingIntersectionObserver {
+      cb: IntersectionObserverCallback;
+      targets: Element[] = [];
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+        observers.push({ cb, targets: this.targets });
+      }
+      observe = (target: Element) => {
+        this.targets.push(target);
+      };
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+    }
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      value: RecordingIntersectionObserver,
+    });
+
+    const interleaved = messages([
+      message({
+        id: "sl-nova-a1",
+        senderId: "agent-1",
+        content: "Pair line before the hidden arrival.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "sl-design-b2",
+        senderId: "agent-2",
+        content: "Hidden interleaved note.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "sl-nova-a3",
+        senderId: "agent-1",
+        content: "Pair line after the hidden arrival.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(interleaved);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), interleaved);
+        // Previous visit ended at A1, so the divider arms for this visit.
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "sl-nova-a1",
+          latestKnownMessageId: "sl-nova-a1",
+          updatedAt: Date.now(),
+        });
+      },
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Pair line after the hidden arrival.");
+    expect(container.textContent).toContain("New Messages");
+
+    // Scroll the divider past the viewport top while STILL FILTERED: the
+    // dismissal advance must clamp to A1, not adopt the filtered bottom A3.
+    const dividerObservers = observers.filter((o) => o.targets.some((t) => t.textContent?.includes("New Messages")));
+    expect(dividerObservers.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const o of dividerObservers) {
+        o.cb(
+          [
+            {
+              rootBounds: { top: 100 } as DOMRectReadOnly,
+              boundingClientRect: { bottom: 0 } as DOMRectReadOnly,
+            } as IntersectionObserverEntry,
+          ],
+          o as unknown as IntersectionObserver,
+        );
+      }
+    });
+    await flush();
+
+    // Lift the filter in the same mounted view. The stale filtered bottom
+    // must not advance the high-water, and the divider anchor stayed at A1,
+    // so the hidden arrival still reads as new after effects settle.
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Hidden interleaved note.");
+    await flush();
+    await flush();
+    expect(container.textContent).toContain("New Messages");
+    const pill = container.querySelector('button[aria-label$="new messages"], button[aria-label$="new message"]');
+    expect(pill).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("keeps the watermark at the blocking question while a stored filter is active", async () => {
     const { ChatView } = await import("../chat-view.js");
     // Stored filter + an unanswered ask + a message AFTER the ask. The

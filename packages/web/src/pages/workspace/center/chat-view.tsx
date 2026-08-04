@@ -3082,6 +3082,30 @@ export function ChatView({
     }
     return beforeOldestHidden;
   }, [filterAgentId, visibleItems, mergedMessages, readState?.latestKnownMessageId]);
+  // ONE clamp for every session-scoped attention anchor — the live session
+  // high-water advance and the divider-anchor advance both go through here
+  // (the tracker's persisted pair applies the same bound internally via
+  // `latestKnownOverride`). Centralizing it makes "is there a fourth
+  // unclamped anchor?" a one-glance question in review: every consumer that
+  // moves an anchor forward must call this first. Returns the id unchanged
+  // when no filter is active, the ceiling when the id sits past it, and
+  // `null` when no anchor is safe (callers must then not advance at all).
+  const clampToCeiling = useCallback(
+    (id: string): string | null => {
+      if (latestKnownCeiling === undefined) return id;
+      if (latestKnownCeiling === null) return null;
+      if (id === latestKnownCeiling) return id;
+      const idIdx = mergedMessages.findIndex((m) => m.id === id);
+      const ceilingIdx = mergedMessages.findIndex((m) => m.id === latestKnownCeiling);
+      if (idIdx < 0 || ceilingIdx < 0) return null;
+      return idIdx > ceilingIdx ? latestKnownCeiling : id;
+    },
+    [latestKnownCeiling, mergedMessages],
+  );
+  // Ref mirror for long-lived observer callbacks (the divider's
+  // IntersectionObserver deliberately avoids rebuilding per render).
+  const clampToCeilingRef = useRef(clampToCeiling);
+  clampToCeilingRef.current = clampToCeiling;
 
   // Resolve the stored bottom-visible id against the rendered set
   // so we can decide where to scroll on chat open. If the stored
@@ -3157,10 +3181,33 @@ export function ChatView({
     return mergedMessages.findIndex((m) => m.id === dividerAnchorMessageId);
   }, [dividerAnchorMessageId, mergedMessages]);
 
-  // Live bottom-visible id during the current session. Driven by
-  // useReadTracker's `onBottomVisibleChange` callback. Used as the
-  // signal that advances the session high watermark below.
-  const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
+  // Live bottom-visible observation during the current session. Driven by
+  // useReadTracker's `onBottomVisibleChange` callback. Used as the signal
+  // that advances the session high watermark below.
+  //
+  // Each observation carries the PROJECTION it was measured under (the
+  // active `filterAgentId`, `null` for the full view). A bottom id from one
+  // projection must never advance the watermark once the projection has
+  // changed: clearing the filter releases the ceiling on the same render,
+  // and the stale filtered bottom — chronologically after an interleaved
+  // hidden message — would otherwise promote the high-water past it before
+  // any real unfiltered viewport observation exists. The tracker only
+  // re-publishes when the new DOM's bottom actually DIFFERS from the last
+  // observed id, so an identical post-transition bottom stays un-trusted
+  // until the user scrolls or the layout genuinely moves.
+  const [liveBottomVisible, setLiveBottomVisible] = useState<{
+    id: string | null;
+    projection: string | null;
+  }>({ id: null, projection: null });
+  const liveBottomVisibleId = liveBottomVisible.id;
+  // Render-assigned mirror so the tracker's publication callback (fired
+  // from scroll/mutation listeners) tags observations with the projection
+  // of the COMMITTED render they were measured against.
+  const filterAgentIdRef = useRef<string | null>(null);
+  filterAgentIdRef.current = filterAgentId;
+  const publishBottomVisible = useCallback((id: string | null) => {
+    setLiveBottomVisible({ id, projection: filterAgentIdRef.current });
+  }, []);
 
   // Session high watermark — id of the latest message the user has
   // reached (had at viewport bottom) at any point during the
@@ -3204,7 +3251,7 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
   useLayoutEffect(() => {
     setSessionHighestId(null);
-    setLiveBottomVisibleId(null);
+    setLiveBottomVisible({ id: null, projection: null });
     // Drop any pending own-send pre-advance from the previous
     // chat — the new chat's watermark should not inherit the
     // outgoing chat's last sent message.
@@ -3250,31 +3297,31 @@ export function ChatView({
   //      until the next forward advance instead.
   useEffect(() => {
     if (!liveBottomVisibleId) return;
+    // Provenance gate: only an observation measured under the CURRENT
+    // projection may advance the watermark. A projection transition (filter
+    // applied, cleared, or retargeted) releases/changes the ceiling on the
+    // same render while the last observation still describes the OLD DOM —
+    // trusting it would promote the high-water past messages the old
+    // projection hid. A successor observation arrives only when the new
+    // DOM's bottom genuinely differs (scroll or layout movement).
+    if (liveBottomVisible.projection !== filterAgentId) return;
     // While the pair filter hides messages, the DOM bottom is a FILTERED
     // anchor that can sit chronologically after a hidden arrival (an own
     // send, or the pair's next visible message). Advancing the session
     // high-water past the safe bound would leave the hidden message
-    // pill-invisible even after the filter lifts, so the advance is clamped
-    // to `latestKnownCeiling` for the duration.
-    let nextId = liveBottomVisibleId;
-    let newIdx = mergedMessages.findIndex((m) => m.id === nextId);
+    // pill-invisible even after the filter lifts, so the advance goes
+    // through the shared ceiling clamp.
+    const nextId = clampToCeiling(liveBottomVisibleId);
+    if (!nextId) return;
+    const newIdx = mergedMessages.findIndex((m) => m.id === nextId);
     if (newIdx < 0) return;
-    if (latestKnownCeiling !== undefined) {
-      if (latestKnownCeiling === null) return;
-      const ceilingIdx = mergedMessages.findIndex((m) => m.id === latestKnownCeiling);
-      if (ceilingIdx < 0) return;
-      if (newIdx > ceilingIdx) {
-        nextId = latestKnownCeiling;
-        newIdx = ceilingIdx;
-      }
-    }
     if (sessionHighestId !== null) {
       const curIdx = mergedMessages.findIndex((m) => m.id === sessionHighestId);
       if (curIdx < 0) return;
       if (newIdx <= curIdx) return;
     }
     setSessionHighestId(nextId);
-  }, [liveBottomVisibleId, mergedMessages, sessionHighestId, latestKnownCeiling]);
+  }, [liveBottomVisible, liveBottomVisibleId, filterAgentId, mergedMessages, sessionHighestId, clampToCeiling]);
   // Effective high water index, resolved from `sessionHighestId`
   // against the live `mergedMessages`. Max with the frozen-at-open
   // anchor index covers the re-visit-without-scroll path (no
@@ -3435,6 +3482,16 @@ export function ChatView({
                 }
               }
             }
+            // The divider anchor is a session attention anchor like the
+            // high-water: while the pair filter is active, both the live
+            // bottom and the tip fallback can sit past a hidden message, so
+            // the advance goes through the same ceiling clamp. When no
+            // anchor is safe, keep the current one — never advance blind.
+            if (reached) {
+              const safeReached = clampToCeilingRef.current(reached);
+              if (safeReached) setDividerAnchorMessageId(safeReached);
+              return;
+            }
             setDividerAnchorMessageId(reached);
             return;
           }
@@ -3566,7 +3623,7 @@ export function ChatView({
         updatedAt: Date.now(),
       });
     },
-    onBottomVisibleChange: setLiveBottomVisibleId,
+    onBottomVisibleChange: publishBottomVisible,
   });
 
   // Pill click: jump to the bottom. As the scroll lands, the
