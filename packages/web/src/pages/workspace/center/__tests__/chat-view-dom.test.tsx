@@ -3788,3 +3788,99 @@ describe("ChatView", () => {
     });
   });
 });
+
+describe("timeline message filter", () => {
+  const FILTER_MESSAGES = messages([
+    message({
+      id: "pf-human-to-nova",
+      senderId: "human-agent-self",
+      content: "Nova, please check the deploy.",
+      createdAt: "2026-05-28T11:50:00.000Z",
+      metadata: { mentions: ["agent-1"] },
+    }),
+    message({
+      id: "pf-nova-reply",
+      senderId: "agent-1",
+      content: "Deploy checked, all green.",
+      createdAt: "2026-05-28T11:51:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    }),
+    message({
+      id: "pf-design-to-human",
+      senderId: "agent-2",
+      content: "Design notes for the banner.",
+      createdAt: "2026-05-28T11:52:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    }),
+  ]);
+
+  it("applies the transient ?focus= pair filter and clears it via Show all messages", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("temporary view");
+    expect(container.textContent).toContain("Deploy checked, all green.");
+    expect(container.textContent).not.toContain("Design notes for the banner.");
+
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Design notes for the banner.");
+    expect(container.querySelector("[data-message-filter-banner]")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("filters via the header control and persists the choice for this user + chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+
+    await waitForText(container, "Design notes for the banner.");
+    expect(container.querySelector("[data-message-filter-banner]")).toBeNull();
+
+    await click(container.querySelector("[data-message-filter-trigger]"));
+    const menu = document.body.querySelector('[role="menu"][aria-label="Filter messages"]');
+    expect(menu).not.toBeNull();
+    if (!menu) throw new Error("filter menu missing");
+    expect(buttonByText(menu, "All messages")).not.toBeNull();
+    await click(buttonByText(menu, "Nova"));
+
+    await waitForText(container, "Showing your conversation with Nova");
+    // An explicit choice is not the transient navigation-applied view.
+    expect(container.textContent).not.toContain("temporary view");
+    expect(container.textContent).not.toContain("Design notes for the banner.");
+    const stored: unknown = JSON.parse(window.localStorage.getItem("first-tree:chat-message-filter:v1") ?? "{}");
+    expect(stored).toMatchObject({ "u:anon:chat:chat-1": { agentId: "agent-1" } });
+
+    await act(async () => root.unmount());
+  });
+
+  it("restores a stored filter choice when the chat opens", async () => {
+    window.localStorage.setItem(
+      "first-tree:chat-message-filter:v1",
+      JSON.stringify({ "u:anon:chat:chat-1": { agentId: "agent-2", updatedAt: 1 } }),
+    );
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+
+    await waitForText(container, "Showing your conversation with Design Critique");
+    expect(container.textContent).toContain("Design notes for the banner.");
+    expect(container.textContent).not.toContain("Deploy checked, all green.");
+
+    await act(async () => root.unmount());
+  });
+});

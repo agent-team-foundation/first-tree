@@ -30,6 +30,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  ListFilter,
   Menu,
   MessageSquare,
   PanelRight,
@@ -106,6 +107,7 @@ import {
   isTrustedGitlabDispatcherMessage,
 } from "../../../components/chat/gitlab-event-card.js";
 import { ImageRefGallery } from "../../../components/chat/image-ref-gallery.js";
+import { isPairConversationMessage, listConversedAgentIds } from "../../../components/chat/pair-conversation.js";
 import {
   contentStartsWithMention,
   findBlockingRequest,
@@ -140,6 +142,7 @@ import { Button } from "../../../components/ui/button.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
 import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
+import { Popover } from "../../../components/ui/popover.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -156,6 +159,7 @@ import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-u
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
+import { useChatMessageFilter } from "../../../lib/use-chat-message-filter.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
@@ -1629,6 +1633,12 @@ export function ChatView({
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
   const [draft, setDraft] = useChatDraftText(user?.id ?? null, chatId);
+  // Viewer-chosen timeline filter ("show only my conversation with agent X"),
+  // cached per user + chat in browser-local storage. Distinct from the
+  // `?focus=` URL param below: the param is a TRANSIENT view a navigation
+  // (e.g. "Show earlier chat" on an ask review) applies for this visit only,
+  // while this stored value is an explicit user choice that survives reloads.
+  const [storedFilterAgentId, setStoredFilterAgentId] = useChatMessageFilter(user?.id ?? null, chatId);
   // Always-current chat id for async send rollbacks: a send that FAILS after
   // the user switched chats must restore its rejected text into the originating
   // chat, never the one now in view (the draft state is shared and ChatView
@@ -2578,6 +2588,52 @@ export function ChatView({
     [cachedMessages, messagesData],
   );
 
+  // ── Timeline message filter: "show only my conversation with agent X".
+  // Two sources, one effect:
+  //   - `?focus=<agentId>` — a TRANSIENT view applied by navigation (the ask
+  //     review's "Show earlier chat"). URL-only, never persisted; re-opening
+  //     the chat through any ordinary route drops the param, so the next
+  //     visit shows all messages again.
+  //   - the stored per-user/per-chat choice from the header filter control —
+  //     an explicit user preference that survives reloads (localStorage).
+  // The transient view wins while present; an explicit selection clears it.
+  // Filtering affects DISPLAY only: blocking-request derivation, open-request
+  // gating, and the ask takeover all keep reading the unfiltered sets, so a
+  // question from a filtered-out agent still blocks and stays answerable.
+  const focusParam = searchParams.get("focus");
+  const focusAgentId = focusParam && focusParam !== myAgentId ? focusParam : null;
+  // Offering only agents the viewer actually exchanged messages with keeps the
+  // option list meaningful; humans are excluded — the filter is about "the
+  // agent I am talking to", and the viewer is the human side of the pair.
+  const humanParticipantIds = useMemo(
+    () => new Set((chatDetail?.participants ?? []).filter((p) => p.type === "human").map((p) => p.agentId)),
+    [chatDetail?.participants],
+  );
+  const filterCandidateIds = useMemo(() => {
+    if (!myAgentId) return [];
+    return listConversedAgentIds({ messages: mergedMessages, humanAgentId: myAgentId }).filter(
+      (id) => !humanParticipantIds.has(id),
+    );
+  }, [mergedMessages, myAgentId, humanParticipantIds]);
+  // A stored choice only applies while it still names someone the viewer has
+  // conversed with in the loaded window — a stale entry (agent left, history
+  // rotated out) silently falls back to the full view instead of blanking the
+  // timeline.
+  const chosenFilterAgentId =
+    storedFilterAgentId && filterCandidateIds.includes(storedFilterAgentId) ? storedFilterAgentId : null;
+  const filterAgentId = focusAgentId ?? chosenFilterAgentId;
+  const setMessageFilter = useCallback(
+    (agentId: string | null) => {
+      setStoredFilterAgentId(agentId);
+      if (searchParams.has("focus")) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("focus");
+        setSearchParams(next, { replace: true });
+      }
+    },
+    [setStoredFilterAgentId, searchParams, setSearchParams],
+  );
+
   // ── Blocking request: the OLDEST (FIFO) live open question directed at me.
   // It pins its questions + options directly above the composer, the timeline
   // hides every item after it, and the block lifts only once it resolves —
@@ -2678,6 +2734,16 @@ export function ChatView({
     next.set("showAsk", "false");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
+  // "Show earlier chat" from the blocking ask: inspect mode + the transient
+  // pair filter on the asker, so the takeover gives way to exactly the
+  // conversation the question grew out of. URL-only — leaving the chat drops
+  // both params (see the timeline-filter block above).
+  const showEarlierChatFromAsk = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set("showAsk", "false");
+    if (dockRequest) next.set("focus", dockRequest.senderId);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, dockRequest]);
   const reopenAskTakeover = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete("showAsk");
@@ -2716,7 +2782,26 @@ export function ChatView({
   // Answer state lives in the AskTakeover overlay (remounted per request via
   // `key`), so chat-view no longer resets per-question selections here.
 
-  const timelineMessages = inspectAskMode ? blockingMessages : mergedMessages;
+  const timelineSource = inspectAskMode ? blockingMessages : mergedMessages;
+  // Display-only pair filter over the timeline source. Group chats use the
+  // same pair-conversation membership rule as the ask review's earlier-chat
+  // preview (sender in the pair AND addressing/replying to the other member),
+  // so "my conversation with X" never leaks X's side conversations.
+  const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
+    if (!filterAgentId || !myAgentId) return timelineSource;
+    const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
+    const directChat = chatDetail?.type === "direct";
+    return timelineSource.filter((message) =>
+      isPairConversationMessage({
+        message,
+        humanAgentId: myAgentId,
+        otherAgentId: filterAgentId,
+        directChat,
+        senderById,
+      }),
+    );
+  }, [timelineSource, filterAgentId, myAgentId, chatDetail?.type]);
+  const hiddenByFilter = timelineSource.length - timelineMessages.length;
   const items: TimelineItem[] = useMemo(() => {
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
@@ -2746,6 +2831,10 @@ export function ChatView({
     }
 
     for (const [eventAgentId, eventsById] of rawEventsByAgent) {
+      // The pair filter narrows the view to one agent's conversation with the
+      // viewer; other agents' live-work groups and error rows follow their
+      // messages out of the filtered view.
+      if (filterAgentId && eventAgentId !== filterAgentId) continue;
       const rawEvents = [...eventsById.values()];
       const visibleEvents = filterEventsForTimeline(rawEvents);
       let lastTurnEndSeq = -1;
@@ -2779,7 +2868,7 @@ export function ChatView({
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [timelineMessages, eventFeedsData]);
+  }, [timelineMessages, eventFeedsData, filterAgentId]);
 
   const itemCount = items.length;
 
@@ -3824,6 +3913,7 @@ export function ChatView({
                   onAsk: askAgent.ask,
                 }}
                 onDismiss={enterAskInspectMode}
+                onRequestEarlierContext={showEarlierChatFromAsk}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
@@ -4069,42 +4159,50 @@ export function ChatView({
                   the trial is a pure conversation with no side rail. */}
               {!isTrial &&
                 (narrow ? (
-                  <button
-                    type="button"
-                    onClick={toggleSidebar}
-                    aria-label={
-                      detailsOpen
-                        ? useMobileDetailsSheet
-                          ? "Hide chat details"
-                          : "Hide chat options"
-                        : useMobileDetailsSheet
-                          ? "Show chat details"
-                          : "Show chat options"
-                    }
-                    aria-expanded={detailsOpen}
-                    aria-pressed={detailsOpen}
-                    title={
-                      detailsOpen
-                        ? useMobileDetailsSheet
-                          ? "Hide chat details"
-                          : "Hide chat options"
-                        : useMobileDetailsSheet
-                          ? "Show chat details"
-                          : "Show chat options"
-                    }
-                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                    style={{
-                      width: 32,
-                      height: 32,
-                      border: 0,
-                      background: detailsOpen ? "var(--bg-sunken)" : "transparent",
-                      borderRadius: "var(--radius-input)",
-                      color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <PanelRight size={17} strokeWidth={2.25} />
-                  </button>
+                  <>
+                    <MessageFilterControl
+                      candidateIds={filterCandidateIds}
+                      activeAgentId={filterAgentId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onSelect={setMessageFilter}
+                    />
+                    <button
+                      type="button"
+                      onClick={toggleSidebar}
+                      aria-label={
+                        detailsOpen
+                          ? useMobileDetailsSheet
+                            ? "Hide chat details"
+                            : "Hide chat options"
+                          : useMobileDetailsSheet
+                            ? "Show chat details"
+                            : "Show chat options"
+                      }
+                      aria-expanded={detailsOpen}
+                      aria-pressed={detailsOpen}
+                      title={
+                        detailsOpen
+                          ? useMobileDetailsSheet
+                            ? "Hide chat details"
+                            : "Hide chat options"
+                          : useMobileDetailsSheet
+                            ? "Show chat details"
+                            : "Show chat options"
+                      }
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        border: 0,
+                        background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <PanelRight size={17} strokeWidth={2.25} />
+                    </button>
+                  </>
                 ) : (
                   <>
                     {/* Audience — compact stats icon + quick-add icon. Replaces
@@ -4141,6 +4239,12 @@ export function ChatView({
                         onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                       />
                     )}
+                    <MessageFilterControl
+                      candidateIds={filterCandidateIds}
+                      activeAgentId={filterAgentId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onSelect={setMessageFilter}
+                    />
                     {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
@@ -4219,6 +4323,49 @@ export function ChatView({
               </button>
             </div>
           )}
+
+          {/* Pair-filter notice: whenever the timeline is narrowed to one
+          conversation the banner says so and offers the way back, so a
+          filtered view can never be mistaken for the full history. The
+          transient (`?focus=`) variant additionally says the view resets on
+          the next visit — it wasn't an explicit choice. */}
+          {filterAgentId ? (
+            <div
+              data-message-filter-banner
+              className="shrink-0 flex items-center"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-1_5) var(--sp-6)",
+                background: "var(--bg-sunken)",
+                borderBottom: "var(--hairline) solid var(--border-faint)",
+                color: "var(--fg-2)",
+              }}
+            >
+              <ListFilter aria-hidden size={14} strokeWidth={2.25} style={{ flexShrink: 0, color: "var(--fg-3)" }} />
+              <span className="text-body" style={{ flex: 1 }}>
+                Showing your conversation with {chatScopedAgentName(filterAgentId)}
+                {hiddenByFilter > 0
+                  ? ` · ${hiddenByFilter} ${hiddenByFilter === 1 ? "message" : "messages"} hidden`
+                  : ""}
+                {focusAgentId ? " · temporary view" : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMessageFilter(null)}
+                className="text-body"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-2)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  background: "var(--bg-raised)",
+                  color: "var(--fg)",
+                  cursor: "pointer",
+                }}
+              >
+                Show all messages
+              </button>
+            </div>
+          ) : null}
 
           {/* Timeline region. Outer `relative flex-col` wrapper exists solely
           as the containing block for the floating pill — putting `position:
@@ -5227,6 +5374,139 @@ function MobileChatDetailsSheet({
  * agent-only concept here.
  */
 const MAX_VISIBLE_AVATARS = 4;
+
+/**
+ * Header entry for the timeline pair filter. Renders nothing until the viewer
+ * has at least one conversed-with agent to offer — an empty menu would be a
+ * dead control. The trigger mirrors the details-toggle icon-button styling;
+ * an active filter keeps the trigger visually pressed so the narrowed state
+ * stays discoverable even when the banner has scrolled out of mind.
+ */
+function MessageFilterControl({
+  candidateIds,
+  activeAgentId,
+  agentIdentity,
+  onSelect,
+}: {
+  candidateIds: readonly string[];
+  activeAgentId: string | null;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
+  onSelect: (agentId: string | null) => void;
+}) {
+  if (candidateIds.length === 0) return null;
+  const filterActive = activeAgentId !== null;
+
+  const optionRow = (label: ReactNode, selected: boolean, onClick: () => void, key: string) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      onClick={onClick}
+      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-1_5) var(--sp-2_5)",
+        border: 0,
+        borderRadius: "var(--radius-input)",
+        background: "transparent",
+        color: "var(--fg)",
+        cursor: "pointer",
+      }}
+    >
+      <span className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-2)" }}>
+        {label}
+      </span>
+      {selected ? <Check aria-hidden className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--fg-2)" }} /> : null}
+    </button>
+  );
+
+  return (
+    <Popover
+      align="end"
+      panelAriaLabel="Filter messages"
+      panelStyle={{
+        minWidth: 220,
+        padding: "var(--sp-1)",
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-input)",
+        background: "var(--bg-raised)",
+        boxShadow: "var(--shadow-md)",
+      }}
+      trigger={({ toggle, open }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={filterActive ? "Filter messages (filtered)" : "Filter messages"}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-pressed={filterActive}
+          title="Filter messages"
+          data-message-filter-trigger
+          className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            width: 28,
+            height: 28,
+            border: 0,
+            background: filterActive || open ? "var(--bg-sunken)" : "transparent",
+            borderRadius: "var(--radius-input)",
+            color: filterActive ? "var(--fg)" : "var(--fg-3)",
+            cursor: "pointer",
+          }}
+        >
+          <ListFilter size={16} strokeWidth={2.25} />
+        </button>
+      )}
+    >
+      {({ close }) => (
+        <div role="menu" aria-label="Filter messages" className="flex flex-col">
+          {optionRow(
+            <span className="truncate">All messages</span>,
+            !filterActive,
+            () => {
+              onSelect(null);
+              close();
+            },
+            "all",
+          )}
+          {candidateIds.map((id) => {
+            const ident = agentIdentity(id);
+            const label = ident?.displayName ?? id.slice(0, 8);
+            return optionRow(
+              <>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0"
+                  style={{ display: "inline-flex", width: 18, height: 18, borderRadius: 999, overflow: "hidden" }}
+                >
+                  <RealAvatar
+                    src={ident?.avatarImageUrl ?? null}
+                    name={label}
+                    seed={id}
+                    colorToken={ident?.avatarColorToken ?? null}
+                    size={18}
+                  />
+                </span>
+                <span className="truncate">{label}</span>
+              </>,
+              activeAgentId === id,
+              () => {
+                onSelect(id);
+                close();
+              },
+              id,
+            );
+          })}
+        </div>
+      )}
+    </Popover>
+  );
+}
 
 function ParticipantsStats({
   participants,

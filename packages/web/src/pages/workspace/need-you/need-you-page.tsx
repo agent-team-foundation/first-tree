@@ -1,13 +1,8 @@
-import {
-  imageAttachmentRefsFromMetadata,
-  type Message,
-  type NeedYouRequestItem,
-  type RequestResolution,
-} from "@first-tree/shared";
+import { imageAttachmentRefsFromMetadata, type NeedYouRequestItem, type RequestResolution } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, CheckCircle2, ExternalLink, History, LoaderCircle } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { getChat, listChatMessages } from "../../../api/chats.js";
+import { getChat } from "../../../api/chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { sendAskAnswer } from "../../../components/chat/ask-answer-transport.js";
 import { type AskAnswer, AskTakeover, clearAskTakeoverDraft } from "../../../components/chat/ask-takeover.js";
@@ -16,10 +11,7 @@ import { useAskAgent } from "../../../components/chat/use-ask-agent.js";
 import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { useGitlabEntityPresentation } from "../../../hooks/use-gitlab-entity-presentation.js";
-import { selectEarlierChatPreview } from "./earlier-chat.js";
 import { needYouQueryOptions, removeResolvedNeedYouRequest } from "./query.js";
-
-const EARLIER_CHAT_LIMIT = 8;
 
 export function NeedYouPage({
   mobile = false,
@@ -28,7 +20,11 @@ export function NeedYouPage({
 }: {
   mobile?: boolean;
   onClose: () => void;
-  onOpenFullChat: (chatId: string) => void;
+  /** Open the request's chat. With `focusAgentId` the chat opens narrowed to
+   *  the viewer's conversation with that agent — the "Show earlier chat"
+   *  path. The narrowing is a transient URL-carried view, not a stored
+   *  preference: re-opening the chat later shows all messages. */
+  onOpenFullChat: (chatId: string, focusAgentId?: string) => void;
 }) {
   const queryClient = useQueryClient();
   const { organizationId, agentId: humanAgentId } = useAuth();
@@ -36,7 +32,6 @@ export function NeedYouPage({
   const item = queue.data?.items[0] ?? null;
   const [sendingRequestId, setSendingRequestId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [earlierRequested, setEarlierRequested] = useState(false);
   const requestId = item?.request.id ?? null;
 
   useEffect(() => {
@@ -44,7 +39,6 @@ export function NeedYouPage({
     void requestId;
     setSendingRequestId(null);
     setSendError(null);
-    setEarlierRequested(false);
   }, [requestId]);
 
   const chatDetail = useQuery({
@@ -75,29 +69,6 @@ export function NeedYouPage({
     [chatDetail.data?.participants, humanAgentId],
   );
 
-  const earlierQuery = useQuery({
-    queryKey: ["need-you", "earlier-chat", item?.chat.id, requestId],
-    queryFn: () => {
-      if (!item) throw new Error("No request selected");
-      return listChatMessages(item.chat.id, { limit: 100 });
-    },
-    enabled: item !== null && earlierRequested,
-    staleTime: 30_000,
-  });
-
-  const earlierContext = useMemo(() => {
-    if (!item || !humanAgentId || !earlierRequested || !earlierQuery.data) return null;
-    return selectEarlierChatPreview({
-      messages: earlierQuery.data.items,
-      requestId: item.request.id,
-      requestCreatedAt: item.request.createdAt,
-      humanAgentId,
-      askerAgentId: item.asker.agentId,
-      directChat: chatDetail.data?.type === "direct",
-      limit: EARLIER_CHAT_LIMIT,
-    });
-  }, [chatDetail.data?.type, earlierQuery.data, earlierRequested, humanAgentId, item]);
-
   const askAgent = useAskAgent({
     chatId: item?.chat.id ?? "",
     requestId,
@@ -108,6 +79,9 @@ export function NeedYouPage({
   const closeReview = useCallback(() => {
     if (!reviewLocked) onClose();
   }, [onClose, reviewLocked]);
+  const showEarlierChat = useCallback(() => {
+    if (!reviewLocked && item) onOpenFullChat(item.chat.id, item.asker.agentId);
+  }, [reviewLocked, item, onOpenFullChat]);
   const { markdownComponents } = useGitlabEntityPresentation(organizationId);
 
   const resolveRequest = async (
@@ -247,18 +221,8 @@ export function NeedYouPage({
             mentionCandidates={mentionCandidates}
             markdownComponents={markdownComponents}
             mobile={mobile}
-            contextBefore={
-              <EarlierChatContext
-                item={item}
-                requested={earlierRequested}
-                loading={earlierQuery.isLoading}
-                error={earlierQuery.error}
-                result={earlierContext}
-                humanAgentId={humanAgentId}
-                onLoad={() => setEarlierRequested(true)}
-              />
-            }
-            onRequestEarlierContext={!earlierRequested ? () => setEarlierRequested(true) : undefined}
+            contextBefore={<ChatContextHeader item={item} locked={reviewLocked} onShowEarlierChat={showEarlierChat} />}
+            onRequestEarlierContext={showEarlierChat}
             onEscape={closeReview}
             askAgent={{
               exchanges: askAgent.exchanges,
@@ -287,22 +251,21 @@ export function NeedYouPage({
   );
 }
 
-function EarlierChatContext({
+/**
+ * Chat context above the question: the chat's running description, plus the
+ * jump to the earlier conversation. The earlier chat is no longer previewed
+ * inline — the button opens the full chat narrowed (transiently) to the
+ * viewer's conversation with the asker, where the real timeline, scrollback,
+ * and "Show all messages" all already exist.
+ */
+function ChatContextHeader({
   item,
-  requested,
-  loading,
-  error,
-  result,
-  humanAgentId,
-  onLoad,
+  locked,
+  onShowEarlierChat,
 }: {
   item: NeedYouRequestItem;
-  requested: boolean;
-  loading: boolean;
-  error: unknown;
-  result: { unavailable: boolean; messages: Message[] } | null;
-  humanAgentId: string | null;
-  onLoad: () => void;
+  locked: boolean;
+  onShowEarlierChat: () => void;
 }) {
   return (
     <div style={{ padding: "var(--sp-4) var(--sp-5)", background: "var(--bg-sunken)" }}>
@@ -314,63 +277,24 @@ function EarlierChatContext({
           <Markdown>{item.chat.description}</Markdown>
         </div>
       ) : null}
-      {!requested ? (
-        <button
-          type="button"
-          onClick={onLoad}
-          className="text-label inline-flex items-center"
-          style={{
-            gap: "var(--sp-1_5)",
-            padding: 0,
-            border: 0,
-            background: "transparent",
-            color: "var(--fg-2)",
-          }}
-        >
-          <History aria-hidden className="h-4 w-4" />
-          Show earlier chat
-        </button>
-      ) : loading ? (
-        <div role="status" className="text-label" style={{ color: "var(--fg-3)" }}>
-          Loading earlier chat…
-        </div>
-      ) : error ? (
-        <div className="text-label" style={{ color: "var(--state-error)" }}>
-          Earlier chat could not be loaded.
-        </div>
-      ) : result?.unavailable ? (
-        <div className="text-label" style={{ color: "var(--fg-3)" }}>
-          Earlier chat preview is unavailable because this question is outside the recent message window.
-        </div>
-      ) : result && result.messages.length === 0 ? (
-        <div className="text-label" style={{ color: "var(--fg-3)" }}>
-          No recent messages between you and this agent before the question.
-        </div>
-      ) : result ? (
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          <div className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
-            Earlier chat
-          </div>
-          {result.messages.map((message) => (
-            <div
-              key={message.id}
-              style={{
-                padding: "var(--sp-2_5) var(--sp-3)",
-                border: "var(--hairline) solid var(--border-faint)",
-                borderRadius: "var(--radius-input)",
-                background: "var(--bg-raised)",
-              }}
-            >
-              <div className="text-caption" style={{ color: "var(--fg-4)", marginBottom: "var(--sp-1)" }}>
-                {message.senderId === humanAgentId ? "You" : item.asker.displayName}
-              </div>
-              <Markdown>
-                {typeof message.content === "string" ? message.content : JSON.stringify(message.content)}
-              </Markdown>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <button
+        type="button"
+        onClick={onShowEarlierChat}
+        disabled={locked}
+        className="text-label inline-flex items-center"
+        style={{
+          gap: "var(--sp-1_5)",
+          padding: 0,
+          border: 0,
+          background: "transparent",
+          color: "var(--fg-2)",
+          cursor: locked ? "default" : "pointer",
+          opacity: locked ? 0.5 : 1,
+        }}
+      >
+        <History aria-hidden className="h-4 w-4" />
+        Show earlier chat
+      </button>
     </div>
   );
 }
