@@ -401,11 +401,13 @@ async function createPlanId(): Promise<string> {
 }
 
 function readApplyCommand(kind: "global" | "directory" | "session"): string {
-  const result = output.result.mock.calls.at(-1)?.[0] as {
-    plan: { choices: Array<{ kind: string; applyCommand: string | null }> };
-  };
-  const command = result.plan.choices.find((choice) => choice.kind === kind)?.applyCommand;
-  if (!command) throw new Error(`Missing ${kind} apply command`);
+  const result: unknown = output.result.mock.calls.at(-1)?.[0];
+  if (!isRecord(result) || !isRecord(result.plan) || !Array.isArray(result.plan.choices)) {
+    throw new Error("Missing setup plan result");
+  }
+  const choice = result.plan.choices.find((candidate: unknown) => isRecord(candidate) && candidate.kind === kind);
+  const command = isRecord(choice) ? choice.applyCommand : null;
+  if (typeof command !== "string") throw new Error(`Missing ${kind} apply command`);
   return command;
 }
 
@@ -420,6 +422,10 @@ function parseGeneratedApplyCommand(command: string): Record<string, unknown> {
     planId: value("--plan-id"),
     yes: command.endsWith(" --yes"),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function context(options: Record<string, unknown>): CommandContext {
