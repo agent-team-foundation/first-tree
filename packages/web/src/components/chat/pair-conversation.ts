@@ -34,6 +34,31 @@ export function isPairConversationMessage({
 }
 
 /**
+ * Whether the loaded window carries any trace of a participant beyond the
+ * pair: a message authored by someone else, or a pair-authored message that
+ * addresses someone else. Current chat membership cannot answer this —
+ * participant removal deletes the speaker row, so a chat whose speakers are
+ * now exactly the pair may still hold a departed third party's conversation
+ * in history. While such traces exist, the pair view must keep the group
+ * addressing rule; the "keep every pair-authored message" shortcut is safe
+ * only for a window that was always a two-person conversation.
+ */
+export function historyContainsThirdParty({
+  messages,
+  humanAgentId,
+  otherAgentId,
+}: {
+  messages: readonly Message[];
+  humanAgentId: string;
+  otherAgentId: string;
+}): boolean {
+  const inPair = (id: string) => id === humanAgentId || id === otherAgentId;
+  return messages.some(
+    (message) => !inPair(message.senderId) || readMentions(message.metadata).some((id) => !inPair(id)),
+  );
+}
+
+/**
  * The agents the viewer has actually conversed with in this window — each
  * non-self sender that addressed or replied to the viewer, plus everyone the
  * viewer addressed or replied to. This drives the filter's option list, so a

@@ -1,6 +1,6 @@
 import type { Message } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { isPairConversationMessage, listConversedAgentIds } from "../pair-conversation.js";
+import { historyContainsThirdParty, isPairConversationMessage, listConversedAgentIds } from "../pair-conversation.js";
 
 function message(overrides: Partial<Message> & Pick<Message, "id" | "senderId" | "createdAt">): Message {
   return {
@@ -80,6 +80,43 @@ describe("isPairConversationMessage", () => {
       metadata: { mentions: ["other-agent", "human"] },
     });
     expect(pairFilter([broadcast], false)).toEqual(["broadcast"]);
+  });
+});
+
+describe("historyContainsThirdParty", () => {
+  const pairArgs = { humanAgentId: "human", otherAgentId: "asker" } as const;
+
+  it("is false for a window that was always pair-only", () => {
+    const window = [
+      message({ id: "m1", senderId: "human", createdAt: "2026-07-28T10:01:00.000Z" }),
+      message({
+        id: "m2",
+        senderId: "asker",
+        createdAt: "2026-07-28T10:02:00.000Z",
+        metadata: { mentions: ["human"] },
+      }),
+    ];
+    expect(historyContainsThirdParty({ messages: window, ...pairArgs })).toBe(false);
+  });
+
+  it("detects a departed third speaker's authored message", () => {
+    const window = [
+      message({ id: "m1", senderId: "human", createdAt: "2026-07-28T10:01:00.000Z" }),
+      message({ id: "m2", senderId: "agent-b", createdAt: "2026-07-28T10:02:00.000Z" }),
+    ];
+    expect(historyContainsThirdParty({ messages: window, ...pairArgs })).toBe(true);
+  });
+
+  it("detects a pair-authored message addressed outside the pair", () => {
+    const window = [
+      message({
+        id: "m1",
+        senderId: "human",
+        createdAt: "2026-07-28T10:01:00.000Z",
+        metadata: { mentions: ["agent-b"] },
+      }),
+    ];
+    expect(historyContainsThirdParty({ messages: window, ...pairArgs })).toBe(true);
   });
 });
 

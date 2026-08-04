@@ -3947,6 +3947,98 @@ describe("timeline message filter", () => {
     await act(async () => root.unmount());
   });
 
+  it("keeps the group rule when the current exact-pair chat once had a third speaker", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Membership evolved {viewer, Nova, Design} → {viewer, Nova}: the speaker
+    // rows say "exact pair", but history still holds the departed Design
+    // era. The direct shortcut must NOT engage — messages addressed to the
+    // departed agent stay out of the pair view, and mention-less pair
+    // messages fall back to the group addressing rule.
+    const shrunkDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const historyWithDeparted = messages([
+      message({
+        id: "hist-human-to-design",
+        senderId: "human-agent-self",
+        content: "Design-era side instruction.",
+        createdAt: "2026-05-28T11:49:00.000Z",
+        metadata: { mentions: ["agent-2"] },
+      }),
+      message({
+        id: "hist-human-plain",
+        senderId: "human-agent-self",
+        content: "Plain unaddressed line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "hist-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, please take over.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "hist-nova-reply",
+        senderId: "agent-1",
+        content: "Taking over now.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(shrunkDetail);
+    chatMocks.listChatMessages.mockResolvedValue(historyWithDeparted);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, shrunkDetail, historyWithDeparted),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("Nova, please take over.");
+    expect(container.textContent).toContain("Taking over now.");
+    expect(container.textContent).not.toContain("Design-era side instruction.");
+    expect(container.textContent).not.toContain("Plain unaddressed line.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("freezes the persisted read watermark while the pair filter narrows the DOM", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { root: filteredRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+    // Unmount flushes the tracker. The whole visit was filtered, so no
+    // unfiltered tip was ever observed — persisting the filtered DOM tip
+    // would permanently mark the hidden agent-2 message as known, and the
+    // IDB row never self-heals. The write must be skipped entirely.
+    await act(async () => filteredRoot.unmount());
+    for (const call of readStateMocks.setReadState.mock.calls) {
+      expect(call[0]).not.toBe("chat-1");
+    }
+
+    // Control: the same visit without the filter persists the true tip.
+    readStateMocks.setReadState.mockClear();
+    document.body.innerHTML = "";
+    const { root: plainRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+    await act(async () => plainRoot.unmount());
+    const chatWrites = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(chatWrites.length).toBeGreaterThan(0);
+    for (const call of chatWrites) {
+      expect(call[2]).toBe("pf-design-to-human");
+    }
+  });
+
   it("reports a failed focus window as a retryable load error, never as request age", async () => {
     const { ChatView } = await import("../chat-view.js");
     // The ordinary timeline is seeded (staleTime: Infinity), so this rejection

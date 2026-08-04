@@ -67,6 +67,19 @@ type UseReadTrackerOptions = {
   onBottomVisibleChange?: (bottomVisibleMessageId: string | null) => void;
   /** Settle time before a scroll triggers an IDB write. Default 600ms. */
   writeDebounceMs?: number;
+  /**
+   * While true, `latestKnownMessageId` stops advancing. Set by the
+   * chat-view whenever a display filter narrows the rendered DOM to a
+   * subset of the timeline: the DOM tip is then only the FILTERED tip,
+   * and persisting it would mark every hidden-but-older message as
+   * "known" — permanently swallowing its unread state (IDB writes do
+   * not self-heal). The ref holds the last tip observed while
+   * unfiltered; if the whole visit was filtered it stays null and the
+   * write is skipped entirely, leaving the previous snapshot intact.
+   * `bottomVisibleMessageId` intentionally keeps tracking the live DOM
+   * — the scroll anchor should restore what the user was looking at.
+   */
+  freezeLatestKnown?: boolean;
 };
 
 /**
@@ -145,6 +158,7 @@ export function useReadTracker({
   onWrite,
   onBottomVisibleChange,
   writeDebounceMs = 600,
+  freezeLatestKnown = false,
 }: UseReadTrackerOptions): void {
   // Latest computed bottom-visible id. Kept in a ref so write/flush
   // paths can read it without depending on React state churn.
@@ -182,6 +196,11 @@ export function useReadTracker({
   // and flushNow guard against by reading this ref live.
   const currentChatIdRef = useRef(chatId);
   currentChatIdRef.current = chatId;
+  // Live freeze flag, mirrored into a ref so recompute (bound inside a
+  // long-lived effect) reads the current value without rebinding the
+  // listeners on every filter toggle.
+  const freezeLatestKnownRef = useRef(freezeLatestKnown);
+  freezeLatestKnownRef.current = freezeLatestKnown;
 
   // Keep latest callbacks reachable from inside effects below
   // without making the effects re-run on every render.
@@ -226,9 +245,14 @@ export function useReadTracker({
       // Capture the chat tip live. flushNow reads this from the ref
       // rather than re-querying the DOM (the DOM at unmount time
       // belongs to the NEXT chat already — see latestKnownIdRef
-      // comment above).
-      const lk = findLatestMessageId(container);
-      if (lk) latestKnownIdRef.current = lk;
+      // comment above). While a display filter narrows the DOM, the
+      // "tip" is only the filtered tip — advancing on it would swallow
+      // hidden-but-older messages' unread state, so it is skipped (see
+      // `freezeLatestKnown`).
+      if (!freezeLatestKnownRef.current) {
+        const lk = findLatestMessageId(container);
+        if (lk) latestKnownIdRef.current = lk;
+      }
 
       const bottomVisible = findBottomVisibleMessageId(container);
       const bottomVisibleChanged = bottomVisible !== bottomVisibleIdRef.current;

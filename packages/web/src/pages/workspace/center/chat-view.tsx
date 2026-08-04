@@ -107,7 +107,11 @@ import {
   isTrustedGitlabDispatcherMessage,
 } from "../../../components/chat/gitlab-event-card.js";
 import { ImageRefGallery } from "../../../components/chat/image-ref-gallery.js";
-import { isPairConversationMessage, listConversedAgentIds } from "../../../components/chat/pair-conversation.js";
+import {
+  historyContainsThirdParty,
+  isPairConversationMessage,
+  listConversedAgentIds,
+} from "../../../components/chat/pair-conversation.js";
 import {
   contentStartsWithMention,
   findBlockingRequest,
@@ -2506,6 +2510,17 @@ export function ChatView({
       queryClient.invalidateQueries({ queryKey: ["need-you"] });
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      // Answering ends the transient "show earlier chat" view: the original
+      // complaint behind this feature was a chat that still looked filtered
+      // after the question was resolved, so the resolution itself restores
+      // the full timeline. The stored (explicitly chosen) filter is not
+      // touched — only the navigation-applied params clear.
+      if (searchParams.has("focus") || searchParams.has("focusMsg")) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("focus");
+        next.delete("focusMsg");
+        setSearchParams(next, { replace: true });
+      }
       scrollToBottom("smooth");
       // Leave `askBusy` true: the overlay disables itself until the resolved
       // request unmounts it, so a slow refetch can't invite a second submit.
@@ -2631,10 +2646,25 @@ export function ChatView({
   );
   const filterCandidateIds = useMemo(() => {
     if (!myAgentId) return [];
-    return listConversedAgentIds({ messages: mergedMessages, humanAgentId: myAgentId }).filter(
+    const candidates = listConversedAgentIds({ messages: mergedMessages, humanAgentId: myAgentId }).filter(
       (id) => !humanParticipantIds.has(id),
     );
-  }, [mergedMessages, myAgentId, humanParticipantIds]);
+    // In a chat whose speakers are exactly {viewer, one agent}, filtering on
+    // that agent is a no-op (the exact-pair rule keeps everything) — a dead
+    // control, so it is not offered. Departed agents in history still
+    // qualify: filtering on THEM is meaningful.
+    const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
+    if (
+      speakerIds.length === 2 &&
+      speakerIds.includes(myAgentId) &&
+      candidates.length === 1 &&
+      candidates[0] !== undefined &&
+      speakerIds.includes(candidates[0])
+    ) {
+      return [];
+    }
+    return candidates;
+  }, [mergedMessages, myAgentId, humanParticipantIds, chatDetail?.participants]);
   // A stored choice only applies while it still names someone the viewer has
   // conversed with in the loaded window — a stale entry (agent left, history
   // rotated out) silently falls back to the full view instead of blanking the
@@ -2814,21 +2844,32 @@ export function ChatView({
   //
   // The "no third party" shortcut (keep every pair-authored message, even
   // mention-less ones — a DM's plain exchange must not vanish under the
-  // group addressing rule) applies only when the chat's current speakers are
-  // EXACTLY the selected pair. Neither speaker COUNT nor the retired
-  // `type="direct"` flag is sufficient: a departed agent can still be a
-  // filter target through loaded history (or an old open request), and a
-  // two-speaker chat whose speakers are {viewer, someone else} would
-  // otherwise pour every viewer-authored message — including ones addressed
-  // to the current peer — into the supposed conversation with the departed
-  // agent. Legacy `direct` rows pass the exact-pair check whenever the
-  // shortcut is actually safe, so they need no separate branch.
+  // group addressing rule) requires BOTH:
+  //   1. the chat's CURRENT speakers are exactly the selected pair — neither
+  //      speaker count nor the retired `type="direct"` flag is sufficient
+  //      (a departed agent can still be a filter target through loaded
+  //      history or an old open request); and
+  //   2. the loaded history itself shows no third-party trace — participant
+  //      removal deletes the speaker row, so a chat that evolved
+  //      {viewer, A, B} → {viewer, A} looks pair-only by membership while
+  //      its history still holds messages to/from the departed B.
+  // Either failing keeps the group addressing rule, at the accepted cost of
+  // hiding mention-less pair messages in such chats. Legacy `direct` rows
+  // pass both checks whenever the shortcut is actually safe, so they need
+  // no separate branch.
   const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
     if (!filterAgentId || !myAgentId) return timelineSource;
     const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
     const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
     const pairIsWholeChat =
-      speakerIds.length === 2 && speakerIds.includes(myAgentId) && speakerIds.includes(filterAgentId);
+      speakerIds.length === 2 &&
+      speakerIds.includes(myAgentId) &&
+      speakerIds.includes(filterAgentId) &&
+      !historyContainsThirdParty({
+        messages: timelineSource,
+        humanAgentId: myAgentId,
+        otherAgentId: filterAgentId,
+      });
     return timelineSource.filter((message) =>
       isPairConversationMessage({
         message,
@@ -3415,6 +3456,12 @@ export function ChatView({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
+    // While the pair filter narrows the DOM, the tracker's DOM tip is only
+    // the FILTERED tip; persisting it would permanently mark hidden-but-older
+    // messages as known (the IDB row never self-heals). Freeze the
+    // latest-known watermark for the duration; the scroll anchor keeps
+    // tracking the visible DOM.
+    freezeLatestKnown: filterAgentId !== null,
     onWrite: (cid, bottomVisibleMessageId, latestKnownMessageId) => {
       queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
         chatId: cid,
@@ -4419,7 +4466,12 @@ export function ChatView({
             >
               <ListFilter aria-hidden size={14} strokeWidth={2.25} style={{ flexShrink: 0, color: "var(--fg-3)" }} />
               <span className="text-body" style={{ flex: 1 }}>
-                Showing your conversation with {chatScopedAgentName(filterAgentId)}
+                {/* An unresolvable id (hand-edited URL, identity map gap) falls
+                    back to neutral copy rather than leaking a raw UUID. */}
+                Showing your conversation with{" "}
+                {chatScopedAgentName(filterAgentId) === filterAgentId
+                  ? "this agent"
+                  : chatScopedAgentName(filterAgentId)}
                 {hiddenByFilter > 0
                   ? ` · ${hiddenByFilter} ${hiddenByFilter === 1 ? "message" : "messages"} hidden`
                   : ""}
