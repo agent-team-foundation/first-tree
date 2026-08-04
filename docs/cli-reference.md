@@ -1222,11 +1222,18 @@ choices:
 - `directory`: make it eligible under the displayed canonical directory;
 - `session`: use it only now, without a Plugin, Hook or persistent grant.
 
-The current agent displays those choices and waits for a new user reply. Apply
-must use the unchanged `planId`; identity drift forces a new plan. Global and
-directory install/update the shared Plugin and add one schema-v3 grant.
-Session-only verifies the release bundle, writes no grant, and returns only
-Read/Write Skills plus a signed opaque candidate receipt.
+Every available choice includes an authoritative `applyCommand` that is ready
+to execute unchanged. It pins the channel's portable CLI, provider, Team,
+canonical `--project-root` or `--pathless` identity, selected scope, exact
+`planId`, and non-interactive consent flag. An unavailable directory choice has
+`applyCommand: null`; human-readable output omits a command for that choice.
+
+The current agent displays the choices and waits for a new user reply, then
+runs only the selected choice's exact command. Apply must use the unchanged
+`planId`; identity drift forces a new plan. Global and directory install/update
+the shared Plugin and add one schema-v3 grant. Session-only verifies the
+release bundle, writes no grant, and returns only Read/Write Skills plus a
+signed opaque candidate receipt.
 
 Successful apply returns `currentSessionHandoff` schema v2. It contains
 immutable provider/project identity, `consumerKind: byo`, activation scope,
