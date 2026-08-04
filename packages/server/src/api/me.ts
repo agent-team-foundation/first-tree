@@ -54,7 +54,11 @@ import {
   recordCampaignActionConversion,
   resolveCampaignActionContext,
 } from "../services/onboarding-kickoff.js";
-import { getOrgContextTreeSettingState, getOrgContextTreeWithMeta } from "../services/org-settings.js";
+import {
+  getOrgContextReviewRuntime,
+  getOrgContextTreeWithMeta,
+  projectOrgContextTreeSettingState,
+} from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
@@ -150,7 +154,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         });
         continue;
       }
-      const tree = await getOrgContextTreeSettingState(scopedApp.db, organizationId);
+      const runtime = await getOrgContextReviewRuntime(scopedApp.db, organizationId);
+      const tree = projectOrgContextTreeSettingState(runtime);
       if (tree.kind !== "bound") {
         candidates.push({
           organizationId,
@@ -158,6 +163,15 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           reasonCode:
             tree.kind === "unbound" ? ("context_tree_unbound" as const) : ("context_tree_binding_invalid" as const),
           message: "The Team's Context Tree binding is unavailable.",
+        });
+        continue;
+      }
+      if (!tree.binding.provider) {
+        candidates.push({
+          organizationId,
+          outcome: "unavailable" as const,
+          reasonCode: "context_tree_provider_unresolved" as const,
+          message: "First Tree cannot resolve the provider for this Team's Context Tree binding.",
         });
         continue;
       }
@@ -405,6 +419,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       organizationId,
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
+      orientationVersion: body.orientation,
       topic: body.topic ?? "Get started with First Tree",
       // Campaign actions key on campaign + repo so the direct and onboarding
       // launchers converge; a normal kickoff remains per-(human, agent).

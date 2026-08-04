@@ -2197,6 +2197,7 @@ describe("web DOM interaction coverage", () => {
         bootstrap: expect.stringContaining("Nova, welcome aboard."),
         topic: "Get started with First Tree",
         complete: true,
+        orientation: 1,
       }),
     );
     expect(onboardingEventMocks.startOnboardingChat.mock.calls.every(([body]) => !("kind" in body))).toBe(true);
@@ -2224,7 +2225,7 @@ describe("web DOM interaction coverage", () => {
     expect(adminNoProject.container.textContent).not.toContain("Discord");
     await click(findButton(adminNoProject.container, "Start exploring"));
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenLastCalledWith(
-      expect.objectContaining({ agentUuid: "agent-1", topic: "Get started with First Tree" }),
+      expect.objectContaining({ agentUuid: "agent-1", topic: "Get started with First Tree", orientation: 1 }),
     );
     expect(onboardingEventMocks.startOnboardingChat.mock.calls.at(-1)?.[0]).not.toHaveProperty("kind");
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
@@ -2317,6 +2318,7 @@ describe("web DOM interaction coverage", () => {
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("Please help me get settled into this team on First Tree."),
         topic: "Get settled on First Tree",
+        orientation: 1,
       }),
     );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
@@ -2349,6 +2351,7 @@ describe("web DOM interaction coverage", () => {
         agentUuid: "agent-1",
         topic: "Get started with First Tree",
         complete: true,
+        orientation: 1,
       }),
     );
     expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();

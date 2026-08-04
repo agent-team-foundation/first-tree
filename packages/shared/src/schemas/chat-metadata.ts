@@ -1,6 +1,55 @@
 import { z } from "zod";
 
 /**
+ * Server-owned lifecycle for the optional first-chat Orientation handshake.
+ * It lives on the chat rather than the immutable bootstrap message so a
+ * rolling-deploy legacy retry and the first visible human continuation can
+ * serialize ownership of the single agent wake-up.
+ */
+export const FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY = "firstChatOrientationLifecycle";
+export const FIRST_CHAT_ORIENTATION_CHAT_STATES = {
+  PENDING: "pending",
+  LEGACY_STARTED: "legacy-started",
+  CONTINUED: "continued",
+} as const;
+export const firstChatOrientationChatStateSchema = z.enum([
+  FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED,
+]);
+export type FirstChatOrientationChatState = z.infer<typeof firstChatOrientationChatStateSchema>;
+
+const firstChatOrientationChatLifecycleSchema = z.object({
+  version: z.literal(1),
+  state: firstChatOrientationChatStateSchema,
+});
+
+export const firstChatOrientationChatMetadataSchema = z
+  .object({
+    [FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY]: firstChatOrientationChatLifecycleSchema,
+  })
+  .strict();
+
+export function readFirstChatOrientationChatState(
+  metadata: Record<string, unknown> | null | undefined,
+): FirstChatOrientationChatState | null {
+  const parsed = firstChatOrientationChatLifecycleSchema.safeParse(
+    metadata?.[FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY],
+  );
+  return parsed.success ? parsed.data.state : null;
+}
+
+export function withFirstChatOrientationChatState(
+  metadata: Record<string, unknown> | null | undefined,
+  state: FirstChatOrientationChatState,
+): Record<string, unknown> {
+  return {
+    ...(metadata ?? {}),
+    [FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY]: { version: 1, state },
+  };
+}
+
+/**
  * `chats.metadata` is `jsonb` at the DB layer. Without a typed contract every
  * writer was free to invent their own keys, so writers could collide on
  * shared keys (`source`, `title`). The discriminated union below pins
@@ -78,7 +127,11 @@ export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
  * the typed variants. The empty `{}` arm is `.strict()` so a caller cannot
  * sneak through `{ source: "github" }` without the required fields.
  */
-export const optionalChatMetadataSchema = z.union([z.object({}).strict(), chatMetadataSchema]);
+export const optionalChatMetadataSchema = z.union([
+  z.object({}).strict(),
+  firstChatOrientationChatMetadataSchema,
+  chatMetadataSchema,
+]);
 export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
 
 /**
@@ -88,7 +141,7 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
 export const callerWritableChatMetadataSchema = z
   .record(z.string(), z.unknown())
   .superRefine((metadata, ctx) => {
-    for (const key of ["contextTreeReviewer", "reviewerAgentUuid"] as const) {
+    for (const key of ["contextTreeReviewer", "reviewerAgentUuid", FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY] as const) {
       if (key in metadata) {
         ctx.addIssue({ code: "custom", message: `Chat metadata field '${key}' is server-owned.`, path: [key] });
       }

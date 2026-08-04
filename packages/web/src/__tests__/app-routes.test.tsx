@@ -201,6 +201,9 @@ vi.mock("../pages/settings-github-preview.js", () => ({
 }));
 vi.mock("../pages/setup-preview.js", () => ({ SetupPreviewPage: () => <div>setup preview</div> }));
 vi.mock("../pages/onboarding-preview.js", () => ({ OnboardingPreviewPage: () => <div>onboarding preview</div> }));
+vi.mock("../pages/onboarding-orientation-preview.js", () => ({
+  OnboardingOrientationPreviewPage: () => <div>onboarding orientation preview</div>,
+}));
 vi.mock("../pages/context-tree-setup-preview.js", () => ({
   ContextTreeSetupPreviewPage: () => (
     <div data-testid="context-tree-setup-preview-mock">context tree setup preview</div>
@@ -562,6 +565,9 @@ describe("App routes", () => {
     await resetRenderedApp();
 
     expect(await renderAppAt("/preview/onboarding")).toContain("onboarding preview");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/preview/onboarding-orientation")).toContain("onboarding orientation preview");
     await resetRenderedApp();
 
     expect(await renderAppAt("/preview/team")).toContain("team preview");

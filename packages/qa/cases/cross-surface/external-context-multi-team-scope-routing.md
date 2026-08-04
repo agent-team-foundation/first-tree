@@ -46,13 +46,18 @@ full Tree is read before one candidate is fixed.
    `selectionBlocked: true`, an unconditional user question, no automatic
    selection of the readable candidate, and that the unavailable candidate
    itself cannot be selected.
-8. Move the binding branch or revoke membership between route and Read.
-   Confirm the opaque candidate is rejected and the task routes again.
-9. Change cwd after handoff and after selection. Confirm the immutable provider
+8. Store a valid legacy binding for the selected Team without `provider`, using
+   each supported HTTPS, SSH URL, and scp-like transport in turn. Confirm route
+   and the member-safe snapshot authority return the same resolved `provider`,
+   repository and branch, then materialize and read the route-pinned commit.
+9. Change the provider, repository or branch, move the binding branch, and
+   revoke membership between route and Read. Confirm every changed authority
+   is rejected before Git fetch or full Tree content and the task routes again.
+10. Change cwd after handoff and after selection. Confirm the immutable provider
    project and selected receipt remain authoritative.
-10. Seed a new Tree from an explicit Team and confirm Phase 1 proposes a
+11. Seed a new Tree from an explicit Team and confirm Phase 1 proposes a
     natural-language SCOPE with no fixed section template.
-11. Place a v2 context store in a disposable home. Confirm it is atomically
+12. Place a v2 context store in a disposable home. Confirm it is atomically
     backed up, v3 starts empty, and the user must authorize again.
 
 ## Observe
@@ -67,15 +72,17 @@ full Tree is read before one candidate is fixed.
   Multiple or zero clear matches produce a user question.
 - Selected Read is pinned to the exact SCOPE/binding commit and never falls
   back to another Team, cached authority or changed cwd.
+- A providerless historical binding is normalized identically by route and
+  snapshot authority; provider, repository and branch remain strict guards.
 
 ## Expected Result
 
-`PASS`: both providers satisfy all three scopes and every routing/failure case
-with exact evidence and no preselection Tree read.
+`PASS`: both providers satisfy all three scopes, providerless normalization and
+every routing/failure case with exact evidence and no preselection Tree read.
 
 `FAIL`: session-only persists state, a Team is inferred outside the candidate
-set, lower priority wins, SCOPE instructions execute, ambiguity is guessed, or
-Read crosses Team/commit.
+set, lower priority wins, SCOPE instructions execute, ambiguity is guessed,
+route and snapshot project different bindings, or Read crosses Team/commit.
 
 `BLOCKED`: two disposable real Teams, provider authentication, or exact Tree
 fixtures cannot be prepared.
@@ -86,5 +93,6 @@ does not prove which SCOPE and exact commit were consumed.
 ## Evidence
 
 Keep redacted plan/apply/handoff/router/Read envelopes, grant stores and backup,
-filesystem before/after lists, provider transcripts, exact commits, authority
-request ids and snapshots showing that only SCOPE existed before selection.
+filesystem before/after lists, provider transcripts, stored legacy binding,
+normalized route/snapshot bindings, exact commits, authority request ids and
+snapshots showing that only SCOPE existed before selection.

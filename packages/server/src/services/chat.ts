@@ -4,10 +4,12 @@ import {
   AGENT_STATUSES,
   AGENT_TYPES,
   CHAT_ENGAGEMENT_STATUSES,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES,
   type LegacyCreateChat,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
   type SendMessage,
+  withFirstChatOrientationChatState,
 } from "@first-tree/shared";
 import { and, asc, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -68,6 +70,10 @@ export type CreateTaskChatInput = {
   initialMessage: SendMessage;
   /** Trusted internal capability forwarded only for Context Reviewer bootstrap. */
   allowContextReviewRun?: boolean;
+  /** Trusted internal capability forwarded only for first-chat Orientation. */
+  allowFirstChatOrientation?: boolean;
+  /** Persist the addressed opening message as context without waking its recipient. */
+  silentInitialMessage?: boolean;
   /** Return session/kick effects to a caller that owns a wider transaction. */
   deferPostCommitEffects?: boolean;
   source: "agent" | "manual";
@@ -390,7 +396,12 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
           effectiveSenderReason,
         }
       : {};
-  const chatMetadata = input.source === "agent" ? { source: "agent" as const, ...provenance } : {};
+  const chatMetadata =
+    input.source === "agent"
+      ? { source: "agent" as const, ...provenance }
+      : input.allowFirstChatOrientation
+        ? withFirstChatOrientationChatState({}, FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING)
+        : {};
   const messageMetadata = {
     ...((input.initialMessage.metadata ?? {}) as Record<string, unknown>),
     ...provenance,
@@ -409,6 +420,8 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     options: {
       normalizeMentionsInContent: input.source === "agent",
       allowContextReviewRun: input.allowContextReviewRun,
+      allowFirstChatOrientation: input.allowFirstChatOrientation,
+      forceSilentFanOut: input.silentInitialMessage,
     },
     participants: allSpeakerRows.map(toSendIntentParticipant),
   });
@@ -510,6 +523,8 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         deferPostCommitEffects: true,
         normalizeMentionsInContent: input.source === "agent",
         allowContextReviewRun: input.allowContextReviewRun,
+        allowFirstChatOrientation: input.allowFirstChatOrientation,
+        forceSilentFanOut: input.silentInitialMessage,
       });
       if (!sent.deferredPostCommitEffects) {
         throw new Error("Keyed task-chat bootstrap did not return deferred post-commit effects");
@@ -573,6 +588,8 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
   const { message, recipients } = await sendMessage(db, chatId, effectiveSenderId, initialMessage, {
     normalizeMentionsInContent: input.source === "agent",
     allowContextReviewRun: input.allowContextReviewRun,
+    allowFirstChatOrientation: input.allowFirstChatOrientation,
+    forceSilentFanOut: input.silentInitialMessage,
   });
   const participants = await db
     .select()

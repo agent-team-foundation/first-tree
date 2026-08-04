@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -136,6 +137,74 @@ describe("org-scoped member Context activation", () => {
           outcome: "unavailable",
           reasonCode: "not_member",
           message: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it("projects one normalized binding for providerless route and member-safe snapshot authority", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const legacyBinding = {
+      repo: "git@github.com:acme/context-tree.git",
+      branch: "main",
+    };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: legacyBinding,
+      version: 3,
+      updatedBy: admin.userId,
+    });
+
+    const settings = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/settings/context_tree`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toEqual({ provider: "github", ...legacyBinding });
+
+    const routed = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/context-activation/candidates/validate",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { schemaVersion: 1, organizationIds: [admin.organizationId] },
+    });
+    expect(routed.statusCode).toBe(200);
+    expect(routed.json()).toMatchObject({
+      schemaVersion: 1,
+      candidates: [
+        {
+          organizationId: admin.organizationId,
+          outcome: "connected",
+          binding: settings.json(),
+        },
+      ],
+    });
+
+    await app.db
+      .update(organizationSettings)
+      .set({ value: { ...legacyBinding, provider: "gitlab" } })
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    const changedProvider = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/context-activation/candidates/validate",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { schemaVersion: 1, organizationIds: [admin.organizationId] },
+    });
+    expect(changedProvider.statusCode).toBe(200);
+    expect(changedProvider.json()).toMatchObject({
+      candidates: [
+        {
+          organizationId: admin.organizationId,
+          outcome: "unavailable",
+          reasonCode: "context_tree_provider_unresolved",
         },
       ],
     });

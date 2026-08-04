@@ -5,6 +5,9 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   encodeProviderRetryEventMessage,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES,
+  FIRST_CHAT_ORIENTATION_METADATA_KEY,
+  withFirstChatOrientationChatState,
 } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useLayoutEffect } from "react";
@@ -818,6 +821,188 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("renders the server-marked Orientation once and starts guidance with a visible user message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.\n\nPlease help me get started with First Tree.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    chatMocks.listChatMessages.mockResolvedValue(messages([bootstrap]));
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={chatDetail()} />,
+      (queryClient) => seedChat(queryClient, chatDetail(), messages([bootstrap])),
+      "/",
+    );
+
+    await waitForText(container, "Skip introduction and start");
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!composer) throw new Error("Composer textarea missing");
+    await setValue(composer, "A draft I still want to send");
+    chatMocks.listChatMessages.mockResolvedValue(
+      messages([
+        bootstrap,
+        message({
+          id: "orientation-ready-message",
+          senderId: "human-agent-self",
+          content: "I'm ready. Please help me get started with First Tree.",
+          metadata: { mentions: ["agent-1"] },
+          createdAt: "2026-05-28T11:56:00.000Z",
+        }),
+      ]),
+    );
+    await click(buttonByText(container, "Skip introduction and start"));
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "I'm ready. Please help me get started with First Tree.",
+      ["agent-1"],
+    );
+    expect(composer.value).toBe("A draft I still want to send");
+    await waitForText(container, "Watch again");
+    expect(container.querySelectorAll('[data-onboarding-orientation="pending"]')).toHaveLength(0);
+
+    await act(async () => root.unmount());
+  });
+
+  it("treats a later human message to the original target as optimistic completion", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-completed",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const directMessage = message({
+      id: "orientation-direct-message",
+      senderId: "human-agent-self",
+      content: "Start by reading /projects/acme.",
+      metadata: { mentions: ["agent-1"] },
+      createdAt: "2026-05-28T11:56:00.000Z",
+    });
+    const page = messages([bootstrap, directMessage]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={chatDetail()} />,
+      (queryClient) => seedChat(queryClient, chatDetail(), page),
+      "/",
+    );
+
+    await waitForText(container, "Watch again");
+    expect(container.textContent).toContain("Start by reading /projects/acme.");
+    expect(container.textContent).not.toContain("Skip introduction and start");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps Orientation pending when a later human message targets another participant", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-wrong-recipient",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const messageToAnotherParticipant = message({
+      id: "orientation-wrong-recipient-message",
+      senderId: "human-agent-self",
+      content: "Please inspect the deployment notes.",
+      metadata: { mentions: ["agent-2"] },
+      createdAt: "2026-05-28T11:56:00.000Z",
+    });
+    const page = messages([bootstrap, messageToAnotherParticipant]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={chatDetail()} />,
+      (queryClient) => seedChat(queryClient, chatDetail(), page),
+      "/",
+    );
+
+    await waitForText(container, "Skip introduction and start");
+    expect(container.querySelectorAll('[data-onboarding-orientation="pending"]')).toHaveLength(1);
+    expect(container.textContent).not.toContain("Watch again");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("treats the server-owned continued lifecycle as complete without a later visible own message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-server-continued",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const continuedChat = chatDetail({
+      metadata: withFirstChatOrientationChatState({}, FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED),
+    });
+    const page = messages([bootstrap]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={continuedChat} />,
+      (queryClient) => seedChat(queryClient, continuedChat, page),
+      "/",
+    );
+
+    await waitForText(container, "Watch again");
+    expect(container.textContent).not.toContain("Skip introduction and start");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("hides Orientation chrome after a legacy retry owns the first wake", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-legacy-started",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const legacyStartedChat = chatDetail({
+      metadata: withFirstChatOrientationChatState({}, FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED),
+    });
+    const page = messages([bootstrap]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={legacyStartedChat} />,
+      (queryClient) => seedChat(queryClient, legacyStartedChat, page),
+      "/",
+    );
+
+    await waitForText(container, "Nova, welcome aboard.");
+    expect(container.querySelector("[data-onboarding-orientation]")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("renders typed GitHub/GitLab header links only for anchored provider chats", async () => {
     const { ChatView } = await import("../chat-view.js");
     const cases = [

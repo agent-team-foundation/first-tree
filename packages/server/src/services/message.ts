@@ -6,12 +6,18 @@ import {
   CLI_BODY_ORIGINS,
   CRON_TRIGGER_METADATA_KEY,
   extractCaption,
+  FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES,
+  FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY,
+  FIRST_CHAT_ORIENTATION_METADATA_KEY,
   imageBatchRefContentSchema,
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   RUNTIME_NOTICE_METADATA_KEY,
+  readFirstChatOrientationChatState,
+  readFirstChatOrientationMessageMetadata,
   requestResolutionSchema,
   type SendMessage,
   scanMentionTokens,
@@ -78,12 +84,17 @@ function stripUntrustedMetadataKeys(
   const shouldStripAskAgent = ASK_AGENT_METADATA_KEY in meta;
   const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
   const shouldStripEditedAt = "editedAt" in meta;
+  const shouldStripFirstChatOrientationContinuation = FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY in meta;
+  const shouldStripFirstChatOrientation =
+    !options.allowFirstChatOrientation && FIRST_CHAT_ORIENTATION_METADATA_KEY in meta;
   if (
     !shouldStripSystemSender &&
     !shouldStripAddressedAgentIds &&
     !shouldStripAskAgent &&
     !shouldStripCliBodyOrigin &&
-    !shouldStripEditedAt
+    !shouldStripEditedAt &&
+    !shouldStripFirstChatOrientationContinuation &&
+    !shouldStripFirstChatOrientation
   ) {
     return meta;
   }
@@ -94,6 +105,8 @@ function stripUntrustedMetadataKeys(
         key !== ASK_AGENT_METADATA_KEY &&
         key !== CLI_BODY_ORIGIN_METADATA_KEY &&
         key !== "editedAt" &&
+        key !== FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY &&
+        (options.allowFirstChatOrientation || key !== FIRST_CHAT_ORIENTATION_METADATA_KEY) &&
         (options.allowSystemSender || key !== "systemSender"),
     ),
   );
@@ -326,6 +339,18 @@ export type DeferredSendMessagePostCommitEffects = {
 
 export type SendMessageOptions = {
   /**
+   * Trusted internal delivery mode that persists an explicitly addressed
+   * message as replayable context without waking any recipient. The ordinary
+   * onboarding kickoff uses it until the user's next visible turn.
+   */
+  forceSilentFanOut?: boolean;
+  /**
+   * Trusted onboarding-kickoff capability for the presentation-only first-chat
+   * Orientation marker. Ordinary message writes always strip the key so a
+   * caller cannot manufacture onboarding chrome in an unrelated chat.
+   */
+  allowFirstChatOrientation?: boolean;
+  /**
    * Trusted request-scoped Ask agent send. The route supplies only the
    * original request id; this service re-validates the still-open request,
    * target human, and original active asker inside the message transaction,
@@ -437,6 +462,8 @@ export type SendMessageOptions = {
    * with `runDeferredSendMessagePostCommitEffects` after commit.
    */
   deferPostCommitEffects?: boolean;
+  /** Test-only barrier for deterministic mixed-version lock-order coverage. */
+  beforeFirstChatOrientationLockForTest?: () => Promise<void>;
 };
 
 export type SendIntentParticipant = {
@@ -589,7 +616,7 @@ export function preflightMessageSendIntent(input: {
       }
     : {
         skipMentionEnforcement: false,
-        forceSilentFanOut: false,
+        forceSilentFanOut: options.forceSilentFanOut === true,
       };
   // Persist the notify-worthy live non-human agents — the recipients whose
   // sessions the send is expected to wake. `mentions` only carries explicit @s /
@@ -789,16 +816,6 @@ async function sendMessageInner(
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
-    const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
-    // Trial chat state is a server-owned single-run state machine. Lock and
-    // re-read only those rows so concurrent outbox writes cannot apply stale
-    // running-state transitions after another send completes the trial.
-    const chatRow = initialTrial
-      ? (
-          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
-        )[0]
-      : chatRowSnapshot;
-
     const prepared = preflightMessageSendIntent({
       chatId,
       senderId,
@@ -809,6 +826,99 @@ async function sendMessageInner(
     });
     const { content: outboundContent, metadata: preparedMetadata, mentionedAgentIds: mergedMentions } = prepared;
     let metadataToStore = preparedMetadata;
+    const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
+    const initialOrientationState = readFirstChatOrientationChatState(chatRowSnapshot?.metadata);
+    const mayContinueFirstChatOrientation =
+      senderRow.type === "human" &&
+      !options.allowFirstChatOrientation &&
+      (initialOrientationState === FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING ||
+        initialOrientationState === FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED);
+    if (mayContinueFirstChatOrientation) {
+      await options.beforeFirstChatOrientationLockForTest?.();
+    }
+    // Trial chat state is a server-owned single-run state machine. Lock and
+    // re-read only stateful rows. First-chat Orientation shares this same row
+    // lock with legacy kickoff reuse so exactly one transition owns the wake.
+    const chatRow =
+      initialTrial || mayContinueFirstChatOrientation
+        ? (
+            await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+          )[0]
+        : chatRowSnapshot;
+    const lockedOrientationState = readFirstChatOrientationChatState(chatRow?.metadata);
+    let orientationTargetAgentId: string | null = null;
+    let openingMessage: { id: string; metadata: Record<string, unknown> } | undefined;
+    if (
+      mayContinueFirstChatOrientation &&
+      (lockedOrientationState === FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING ||
+        lockedOrientationState === FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED)
+    ) {
+      [openingMessage] = await tx
+        .select({ id: messages.id, metadata: messages.metadata })
+        .from(messages)
+        .where(eq(messages.chatId, chatId))
+        .orderBy(asc(messages.createdAt), asc(messages.id))
+        .limit(1);
+      const openingMentions = Array.isArray(openingMessage?.metadata.mentions)
+        ? openingMessage.metadata.mentions.filter((value): value is string => typeof value === "string")
+        : [];
+      const candidateTargetAgentId = openingMentions.length === 1 ? openingMentions[0] : undefined;
+      if (
+        !openingMessage ||
+        readFirstChatOrientationMessageMetadata(openingMessage.metadata) === null ||
+        !candidateTargetAgentId
+      ) {
+        throw new Error(`Unexpected: pending first-chat Orientation "${chatId}" has no trusted target bootstrap`);
+      }
+      orientationTargetAgentId = candidateTargetAgentId;
+    }
+    const routedRecipientIds = new Set([
+      ...mergedMentions.filter((id) => id !== senderId),
+      ...(options.addressedToAgentIds ?? []).filter((id) => id !== senderId),
+    ]);
+    const continuesFirstChatOrientation =
+      orientationTargetAgentId !== null &&
+      !prepared.forceSilentFanOut &&
+      routedRecipientIds.has(orientationTargetAgentId);
+
+    if (continuesFirstChatOrientation) {
+      if (lockedOrientationState === FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED) {
+        const recipientInboxIds = participants
+          .filter((participant) => participant.agentId === orientationTargetAgentId && participant.status === "active")
+          .map((participant) => participant.inboxId);
+        if (openingMessage && recipientInboxIds.length > 0) {
+          // A legacy retry may already have signalled the silent bootstrap. If
+          // the agent has not claimed it, transfer the pending trigger to this
+          // substantive human turn so inbox replay delivers bootstrap context
+          // followed by the user's actual message. If it was already claimed,
+          // this update is a no-op and the new message wakes as a normal next
+          // turn; user content is never left behind as silent future context.
+          await tx
+            .update(inboxEntries)
+            .set({ notify: false })
+            .where(
+              and(
+                eq(inboxEntries.chatId, chatId),
+                eq(inboxEntries.messageId, openingMessage.id),
+                eq(inboxEntries.status, "pending"),
+                eq(inboxEntries.notify, true),
+                inArray(inboxEntries.inboxId, recipientInboxIds),
+              ),
+            );
+        }
+      }
+      await tx
+        .update(chats)
+        .set({
+          metadata: sql`jsonb_set(
+            ${chats.metadata},
+            ARRAY[${FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY}]::text[],
+            ${JSON.stringify({ version: 1, state: FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED })}::jsonb,
+            true
+          )`,
+        })
+        .where(eq(chats.id, chatId));
+    }
 
     // Ask agent is a constrained clarification turn under an existing open
     // request. Re-check every relation under the same transaction that stores
@@ -872,6 +982,16 @@ async function sendMessageInner(
       };
     }
 
+    if (continuesFirstChatOrientation) {
+      metadataToStore = {
+        ...metadataToStore,
+        [FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY]: {
+          version: 1,
+          targetAgentId: orientationTargetAgentId,
+        },
+      };
+    }
+
     assertLandingCampaignTrialMessageAllowed({
       chat: chatRow,
       senderId,
@@ -923,8 +1043,9 @@ async function sendMessageInner(
     //    - explicit wake triggers `notify=true`:
     //        * agentId in `addressedToAgentIds` (system-routed override), OR
     //        * agentId in `metadata.mentions` (mergedMentions, post-resolve).
-    //    - `purposeProfile.forceSilentFanOut` (today = `purpose ===
-    //      "agent-final-text"`) forces notify=false for every row regardless.
+    //    - `purposeProfile.forceSilentFanOut` (agent final-text or another
+    //      explicitly trusted internal silent-delivery path) forces
+    //      notify=false for every row regardless.
     //      Inbox entries are still written so history replay still works;
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);

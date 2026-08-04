@@ -67,6 +67,13 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
+    /**
+     * Web capability handshake for the optional first-chat Orientation UI.
+     * Version 1 asks the server to mark the visible bootstrap and defer the
+     * target agent until the user's next visible turn. Omitted preserves the
+     * legacy immediate-wake behavior during a rolling deployment.
+     */
+    orientation: z.literal(1).optional(),
     // How the membership's onboarding state is stamped once the kickoff chat
     // exists. Takes precedence over the older boolean `complete` when both are
     // present:
@@ -95,6 +102,13 @@ export const kickoffOnboardingSchema = z
   .superRefine((value, ctx) => {
     if (value.campaignAction && value.scanFixRepoSlug) {
       ctx.addIssue({ code: "custom", message: "Use campaignAction or scanFixRepoSlug, not both." });
+    }
+    if (value.orientation && (value.campaignAction || value.scanFixRepoSlug || value.campaign)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["orientation"],
+        message: "Orientation is only available for ordinary onboarding kickoffs.",
+      });
     }
   });
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;

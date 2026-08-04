@@ -48,12 +48,12 @@ CI would additionally need a `MOMENTIC_API_KEY` secret.
 
 **What leaves your machine.** Resolving a natural-language step and evaluating a
 model-backed assertion sends page context — DOM snapshot and screenshot — to
-Momentic's service. Runs against `first-tree-local` therefore transmit whatever
-is on screen in your local dev app. That is fine for the disposable
-`e2e-user-<ms>` identities these tests create, but do not point this suite at an
-environment holding real user data. `npx momentic results upload` additionally
-publishes a run's screenshots and video to the Momentic dashboard; nothing is
-uploaded unless you run that command.
+Momentic's service. Runs against `local` therefore transmit whatever is on
+screen in your local dev app. That is fine for the disposable `e2e-user-<ms>`
+identities these tests create, but do not point this suite at an environment
+holding real user data. `npx momentic results upload` additionally publishes a
+run's screenshots and video to the Momentic dashboard; nothing is uploaded
+unless you run that command.
 
 ### 2. Local First Tree stack
 
@@ -68,7 +68,7 @@ pnpm --filter @first-tree/server dev          # :8000, enables the dev callback
 pnpm --filter @first-tree/web dev --host 127.0.0.1   # :5173
 ```
 
-The `first-tree-local` environment in [momentic.config.yaml](../momentic.config.yaml)
+The `local` environment in [momentic.config.yaml](../momentic.config.yaml)
 points at `http://127.0.0.1:5173` (Vite proxies `/api/v1` to the server) and
 passes `DATABASE_URL` through for the fixtures below.
 
@@ -93,7 +93,7 @@ the local stack and the local tests do not touch staging.
 | --- | --- | --- |
 | `registration-new-user.test.yaml` | local | A brand-new account is created and lands on onboarding step 1 |
 | `onboarding-complete-setup.test.yaml` | local | The whole first-run journey: sign up → create team → connect a computer → create the first agent → start the kickoff chat → land in the workspace |
-| `dev-cloud-sign-in-available.test.yaml` | dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
+| `dev-cloud-sign-in-available.test.yaml` | first-tree-dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
 
 `modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow. Each run
 registers a **new** user (`e2e-user-<ms>`); reusing an identity would sign in as
@@ -104,7 +104,7 @@ by design — they accumulate rows in the local dev database.
 
 | Environment | Target | Runs |
 | --- | --- | --- |
-| `first-tree-local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
+| `local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
 | `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke check only |
 
 The registration and onboarding tests **cannot** run against a deployed

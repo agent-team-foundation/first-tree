@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import {
+  FIRST_CHAT_ORIENTATION_CHAT_STATES,
+  FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY,
+  readFirstChatOrientationChatState,
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -10,6 +15,9 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { createAgent } from "../services/agent.js";
+import { addParticipant, removeParticipant } from "../services/chat.js";
+import { pollInbox } from "../services/inbox.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
@@ -59,6 +67,7 @@ describe("POST /me/onboarding/kickoff", () => {
         agentUuid: agent.uuid,
         bootstrap: "Reflect these repos.",
         topic: "Get started with First Tree",
+        orientation: 1,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -69,11 +78,13 @@ describe("POST /me/onboarding/kickoff", () => {
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:onboarding`);
     expect(chat?.topic).toBe("Get started with First Tree");
+    expect(readFirstChatOrientationChatState(chat?.metadata)).toBe(FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING);
 
     // Bootstrap message landed.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.content).toBe("Reflect these repos.");
+    expect(msgs[0]?.metadata).toMatchObject({ firstChatOrientation: { version: 1 } });
 
     // Completion stamped, with the suppressor + reason (coupled invariant).
     const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
@@ -82,7 +93,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(member?.onboardingSuppressedReason).toBe("completed");
   });
 
-  it("sends kickoff as a visible task message that wakes the target agent", async () => {
+  it("keeps an Orientation bootstrap replayable until the user's next visible turn", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
@@ -96,6 +107,7 @@ describe("POST /me/onboarding/kickoff", () => {
         agentUuid: agent.uuid,
         bootstrap: "First Tree is getting Bootstrap Agent up to speed on acme/web.",
         topic: "Get started with First Tree",
+        orientation: 1,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -111,8 +123,8 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(msg?.format).toBe("text");
     expect(msg?.content).toBe("First Tree is getting Bootstrap Agent up to speed on acme/web.");
     expect(msg?.metadata).toEqual({
+      firstChatOrientation: { version: 1 },
       mentions: [agent.uuid],
-      addressedAgentIds: [agent.uuid],
     });
 
     const deliveries = await app.db
@@ -120,8 +132,293 @@ describe("POST /me/onboarding/kickoff", () => {
       .from(inboxEntries)
       .where(eq(inboxEntries.messageId, msg?.id ?? ""));
     expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]?.notify).toBe(true);
+    expect(deliveries[0]?.notify).toBe(false);
+
+    // Orientation is the deferred activation instruction, so it must survive
+    // beyond the generic 24-hour silent-context replay window.
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(inboxEntries.messageId, msg?.id ?? ""));
+
+    const continued = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "I'm ready. Please help me get started with First Tree.",
+      metadata: { mentions: [agent.uuid] },
+      source: "web",
+    });
+    const [continuedChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(continuedChat?.metadata)).toBe(
+      FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED,
+    );
+    expect(continued.message.metadata).toMatchObject({
+      [FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY]: { version: 1 },
+    });
+    const inbox = await pollInbox(app.db, agent.inboxId, 10);
+    const wake = inbox.find((entry) => entry.messageId === continued.message.id);
+    expect(wake?.message.content).toBe("I'm ready. Please help me get started with First Tree.");
+    expect(wake?.message.precedingMessages).toEqual([
+      expect.objectContaining({
+        id: msg?.id,
+        content: "First Tree is getting Bootstrap Agent up to speed on acme/web.",
+      }),
+    ]);
     expect(res.json<{ chatId: string }>().chatId).toBe(chatId);
+  });
+
+  it("does not let another participant consume a pending Orientation handoff", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const targetAgent = await createOrgAgent(app, admin);
+    const otherAgent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: targetAgent.uuid,
+        bootstrap: "First Tree is getting the onboarding agent up to speed.",
+        topic: "Get started with First Tree",
+        orientation: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+    await addParticipant(app.db, chatId, admin.humanAgentUuid, { agentId: otherAgent.uuid });
+
+    const unrelated = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: `@${otherAgent.name} please handle this separate question.`,
+      metadata: { mentions: [otherAgent.uuid] },
+      source: "web",
+    });
+    const [pendingChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(pendingChat?.metadata)).toBe(FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING);
+    expect(unrelated.message.metadata).not.toHaveProperty(FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY);
+    const otherWake = (await pollInbox(app.db, otherAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === unrelated.message.id,
+    );
+    expect(otherWake?.message.precedingMessages).toEqual([]);
+    expect(await pollInbox(app.db, targetAgent.inboxId, 10)).toEqual([]);
+
+    const continuation = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "I'm ready. Please help me get started with First Tree.",
+      metadata: { mentions: [targetAgent.uuid] },
+      source: "web",
+    });
+    expect(continuation.message.metadata).toMatchObject({
+      [FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY]: {
+        version: 1,
+        targetAgentId: targetAgent.uuid,
+      },
+    });
+    const targetWake = (await pollInbox(app.db, targetAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === continuation.message.id,
+    );
+    expect(targetWake?.message.precedingMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: "First Tree is getting the onboarding agent up to speed." }),
+      ]),
+    );
+  });
+
+  it("keeps ordinary messages working after the original Orientation target is removed", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const targetAgent = await createOrgAgent(app, admin);
+    const otherAgent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: targetAgent.uuid,
+        bootstrap: "First Tree is getting the onboarding agent up to speed.",
+        topic: "Get started with First Tree",
+        orientation: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+    await addParticipant(app.db, chatId, admin.humanAgentUuid, { agentId: otherAgent.uuid });
+    await removeParticipant(app.db, chatId, admin.humanAgentUuid, targetAgent.uuid);
+
+    const unrelated = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: `@${otherAgent.name} please handle this separate question.`,
+      metadata: { mentions: [otherAgent.uuid] },
+      source: "web",
+    });
+    const [pendingChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(pendingChat?.metadata)).toBe(FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING);
+    expect(unrelated.message.metadata).not.toHaveProperty(FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY);
+    const otherWake = (await pollInbox(app.db, otherAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === unrelated.message.id,
+    );
+    expect(otherWake?.message.precedingMessages).toEqual([]);
+
+    await expect(
+      sendMessage(app.db, chatId, admin.humanAgentUuid, {
+        format: "text",
+        content: "Please continue the onboarding handoff.",
+        metadata: { mentions: [targetAgent.uuid] },
+        source: "web",
+      }),
+    ).rejects.toThrow("Sending a message requires an explicit recipient.");
+  });
+
+  it("replays a pending Orientation bootstrap only to its original target on a multi-recipient continuation", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const targetAgent = await createOrgAgent(app, admin);
+    const otherAgent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: targetAgent.uuid,
+        bootstrap: "First Tree is getting the onboarding agent up to speed.",
+        topic: "Get started with First Tree",
+        orientation: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+    await addParticipant(app.db, chatId, admin.humanAgentUuid, { agentId: otherAgent.uuid });
+
+    const continuation = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "Let's start and keep the other agent informed.",
+      metadata: { mentions: [targetAgent.uuid, otherAgent.uuid] },
+      source: "web",
+    });
+    const [continuedChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(continuedChat?.metadata)).toBe(
+      FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED,
+    );
+    expect(continuation.message.metadata).toMatchObject({
+      [FIRST_CHAT_ORIENTATION_CONTINUATION_METADATA_KEY]: {
+        version: 1,
+        targetAgentId: targetAgent.uuid,
+      },
+    });
+
+    const targetWake = (await pollInbox(app.db, targetAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === continuation.message.id,
+    );
+    expect(targetWake?.message.precedingMessages).toEqual([
+      expect.objectContaining({ content: "First Tree is getting the onboarding agent up to speed." }),
+    ]);
+    const otherWake = (await pollInbox(app.db, otherAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === continuation.message.id,
+    );
+    expect(otherWake?.message.precedingMessages).toEqual([]);
+  });
+
+  it("does not replay a completed Orientation bootstrap to a later participant outside the normal window", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const laterAgent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "First Tree is getting Bootstrap Agent up to speed on acme/web.",
+        topic: "Get started with First Tree",
+        orientation: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+
+    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "I'm ready. Please help me get started with First Tree.",
+      metadata: { mentions: [agent.uuid] },
+      source: "web",
+    });
+    await addParticipant(app.db, chatId, admin.humanAgentUuid, { agentId: laterAgent.uuid });
+
+    const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: stale })
+      .where(and(eq(inboxEntries.inboxId, laterAgent.inboxId), eq(inboxEntries.chatId, chatId)));
+
+    const trigger = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: `@${laterAgent.name} please review the current task.`,
+      metadata: { mentions: [laterAgent.uuid] },
+      source: "web",
+    });
+    const delivery = (await pollInbox(app.db, laterAgent.inboxId, 10)).find(
+      (entry) => entry.messageId === trigger.message.id,
+    );
+    expect(delivery?.message.precedingMessages).toEqual([]);
+  });
+
+  it("preserves the immediate wake contract for clients that do not opt into Orientation", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Please help me get started with First Tree.",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const { chatId } = res.json<{ chatId: string }>();
+    const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+    expect(msg?.metadata).not.toHaveProperty("firstChatOrientation");
+    const [delivery] = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, msg?.id ?? ""))
+      .limit(1);
+    expect(delivery?.notify).toBe(true);
+  });
+
+  it("does not add the Orientation marker to a campaign action with a task already chosen", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Fix the selected production-scan findings.",
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/app" },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const { chatId } = res.json<{ chatId: string }>();
+    const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+    expect(msg?.metadata).not.toHaveProperty("firstChatOrientation");
   });
 
   it("can defer completion for multi-chat onboarding until the caller finishes all required chats", async () => {
@@ -280,6 +577,7 @@ describe("POST /me/onboarding/kickoff", () => {
       agentUuid: agent.uuid,
       bootstrap: "Hello team.",
       topic: "Get started with First Tree",
+      orientation: 1,
     };
 
     const first = await app.inject({
@@ -322,6 +620,200 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(secondMember?.onboardingCompletedAt?.getTime()).toBe(firstStamp?.getTime());
   });
 
+  it("reconciles an Orientation chat when a legacy client retries without the capability", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const basePayload = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      bootstrap: "Please help me get started with First Tree.",
+      topic: "Get started with First Tree",
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...basePayload, orientation: 1 },
+    });
+    const chatId = first.json<{ chatId: string }>().chatId;
+
+    const legacyRetry = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: basePayload,
+    });
+    expect(legacyRetry.statusCode).toBe(200);
+    expect(legacyRetry.json<{ chatId: string }>().chatId).toBe(chatId);
+
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0]?.metadata).toHaveProperty("firstChatOrientation", { version: 1 });
+
+    const [reconciledChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(reconciledChat?.metadata)).toBe(
+      FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED,
+    );
+
+    const [delivery] = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, chatMessages[0]?.id ?? ""))
+      .limit(1);
+    expect(delivery?.notify).toBe(true);
+    const inbox = await pollInbox(app.db, agent.inboxId, 10);
+    expect(inbox).toContainEqual(expect.objectContaining({ messageId: chatMessages[0]?.id }));
+
+    const continued = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "Please inspect /projects/acme.",
+      metadata: { mentions: [agent.uuid] },
+      source: "web",
+    });
+    const nextInbox = await pollInbox(app.db, agent.inboxId, 10);
+    expect(nextInbox).toContainEqual(
+      expect.objectContaining({
+        messageId: continued.message.id,
+        message: expect.objectContaining({ content: "Please inspect /projects/acme." }),
+      }),
+    );
+  });
+
+  it("does not promote the Orientation bootstrap after a visible continuation owns the wake", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const basePayload = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      bootstrap: "Please help me get started with First Tree.",
+      topic: "Get started with First Tree",
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...basePayload, orientation: 1 },
+    });
+    const chatId = first.json<{ chatId: string }>().chatId;
+    const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+
+    const continued = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: "I'm ready. Please help me get started with First Tree.",
+      metadata: { mentions: [agent.uuid] },
+      source: "web",
+    });
+
+    const legacyRetry = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: basePayload,
+    });
+    expect(legacyRetry.statusCode).toBe(200);
+    expect(legacyRetry.json<{ chatId: string }>().chatId).toBe(chatId);
+
+    const deliveries = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId));
+    expect(deliveries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ messageId: bootstrap?.id, notify: false }),
+        expect.objectContaining({ messageId: continued.message.id, notify: true }),
+      ]),
+    );
+    expect(deliveries.filter((delivery) => delivery.notify)).toHaveLength(1);
+
+    const [storedBootstrap] = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, bootstrap?.id ?? ""))
+      .limit(1);
+    expect(storedBootstrap?.metadata).toHaveProperty("firstChatOrientation", { version: 1 });
+  });
+
+  it("serializes a concurrent legacy retry ahead of the first visible continuation", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const basePayload = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      bootstrap: "Please help me get started with First Tree.",
+      topic: "Get started with First Tree",
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...basePayload, orientation: 1 },
+    });
+    const chatId = first.json<{ chatId: string }>().chatId;
+    const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+
+    let releaseContinuation: (() => void) | undefined;
+    const continuationReleased = new Promise<void>((resolve) => {
+      releaseContinuation = resolve;
+    });
+    let signalContinuationReady: (() => void) | undefined;
+    const continuationReady = new Promise<void>((resolve) => {
+      signalContinuationReady = resolve;
+    });
+    const continuedPromise = sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      {
+        format: "text",
+        content: "Please inspect /projects/acme.",
+        metadata: { mentions: [agent.uuid] },
+        source: "web",
+      },
+      {
+        beforeFirstChatOrientationLockForTest: async () => {
+          signalContinuationReady?.();
+          await continuationReleased;
+        },
+      },
+    );
+    await continuationReady;
+
+    const legacyRetry = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: basePayload,
+    });
+    expect(legacyRetry.statusCode).toBe(200);
+    releaseContinuation?.();
+    const continued = await continuedPromise;
+
+    const deliveries = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId));
+    expect(deliveries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ messageId: bootstrap?.id, notify: false }),
+        expect.objectContaining({ messageId: continued.message.id, notify: true }),
+      ]),
+    );
+    expect(deliveries.filter((delivery) => delivery.notify)).toHaveLength(1);
+
+    const inbox = await pollInbox(app.db, agent.inboxId, 10);
+    const wake = inbox.find((entry) => entry.messageId === continued.message.id);
+    expect(wake?.message.content).toBe("Please inspect /projects/acme.");
+    expect(wake?.message.precedingMessages).toEqual([
+      expect.objectContaining({ id: bootstrap?.id, content: "Please help me get started with First Tree." }),
+    ]);
+
+    const [continuedChat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(readFirstChatOrientationChatState(continuedChat?.metadata)).toBe(
+      FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED,
+    );
+    expect(bootstrap?.metadata).toHaveProperty("firstChatOrientation", { version: 1 });
+  });
+
   it("concurrent kickoffs converge on a single chat with a single bootstrap", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -331,6 +823,7 @@ describe("POST /me/onboarding/kickoff", () => {
       agentUuid: agent.uuid,
       bootstrap: "Race.",
       topic: "Get started with First Tree",
+      orientation: 1,
     };
     const inject = () =>
       app.inject({
@@ -395,6 +888,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
     expect(treeMsgs).toHaveLength(1);
+    expect(treeMsgs[0]?.metadata).not.toHaveProperty("firstChatOrientation");
     expect(treeMsgs[0]?.content).toContain("Let's build or finish our team's Context Tree.");
     expect(treeMsgs[0]?.content).toContain("A non-empty source manifest is authoritative");
     expect(treeMsgs[0]?.content).toContain("missing declared clone as a blocking half-provisioned workspace");

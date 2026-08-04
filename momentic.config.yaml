@@ -29,7 +29,7 @@ ai:
 environments:
   # Local first-tree stack: web on :5173 (Vite proxies /api/v1 to the server
   # on :8000), postgres from docker-compose. See DEVELOPMENT.md Quickstart.
-  - name: first-tree-local
+  - name: local
     baseUrl: http://127.0.0.1:5173
     envVariables:
       DATABASE_URL: postgresql://firsttree:firsttree@localhost:5432/firsttree

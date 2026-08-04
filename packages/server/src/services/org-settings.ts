@@ -363,6 +363,27 @@ export type OrgContextReviewRuntime = {
   };
 };
 
+/**
+ * Project the joined Context Review runtime into the only member-safe Context
+ * Tree setting shape. Persisted providerless bindings gain a provider only
+ * when the current runtime can resolve it against the repository authority.
+ */
+export function projectOrgContextTreeSettingState(runtime: OrgContextReviewRuntime): ContextTreeSettingState {
+  if (runtime.bindingState === "invalid") return { kind: "invalid" };
+
+  if (runtime.bindingState === "unbound") {
+    const state = classifyContextTreeSetting({ branch: runtime.branch });
+    return state.kind === "unbound" ? state : { kind: "invalid" };
+  }
+
+  const state = classifyContextTreeSetting({
+    repo: runtime.repo,
+    branch: runtime.branch,
+    ...(runtime.provider && runtime.providerMatchesRepository ? { provider: runtime.provider } : {}),
+  });
+  return state.kind === "bound" ? state : { kind: "invalid" };
+}
+
 function isSameOrgContextTreeBindingRuntime(
   current: OrgContextReviewRuntime,
   expected: OrgContextReviewRuntime,
@@ -409,9 +430,9 @@ export async function isOrgContextReviewRuntimeCurrent(
 }
 
 /**
- * Read the stable member-safe projection used by the settings API. Unlike the
- * raw admin repair view, this never returns invalid historical repo or branch
- * values to callers.
+ * Classify the storage-compatible binding without resolving a provider.
+ * Member-readable API surfaces must project `OrgContextReviewRuntime` through
+ * `projectOrgContextTreeSettingState` instead.
  */
 export async function getOrgContextTreeSettingState(db: Database, orgId: string): Promise<ContextTreeSettingState> {
   const [row] = await db

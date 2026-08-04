@@ -16,6 +16,7 @@ import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { SdkError } from "@first-tree/client";
+import type { ContextTreeProvider } from "@first-tree/shared";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readContextTreeSnapshot, runTreeTreeCommand } from "../commands/tree/tree.js";
@@ -129,7 +130,9 @@ function createRealGitRunner(
   };
 }
 
-function readerFor(bindings: Record<string, { repo?: string; branch?: string } | Error>): {
+function readerFor(
+  bindings: Record<string, { provider?: ContextTreeProvider; repo?: string; branch?: string } | Error>,
+): {
   reader: ContextTreeReadAuthorityReader;
   read: ReturnType<typeof vi.fn>;
 } {
@@ -183,7 +186,15 @@ describe("task-scoped BYO Context Tree Read activation", () => {
     });
     const snapshotPath = join(root, "snapshots", "task-a");
 
-    const activation = await activateContextTreeRead(reader, { teamId: "team-a", snapshotPath }, runGit);
+    const activation = await activateContextTreeRead(
+      reader,
+      {
+        teamId: "team-a",
+        snapshotPath,
+        expectedBinding: { repo: remote.bindingRepo, branch: "main" },
+      },
+      runGit,
+    );
 
     expect(read).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledWith("team-a", { retry: false });
@@ -476,6 +487,39 @@ describe("task-scoped BYO Context Tree Read activation", () => {
         return "";
       }),
     ).rejects.toMatchObject({ code, stage: "binding" });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+    expect(existsSync(snapshotPath)).toBe(false);
+  });
+
+  it.each([
+    [
+      "provider",
+      { provider: "github" as const, repo: "https://github.com/acme/tree.git", branch: "main" },
+      { provider: "gitlab" as const, repo: "https://github.com/acme/tree.git", branch: "main" },
+    ],
+    [
+      "repo",
+      { provider: "github" as const, repo: "https://github.com/acme/tree.git", branch: "main" },
+      { provider: "github" as const, repo: "https://github.com/acme/other.git", branch: "main" },
+    ],
+    [
+      "branch",
+      { provider: "github" as const, repo: "https://github.com/acme/tree.git", branch: "main" },
+      { provider: "github" as const, repo: "https://github.com/acme/tree.git", branch: "release" },
+    ],
+  ])("rejects a route-to-snapshot %s change before Git", async (_field, current, expected) => {
+    const root = tempRoot("ft-byo-read-binding-change-");
+    const events: string[][] = [];
+    const { reader, read } = readerFor({ "team-a": current });
+    const snapshotPath = join(root, "snapshot");
+
+    await expect(
+      activateContextTreeRead(reader, { teamId: "team-a", snapshotPath, expectedBinding: expected }, (_cwd, args) => {
+        events.push([...args]);
+        return "";
+      }),
+    ).rejects.toMatchObject({ code: "CONTEXT_TREE_READ_BINDING_INVALID", stage: "binding" });
     expect(read).toHaveBeenCalledTimes(1);
     expect(events).toEqual([]);
     expect(existsSync(snapshotPath)).toBe(false);

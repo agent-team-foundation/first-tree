@@ -8,6 +8,33 @@ chats and the adjacent campaign quickstart handoff.
 - `POST /api/v1/me/onboarding/kickoff` starts the user's first onboarding chat.
 - The first message is visible task text sent through task `createChat`; the
   agent sees the same message the user sees.
+- An ordinary onboarding client may send `orientation: 1` to opt into the
+  current soft Orientation flow. The server then stores the visible bootstrap
+  as silent, replayable context and adds the server-owned
+  `firstChatOrientation` marker for Web rendering. The next ordinary visible
+  human message addressed to the original bootstrap target wakes that agent
+  and carries the bootstrap as preceding context. A message addressed only to
+  a participant added later remains an ordinary turn and does not consume the
+  handoff. For a multi-recipient continuation, only the original target is
+  eligible for exceptional bootstrap replay. The server marks that exact
+  continuation and target, then advances the
+  chat-scoped lifecycle to `continued`; Web treats the lifecycle as canonical
+  completion even when the continuation is outside its cached message window.
+  The bootstrap remains replayable beyond the generic silent-context window
+  only for that marked first handoff. Afterward it is excluded from exceptional
+  replay, including silent history backfilled to participants added later.
+  Omitting `orientation` preserves the immediate-wake behavior for fresh
+  kickoffs. If a legacy client reuses a keyed pending Orientation chat, the
+  server promotes its existing bootstrap to one immediate wake and suppresses
+  Orientation UI through a server-owned chat lifecycle. The immutable bootstrap
+  marker is not rewritten. The lifecycle transition and the first ordinary
+  human send share the keyed chat lock. If the promoted bootstrap is still
+  pending, ownership of that wake transfers to the human continuation so the
+  agent receives the bootstrap as preceding context and the user's actual
+  message as the trigger.
+  If the bootstrap was already claimed, the continuation is a normal next turn
+  and wakes independently. Campaign actions and dedicated tree-setup kickoffs
+  do not accept or render this Orientation marker.
 - Skill activation comes from the visible message, bound resources, and skill
   descriptions. The client must not append hidden onboarding directives from
   message metadata.

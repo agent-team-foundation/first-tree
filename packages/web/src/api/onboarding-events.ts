@@ -49,6 +49,8 @@ export type StartOnboardingChatArgs = {
   bootstrap: string;
   topic?: string;
   complete?: boolean;
+  /** Opt into the current soft first-chat Orientation contract. */
+  orientation?: 1;
   /**
    * How the membership's onboarding state is stamped once the chat exists.
    * Supersedes `complete` server-side. Personal-agent terminal paths use

@@ -68,14 +68,9 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         : await requireOrgAdmin(request, app.db);
     if (namespace === "context_tree") {
       const runtime = await orgSettingsService.getOrgContextReviewRuntime(app.db, scope.organizationId);
-      if (runtime.bindingState === "bound" && runtime.repo && runtime.branch) {
-        return {
-          repo: runtime.repo,
-          branch: runtime.branch,
-          ...(runtime.provider && runtime.providerMatchesRepository ? { provider: runtime.provider } : {}),
-        };
-      }
-      if (runtime.bindingState === "unbound") return { branch: runtime.branch ?? "main" };
+      const tree = orgSettingsService.projectOrgContextTreeSettingState(runtime);
+      if (tree.kind === "bound") return tree.binding;
+      if (tree.kind === "unbound") return { branch: tree.branch };
       throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);

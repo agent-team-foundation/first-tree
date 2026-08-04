@@ -1,7 +1,7 @@
 fileType: momentic/test/v2
 id: early-firm-harbor-dreams-poorly
 description: A new user completes onboarding end to end and lands in the workspace
-defaultEnv: first-tree-local
+defaultEnv: local
 steps:
   # ── Sign up ─────────────────────────────────────────────────────────────────
   - module:

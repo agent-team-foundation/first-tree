@@ -1,11 +1,13 @@
 import {
+  FIRST_CHAT_ORIENTATION_METADATA_KEY,
   INBOX_FENCE_PROBE_MAX_IDS,
   type InboxEntryWithMessage,
   inboxEntryStatusSchema,
   messageSourceSchema,
   type PrecedingMessage,
+  readFirstChatOrientationContinuationMessageMetadata,
 } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -13,7 +15,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { ForbiddenError } from "../errors.js";
 import { FIRST_TREE_ATTR, withSpan } from "../observability/index.js";
-import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
+import { buildClientMessagePayloadsForInbox, resolveInboxAgentId } from "./message-dispatcher.js";
 
 /** Claimed `inbox_entries` row, typed via Drizzle `$inferSelect` so column-mode
  *  conversions (bigserial → number, timestamp → Date) flow through. */
@@ -176,8 +178,8 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number, chat
  *
  * Steps:
  *   1. Sort by inbox `id` ASC (PG `RETURNING` does not guarantee order).
- *   2. For each trigger, collect silent context without consuming silent rows.
- *   3. Fetch the trigger messages.
+ *   2. Fetch the trigger messages and identify an exact Orientation continuation.
+ *   3. For each trigger, collect silent context without consuming silent rows.
  *   4. Build wire payloads via the single dispatcher.
  *
  * Returns `[]` if `claimed` is empty.
@@ -194,11 +196,19 @@ export async function bundleDeliveryWithSilentContext(
   // `createdAt` as a separate prefix order without making that cursor unsafe.
   claimed.sort((a, b) => a.id - b.id);
 
-  const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed);
-
   const messageIds = claimed.map((e) => e.messageId);
   const msgs = await tx.select().from(messages).where(inArray(messages.id, messageIds));
   const msgMap = new Map(msgs.map((m) => [m.id, m]));
+  const recipientAgentId = await resolveInboxAgentId(tx, inboxId);
+  const orientationContinuationTriggerIds = new Set(
+    msgs
+      .filter(
+        (message) =>
+          readFirstChatOrientationContinuationMessageMetadata(message.metadata)?.targetAgentId === recipientAgentId,
+      )
+      .map((message) => message.id),
+  );
+  const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed, orientationContinuationTriggerIds);
 
   // Step 3 (M1 §10): every outbound client message must carry the current
   // agent_configs.version so the client can refresh config before delivering
@@ -227,6 +237,7 @@ export async function bundleDeliveryWithSilentContext(
         },
       };
     }),
+    recipientAgentId,
   );
 
   return claimed.map((entry, idx) => {
@@ -468,12 +479,13 @@ export async function claimBacklogForPushFair(
 async function collectPrecedingContext(
   tx: TxLike,
   inboxId: string,
-  triggers: Array<Pick<ClaimedEntry, "id" | "chatId" | "createdAt">>,
+  triggers: Array<Pick<ClaimedEntry, "id" | "messageId" | "chatId" | "createdAt">>,
+  orientationContinuationTriggerIds: ReadonlySet<string>,
 ): Promise<Map<number, PrecedingMessage[]>> {
   const result = new Map<number, PrecedingMessage[]>();
 
   // Group triggers by chatId so we can split the silent timeline per chat.
-  const byChat = new Map<string, Array<Pick<ClaimedEntry, "id" | "chatId" | "createdAt">>>();
+  const byChat = new Map<string, Array<Pick<ClaimedEntry, "id" | "messageId" | "chatId" | "createdAt">>>();
   for (const t of triggers) {
     if (t.chatId === null) continue; // defensive: legacy / null-chatId rows can't have context
     const list = byChat.get(t.chatId) ?? [];
@@ -502,7 +514,12 @@ async function collectPrecedingContext(
 
     // For each trigger, fetch silent context strictly before it (and after
     // the previous notify trigger cursor, even if that trigger was delivered
-    // in an earlier unacked batch). Window: 24h before the trigger.
+    // in an earlier unacked batch). Ordinary context uses a 24h window.
+    // The first-chat Orientation bootstrap is the deferred activation
+    // instruction itself, so it remains replayable beyond the generic window
+    // only for the exact first continuation that consumed the server-owned
+    // handoff. The marker is excluded from ordinary recency replay after that
+    // boundary, including copies backfilled to participants added later.
     //
     // Order matters: when there are MORE than `PRECEDING_CONTEXT_MAX_ENTRIES`
     // candidates, we want to keep the rows CLOSEST to the trigger (most
@@ -529,6 +546,14 @@ async function collectPrecedingContext(
     let previousNotifyId: number | null = previousNotify?.id ?? null;
     for (const trigger of chatTriggers) {
       const windowStart = new Date(trigger.createdAt.getTime() - PRECEDING_CONTEXT_WINDOW_SECONDS * 1000);
+      const orientationBootstrap = sql<boolean>`COALESCE(
+        ${messages.metadata} -> ${FIRST_CHAT_ORIENTATION_METADATA_KEY} ->> 'version' = '1',
+        false
+      )`;
+      const contextWindow = or(
+        and(gt(inboxEntries.createdAt, windowStart), sql`NOT (${orientationBootstrap})`),
+        orientationContinuationTriggerIds.has(trigger.messageId) ? orientationBootstrap : undefined,
+      );
       const rows = await tx
         .select({
           messageId: messages.id,
@@ -549,7 +574,7 @@ async function collectPrecedingContext(
             eq(inboxEntries.notify, false),
             lt(inboxEntries.id, trigger.id),
             previousNotifyId === null ? undefined : gt(inboxEntries.id, previousNotifyId),
-            gt(inboxEntries.createdAt, windowStart),
+            contextWindow,
           ),
         )
         .orderBy(desc(messages.createdAt))

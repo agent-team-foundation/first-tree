@@ -1,12 +1,19 @@
 import {
+  FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY,
+  FIRST_CHAT_ORIENTATION_CHAT_STATES,
+  FIRST_CHAT_ORIENTATION_METADATA_KEY,
   type LandingCampaignActionContext,
   parseLandingCampaignTrialChatMetadata,
+  readFirstChatOrientationChatState,
+  readFirstChatOrientationMessageMetadata,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, desc, eq, isNull, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, like, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
@@ -112,6 +119,8 @@ export type KickoffOnboardingArgs = {
   bootstrap: string;
   /** Optional trusted metadata for a server-owned bootstrap variant. */
   bootstrapMetadata?: Record<string, unknown>;
+  /** Current Web capability for the optional, soft first-chat Orientation. */
+  orientationVersion?: 1;
   /** Display title for the created chat. */
   topic: string;
   /** Stable idempotency key for this kickoff surface. */
@@ -289,6 +298,93 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
   return !!row;
 }
 
+async function promoteOrientationBootstrapForLegacyReuse(
+  db: Database,
+  args: KickoffOnboardingArgs,
+  context: { chat: typeof chats.$inferSelect; openingMessage: typeof messages.$inferSelect },
+) {
+  if (args.orientationVersion === 1) return null;
+  if (!readFirstChatOrientationMessageMetadata(context.openingMessage.metadata)) return null;
+  if (readFirstChatOrientationChatState(context.chat.metadata) !== FIRST_CHAT_ORIENTATION_CHAT_STATES.PENDING) {
+    return null;
+  }
+
+  // A visible human turn after the Orientation bootstrap already owns the
+  // wake-up. A stale legacy tab may retry kickoff while that delivery is still
+  // pending; promoting the bootstrap as well would enqueue two triggers for
+  // the same transition into first-task guidance.
+  const [continuation] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, context.chat.id),
+        eq(messages.senderId, args.humanAgentId),
+        gt(messages.id, context.openingMessage.id),
+      ),
+    )
+    .limit(1);
+  if (continuation) return null;
+
+  const [target] = await db
+    .select({ inboxId: agents.inboxId, status: agents.status })
+    .from(agents)
+    .where(eq(agents.uuid, args.targetAgentId))
+    .limit(1);
+  if (!target || target.status !== "active") return null;
+
+  const [delivery] = await db
+    .select()
+    .from(inboxEntries)
+    .where(
+      and(
+        eq(inboxEntries.inboxId, target.inboxId),
+        eq(inboxEntries.messageId, context.openingMessage.id),
+        eq(inboxEntries.chatId, context.chat.id),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  if (delivery && (delivery.notify || delivery.status !== "pending")) return null;
+
+  if (delivery) {
+    await db.update(inboxEntries).set({ notify: true }).where(eq(inboxEntries.id, delivery.id));
+  } else {
+    await db.insert(inboxEntries).values({
+      inboxId: target.inboxId,
+      messageId: context.openingMessage.id,
+      chatId: context.chat.id,
+      notify: true,
+    });
+  }
+
+  // The keyed create path holds this chat row FOR UPDATE. Persist the owner of
+  // the wake outside the immutable bootstrap message; the first ordinary human
+  // send takes the same lock before deciding whether its fan-out should wake.
+  await db
+    .update(chats)
+    .set({
+      metadata: sql`jsonb_set(
+        ${chats.metadata},
+        ARRAY[${FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY}]::text[],
+        ${JSON.stringify({ version: 1, state: FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED })}::jsonb,
+        true
+      )`,
+    })
+    .where(eq(chats.id, context.chat.id));
+
+  return {
+    message: context.openingMessage,
+    recipients: [target.inboxId],
+    deferredPostCommitEffects: {
+      chatId: context.chat.id,
+      messageId: context.openingMessage.id,
+      organizationId: args.organizationId,
+      recipientAgentIds: [args.targetAgentId],
+    },
+  };
+}
+
 /**
  * Idempotent server-side tail of onboarding. Folds the three steps the browser
  * used to orchestrate (create the first chat → send the bootstrap → stamp
@@ -308,10 +404,14 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  * `"none"` and stamp completion only after all required chats exist.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
+  const orientationMetadata =
+    args.orientationVersion === 1 ? { [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 } } : null;
   const initialMessage: SendMessage = {
     format: "text",
     content: args.bootstrap,
-    ...(args.bootstrapMetadata ? { metadata: args.bootstrapMetadata } : {}),
+    ...(args.bootstrapMetadata || orientationMetadata
+      ? { metadata: { ...args.bootstrapMetadata, ...orientationMetadata } }
+      : {}),
     source: "api",
   };
   const created = await createChat(db, {
@@ -322,9 +422,12 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
     contextParticipantAgentIds: [],
     topic: args.topic,
     initialMessage,
+    allowFirstChatOrientation: args.orientationVersion === 1,
+    silentInitialMessage: args.orientationVersion === 1,
     source: "manual",
     onboardingKickoffKey: args.kickoffKey,
     beforeInitialMessage: args.onChatReady,
+    onTaskReuse: (tx, context) => promoteOrientationBootstrapForLegacyReuse(tx, args, context),
   });
 
   // 3. Stamp onboarding state now that the chat exists, when requested.
@@ -359,7 +462,7 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
 
   return {
     chatId: created.chat.id,
-    ...(created.initialMessageCreated
+    ...(created.notificationMessageId && created.recipients.length > 0
       ? { sent: { recipients: created.recipients, messageId: created.message.id } }
       : {}),
   };

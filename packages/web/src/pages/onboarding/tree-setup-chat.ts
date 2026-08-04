@@ -56,6 +56,10 @@ export async function startOnboardingChat(args: {
     bootstrap: args.bootstrap,
     topic: args.topic,
     complete: args.complete,
+    // Campaign action chats already carry a selected task. Every ordinary
+    // onboarding chat opts into the versioned Orientation contract; omitting
+    // this field on older Web bundles preserves the server's immediate wake.
+    ...(args.campaignAction ? {} : { orientation: 1 as const }),
     ...(args.stamp ? { stamp: args.stamp } : {}),
     ...(args.campaignAction ? { campaignAction: args.campaignAction } : {}),
   });

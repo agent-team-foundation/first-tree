@@ -1,7 +1,7 @@
 fileType: momentic/test/v2
 id: circling-deep-speed-returns-linearly
 description: A brand-new user signs up and lands in onboarding
-defaultEnv: first-tree-local
+defaultEnv: local
 steps:
   - module:
       path: ./modules/sign-up-fresh-user.module.yaml

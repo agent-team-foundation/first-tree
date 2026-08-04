@@ -114,15 +114,18 @@ export type MessageForInbox = {
 /**
  * Batch variant — builds all payloads with a single DB lookup per agent.
  * v2 dropped the chat_membership.mode batched lookup; every payload's
- * `recipientMode` is the constant wire value.
+ * `recipientMode` is the constant wire value. A caller that already resolved
+ * the inbox owner may pass it to keep recipient-bound preprocessing and
+ * payload construction on the same two-query path.
  */
 export async function buildClientMessagePayloadsForInbox(
   db: DbLike,
   inboxId: string,
   items: MessageForInbox[],
+  resolvedAgentId?: string,
 ): Promise<ClientMessage[]> {
   if (items.length === 0) return [];
-  const agentId = await resolveAgentId(db, { kind: "inboxId", inboxId });
+  const agentId = resolvedAgentId ?? (await resolveInboxAgentId(db, inboxId));
   const [cfg] = await db
     .select({ version: agentConfigs.version })
     .from(agentConfigs)
@@ -148,13 +151,14 @@ export async function buildClientMessagePayloadsForInbox(
 
 async function resolveAgentId(db: DbLike, source: ClientMessagePayloadSource): Promise<string> {
   if (source.kind === "agentId") return source.agentId;
-  const [agent] = await db
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(eq(agents.inboxId, source.inboxId))
-    .limit(1);
+  return resolveInboxAgentId(db, source.inboxId);
+}
+
+/** Resolve the agent that owns an inbox once for recipient-bound delivery. */
+export async function resolveInboxAgentId(db: DbLike, inboxId: string): Promise<string> {
+  const [agent] = await db.select({ uuid: agents.uuid }).from(agents).where(eq(agents.inboxId, inboxId)).limit(1);
   if (!agent) {
-    throw new Error(`No agent owns inbox "${source.inboxId}"`);
+    throw new Error(`No agent owns inbox "${inboxId}"`);
   }
   return agent.uuid;
 }
