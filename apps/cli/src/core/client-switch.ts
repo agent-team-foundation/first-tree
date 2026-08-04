@@ -357,7 +357,7 @@ export async function confirmLocalClientSwitch(opts: {
   if (process.stdin.isTTY !== true) {
     fail(
       "ACCOUNT_SWITCH_REQUIRES_CONFIRMATION",
-      "This connect code belongs to a different First Tree user. Re-run with `--force-switch` in non-interactive mode to confirm account switching. Safety checks still run and cannot be skipped.",
+      "This connect code belongs to a different First Tree user and has now been consumed. Ask the user to approve switching this computer first. If they approve, ask for a fresh setup prompt and run its login command with `--force-switch`; never reuse this code. Safety checks still run and cannot be skipped.",
       1,
     );
   }

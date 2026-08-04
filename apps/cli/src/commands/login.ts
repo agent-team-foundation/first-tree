@@ -62,7 +62,11 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    fail("AUTH_ERROR", body.error ?? `Token exchange failed (HTTP ${res.status})`, 1);
+    const message =
+      body.error === "Invalid or expired connect token"
+        ? "This connect code is expired or has already been used. Ask the user for a fresh setup prompt from First Tree Settings; never reuse this code."
+        : (body.error ?? `Token exchange failed (HTTP ${res.status})`);
+    fail("AUTH_ERROR", message, 1);
   }
   return (await res.json()) as { accessToken: string; refreshToken: string };
 }

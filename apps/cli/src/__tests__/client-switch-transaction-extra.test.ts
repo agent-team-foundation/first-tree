@@ -720,6 +720,11 @@ describe("client switch transaction recovery", () => {
         targetServerUrl: "https://new.example",
       }),
     ).rejects.toMatchObject({ code: "ACCOUNT_SWITCH_REQUIRES_CONFIRMATION" });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "ACCOUNT_SWITCH_REQUIRES_CONFIRMATION",
+      expect.stringMatching(/consumed.*approve.*fresh setup prompt.*--force-switch/iu),
+      1,
+    );
 
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     promptMocks.confirm.mockResolvedValueOnce(false);

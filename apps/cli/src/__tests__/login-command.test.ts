@@ -459,6 +459,18 @@ describe("login command", { timeout: 60_000 }, () => {
     });
   });
 
+  it("tells the coding agent to request a fresh setup prompt for an expired or used code", async () => {
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
+    cliFetchMock.mockResolvedValueOnce(response(401, { error: "Invalid or expired connect token" }));
+
+    await expect(runLogin(["login", "short_code-1234567890", "--no-start"])).rejects.toThrow("process.exit");
+
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("expired or has already been used");
+    expect(output).toContain("fresh setup prompt from First Tree Settings");
+    expect(output).toContain("never reuse this code");
+  });
+
   it("rejects a connect URL instead of accepting it as a short code", async () => {
     const token = "http://first-tree.test/connect/short_code-123";
     await expect(runLogin(["login", token, "--no-start"])).rejects.toThrow("process.exit");
@@ -505,6 +517,9 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(installClientServiceMock).not.toHaveBeenCalled();
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_CONFIRMATION");
+    expect(output).toContain("has now been consumed");
+    expect(output).toContain("Ask the user to approve switching this computer first");
+    expect(output).toContain("fresh setup prompt");
     expect(output).toContain("--force-switch");
   });
 
