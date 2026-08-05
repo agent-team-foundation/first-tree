@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { join, sep } from "node:path";
 import { defaultConfigDir, defaultDataDir } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -136,13 +136,71 @@ export function formatStaleReason(reason: StaleAliasReason): string {
 }
 
 /**
+ * Names that may be passed to `removeLocalAgent`. This is the pre-tightening
+ * server-side acceptance set (`z.string().min(1).max(100).regex(/^[a-z0-9_-]+$/)`),
+ * i.e. a superset of the canonical `AGENT_NAME_REGEX`
+ * (`/^[a-z0-9][a-z0-9_-]{0,63}$/` in `@first-tree/shared`). Grandfathered
+ * aliases — names starting with `-`/`_` or 65–100 chars — must stay
+ * removable, otherwise `agent prune` can never clean up such a stale alias.
+ * The charset excludes `.`, `/`, and `\`, so no accepted name can traverse
+ * directories; containment below is the second, hard boundary.
+ */
+const REMOVABLE_AGENT_NAME_REGEX = /^[a-z0-9_-]{1,100}$/;
+
+/**
+ * Reject names that could escape First Tree state directories when joined
+ * into a deletion path. Throws on anything outside the historical slug
+ * charset — including `.`/`..`, path separators, and the empty string (which
+ * would otherwise resolve to the base directory itself).
+ */
+export function assertRemovableAgentName(name: string): void {
+  if (!REMOVABLE_AGENT_NAME_REGEX.test(name)) {
+    throw new Error(
+      `Invalid agent name "${name}": only lowercase letters, digits, hyphens, and underscores (1-100 chars) are allowed.`,
+    );
+  }
+}
+
+/**
+ * Delete `join(baseDir, childName)` only when it stays inside `baseDir`.
+ *
+ * - Missing target: no-op (preserves the old `force: true` semantics).
+ * - Symlink target: plain unlink. Removing a link never touches its target,
+ *   so no containment check is needed — this also keeps power-user layouts
+ *   (e.g. `workspaces/<name>` symlinked to another disk) working, and
+ *   broken symlinks removable.
+ * - Real file/dir: resolve both sides with `realpathSync` immediately before
+ *   the delete and refuse when the resolved target escapes the resolved
+ *   base (e.g. an intermediate symlink pointing outside First Tree state).
+ *
+ * Residual TOCTOU window between the check and the delete is accepted: it
+ * would require an attacker who already has local write access.
+ */
+function rmContained(baseDir: string, childName: string, opts: { recursive: boolean }): void {
+  const target = join(baseDir, childName);
+  const stat = lstatSync(target, { throwIfNoEntry: false });
+  if (stat === undefined) return;
+  if (stat.isSymbolicLink()) {
+    rmSync(target, { force: true });
+    return;
+  }
+  const realBase = realpathSync(baseDir);
+  const realTarget = realpathSync(target);
+  if (!realTarget.startsWith(realBase + sep)) {
+    throw new Error(`Refusing to delete "${target}": resolves to "${realTarget}", outside "${realBase}".`);
+  }
+  rmSync(target, { recursive: opts.recursive, force: true });
+}
+
+/**
  * Remove an agent's local footprint: the YAML alias dir, the workspace
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
  * separately so prune and the post-rotation override cleanup can share it.
  */
 export function removeLocalAgent(name: string): void {
-  rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "workspaces", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "sessions", `${name}.json`), { force: true });
+  assertRemovableAgentName(name);
+  rmContained(join(defaultConfigDir(), "agents"), name, { recursive: true });
+  rmContained(join(defaultDataDir(), "workspaces"), name, { recursive: true });
+  rmContained(join(defaultDataDir(), "sessions"), `${name}.json`, { recursive: false });
 }

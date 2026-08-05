@@ -38,6 +38,7 @@ const outputMocks = vi.hoisted(() => ({
 const printLineMock = vi.hoisted(() => vi.fn());
 
 const coreMocks = vi.hoisted(() => ({
+  assertRemovableAgentName: vi.fn(),
   getClientServiceStatus: vi.fn(),
   installClientService: vi.fn(),
   isServiceSupported: vi.fn(),
@@ -431,6 +432,12 @@ describe("agent admin and local commands", () => {
     await runAgent(["remove", "nova"]);
     expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("nova");
     await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
+
+    coreMocks.assertRemovableAgentName.mockImplementationOnce(() => {
+      throw new Error('Invalid agent name "../escape"');
+    });
+    await expect(runAgent(["remove", "../escape"])).rejects.toMatchObject({ code: 1 });
+    expect(coreMocks.removeLocalAgent).not.toHaveBeenCalledWith("../escape");
 
     localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
     await runAgent(["debug", "register", "--agent", "nova"]);
