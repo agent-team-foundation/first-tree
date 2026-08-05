@@ -40,6 +40,7 @@ const printLineMock = vi.hoisted(() => vi.fn());
 const coreMocks = vi.hoisted(() => ({
   getClientServiceStatus: vi.fn(),
   installClientService: vi.fn(),
+  isSafeLocalAgentName: vi.fn(() => true),
   isServiceSupported: vi.fn(),
   isServiceUnitDriftDetected: vi.fn(),
   loadCredentials: vi.fn(),
@@ -431,6 +432,12 @@ describe("agent admin and local commands", () => {
     await runAgent(["remove", "nova"]);
     expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("nova");
     await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
+
+    // SEC-030: names failing the schema gate exit before any filesystem use.
+    coreMocks.isSafeLocalAgentName.mockReturnValueOnce(false);
+    await expect(runAgent(["remove", "../../escape"])).rejects.toMatchObject({ code: 1 });
+    expect(coreMocks.removeLocalAgent).not.toHaveBeenCalledWith("../../escape");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Invalid agent name");
 
     localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
     await runAgent(["debug", "register", "--agent", "nova"]);

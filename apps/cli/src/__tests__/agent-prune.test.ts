@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findStaleAliases, formatStaleReason, type PinnedAgent, removeLocalAgent } from "../core/agent-prune.js";
+import {
+  findStaleAliases,
+  formatStaleReason,
+  isSafeLocalAgentName,
+  type PinnedAgent,
+  removeLocalAgent,
+} from "../core/agent-prune.js";
 
 /**
  * Pins the four cases that drove the rewrite:
@@ -192,5 +198,128 @@ describe("findStaleAliases", () => {
     expect(existsSync(join(home, "data", "workspaces", "stale"))).toBe(false);
     expect(existsSync(join(home, "data", "sessions", "stale.json"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+/**
+ * SEC-030 — `removeLocalAgent` recursively deletes three paths built from a
+ * caller-supplied name. These tests pin the two-layer guard: the canonical
+ * name-schema gate (plus the grandfathered legacy 1–100 form), and realpath
+ * containment right before every deletion.
+ */
+describe("removeLocalAgent containment (SEC-030)", () => {
+  let home = "";
+
+  function seedHome(): void {
+    mkdirSync(join(home, "config", "agents"), { recursive: true });
+    mkdirSync(join(home, "data", "workspaces"), { recursive: true });
+    mkdirSync(join(home, "data", "sessions"), { recursive: true });
+  }
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "fthub-remove-home-"));
+    process.env.FIRST_TREE_HOME = home;
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("rejects traversal and non-schema names before touching the filesystem", () => {
+    seedHome();
+    // Victims reachable from the three deletion bases via `../…` names.
+    writeFileSync(join(home, "config", "victim.txt"), "keep");
+    mkdirSync(join(home, "data", "victim-dir"));
+    writeFileSync(join(home, "data", "victim-dir", "keep.txt"), "keep");
+
+    const hostile = [
+      "..",
+      "../victim.txt",
+      "../victim-dir",
+      "../../victim-dir",
+      "a/../../victim-dir",
+      "nested/child",
+      "/tmp/absolute-escape",
+      "",
+      ".",
+      ".hidden",
+      "Uppercase",
+      "-leading-dash",
+      "_leading-underscore",
+      "a".repeat(101),
+    ];
+    for (const name of hostile) {
+      expect(() => removeLocalAgent(name), `name: ${JSON.stringify(name)}`).toThrow(/invalid agent name/);
+    }
+
+    expect(existsSync(join(home, "config", "victim.txt"))).toBe(true);
+    expect(existsSync(join(home, "data", "victim-dir", "keep.txt"))).toBe(true);
+    expect(existsSync(join(home, "config", "agents"))).toBe(true);
+    expect(existsSync(join(home, "data", "workspaces"))).toBe(true);
+    expect(existsSync(join(home, "data", "sessions"))).toBe(true);
+  });
+
+  it("still removes grandfathered names from the previous 1–100 rule", () => {
+    const legacy = "a".repeat(100);
+    seedHome();
+    mkdirSync(join(home, "config", "agents", legacy));
+    mkdirSync(join(home, "data", "workspaces", legacy));
+    writeFileSync(join(home, "data", "sessions", `${legacy}.json`), "{}");
+
+    removeLocalAgent(legacy);
+
+    expect(existsSync(join(home, "config", "agents", legacy))).toBe(false);
+    expect(existsSync(join(home, "data", "workspaces", legacy))).toBe(false);
+    expect(existsSync(join(home, "data", "sessions", `${legacy}.json`))).toBe(false);
+  });
+
+  it("is a no-op when the base dirs do not exist yet", () => {
+    expect(() => removeLocalAgent("ghost")).not.toThrow();
+  });
+
+  it("removes only the symlink when an alias dir points outside the base", (ctx) => {
+    seedHome();
+    const outside = join(home, "outside-target");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "keep");
+    try {
+      symlinkSync(outside, join(home, "config", "agents", "linked"));
+      symlinkSync(outside, join(home, "data", "workspaces", "linked"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    removeLocalAgent("linked");
+
+    expect(existsSync(join(home, "config", "agents", "linked"))).toBe(false);
+    expect(existsSync(join(home, "data", "workspaces", "linked"))).toBe(false);
+    expect(existsSync(join(outside, "keep.txt"))).toBe(true);
+  });
+});
+
+describe("isSafeLocalAgentName", () => {
+  it("accepts canonical and grandfathered legacy names", () => {
+    for (const name of ["a", "my-agent", "agent_1", "0start", "a".repeat(64), "a".repeat(100)]) {
+      expect(isSafeLocalAgentName(name), name).toBe(true);
+    }
+  });
+
+  it("rejects names that could steer filesystem paths", () => {
+    for (const name of [
+      "..",
+      "../x",
+      "a/b",
+      "a\\b",
+      "/abs",
+      "",
+      ".",
+      ".hidden",
+      "UPPER",
+      "-x",
+      "_x",
+      "a".repeat(101),
+    ]) {
+      expect(isSafeLocalAgentName(name), JSON.stringify(name)).toBe(false);
+    }
   });
 });
