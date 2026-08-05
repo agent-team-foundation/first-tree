@@ -99,7 +99,7 @@ function createSessionManager(opts: {
     concurrency: 5,
     subprocessProbe: opts.subprocessProbe,
     handlerFactory: opts.handlerFactory ?? (() => handler),
-    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
     agentIdentity: {
       agentId: "agent-1",

@@ -55,7 +55,7 @@ function createSessionManager(opts: {
     },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test" },
+    handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",

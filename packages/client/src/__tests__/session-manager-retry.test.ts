@@ -44,7 +44,7 @@ function makeManager(opts: {
     session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test-retry" },
+    handlerConfig: { workspaceRoot: "/tmp/test-retry", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",

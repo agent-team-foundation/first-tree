@@ -46,6 +46,7 @@ const GUARDED_CLIENT_FILES = [
   "runtime/runtime.ts",
   "runtime/handler.ts",
   "runtime/runtime-notice.ts",
+  "runtime/session-manager.ts",
   "handlers/auth-error-hint.ts",
 ] as const;
 
@@ -138,6 +139,17 @@ describe("runtime provider architecture guard", () => {
         expect(source).toContain("runtimeProviderLabel");
         expect(source).not.toMatch(/function providerLabel/);
         expect(source).not.toMatch(/case ["']codex["']:\s*return ["']Codex["']/);
+        continue;
+      }
+
+      if (relPosix === "runtime/session-manager.ts") {
+        // Session lifecycle owns provider-typed payloads but must not hard-code
+        // a concrete runtime id (including the retired silent Claude-era default).
+        const hit = containsAnyProviderLiteral(source);
+        expect(hit, `${rel} must not hard-code provider literal ${hit}`).toBeNull();
+        expect(source).not.toMatch(/from ["'].*handlers\/(claude-code|codex|cursor|grok|kimi-code|opencode|pi)/);
+        expect(source).toContain("runtimeProviderSchema");
+        expect(source).toMatch(/runtimeProvider is required/);
         continue;
       }
 

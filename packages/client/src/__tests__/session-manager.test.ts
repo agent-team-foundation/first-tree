@@ -252,7 +252,7 @@ function createSessionManager(opts: {
     concurrency: opts.concurrency ?? 5,
     subprocessProbe: opts.subprocessProbe,
     handlerFactory: factory,
-    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     // Tests never want the live git-backed resolver — default to a no-op so a
     // tree-less handlerConfig stays tree-less unless a test opts in.
     resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
@@ -389,7 +389,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -801,7 +801,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -897,7 +897,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -955,7 +955,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1033,7 +1033,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 2,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1129,7 +1129,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: () => h,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1506,7 +1506,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1877,7 +1877,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => handler,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",

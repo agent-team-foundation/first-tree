@@ -72,7 +72,7 @@ function makeSessionManager(opts: {
     session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test" },
+    handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -536,7 +536,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => queue.shift() ?? workingHandler(),
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",

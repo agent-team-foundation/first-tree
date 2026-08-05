@@ -346,6 +346,11 @@ export class AgentSlot {
         await this.clientConnection.sendInboxRecover(agent.agentId, chatId);
       };
       const runtimeProvider = runtimeProviderSchema.safeParse(runtimeType);
+      if (!runtimeProvider.success) {
+        throw new Error(
+          `Unsupported agent runtime type "${runtimeType}" — refusing to start SessionManager without a known RuntimeProvider`,
+        );
+      }
 
       // Defer idle-suspend while a provider has a live background subprocess
       // (default on; opt out via `session.defer_suspend_on_subprocess: false`).
@@ -365,7 +370,7 @@ export class AgentSlot {
           contextTreePath: contextTreeBinding?.path,
           contextTreeRepoUrl: contextTreeBinding?.repoUrl,
           contextTreeBranch: contextTreeBinding?.branch,
-          ...(runtimeProvider.success ? { runtimeProvider: runtimeProvider.data } : {}),
+          runtimeProvider: runtimeProvider.data,
           // Identifies the owning client process. The claude-code-tui handler
           // uses it to scope tmux session ownership (orphan sweep / names) so
           // it never touches another live client's sessions. Other handlers

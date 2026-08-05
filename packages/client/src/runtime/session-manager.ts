@@ -2313,7 +2313,12 @@ export class SessionManager {
 
   private runtimeProvider(): RuntimeProvider {
     const parsed = runtimeProviderSchema.safeParse(this.config.handlerConfig.runtimeProvider);
-    return parsed.success ? parsed.data : "claude-code";
+    if (!parsed.success) {
+      throw new Error(
+        `handlerConfig.runtimeProvider is required and must be a known RuntimeProvider (got ${JSON.stringify(this.config.handlerConfig.runtimeProvider)})`,
+      );
+    }
+    return parsed.data;
   }
 
   private captureRuntimeFailureNotice(

@@ -203,7 +203,7 @@ describe("characterization — SessionManager turn-end wiring", () => {
             return "char-session";
           },
         }),
-      handlerConfig: { workspaceRoot },
+      handlerConfig: { workspaceRoot, runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",

@@ -224,7 +224,7 @@ function makeManager(
     concurrency: opts.concurrency ?? 5,
     subprocessProbe: opts.subprocessProbe,
     handlerFactory,
-    handlerConfig: { workspaceRoot: opts.workspaceRoot ?? "/tmp/test-edge/agent-a" },
+    handlerConfig: { workspaceRoot: opts.workspaceRoot ?? "/tmp/test-edge/agent-a", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -6663,7 +6663,7 @@ describe("SessionManager edge coverage", () => {
       session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 1, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: () => first,
-      handlerConfig: { workspaceRoot: "/tmp/test-edge/idle-log" },
+      handlerConfig: { workspaceRoot: "/tmp/test-edge/idle-log", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
