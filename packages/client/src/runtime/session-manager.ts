@@ -692,7 +692,6 @@ export class SessionManager {
   /** Cache of chatId → organizationId, resolved via `getChatDetail`. A chat's
    *  org is immutable, so this is a cheap permanent memo that keeps doc-capture
    *  uploads off the hot path after the first lookup. */
-  private readonly chatOrgIds = new Map<string, string>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -4616,18 +4615,10 @@ export class SessionManager {
       : sessionRoot;
 
     const forwardResult = createResultSink({
-      sdk: this.config.sdk,
-      agent: this.config.agentIdentity,
-      chatId,
-      getTrigger: () => this.currentTrigger.get(chatId) ?? null,
       clearTrigger: () => {
         this.currentTrigger.delete(chatId);
       },
       log,
-      getSelfFence: () => this.resolveSelfFence(log, chatId),
-      getOrgId: () => this.resolveChatOrgId(log, chatId),
-      workspacesRoot,
-      selfSlug,
     });
 
     const envCtx = {
@@ -4763,50 +4754,6 @@ export class SessionManager {
       throw new Error("route transition invalidated");
     }
     this.captureRuntimeFailureNotice(chatId, event, mutationLeaseValid);
-  }
-
-  private async resolveSelfFence(log: (msg: string) => void, chatId: string): Promise<SelfFence> {
-    // Session doc root: the dir the handler actually hands the agent as cwd —
-    // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
-    // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
-    // no acquire* side effects on every outbound message).
-    const workspaceRoot = this.config.handlerConfig.workspaceRoot;
-    const sessionRoot = resolveSessionDocRoot(workspaceRoot, chatId);
-    if (!this.config.agentConfigCache) return { agentHome: sessionRoot };
-    try {
-      const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return selfFenceFromRuntimeConfig(payload, sessionRoot, workspaceRoot);
-    } catch (err) {
-      log(
-        `document preview self-fence: config unavailable, using agent home only: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return { agentHome: sessionRoot };
-    }
-  }
-
-  /**
-   * Resolve the organization id a chat belongs to, for doc-capture uploads
-   * (`POST /orgs/:orgId/attachments`). Cached permanently (a chat's org never
-   * changes). Returns `null` when the lookup fails so the sink degrades doc
-   * mentions to plain text instead of blocking the message.
-   */
-  private async resolveChatOrgId(log: (msg: string) => void, chatId: string): Promise<string | null> {
-    const cached = this.chatOrgIds.get(chatId);
-    if (cached) return cached;
-    try {
-      const detail = await this.config.sdk.getChatDetail(chatId);
-      const orgId = detail.organizationId;
-      if (typeof orgId === "string" && orgId.length > 0) {
-        this.chatOrgIds.set(chatId, orgId);
-        return orgId;
-      }
-      return null;
-    } catch (err) {
-      log(
-        `doc capture: org lookup failed, doc mentions stay plain text: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return null;
-    }
   }
 
   private projectSessionRuntime(chatId: string, opts: { drainPendingOnIdle?: boolean } = {}): void {

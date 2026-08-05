@@ -107,11 +107,6 @@ type SessionManagerInternals = {
   recomputeRuntimeState(): void;
   buildSessionContext(chatId: string): SessionContext;
   confirmSessionEventOrThrow(chatId: string, event: SessionEvent): Promise<void>;
-  resolveSelfFence(
-    log: (msg: string) => void,
-    chatId: string,
-  ): Promise<{ agentHome: string; singleRepoLocalPath?: string }>;
-  resolveChatOrgId(log: (msg: string) => void, chatId: string): Promise<string | null>;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
 };
@@ -6650,62 +6645,6 @@ describe("SessionManager edge coverage", () => {
     await confirmedCtx.emitEventConfirmed(event);
     expect(confirmSessionEvent).toHaveBeenCalledWith("chat-confirmed", event);
     await confirmed.shutdown();
-  });
-
-  it("resolves document self fences from runtime config and falls back on refresh failure", async () => {
-    const workspaceRoot = "/tmp/test-edge/fence-agent";
-    const config = runtimeConfig({
-      payload: {
-        ...runtimeConfig().payload,
-        gitRepos: [{ url: "https://github.com/acme/repo.git", localPath: "repo" }],
-      },
-    });
-    const sm = makeManager({ workspaceRoot, agentConfigCache: makeCache({ config }) });
-    const logs: string[] = [];
-
-    await expect(internals(sm).resolveSelfFence((msg) => logs.push(msg), "chat-fence")).resolves.toEqual({
-      agentHome: workspaceRoot,
-      singleRepoLocalPath: "source-repos/repo",
-    });
-    expect(logs).toEqual([]);
-    await sm.shutdown();
-
-    const failing = makeManager({
-      workspaceRoot,
-      agentConfigCache: makeCache({
-        refreshIfNewer: async () => {
-          throw new Error("config unavailable");
-        },
-      }),
-    });
-    await expect(internals(failing).resolveSelfFence((msg) => logs.push(msg), "chat-fence-fallback")).resolves.toEqual({
-      agentHome: workspaceRoot,
-    });
-    expect(logs.some((msg) => msg.includes("config unavailable"))).toBe(true);
-    await failing.shutdown();
-  });
-
-  it("resolves chat org ids with caching and degrades lookup failures to null", async () => {
-    const getChatDetail = vi.fn(async (chatId: string) => {
-      if (chatId === "chat-org") return { organizationId: "org-1" };
-      if (chatId === "chat-empty-org") return { organizationId: "" };
-      throw new Error("lookup failed");
-    });
-    const sdk = { ...mockSdk(), getChatDetail } as unknown as FirstTreeHubSDK;
-    const sm = makeManager({ sdk });
-    const logs: string[] = [];
-    const log = (msg: string): void => {
-      logs.push(msg);
-    };
-
-    await expect(internals(sm).resolveChatOrgId(log, "chat-org")).resolves.toBe("org-1");
-    await expect(internals(sm).resolveChatOrgId(log, "chat-org")).resolves.toBe("org-1");
-    expect(getChatDetail).toHaveBeenCalledTimes(1);
-
-    await expect(internals(sm).resolveChatOrgId(log, "chat-empty-org")).resolves.toBeNull();
-    await expect(internals(sm).resolveChatOrgId(log, "chat-fail")).resolves.toBeNull();
-    expect(logs.some((msg) => msg.includes("lookup failed"))).toBe(true);
-    await sm.shutdown();
   });
 
   it("uses idle fallback in evictIdle logging when no runtime state was recorded", async () => {

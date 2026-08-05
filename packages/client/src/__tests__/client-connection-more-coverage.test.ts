@@ -196,7 +196,7 @@ describe("ClientConnection — additional branch coverage", () => {
     const commands: unknown[] = [];
     const pins: unknown[] = [];
     const runtimeAuthStarts: unknown[] = [];
-    connection.on("inbox:deliver", (agentId, frame) => delivered.push({ agentId, frame }));
+    connection.on("inbox:deliver", (inboxId, frame) => delivered.push({ inboxId, frame }));
     connection.on("session:command", (command) => commands.push(command));
     connection.on("agent:pinned", (message) => pins.push(message));
     connection.on("runtime-auth:start", (command) => runtimeAuthStarts.push(command));
@@ -270,7 +270,7 @@ describe("ClientConnection — additional branch coverage", () => {
       },
     };
     socket.emitMessage(deliveredFrame);
-    expect(delivered).toEqual([{ agentId: "inbox-agent-1", frame: deliveredFrame }]);
+    expect(delivered).toEqual([{ inboxId: "inbox-agent-1", frame: deliveredFrame }]);
 
     socket.emitMessage({
       type: "session:event:accepted",
