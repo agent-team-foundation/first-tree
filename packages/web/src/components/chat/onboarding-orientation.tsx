@@ -1,6 +1,7 @@
 import { Check, Play, RotateCcw } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import orientationAuthoring from "../../../orientation-videos/chapters.json";
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
 
@@ -15,7 +16,7 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     id: "multi-agent",
     title: "Multi-agent collaboration",
     summary: "The right agents join as the work unfolds",
-    durationInSeconds: 35,
+    durationInSeconds: orientationAuthoring.chapters["multi-agent"].durationInSeconds,
     videoSrc: "/onboarding/orientation/multi-agent.mp4",
     posterSrc: "/onboarding/orientation/stills/multi-agent-poster.png",
     captionsSrc: "/onboarding/orientation/multi-agent.vtt",
@@ -24,7 +25,7 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     id: "context-tree",
     title: "Context Tree",
     summary: "Read, work, review, update—then start smarter",
-    durationInSeconds: 59,
+    durationInSeconds: orientationAuthoring.chapters["context-tree"].durationInSeconds,
     videoSrc: "/onboarding/orientation/context-tree.mp4",
     posterSrc: "/onboarding/orientation/stills/context-tree-poster.png",
     captionsSrc: "/onboarding/orientation/context-tree.vtt",
@@ -33,7 +34,7 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     id: "github",
     title: "GitHub automation",
     summary: "Issue-to-PR work stays connected in one Chat",
-    durationInSeconds: 31,
+    durationInSeconds: orientationAuthoring.chapters.github.durationInSeconds,
     videoSrc: "/onboarding/orientation/github.mp4",
     posterSrc: "/onboarding/orientation/stills/github-poster.png",
     captionsSrc: "/onboarding/orientation/github.vtt",

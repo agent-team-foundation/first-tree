@@ -32,7 +32,8 @@ The registered chapter ids are `multi-agent`, `context-tree`, and `github`. `fra
 
 ## Render
 
-Generate the committed narration tracks and matching VTT files with an approved Piper model:
+Edit `chapters.json`, the single authoring source for chapter duration, narration timing, and spoken copy. Then generate
+the committed narration tracks, review script, and matching VTT files with an approved Piper model:
 
 ```bash
 ORIENTATION_PIPER_MODEL=/absolute/path/to/en_US-ljspeech-high.onnx \
@@ -40,6 +41,13 @@ ORIENTATION_PIPER_MODEL=/absolute/path/to/en_US-ljspeech-high.onnx \
 ```
 
 This authoring command uses `uv`, Piper, FFmpeg, and FFprobe. It does not add a runtime dependency to Web.
+
+To regenerate or verify only the derived text assets without a voice model:
+
+```bash
+pnpm --filter @first-tree/web video:voiceover:write-text
+pnpm --filter @first-tree/web video:voiceover:check
+```
 
 Render every registered MP4, poster, and set of review stills:
 
@@ -78,7 +86,9 @@ The script builds `@first-tree/shared`, opens the DEV-only recording route in Ch
 
 Master settings: a 1280×720 CSS viewport, 30fps, H.264 High Profile, yuv420p, slow preset with animation tuning, fast-start, and mono AAC narration at 48kHz / 96kbps. The approved Multi-agent chapter retains its 1.5× device-scale 1920×1080 output at CRF 18. Context Tree captures at 1.5× device scale, downsamples to 1280×720 with Lanczos, and uses CRF 16 so text and Tree lines remain crisp at the ordinary delivery resolution.
 
-The product chapter registry is the source of truth for duration and asset paths. The recording page exposes its frame rate and derived frame count to the renderer, so timing is not duplicated in the render script.
+`orientation-videos/chapters.json` is the source of truth for duration, cue timing, and narration copy. The product chapter
+registry imports its durations from that file and remains the source of truth for runtime asset paths. The recording page
+exposes its frame rate and derived frame count to the renderer, so timing is not duplicated in the render script.
 
 ## Voiceover and captions
 
@@ -87,7 +97,7 @@ while leaving quiet space for the viewer to inspect the real interface. Committe
 `orientation-videos/voiceover/`; the renderer mixes the matching track into each MP4.
 
 The current tracks use Piper's `en_US-ljspeech-high` US English voice, trained from the public-domain LJSpeech dataset.
-The approved cue timing and spoken copy live in `voiceover-script.md`.
+`voiceover-script.md` is the generated human-review view of the approved cue timing and spoken copy; do not edit it directly.
 
 Timed WebVTT files are accurate closed captions for the narration. They remain available from the native player but are
 off by default so they do not cover the product UI, especially in the narrow mobile player. There is no separate
@@ -96,7 +106,8 @@ transcript UI.
 ## Edit copy or add a language
 
 - Visible scene copy and timing: `src/pages/onboarding-orientation-video-preview.tsx` and the chapter scene file beside it
-- Narration timing and spoken copy: `orientation-videos/voiceover-script.md`
+- Narration duration, timing, and spoken copy: `orientation-videos/chapters.json`
+- Generated review copy: `orientation-videos/voiceover-script.md`
 - Committed narration tracks: `orientation-videos/voiceover/*.m4a`
 - English captions: `public/onboarding/orientation/*.vtt`
 
@@ -117,4 +128,4 @@ For a new language, add a localized narration track, separate VTT files, and a m
 1. Add its metadata, duration, and asset paths to `ONBOARDING_ORIENTATION_CHAPTERS` in `src/components/chat/onboarding-orientation.tsx`.
 2. Add its deterministic scene to `src/pages/onboarding-orientation-video-preview.tsx`.
 3. Add its review keyframes and poster timestamp to `CHAPTERS` in `scripts/render-orientation-videos.mjs`.
-4. Add the timed narration source and VTT captions, render the MP4 and poster, and extend the component and route tests.
+4. Add the timed narration source to `orientation-videos/chapters.json`, generate its voiceover and VTT, render the MP4 and poster, and extend the component and route tests.
