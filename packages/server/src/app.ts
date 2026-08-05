@@ -99,6 +99,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { securityHeadersHook } from "./security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { backfillExternalAttachmentsToPostgres } from "./services/attachment.js";
 import {
@@ -396,6 +397,12 @@ export async function buildApp(config: Config, options: BuildAppOptions = {}) {
     origin: corsOrigin ? corsOrigin.split(",").map((s) => s.trim()) : isDev,
     credentials: true,
   });
+
+  // App-wide browser security headers (CSP / HSTS / nosniff / frame / referrer
+  // / permissions) on every response — SPA, static assets, API JSON, errors.
+  // The hook only fills headers a route has not set itself, so route-local
+  // policies keep winning. See security-headers.ts (issue #1541).
+  app.addHook("onSend", securityHeadersHook);
 
   // Rate limiting — single actor-aware global safety cap.
   // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
