@@ -146,7 +146,8 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("Use only the JSON `enabled` and `agentUuid` fields");
     expect(skillMarkdown).toMatch(/selecting an eligible managed Review Agent and\s+enabling Automatic Review/u);
     expect(skillMarkdown).toContain("the selection is retained");
-    expect(skillMarkdown).toMatch(/Getting Started owns\s+provider prerequisites and the Team mutation/u);
+    expect(skillMarkdown).toMatch(/The owning Settings surfaces hold provider prerequisites and the\s+Team mutation/u);
+    expect(skillMarkdown).toContain("Getting Started only summarizes readiness and links there");
     expect(skillMarkdown).toContain("This is not a health or readiness check");
     expect(skillMarkdown).toContain("first perform the Review Agent read");
     expect(skillMarkdown).toContain("send at most one combined setup handoff");

@@ -486,8 +486,9 @@ run. The dedicated tree task owns its own post-PR/MR handoff through
 - This is not a health or readiness check. Do not prompt a member, infer
   Reviewer health, or infer debt when the read is invalid, fails, or is
   ambiguous. None of these states blocks onboarding.
-- Getting Started owns provider prerequisites, Reviewer selection and health; this
-  launcher performs no Team mutation.
+- Settings → Context Tree owns Reviewer selection and health, while Settings →
+  GitHub & GitLab owns provider prerequisites. Getting Started only summarizes
+  readiness and links to those surfaces; this launcher performs no Team mutation.
 
 The ownership matrix is intentionally small:
 

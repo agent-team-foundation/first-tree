@@ -128,7 +128,7 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
   });
 
-  it("keeps capability setup milestone-gated, role-aware, and owned by Getting Started", () => {
+  it("keeps capability setup milestone-gated, role-aware, and owned by capability settings", () => {
     expect(skillMarkdown).toContain("After a pre-existing Context Tree milestone: guide Review setup once");
     expect(skillMarkdown).toContain("first-tree org context-tree review-config --json");
     expect(skillMarkdown).toContain("its default Team can differ from this Agent/chat's Team");
@@ -139,6 +139,8 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toMatch(
       /\*\*Settings → Getting Started\*\* can enable Automatic Review; the Agent is already\s+selected/u,
     );
+    expect(skillMarkdown).toMatch(/Settings → Context Tree owns Reviewer selection and health/u);
+    expect(skillMarkdown).toContain("Getting Started only summarizes\n  readiness and links to those surfaces");
     expect(skillMarkdown).toContain("launcher performs no Team mutation");
     expect(skillMarkdown).toContain("This is not a health or readiness check");
     expect(skillMarkdown).toMatch(/infer debt when the read is invalid, fails, or is\s+ambiguous/u);

@@ -371,7 +371,8 @@ first-tree org context-tree review-config --as-member --org "<team-id>" --json
 - Send one milestone response: combine any GitHub App recovery or repository
   coverage action with the applicable Review setup action above. If only one is
   missing, mention only that action. If neither is missing, add no setup
-  guidance. Getting Started owns provider prerequisites and the Team mutation.
+  guidance. The owning Settings surfaces hold provider prerequisites and the
+  Team mutation; Getting Started only summarizes readiness and links there.
 - A failed or ambiguous read creates no inferred debt. It does not block
   ordinary Seed. Context Review remains optional for Team, Chat, basic Tree use,
   and ordinary Seed completion. Under the explicit Welcome Reviewer contract,
