@@ -45,6 +45,22 @@ describe("Agent Participants API", () => {
     expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.agent.uuid);
   });
 
+  it("adds an active human by name (chat invite CLI path)", async () => {
+    const app = getApp();
+    const { a1, chatId } = await setupChat(app);
+    const human = await createTestAgent(app, {
+      type: "human",
+      name: `part-human-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    if (!human.agent.name) throw new Error("human participant name missing");
+
+    const addRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
+      agentName: human.agent.name,
+    });
+    expect(addRes.statusCode).toBe(201);
+    expect(addRes.json().map((p: { agentId: string }) => p.agentId)).toContain(human.agent.uuid);
+  });
+
   it("rejects request with neither agentId nor agentName", async () => {
     const app = getApp();
     const { a1, chatId } = await setupChat(app);

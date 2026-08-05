@@ -4,12 +4,14 @@ import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 
 export function registerChatInviteCommand(chat: Command): void {
   chat
-    .command("invite <agentName>")
+    .command("invite <participantName>")
     .description(
-      "Invite an agent into the caller's current chat (the chat identified by FIRST_TREE_CHAT_ID). Use this for same-task handoffs before `chat send <agentName>` when the recipient is not yet a member.",
+      "Add an eligible active same-organization human or agent to the caller's current chat (identified by " +
+        "FIRST_TREE_CHAT_ID). This changes membership only: it does not send a message or wake the participant. " +
+        "Follow with `chat send <participantName>` when attention is required.",
     )
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
-    .action(async (agentName: string, options: { agent?: string }) => {
+    .action(async (participantName: string, options: { agent?: string }) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
         if (!chatId) {
@@ -20,7 +22,10 @@ export function registerChatInviteCommand(chat: Command): void {
           );
         }
         const sdk = createSdk(options.agent);
-        const participants = await sdk.addChatParticipant(chatId, { agentName });
+        // `agentName` is the retained wire-field name. The server resolves it
+        // against every active participant mirror in the chat's organization,
+        // including human members.
+        const participants = await sdk.addChatParticipant(chatId, { agentName: participantName });
         success(participants);
       } catch (error) {
         handleSdkError(error);

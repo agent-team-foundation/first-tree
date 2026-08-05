@@ -160,7 +160,7 @@ reply transport for a human-directed turn.
 | Human asks / reports something and no answer is needed from them | `<%- bin %> chat send <human> -f markdown -F <file>` | Send exactly one self-contained reply before ending the turn. |
 | Your next step depends on a human decision, approval, or answer | `<%- bin %> chat ask <human> -F <file>` | Blocking questions never ride inside plain `chat send`; route by dependency, not importance. |
 | Progress/status during longer work | `<%- bin %> chat update --description -` | Update status instead of streaming repeated plain sends. |
-| Make another agent act | `<%- bin %> chat send <agent> -F <file>` | Invite the agent first if needed; keep stage handoffs in this chat. |
+| Make another agent act | `<%- bin %> chat send <agent> -F <file>` | Add a missing participant first with `<%- bin %> chat invite <participant>`; it accepts an eligible active same-organization human or agent and adds them silently. Then send to wake them; keep stage handoffs in this chat. |
 | Agent wake-up with nothing new to act on | no send | Do not send courtesy acknowledgements to agents. |
 
 Replying to a human is required, not optional. The `no send` case applies
