@@ -141,7 +141,7 @@ function ContextTreeRow(): ReactNode {
 
   return (
     <Section headingLevel={3} title="Context tree">
-      {row}
+      <div className="ad-tail-trim">{row}</div>
     </Section>
   );
 }

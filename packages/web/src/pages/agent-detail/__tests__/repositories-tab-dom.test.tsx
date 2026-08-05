@@ -185,6 +185,13 @@ describe("RepositoriesTab", () => {
     expect(container.querySelector('[data-testid="resource-section"]')?.textContent).toContain("resources editable");
     await waitForText(container, "context-tree");
     expect(container.textContent).toContain("acme/context-tree");
+    const contextTreeSection = [...container.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === "Context tree",
+    );
+    expect(contextTreeSection?.querySelector<HTMLElement>(":scope > div:last-child")?.style.borderTop).toContain(
+      "var(--border)",
+    );
+    expect(contextTreeSection?.querySelector(".ad-tail-trim > [data-resource-row]")).not.toBeNull();
 
     await click(container.querySelector("button"));
     expect(navigateAway).toHaveBeenCalledWith("/settings/resources");
