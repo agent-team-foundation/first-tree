@@ -170,7 +170,17 @@ describe("mobile density tiers", () => {
       nextCursor: null,
     });
     meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
-    meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 1, nextCursor: null });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [
+        {
+          request: { id: "req-1" },
+          chat: { id: "pinned-urgent", title: "Pinned urgent work" },
+          asker: { agentId: "a-1" },
+        },
+      ],
+      total: 1,
+      nextCursor: null,
+    });
   });
 
   afterEach(() => {

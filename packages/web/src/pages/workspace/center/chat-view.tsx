@@ -2728,32 +2728,34 @@ export function ChatView({
           }
         }
       }
-      const advancing = queueDecision?.kind === "advance";
       if (chatIdRef.current !== chatId) return;
-      setSearchParams(
-        (prev) => {
-          // The updater sees the CURRENT params. If the user navigated away
-          // while the queue was being fetched, leave their URL untouched.
-          if ((prev.get("c") ?? chatId) !== chatId) return prev;
-          const next = new URLSearchParams(prev);
-          next.delete("focus");
-          next.delete("focusMsg");
-          // The session may have been ended by a navigation between the
-          // decision and this write — only act on a still-live flag.
-          if (queueDecision && prev.get("nq") === "1") {
-            if (queueDecision.kind === "end") {
-              next.delete("nq");
-            } else {
-              next.set("c", queueDecision.chatId);
-              next.delete("showAsk");
-            }
-          }
-          return next;
-        },
+      // Build the write from the LIVE committed params, re-read AFTER the
+      // queue await. The functional setSearchParams form is deliberately not
+      // used here: in the pinned react-router, that setter closes over the
+      // params of the render that created it and hands the updater a copy of
+      // that snapshot — so it cannot see a same-chat exit that only deleted
+      // `nq` while the queue fetch was pending. `latestSearchParamsRef` is
+      // commit-synced (layout effect), which makes it the live authority.
+      const live = latestSearchParamsRef.current;
+      if ((live.get("c") ?? chatId) !== chatId) return;
+      const sessionStillLive = live.get("nq") === "1";
+      const advancing = sessionStillLive && queueDecision?.kind === "advance";
+      const next = new URLSearchParams(live);
+      next.delete("focus");
+      next.delete("focusMsg");
+      if (queueDecision && sessionStillLive) {
+        if (queueDecision.kind === "end") {
+          next.delete("nq");
+        } else {
+          next.set("c", queueDecision.chatId);
+          next.delete("showAsk");
+        }
+      }
+      if (next.toString() !== live.toString()) {
         // Advancing is a navigation (push — Back walks the queue hops);
         // param cleanup in place is not (replace).
-        { replace: !advancing },
-      );
+        setSearchParams(next, { replace: !advancing });
+      }
       if (!advancing) scrollToBottom("smooth");
       // Leave `askBusy` true: the overlay disables itself until the resolved
       // request unmounts it, so a slow refetch can't invite a second submit.
@@ -5099,7 +5101,7 @@ export function ChatView({
                       ?
                     </span>
                     <span className="text-body flex-1">
-                      {openRequestCount === 1 ? "有 1 条待处理的问题" : `有 ${openRequestCount} 条待处理的问题`}
+                      {openRequestCount === 1 ? "1 pending question" : `${openRequestCount} pending questions`}
                     </span>
                     <span className="text-label" style={{ color: "var(--fg-4)" }}>
                       Open

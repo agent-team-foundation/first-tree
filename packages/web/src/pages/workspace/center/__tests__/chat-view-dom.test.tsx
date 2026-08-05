@@ -2885,7 +2885,7 @@ describe("ChatView", () => {
 
     const blockedComposer = container.querySelector<HTMLButtonElement>("[data-inspect-ask-composer]");
     expect(blockedComposer).not.toBeNull();
-    expect(blockedComposer?.textContent).toContain("有 2 条待处理的问题");
+    expect(blockedComposer?.textContent).toContain("2 pending questions");
     await click(blockedComposer);
     await waitForText(container, "Submit");
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).not.toBeNull();
@@ -2893,7 +2893,7 @@ describe("ChatView", () => {
 
     await click(container.querySelector('button[aria-label="Show earlier chat"]'));
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).toBeNull();
-    expect(container.querySelector("[data-inspect-ask-composer]")?.textContent).toContain("有 2 条待处理的问题");
+    expect(container.querySelector("[data-inspect-ask-composer]")?.textContent).toContain("2 pending questions");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -2944,7 +2944,7 @@ describe("ChatView", () => {
     await act(async () => {
       resolveOpenRequests({ items: [buriedAsk] });
     });
-    await waitForText(container, "有 1 条待处理的问题");
+    await waitForText(container, "1 pending question");
     expect(container.querySelector("[data-inspect-ask-composer]")).not.toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
@@ -3037,7 +3037,7 @@ describe("ChatView", () => {
     await act(async () => {
       resolveOpenRequests({ items: [buriedAsk] });
     });
-    await waitForText(container, "有 1 条待处理的问题");
+    await waitForText(container, "1 pending question");
     expect(container.querySelector("[data-inspect-ask-composer]")).not.toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
@@ -4997,6 +4997,78 @@ describe("need-you queue session", () => {
     expect(locText(container)).toBe("/?c=chat-elsewhere");
     expect(locText(container)).not.toContain("nq=1");
     expect(locText(container)).not.toContain("chat-2");
+
+    await act(async () => root.unmount());
+  });
+
+  it("respects a same-chat session exit that lands while the queue fetch is pending", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    // Hold the QUEUE fetch (not the send): the exit happens in the window
+    // between resolution and the continuation's write.
+    let releaseQueue!: (value: { items: unknown[]; total: number; nextCursor: null }) => void;
+    meChatMocks.listNeedYouRequests.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseQueue = resolve;
+        }),
+    );
+
+    // Same chat throughout — the exit only deletes `nq` (the shape of
+    // re-clicking the already-selected rail row).
+    function SameChatExitHarness() {
+      const [params, setParams] = useSearchParams();
+      return (
+        <>
+          <ChatView agentId="agent-1" chatId="chat-1" />
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              next.delete("nq");
+              setParams(next);
+            }}
+          >
+            End session
+          </button>
+          <LocationProbe />
+        </>
+      );
+    }
+
+    const { container, root } = await renderDom(
+      <SameChatExitHarness />,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => meChatMocks.listNeedYouRequests.mock.calls.length > 0, "queue fetch started");
+
+    // The user exits the session in place — same chat, `nq` deleted.
+    await click(buttonByText(container, "End session"));
+    expect(locText(container)).toBe("/");
+
+    // The queue settles with a next chat available. The committed chat never
+    // changed, so only the LIVE params can protect this exit: no navigation,
+    // no resurrected flag.
+    await act(async () => {
+      releaseQueue({
+        items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "a2" } }],
+        total: 1,
+        nextCursor: null,
+      });
+    });
+    await flush();
+    await flush();
+    expect(locText(container)).toBe("/");
 
     await act(async () => root.unmount());
   });

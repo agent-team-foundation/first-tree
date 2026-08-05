@@ -33,11 +33,14 @@ export function NeedYouEntry({
     }
     if (first) onOpen(first.chat.id);
   };
+  // Label keys on `first` (the same predicate that enables the button), not
+  // on the raw count: an items-empty-but-total>0 intermediate snapshot must
+  // not announce questions on a disabled control.
   const accessibleLabel = queue.isPending
     ? "Need you, loading"
     : queue.isError
       ? "Need you, failed to load, tap to retry"
-      : count > 0
+      : first
         ? `Need you, ${count} ${count === 1 ? "question" : "questions"}`
         : "Need you, no questions";
 
