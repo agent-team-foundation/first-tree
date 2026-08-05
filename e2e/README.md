@@ -25,9 +25,10 @@ Two limits follow from that and are deliberate:
 - It is **not a CI gate** and is not wired into any workflow. Steps resolve from
   natural-language descriptions through a hosted model and some assertions are
   model-evaluated, so a red run is a signal to investigate, not a merge blocker.
-- It covers the registration happy path, the connect-computer gate, and the Web
-  setup-prompt dialog — not the negative branches, provider handoff execution,
-  degraded states, or evidence judgement the cases ask for.
+- It covers the registration happy path, the connect-computer gate, the Team
+  switcher's handoff to the unbound Coding agent setup state, and the Web
+  setup-prompt dialog — not the other negative branches, provider handoff
+  execution, degraded states, or evidence judgement the cases ask for.
 
 A stable invariant that Vitest could assert still belongs in Vitest. Do not move
 a check here to escape a flaky product test.
