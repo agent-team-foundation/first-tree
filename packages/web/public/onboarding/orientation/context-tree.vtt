@@ -1,21 +1,16 @@
 WEBVTT
 
-00:00.000 --> 00:08.500
-Without shared context, each Agent must rediscover
-decisions the team has already settled.
+00:00:00.500 --> 00:00:08.500
+Context Tree carries durable team knowledge from one task into the next.
 
-00:08.500 --> 00:20.000
-Task-scoped reads supply relevant, authorized context—
-not the entire Tree.
+00:00:08.500 --> 00:00:18.500
+Before work begins, an Agent reads only the relevant, authorized paths.
 
-00:20.000 --> 00:31.000
-Settled constraints guide design, code, and tests
-without replacing verification.
+00:00:18.500 --> 00:00:30.500
+Settled constraints guide design, code, and tests without replacing verification.
 
-00:31.000 --> 00:46.000
-Temporary detail stays with the code; review protects
-shared context before a lasting decision enters the Tree.
+00:00:30.500 --> 00:00:45.500
+Temporary implementation detail stays with the code. Lasting decisions become source-backed proposals for a dedicated Context Reviewer.
 
-00:46.000 --> 00:55.000
-After approval, the shared snapshot becomes
-the next loop's starting point.
+00:00:45.500 --> 00:00:55.500
+Once approved, the shared snapshot helps every future Agent start smarter.

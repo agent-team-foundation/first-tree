@@ -18,8 +18,6 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     videoSrc: "/onboarding/orientation/multi-agent.mp4",
     posterSrc: "/onboarding/orientation/stills/multi-agent-poster.png",
     captionsSrc: "/onboarding/orientation/multi-agent.vtt",
-    transcript:
-      "Give one lead agent a clear software task. As the work unfolds, the lead @mentions UX, development, and QA agents in the same chat—each only when needed. Their working updates and replies stay in the shared conversation, and the verified pull request appears in the GitHub sidebar without the user coordinating separate chats.",
   },
   "context-tree": {
     id: "context-tree",
@@ -29,8 +27,6 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     videoSrc: "/onboarding/orientation/context-tree.mp4",
     posterSrc: "/onboarding/orientation/stills/context-tree-poster.png",
     captionsSrc: "/onboarding/orientation/context-tree.vtt",
-    transcript:
-      "Context Tree carries durable team knowledge from one task into the next. Before working, an Agent reads only the task-relevant Context Tree paths it is authorized to use, so settled constraints guide design, code, and tests without replacing verification. Afterward, temporary implementation detail stays with the code while lasting decisions become source-backed proposals. A dedicated Context Reviewer checks evidence, consistency, authorization boundaries, and durable value before an approved update enters the team's shared snapshot. The real Context view keeps Agent reads and writes visible, and every future Agent begins with reviewed knowledge instead of starting from zero.",
   },
   github: {
     id: "github",
@@ -40,8 +36,6 @@ export const ONBOARDING_ORIENTATION_CHAPTERS = {
     videoSrc: "/onboarding/orientation/github.mp4",
     posterSrc: "/onboarding/orientation/stills/github-poster.png",
     captionsSrc: "/onboarding/orientation/github.vtt",
-    transcript:
-      "After a repository-scoped GitHub App is connected, assigning an Issue to a First Tree teammate creates or reuses an Issue Chat and wakes that teammate’s configured Delegate Agent with the source context. A pull request linked to the Issue stays attached to that Chat, and its review, update, approval, and merge events return automatically. Routing requires a matched GitHub identity and an active Delegate, while repository access remains limited to the connected installation.",
   },
 } as const;
 
@@ -227,8 +221,8 @@ export function OnboardingOrientation({
             onError={() => setVideoError(true)}
           >
             <source src={selected.videoSrc} type="video/mp4" />
-            <track kind="captions" src={selected.captionsSrc} srcLang="en" label="English" default />
-            {selected.transcript}
+            <track kind="captions" src={selected.captionsSrc} srcLang="en" label="English captions" />
+            Your browser does not support this video.
           </video>
           {videoError ? (
             <div
@@ -237,9 +231,12 @@ export function OnboardingOrientation({
               style={{ gap: "var(--sp-3)", padding: "var(--sp-4)" }}
             >
               <div className="flex flex-wrap items-center justify-between" style={{ gap: "var(--sp-2)" }}>
-                <p className="text-label font-medium" role="status">
-                  This video couldn’t load. You can read the transcript instead.
-                </p>
+                <div>
+                  <p className="text-label font-medium" role="status">
+                    This video couldn’t load
+                  </p>
+                  <p className="text-body mt-1 text-muted-foreground text-pretty">{selected.summary}</p>
+                </div>
                 <Button
                   type="button"
                   variant="outline"
@@ -252,10 +249,6 @@ export function OnboardingOrientation({
                   Try again
                 </Button>
               </div>
-              <section aria-label={`${selected.title} transcript`}>
-                <p className="mono text-caption text-muted-foreground">Transcript</p>
-                <p className="text-body mt-1 max-w-[65ch] text-muted-foreground text-pretty">{selected.transcript}</p>
-              </section>
             </div>
           ) : null}
         </div>

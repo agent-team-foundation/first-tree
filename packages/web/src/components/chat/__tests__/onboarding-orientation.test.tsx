@@ -66,7 +66,7 @@ describe("OnboardingOrientation", () => {
     expect(onContinue).toHaveBeenCalledTimes(2);
   });
 
-  it("shows the transcript inside the failed-video overlay", async () => {
+  it("shows the chapter summary inside the failed-video recovery state", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     const { container } = await renderOrientation();
     expect(container.querySelector("[data-onboarding-orientation-video-error]")).toBeNull();
@@ -77,10 +77,8 @@ describe("OnboardingOrientation", () => {
     });
     const errorState = container.querySelector("[data-onboarding-orientation-video-error]");
     expect(errorState?.textContent).toContain("This video couldn’t load");
-    expect(errorState?.textContent).toContain("Give one lead agent a clear software task");
-    const status = errorState?.querySelector('[role="status"]');
-    expect(status?.textContent).not.toContain("Give one lead agent a clear software task");
-    expect(errorState?.querySelector('[aria-label="Multi-agent collaboration transcript"]')).not.toBeNull();
+    expect(errorState?.textContent).toContain("The right agents join as the work unfolds");
+    expect(errorState?.textContent).not.toContain("Transcript");
 
     const tryAgain = [...container.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "Try again",
@@ -104,7 +102,9 @@ describe("OnboardingOrientation", () => {
     const video = container.querySelector("video");
     expect(video?.getAttribute("poster")).toBe("/onboarding/orientation/stills/multi-agent-poster.png");
     expect(video?.querySelector("source")?.getAttribute("src")).toBe("/onboarding/orientation/multi-agent.mp4");
-    expect(video?.querySelector("track")?.getAttribute("src")).toBe("/onboarding/orientation/multi-agent.vtt");
+    const captions = video?.querySelector("track");
+    expect(captions?.getAttribute("src")).toBe("/onboarding/orientation/multi-agent.vtt");
+    expect(captions?.hasAttribute("default")).toBe(false);
     expect(container.textContent).not.toContain("Transcript");
     expect(container.textContent).not.toContain("Choose another chapter");
 
@@ -148,7 +148,7 @@ describe("OnboardingOrientation", () => {
     expect(startButton?.className).toContain("whitespace-normal");
   });
 
-  it("connects the Context Tree chapter to its silent media, captions, and transcript", async () => {
+  it("connects the Context Tree chapter to narrated media with opt-in captions", async () => {
     const { container } = await renderOrientation();
     const contextTree = [...container.querySelectorAll<HTMLButtonElement>("[data-orientation-chapter]")].find(
       (button) => button.textContent?.includes("Context Tree"),
@@ -159,12 +159,13 @@ describe("OnboardingOrientation", () => {
     const video = container.querySelector("video");
     expect(video?.getAttribute("poster")).toBe("/onboarding/orientation/stills/context-tree-poster.png");
     expect(video?.querySelector("source")?.getAttribute("src")).toBe("/onboarding/orientation/context-tree.mp4");
-    expect(video?.querySelector("track")?.getAttribute("src")).toBe("/onboarding/orientation/context-tree.vtt");
-    expect(container.textContent).toContain("task-relevant Context Tree paths it is authorized to use");
-    expect(container.textContent).toContain("dedicated Context Reviewer");
+    const captions = video?.querySelector("track");
+    expect(captions?.getAttribute("src")).toBe("/onboarding/orientation/context-tree.vtt");
+    expect(captions?.hasAttribute("default")).toBe(false);
+    expect(container.textContent).not.toContain("Transcript");
   });
 
-  it("connects the GitHub chapter to its supported automation media and transcript", async () => {
+  it("connects the GitHub chapter to narrated automation media with opt-in captions", async () => {
     const { container } = await renderOrientation();
     const github = [...container.querySelectorAll<HTMLButtonElement>("[data-orientation-chapter]")].find((button) =>
       button.textContent?.includes("GitHub automation"),
@@ -175,9 +176,10 @@ describe("OnboardingOrientation", () => {
     const video = container.querySelector("video");
     expect(video?.getAttribute("poster")).toBe("/onboarding/orientation/stills/github-poster.png");
     expect(video?.querySelector("source")?.getAttribute("src")).toBe("/onboarding/orientation/github.mp4");
-    expect(video?.querySelector("track")?.getAttribute("src")).toBe("/onboarding/orientation/github.vtt");
-    expect(container.textContent).toContain("review, update, approval, and merge events return automatically");
-    expect(container.textContent).not.toContain("review, check, approval");
+    const captions = video?.querySelector("track");
+    expect(captions?.getAttribute("src")).toBe("/onboarding/orientation/github.vtt");
+    expect(captions?.hasAttribute("default")).toBe(false);
+    expect(container.textContent).not.toContain("Transcript");
   });
 
   it("collapses completed Orientation while keeping an explicit review path", async () => {

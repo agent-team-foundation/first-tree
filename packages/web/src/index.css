@@ -26,11 +26,10 @@
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* Native WebVTT stays readable when the Orientation player is embedded in a
-   narrow first-chat card. The video remains understandable without audio and
-   the transcript below it remains the reduced-motion equivalent. */
+/* Closed captions are opt-in. Scale them down in the narrow first-chat player
+   so users who enable CC can still follow the product UI behind the words. */
 video[data-onboarding-orientation-video]::cue {
-  font-size: var(--text-subtitle);
+  font-size: clamp(var(--text-caption), 1.25vw, var(--text-subtitle));
   font-weight: 600;
 }
 
