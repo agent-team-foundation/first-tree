@@ -12,7 +12,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, useLocation, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -4921,6 +4921,82 @@ describe("need-you queue session", () => {
     await answerOpenAsk(container);
 
     await waitForCondition(() => locText(container) === "/", "expected the session flag to clear in place");
+
+    await act(async () => root.unmount());
+  });
+
+  it("never lets a stale queue continuation override a manual chat switch", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "agent-2" } }],
+      total: 1,
+      nextCursor: null,
+    });
+    // The resolving send stays in flight until the test releases it, keeping
+    // the rail-usable window open.
+    let releaseSend!: (value: MessageWithDelivery) => void;
+    chatMocks.sendChatMessage.mockImplementation(
+      () =>
+        new Promise<MessageWithDelivery>((resolve) => {
+          releaseSend = resolve;
+        }),
+    );
+
+    // Harness stand-in for the workspace shell: the chat follows `?c=` and a
+    // rail-like button performs a manual switch (new chat + `nq` deleted).
+    function QueueRaceHarness() {
+      const [params, setParams] = useSearchParams();
+      const chatId = params.get("c") ?? "chat-1";
+      return (
+        <>
+          <ChatView agentId="agent-1" chatId={chatId} />
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              next.set("c", "chat-elsewhere");
+              next.delete("nq");
+              setParams(next);
+            }}
+          >
+            Manual switch
+          </button>
+          <LocationProbe />
+        </>
+      );
+    }
+
+    const { container, root } = await renderDom(
+      <QueueRaceHarness />,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "send started");
+
+    // Mid-flight manual exit: switches chat and deletes `nq`.
+    await click(buttonByText(container, "Manual switch"));
+    expect(locText(container)).toBe("/?c=chat-elsewhere");
+
+    // The send settles AFTER the switch. The stale continuation must neither
+    // navigate to the queue's next chat nor resurrect the session flag.
+    await act(async () => {
+      releaseSend(message({ id: "msg-late", senderId: "human-agent-self", createdAt: "2026-05-28T12:10:00.000Z" }));
+    });
+    await flush();
+    await flush();
+    expect(locText(container)).toBe("/?c=chat-elsewhere");
+    expect(locText(container)).not.toContain("nq=1");
+    expect(locText(container)).not.toContain("chat-2");
 
     await act(async () => root.unmount());
   });

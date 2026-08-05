@@ -1773,6 +1773,15 @@ export function ChatView({
   useLayoutEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
+  // Always-current committed search params, for async callbacks that must
+  // not act on the snapshot captured when their operation STARTED (e.g. the
+  // need-you queue advance: a manual chat switch mid-send deletes `nq`, and
+  // the stale closure must not resurrect it). Same commit discipline as
+  // `chatIdRef` above.
+  const latestSearchParamsRef = useRef(searchParams);
+  useLayoutEffect(() => {
+    latestSearchParamsRef.current = searchParams;
+  }, [searchParams]);
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -2688,43 +2697,64 @@ export function ChatView({
       // after the question was resolved, so the resolution itself restores
       // the full timeline. The stored (explicitly chosen) filter is not
       // touched — only the navigation-applied params clear.
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete("focus");
-      nextParams.delete("focusMsg");
+      //
+      // Every read below is LIVE, never the snapshot captured when the send
+      // started: the rail stays usable while a resolve is in flight, and a
+      // manual chat switch both changes the chat and deletes `nq` — a stale
+      // continuation must neither hijack that navigation nor resurrect the
+      // session. Three layers: bail when the committed chat moved on, decide
+      // from the committed params, and re-validate inside the functional
+      // updater (the final word at write time).
+      if (chatIdRef.current !== chatId) return;
       // Need-you queue session (`?nq=1`, set by the Need you entry): each
       // resolution advances to the NEXT chat holding an open question. A
       // next question in THIS chat needs no navigation — the FIFO takeover
       // advances in place, and the session flag survives for the question
       // after it. An empty queue (or an unavailable one — never strand a
-      // stale flag) ends the session; manual chat switches already delete
-      // `nq` on every ordinary selection path.
-      let advanced = false;
-      if (searchParams.get("nq") === "1") {
+      // stale flag) ends the session.
+      let queueDecision: { kind: "advance"; chatId: string } | { kind: "end" } | null = null;
+      if (latestSearchParamsRef.current.get("nq") === "1") {
         if (organizationId === null) {
-          nextParams.delete("nq");
+          queueDecision = { kind: "end" };
         } else {
           removeResolvedNeedYouRequest(queryClient, organizationId, request.id);
           try {
             const queue = await queryClient.fetchQuery(needYouQueryOptions(organizationId));
             const nextItem = queue.items.find((item) => item.request.id !== request.id) ?? null;
-            if (!nextItem) {
-              nextParams.delete("nq");
-            } else if (nextItem.chat.id !== chatId) {
-              nextParams.set("c", nextItem.chat.id);
-              nextParams.delete("showAsk");
-              advanced = true;
-            }
+            if (!nextItem) queueDecision = { kind: "end" };
+            else if (nextItem.chat.id !== chatId) queueDecision = { kind: "advance", chatId: nextItem.chat.id };
           } catch {
-            nextParams.delete("nq");
+            queueDecision = { kind: "end" };
           }
         }
       }
-      if (nextParams.toString() !== searchParams.toString()) {
+      const advancing = queueDecision?.kind === "advance";
+      if (chatIdRef.current !== chatId) return;
+      setSearchParams(
+        (prev) => {
+          // The updater sees the CURRENT params. If the user navigated away
+          // while the queue was being fetched, leave their URL untouched.
+          if ((prev.get("c") ?? chatId) !== chatId) return prev;
+          const next = new URLSearchParams(prev);
+          next.delete("focus");
+          next.delete("focusMsg");
+          // The session may have been ended by a navigation between the
+          // decision and this write — only act on a still-live flag.
+          if (queueDecision && prev.get("nq") === "1") {
+            if (queueDecision.kind === "end") {
+              next.delete("nq");
+            } else {
+              next.set("c", queueDecision.chatId);
+              next.delete("showAsk");
+            }
+          }
+          return next;
+        },
         // Advancing is a navigation (push — Back walks the queue hops);
         // param cleanup in place is not (replace).
-        setSearchParams(nextParams, { replace: !advanced });
-      }
-      if (!advanced) scrollToBottom("smooth");
+        { replace: !advancing },
+      );
+      if (!advancing) scrollToBottom("smooth");
       // Leave `askBusy` true: the overlay disables itself until the resolved
       // request unmounts it, so a slow refetch can't invite a second submit.
     } catch (err) {

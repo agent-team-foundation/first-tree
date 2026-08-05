@@ -170,6 +170,36 @@ describe("AskTakeover", () => {
     expect(c.querySelector('button[aria-label="Show earlier chat"]')).toBeNull();
   });
 
+  it("Enter never resolves the hidden answer while Ask agent mode is open", async () => {
+    const onReply = vi.fn();
+    const onAsk = vi.fn(async () => undefined);
+    const c = await renderDom(
+      <AskTakeover
+        requestId="request-enter-gate"
+        body="# Which rollout?"
+        payload={{ multiSelect: false }}
+        askAgent={{ exchanges: [], waiting: false, sending: false, error: null, onAsk }}
+        onReply={onReply}
+        onSkip={() => {}}
+      />,
+    );
+
+    // A VALID hidden answer exists before entering the mode.
+    const answer = freeTextBox(c);
+    if (!answer) throw new Error("answer input missing");
+    await setValue(answer, "the hidden answer");
+    await click(btn(c, "Ask agent"));
+
+    const clarification = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Ask a focused question"]');
+    if (!clarification) throw new Error("clarification input missing");
+    await setValue(clarification, "what does the rollout window mean?");
+    // Desktop Enter in the clarification composer must be a newline, never
+    // the resolving shortcut against the invisible answer draft.
+    await keyDown(clarification, "Enter");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+
   it("Ask agent mode replaces the answer surface and hides the resolving actions", async () => {
     const onAsk = vi.fn(async () => undefined);
     const onSkip = vi.fn();

@@ -394,6 +394,12 @@ export function AskTakeover({
         // An option row is a radio/checkbox button that owns Enter as its
         // toggle; let that native behavior stand rather than resolving.
         if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
+        // Ask agent mode hides the answer surface, but `canReply` still
+        // reflects the HIDDEN draft — Enter must never resolve the request
+        // with an answer the user cannot see while composing a
+        // clarification. Enter is plain newline here; the footer button is
+        // the only way to send the question.
+        if (askAgentOpen) return;
         if (!canReply) return;
         e.preventDefault();
         reply();
@@ -748,32 +754,34 @@ export function AskTakeover({
         }}
       >
         {onShowEarlierChat ? (
-          <button
-            type="button"
-            aria-label="Show earlier chat"
-            title="Show earlier chat (Esc)"
-            onClick={onShowEarlierChat}
-            disabled={interactionLocked}
-            className="absolute inline-flex items-center text-label"
-            style={{
-              top: "var(--sp-2)",
-              right: "var(--sp-2)",
-              zIndex: 2,
-              gap: "var(--sp-1_5)",
-              // Mobile: 44 height clears the touch minimum.
-              height: mobile ? 44 : 34,
-              padding: "0 var(--sp-3)",
-              border: 0,
-              borderRadius: "var(--radius-input)",
-              background: "var(--bg-raised)",
-              color: "var(--fg-3)",
-              cursor: interactionLocked ? "default" : "pointer",
-              opacity: interactionLocked ? 0.5 : 1,
-            }}
-          >
-            <History aria-hidden className="h-4 w-4" />
-            Show earlier chat
-          </button>
+          // A real header row, not an absolute overlay: the wide text button
+          // would otherwise cover the question's first lines on narrow
+          // widths. The row reserves its own space above the scroller.
+          <div className="flex justify-end" style={{ flex: "0 0 auto", padding: "var(--sp-2) var(--sp-2) 0" }}>
+            <button
+              type="button"
+              aria-label="Show earlier chat"
+              title="Show earlier chat (Esc)"
+              onClick={onShowEarlierChat}
+              disabled={interactionLocked}
+              className="inline-flex items-center text-label"
+              style={{
+                gap: "var(--sp-1_5)",
+                // Mobile: 44 height clears the touch minimum.
+                height: mobile ? 44 : 34,
+                padding: "0 var(--sp-3)",
+                border: 0,
+                borderRadius: "var(--radius-input)",
+                background: "var(--bg-raised)",
+                color: "var(--fg-3)",
+                cursor: interactionLocked ? "default" : "pointer",
+                opacity: interactionLocked ? 0.5 : 1,
+              }}
+            >
+              <History aria-hidden className="h-4 w-4" />
+              Show earlier chat
+            </button>
+          </div>
         ) : null}
         {/* Scrolling region: the ask body PLUS the answer surface. Keeping the
             options inside the scroller (rather than in a fixed block) is what
