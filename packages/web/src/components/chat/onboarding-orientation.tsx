@@ -1,5 +1,6 @@
 import { Check, Play, RotateCcw } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
 
@@ -79,9 +80,9 @@ export function OnboardingOrientation({
   const [selectedId, setSelectedId] = useState<OnboardingOrientationChapterId>(
     ONBOARDING_ORIENTATION_DEFAULT_CHAPTER_ID,
   );
-  const [requestedAutoplayId, setRequestedAutoplayId] = useState<OnboardingOrientationChapterId | null>(null);
   const [watchedIds, setWatchedIds] = useState<Set<OnboardingOrientationChapterId>>(() => new Set());
   const [videoError, setVideoError] = useState(false);
+  const [playbackNeedsUserAction, setPlaybackNeedsUserAction] = useState(false);
   const normalizedTargetAgentName = targetAgentName?.trim() || null;
   const tourComplete = watchedIds.size === CHAPTERS.length;
 
@@ -101,18 +102,24 @@ export function OnboardingOrientation({
   const selected = ONBOARDING_ORIENTATION_CHAPTERS[selectedId];
 
   const playSelectedChapter = (): void => {
-    const playPromise = videoRef.current?.play();
-    if (playPromise) void playPromise.catch(() => undefined);
+    setPlaybackNeedsUserAction(false);
+    try {
+      const playPromise = videoRef.current?.play();
+      if (playPromise) void playPromise.catch(() => setPlaybackNeedsUserAction(true));
+    } catch {
+      setPlaybackNeedsUserAction(true);
+    }
   };
 
   const selectChapter = (chapterId: OnboardingOrientationChapterId): void => {
-    setVideoError(false);
-    if (chapterId === selectedId) {
-      playSelectedChapter();
-      return;
-    }
-    setRequestedAutoplayId(chapterId);
-    setSelectedId(chapterId);
+    // Mount the selected media synchronously so play() remains part of the
+    // chapter button's user gesture, including on WebKit with audible media.
+    flushSync(() => {
+      setVideoError(false);
+      setPlaybackNeedsUserAction(false);
+      if (chapterId !== selectedId) setSelectedId(chapterId);
+    });
+    playSelectedChapter();
   };
 
   const markSelectedChapterWatched = (): void => {
@@ -213,10 +220,9 @@ export function OnboardingOrientation({
             controls
             playsInline
             preload="metadata"
-            autoPlay={requestedAutoplayId === selected.id}
             poster={selected.posterSrc}
             aria-label={`${selected.title} orientation video`}
-            onPlay={() => setRequestedAutoplayId(null)}
+            onPlay={() => setPlaybackNeedsUserAction(false)}
             onEnded={markSelectedChapterWatched}
             onError={() => setVideoError(true)}
           >
@@ -252,6 +258,21 @@ export function OnboardingOrientation({
             </div>
           ) : null}
         </div>
+
+        {playbackNeedsUserAction && !videoError ? (
+          <div
+            data-onboarding-orientation-playback-prompt
+            className="mt-2 flex flex-wrap items-center justify-between text-muted-foreground"
+            style={{ gap: "var(--sp-2)" }}
+            role="status"
+          >
+            <p className="text-body">Playback is ready. Press play to watch this chapter.</p>
+            <Button type="button" variant="outline" size="sm" onClick={playSelectedChapter}>
+              <Play className="size-3.5" aria-hidden="true" />
+              Play chapter
+            </Button>
+          </div>
+        ) : null}
 
         <nav className="mt-4" aria-label="Orientation chapters">
           <p className="text-label font-medium">Chapters</p>

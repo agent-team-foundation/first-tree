@@ -120,6 +120,30 @@ describe("OnboardingOrientation", () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
+  it("plays newly mounted chapter media from the click and exposes recovery when playback is blocked", async () => {
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("Playback blocked", "NotAllowedError"))
+      .mockResolvedValue(undefined);
+    const { container } = await renderOrientation();
+    const contextTree = [...container.querySelectorAll<HTMLButtonElement>("[data-orientation-chapter]")].find(
+      (button) => button.textContent?.includes("Context Tree"),
+    );
+
+    await click(contextTree ?? null);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("video")?.dataset.onboardingOrientationVideo).toBe("context-tree");
+
+    const prompt = container.querySelector("[data-onboarding-orientation-playback-prompt]");
+    expect(prompt?.textContent).toContain("Press play to watch this chapter");
+    const playChapter = [...(prompt?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Play chapter",
+    );
+    await click(playChapter ?? null);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("[data-onboarding-orientation-playback-prompt]")).toBeNull();
+  });
+
   it("acknowledges completion after all three chapters finish", async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
