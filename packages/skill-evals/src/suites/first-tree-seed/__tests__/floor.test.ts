@@ -159,14 +159,14 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/Do not repeat the Review Agent\s+handoff from Phase 1/u);
 
     const handoffRows = [
-      "| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Setup |",
-      "| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Setup |",
+      "| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Getting Started |",
+      "| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Getting Started |",
       "| GitHub coverage missing | Enabled or read failed/ambiguous | Coverage recovery only; infer no Review debt |",
-      "| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Setup only |",
-      "| GitHub covered | Selected but off | Enable Automatic Review in Settings → Setup only |",
+      "| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only |",
+      "| GitHub covered | Selected but off | Enable Automatic Review in Settings → Getting Started only |",
       "| GitHub covered | Enabled or read failed/ambiguous | No setup handoff |",
-      "| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
-      "| GitLab | Selected but off | Enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
+      "| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |",
+      "| GitLab | Selected but off | Enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |",
       "| GitLab | Enabled or read failed/ambiguous | No setup handoff |",
     ];
     for (const row of handoffRows) {
@@ -183,7 +183,7 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("failure does not invalidate the MR");
     expect(skillMarkdown).toContain("no GitHub App coverage guidance applies");
     expect(skillMarkdown).toContain("Never substitute a GitHub App URL");
-    expect(skillMarkdown).toContain("Use **Settings → Setup** only for an actual Team capability");
+    expect(skillMarkdown).toContain("Use **Settings → Getting Started** only for an actual Team capability");
   });
 
   it("gates only Welcome-launched Content PRs on a selected enabled Reviewer", () => {

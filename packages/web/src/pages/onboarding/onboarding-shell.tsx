@@ -89,10 +89,10 @@ export function OnboardingShell({
               onClick={() => {
                 // Tell the user where setup lives before dropping them into the
                 // still-incomplete workspace — otherwise "finish later" reads as
-                // "lose my progress". Settings → Setup has the Resume path.
+                // "lose my progress". Settings → Getting Started has the Resume path.
                 addToast({
                   title: "Setup paused",
-                  description: "Pick up where you left off anytime in Settings → Setup.",
+                  description: "Pick up where you left off anytime in Settings → Getting Started.",
                   action: { label: "Open Settings", onClick: () => navigate("/settings/setup") },
                 });
                 void finishLater();

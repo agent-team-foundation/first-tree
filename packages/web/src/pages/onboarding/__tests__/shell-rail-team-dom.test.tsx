@@ -199,7 +199,11 @@ describe("onboarding shell and team step", () => {
       [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("finish later")) ?? null,
     );
     expect(toastMock.addToast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Setup paused", action: expect.objectContaining({ label: "Open Settings" }) }),
+      expect.objectContaining({
+        title: "Setup paused",
+        description: "Pick up where you left off anytime in Settings → Getting Started.",
+        action: expect.objectContaining({ label: "Open Settings" }),
+      }),
     );
     expect(flowMock.value.finishLater).toHaveBeenCalled();
 
@@ -227,7 +231,7 @@ describe("onboarding shell and team step", () => {
   });
 
   it("keeps finish-later for a quick-start member (no personal agent, usable team agent)", async () => {
-    // The team-agent quick-start case: Settings -> Setup resume cleared the
+    // The team-agent quick-start case: Settings -> Getting Started resume cleared the
     // suppressor, the member has no personal agent, but the org has a usable
     // team agent — leaving is NOT a dead end, so the pause stays available.
     authMock.currentOrgHasUsableAgent = true;

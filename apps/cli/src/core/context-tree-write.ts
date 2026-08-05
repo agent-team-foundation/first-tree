@@ -311,9 +311,9 @@ function serverPreflightFailure(
       "The selected Team does not currently have Context Reviewer enabled with an assigned Reviewer.",
     CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE: "The selected Team's current Reviewer is unavailable.",
     CONTEXT_TREE_WRITE_REVIEW_NOT_CONFIGURED:
-      "Automatic Review is not configured. Ask a Team Admin to assign a Reviewer in Settings → Setup; Context reads and local code work remain available.",
+      "Automatic Review is not configured. Ask a Team Admin to assign a Reviewer in Settings → Getting Started; Context reads and local code work remain available.",
     CONTEXT_TREE_WRITE_REVIEW_DISABLED:
-      "Automatic Review is disabled. Ask a Team Admin to enable it in Settings → Setup; Context reads and local code work remain available.",
+      "Automatic Review is disabled. Ask a Team Admin to enable it in Settings → Getting Started; Context reads and local code work remain available.",
     CONTEXT_TREE_WRITE_REVIEW_PREREQUISITES_MISSING:
       "Automatic Review prerequisites are incomplete. Ask a Team Admin to repair the Reviewer Agent, Computer, or provider before creating a Context Tree PR/MR.",
     CONTEXT_TREE_WRITE_REVIEWER_OFFLINE:

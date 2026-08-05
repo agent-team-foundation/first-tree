@@ -387,7 +387,7 @@ Key mechanics — read these carefully, they are easy to get wrong:
   Context Tree from the connected code — propose an initial structure for me to
   review, then fill it in. Open the Structure PR/MR first. After that milestone,
   preserve any existing Reviewer; if none is selected, guide me to use this same
-  Agent as the default and enable Automatic Review in Settings → Setup. Draft
+  Agent as the default and enable Automatic Review in Settings → Getting Started. Draft
   the initial content, but do not open its PR/MR until a selected Reviewer is
   enabled so that PR/MR can exercise Automatic Review." This explicit
   Reviewer-handoff sentence is part of the brief only for the admin tree-build
@@ -412,7 +412,7 @@ handoff in its task chat. The welcome launcher consumes that result and must not
 send the same Setup prompt again.
 
 This section's App-install guidance is GitHub-only. For a GitLab MR, do not call
-`first-tree github follow`, send the user to **Settings → Setup** for GitHub App
+`first-tree github follow`, send the user to **Settings → Getting Started** for GitHub App
 installation, or imply
 that the First Tree GitHub App is involved. Instead, consume the spawned task's
 `first-tree gitlab follow <url>` result and preserve its returned pending or
@@ -479,7 +479,7 @@ run. The dedicated tree task owns its own post-PR/MR handoff through
   `first-tree org context-tree review-config --json`. Do not switch to
   `--as-member`: its default Team can differ from this Agent/chat's Team.
   Read only the JSON `enabled` and `agentUuid` fields. If `agentUuid` is null,
-  say once that **Settings → Setup** can select an eligible managed Review Agent
+  say once that **Settings → Getting Started** can select an eligible managed Review Agent
   and enable Automatic Review. If `agentUuid` is present while `enabled` is
   false, say only that Setup can enable Automatic Review; the Agent is already
   selected. If both are present/enabled, add no Review setup handoff.
@@ -494,8 +494,8 @@ The ownership matrix is intentionally small:
 | Observed milestone | State | This launcher's action |
 | --- | --- | --- |
 | GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |
-| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |
-| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |
+| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Getting Started |
+| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Getting Started |
 | Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |
 | Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |
 
@@ -597,7 +597,7 @@ milestone makes the capability relevant, then
 guide that one step to completion — do not raise setup as an opening menu, and do
 not give brittle click-by-click paths. When you do hand off, give the most
 specific stable target available (product deep link when authoritative;
-otherwise **Settings → Setup**). Do not guess slugs or URLs, and do not expose
+otherwise **Settings → Getting Started**). Do not guess slugs or URLs, and do not expose
 tokens or secrets. If the human is not an admin, do not send them into an
 admin-only surface; involve the responsible admin.
 
@@ -630,12 +630,12 @@ admin-only surface; involve the responsible admin.
   active state. Attention is inbound-only; only pending waits for a matching
   valid webhook. If follow failed, report only that chat attention gap and do
   not treat the MR as invalid. Never substitute `first-tree github follow`,
-  **Settings → Setup** for GitHub App installation, or other GitHub App
+  **Settings → Getting Started** for GitHub App installation, or other GitHub App
   guidance. This does not replace
   the tree offer; if both apply, keep each to a short sentence and do not repeat
   either later.
 - After value against a pre-existing populated tree, check Context Review
-  configuration and give a confirmed admin at most one **Settings → Setup**
+  configuration and give a confirmed admin at most one **Settings → Getting Started**
   handoff when no eligible Reviewer is selected or the retained selection is
   disabled. Distinguish those states: do not tell an admin to select another
   Agent when one is already retained. A dedicated tree task owns this handoff

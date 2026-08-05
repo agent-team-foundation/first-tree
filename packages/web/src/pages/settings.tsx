@@ -42,7 +42,7 @@ const ACCOUNT_ITEM: Item = {
   label: "Account",
   description: "Manage your profile and ways to sign in. These settings follow you across all your teams.",
 };
-const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup" };
+const SETUP_ITEM: Item = { to: "/settings/setup", label: "Getting Started" };
 const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
 const REPOSITORIES_ITEM: Item = {
   to: "/settings/repositories",

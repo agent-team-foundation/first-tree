@@ -42,3 +42,9 @@ steps:
   - assert: the workspace is open on a chat named Get started with First Tree,
       whose first message asks the user's new assistant agent for help getting
       started, and a message composer addressed to that agent is available
+
+  # ── Settings — the permanent readiness overview keeps its stable route ────
+  - click: Settings link in the top navigation
+  - waitForUrl: /settings/account
+  - assert: the Settings sidebar contains a Getting Started entry and does not
+      contain an entry named Setup

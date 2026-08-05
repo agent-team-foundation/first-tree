@@ -64,7 +64,7 @@ provider project, reload behavior, and the absence of accidental personal-agent 
    fail-closed verification rejects stale authority while ordinary coding continues.
 10. Return to First Tree after external setup. The member can use the product normally because onboarding auto-open was
     suppressed only by their explicit continue-without action, while the personal-agent journey remains resumable.
-11. Verify the Context Tree entry already present in Settings → Setup remains unchanged and can issue a fresh
+11. Verify the Context Tree entry already present in Settings → Getting Started remains unchanged and can issue a fresh
     settings-intent handoff without implying onboarding completion.
 
 ## Non-goals

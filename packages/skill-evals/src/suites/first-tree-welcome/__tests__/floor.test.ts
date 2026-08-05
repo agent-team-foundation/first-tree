@@ -122,7 +122,7 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toMatch(/A follow failure does not\s+invalidate the MR/u);
     expect(skillMarkdown).toMatch(/report\s+only the First Tree chat attention gap/u);
     expect(skillMarkdown).toContain(
-      "do not call\n`first-tree github follow`, send the user to **Settings → Setup** for GitHub App",
+      "do not call\n`first-tree github follow`, send the user to **Settings → Getting Started** for GitHub App",
     );
     expect(skillMarkdown).toContain("Never substitute `first-tree github follow`");
     expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
@@ -134,7 +134,7 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toContain("its default Team can differ from this Agent/chat's Team");
     expect(skillMarkdown).toContain("JSON `enabled` and `agentUuid` fields");
     expect(skillMarkdown).toMatch(
-      /\*\*Settings → Setup\*\* can select an eligible managed Review Agent\s+and enable Automatic Review/u,
+      /\*\*Settings → Getting Started\*\* can select an eligible managed Review Agent\s+and enable Automatic Review/u,
     );
     expect(skillMarkdown).toContain("the Agent is already\n  selected");
     expect(skillMarkdown).toContain("launcher performs no Team mutation");
@@ -148,8 +148,8 @@ describe("first-tree-welcome floor invariants", () => {
 
     const handoffRows = [
       "| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |",
-      "| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |",
-      "| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |",
+      "| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Getting Started |",
+      "| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Getting Started |",
       "| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |",
       "| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |",
     ];
