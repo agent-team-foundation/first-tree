@@ -341,7 +341,11 @@ async function renderDom(
   route: string,
   child: ReactElement,
   setup?: (queryClient: QueryClient) => void | Promise<void>,
-  routeChildren?: { prompt?: ReactElement },
+  routeChildren?: {
+    prompt?: ReactElement;
+    capabilities?: ReactElement;
+    repositories?: ReactElement;
+  },
 ): Promise<{ container: HTMLElement; root: Root; queryClient: QueryClient }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -364,7 +368,8 @@ async function renderDom(
                 <Route path="profile" element={child} />
                 <Route path="responsibilities" element={<ResponsibilitiesTab />} />
                 <Route path="prompt" element={routeChildren?.prompt ?? child} />
-                <Route path="capabilities" element={child} />
+                <Route path="capabilities" element={routeChildren?.capabilities ?? child} />
+                <Route path="repositories" element={routeChildren?.repositories ?? child} />
                 <Route path="resources" element={<div>Resources route</div>} />
                 <Route path="runtime" element={child} />
                 <Route path="usage" element={<UsageTab />} />
@@ -881,13 +886,19 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
-  it("does not flash Responsibilities when opening a resource-backed tab", async () => {
-    const { PromptTab } = await import("../prompt-tab.js");
+  it("does not flash Responsibilities when opening resource-backed tabs", async () => {
+    const [{ PromptTab }, { RepositoriesTab }, { ResourcesTab }] = await Promise.all([
+      import("../prompt-tab.js"),
+      import("../repositories-tab.js"),
+      import("../resources-tab.js"),
+    ]);
     templateMocks.listAgentTemplates.mockResolvedValue({ templates: [] });
     agentResourceMocks.getAgentResources.mockResolvedValue(agentResources({ templateIds: [], adoptedTemplates: [] }));
 
     const view = await renderDom("/agents/agent-1/profile", <div>Profile route</div>, undefined, {
       prompt: <PromptTab />,
+      capabilities: <ResourcesTab />,
+      repositories: <RepositoriesTab />,
     });
     await waitForText(view.container, "Profile route");
     await waitForCondition(
@@ -898,10 +909,13 @@ describe("AgentDetailPage", () => {
     const requestsBeforeNavigation = agentResourceMocks.getAgentResources.mock.calls.length;
     agentResourceMocks.getAgentResources.mockImplementation(() => new Promise(() => undefined));
 
-    await click(agentSectionLink(view.container, "Instructions"));
-    await flush();
-    expect(agentResourceMocks.getAgentResources).toHaveBeenCalledTimes(requestsBeforeNavigation);
-    expect(agentSectionLabels(view.container)).not.toContain("Responsibilities");
+    for (const label of ["Instructions", "Tools & skills", "Repositories"]) {
+      await click(agentSectionLink(view.container, label));
+      await flush();
+      expect(agentSectionLink(view.container, label)?.getAttribute("aria-current")).toBe("page");
+      expect(agentResourceMocks.getAgentResources).toHaveBeenCalledTimes(requestsBeforeNavigation);
+      expect(agentSectionLabels(view.container)).not.toContain("Responsibilities");
+    }
 
     await act(async () => view.root.unmount());
   });
