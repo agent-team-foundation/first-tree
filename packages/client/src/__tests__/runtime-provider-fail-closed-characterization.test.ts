@@ -133,16 +133,7 @@ describe("characterization — provider-boundary guard covers SessionManager", (
     const failClosed = detectFailClosed();
     if (!failClosed) return;
     const source = readFileSync(sessionManagerSourcePath, "utf8");
-    for (const id of [
-      "claude-code",
-      "claude-code-tui",
-      "codex",
-      "cursor",
-      "grok",
-      "kimi-code",
-      "opencode",
-      "pi",
-    ]) {
+    for (const id of ["claude-code", "claude-code-tui", "codex", "cursor", "grok", "kimi-code", "opencode", "pi"]) {
       expect(source.includes(`"${id}"`) || source.includes(`'${id}'`), `literal ${id}`).toBe(false);
     }
   });
