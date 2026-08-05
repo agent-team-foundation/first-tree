@@ -104,7 +104,7 @@ export function ConversationList({
   group: GroupMode;
   onGroupChange: (next: GroupMode) => void;
   /** Enter the cross-Chat request review flow. */
-  onOpenNeedYou: () => void;
+  onOpenNeedYou: (chatId: string) => void;
 }) {
   const { agentId: selfAgentId } = useAuth();
   // Per-bucket collapse override. Absence in the map means "use the

@@ -17,7 +17,6 @@ import {
   storeGroupMode,
 } from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID, type RailFilter } from "./conversations/index.js";
-import { NeedYouPage } from "./need-you/need-you-page.js";
 
 /**
  * Workspace shell — chat-first. The left rail is `ConversationList`; the
@@ -163,7 +162,6 @@ export function WorkspaceBody() {
   // filter affordances) and show the chat full-bleed.
   const isTrial = isLandingTrialSurface(location.pathname);
   const selectedChatId = searchParams.get("c");
-  const reviewingNeedYou = searchParams.get("review") === "need-you";
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
   const engagement: ChatEngagementView = engagementViewParser.parse(searchParams.get("engagement"));
@@ -252,6 +250,7 @@ export function WorkspaceBody() {
       next.delete("showAsk");
       next.delete("focus");
       next.delete("focusMsg");
+      next.delete("nq");
       clearDocPreviewParams(next);
       setSearchParams(next);
       // Auto-dismiss the conversation-list overlay on narrow viewports —
@@ -270,6 +269,7 @@ export function WorkspaceBody() {
     next.delete("showAsk");
     next.delete("focus");
     next.delete("focusMsg");
+    next.delete("nq");
     clearDocPreviewParams(next);
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
@@ -281,54 +281,31 @@ export function WorkspaceBody() {
     next.delete("showAsk");
     next.delete("focus");
     next.delete("focusMsg");
+    next.delete("nq");
     clearDocPreviewParams(next);
     setSearchParams(next, { replace: true });
     setConvOverlayOpen(false);
   }, [searchParams, setSearchParams]);
 
-  const openNeedYou = useCallback(() => {
-    if (isAskAgentNavLocked()) return;
-    const next = new URLSearchParams(searchParams);
-    next.set("review", "need-you");
-    next.delete("c");
-    next.delete("showAsk");
-    next.delete("focus");
-    next.delete("focusMsg");
-    clearDocPreviewParams(next);
-    setSearchParams(next);
-    setConvOverlayOpen(false);
-  }, [searchParams, setSearchParams]);
-
-  const closeNeedYou = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.delete("review");
-    next.delete("showAsk");
-    next.delete("focus");
-    next.delete("focusMsg");
-    clearDocPreviewParams(next);
-    setSearchParams(next);
-  }, [searchParams, setSearchParams]);
-
-  const openFullChatFromNeedYou = useCallback(
-    (chatId: string, focus?: { agentId: string; requestId: string }) => {
+  // Need you entry: jump straight to the oldest open request's chat with the
+  // cross-chat queue session (`?nq=1`) active. The ask takeover over the real
+  // conversation is the single answering surface — there is no separate
+  // review page. Answering with the session active auto-advances to the next
+  // question's chat (chat-view owns that hop); every ordinary chat-selection
+  // path deletes `nq`, so manually switching away ends the session.
+  const openNeedYouChat = useCallback(
+    (chatId: string) => {
+      if (isAskAgentNavLocked()) return;
       const next = new URLSearchParams(searchParams);
-      next.delete("review");
       next.set("c", chatId);
-      next.set("showAsk", "false");
-      // "Show earlier chat" narrows the opened chat to the viewer's
-      // conversation with the asker; `focusMsg` carries the reviewed request
-      // so the chat can report when it is older than the loaded history.
-      // URL-carried and transient: every other chat-selection path deletes
-      // both params, so the next visit is unfiltered.
-      if (focus) {
-        next.set("focus", focus.agentId);
-        next.set("focusMsg", focus.requestId);
-      } else {
-        next.delete("focus");
-        next.delete("focusMsg");
-      }
+      next.set("nq", "1");
+      next.delete("review");
+      next.delete("showAsk");
+      next.delete("focus");
+      next.delete("focusMsg");
       clearDocPreviewParams(next);
       setSearchParams(next);
+      setConvOverlayOpen(false);
     },
     [searchParams, setSearchParams],
   );
@@ -440,7 +417,7 @@ export function WorkspaceBody() {
       onClearFilters={clearFilters}
       group={group}
       onGroupChange={setGroup}
-      onOpenNeedYou={openNeedYou}
+      onOpenNeedYou={openNeedYouChat}
       width={conversationListWidth}
     />
   );
@@ -449,7 +426,7 @@ export function WorkspaceBody() {
   // overlay. Avoids trapping the user on NoChatView with no way back to
   // their chats (the inline rail is hidden, the hamburger only renders
   // inside ChatView). Same component reused, just stretched full-bleed.
-  if (isNarrow && !selectedChatId && !reviewingNeedYou) {
+  if (isNarrow && !selectedChatId) {
     return (
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 flex">{conversationList}</div>
@@ -465,18 +442,14 @@ export function WorkspaceBody() {
       {isNarrow ? null : conversationList}
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
-        {reviewingNeedYou ? (
-          <NeedYouPage mobile={isNarrow} onClose={closeNeedYou} onOpenFullChat={openFullChatFromNeedYou} />
-        ) : (
-          <CenterPanel
-            selectedChatId={selectedChatId}
-            onSelectChat={selectChat}
-            onClearChat={clearSelectedChat}
-            narrow={isNarrow}
-            onShowConversations={isNarrow ? () => setConvOverlayOpen(true) : null}
-            initialParticipantIds={participants}
-          />
-        )}
+        <CenterPanel
+          selectedChatId={selectedChatId}
+          onSelectChat={selectChat}
+          onClearChat={clearSelectedChat}
+          narrow={isNarrow}
+          onShowConversations={isNarrow ? () => setConvOverlayOpen(true) : null}
+          initialParticipantIds={participants}
+        />
       </main>
       <DocPreviewDrawer />
 

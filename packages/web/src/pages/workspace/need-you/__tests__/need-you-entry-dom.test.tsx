@@ -105,7 +105,7 @@ describe.each([
     await act(async () => root.unmount());
   });
 
-  it("keeps the entry reachable on error so the page's retry path can open", async () => {
+  it("keeps the entry reachable on error and retries the queue fetch on click", async () => {
     meChatMocks.listNeedYouRequests.mockRejectedValue(new Error("queue unavailable"));
     const { button, onOpen, root } = await render();
 
@@ -115,8 +115,12 @@ describe.each([
     );
     expect(button()?.disabled).toBe(false);
 
+    // There is no review page to recover in: the click retries the fetch
+    // itself and never navigates on unknown queue state.
+    const callsBefore = meChatMocks.listNeedYouRequests.mock.calls.length;
     await click(button());
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+    await waitForCondition(() => meChatMocks.listNeedYouRequests.mock.calls.length > callsBefore, "retry fetch");
 
     await act(async () => root.unmount());
   });
@@ -137,8 +141,14 @@ describe.each([
     await act(async () => root.unmount());
   });
 
-  it("enables with the exact count when questions are waiting", async () => {
-    meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 2 });
+  it("enables with the exact count and opens the oldest request's chat", async () => {
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [
+        { request: { id: "req-old" }, chat: { id: "chat-oldest", title: "Oldest" }, asker: { agentId: "agent-1" } },
+        { request: { id: "req-new" }, chat: { id: "chat-newer", title: "Newer" }, asker: { agentId: "agent-2" } },
+      ],
+      total: 2,
+    });
     const { button, onOpen, root } = await render();
 
     await waitForCondition(() => button()?.getAttribute("aria-label") === "Need you, 2 questions", "count label");
@@ -146,7 +156,7 @@ describe.each([
     expect(button()?.textContent).toContain("2");
 
     await click(button());
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith("chat-oldest");
 
     await act(async () => root.unmount());
   });

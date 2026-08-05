@@ -29,9 +29,6 @@ vi.mock("../../../api/chats.js", () => chatMocks);
 vi.mock("../../workspace/center/index.js", () => ({
   CenterPanel: () => <div data-testid="mobile-chat-detail">Chat detail</div>,
 }));
-vi.mock("../../workspace/need-you/need-you-page.js", () => ({
-  NeedYouPage: () => <div data-testid="mobile-need-you">Need you review</div>,
-}));
 
 const row: MeChatRow = {
   chatId: "question",
@@ -97,7 +94,10 @@ function renderPage(harness: DomHarness, needYouCount = 1): QueryClient {
     counts: {},
   });
   queryClient.setQueryData(["need-you", "org-1"], {
-    items: [],
+    items:
+      needYouCount > 0
+        ? [{ request: { id: "req-oldest" }, chat: { id: "question", title: "Question" }, asker: { agentId: "a-1" } }]
+        : [],
     total: needYouCount,
     nextCursor: null,
   });
@@ -315,15 +315,15 @@ describe("mobile Chat card behavior", () => {
     );
   });
 
-  it("opens the separate Need you review route when request count is nonzero", async () => {
+  it("opens the oldest request's chat with the queue session when count is nonzero", async () => {
     renderPage(harness);
     await harness.waitFor(() =>
       expect(harness.container.querySelector('button[aria-label="Need you, 1 question"]')).not.toBeNull(),
     );
 
     await click(harness.container.querySelector('button[aria-label="Need you, 1 question"]'));
-    expect(currentLocation).toBe("/m/chat?review=need-you");
-    expect(harness.container.querySelector('[data-testid="mobile-need-you"]')).not.toBeNull();
+    expect(currentLocation).toBe("/m/chat?c=question&nq=1");
+    expect(harness.container.querySelector('[data-testid="mobile-chat-detail"]')).not.toBeNull();
   });
 
   it("disables Need you without rendering a count when the queue is empty", async () => {

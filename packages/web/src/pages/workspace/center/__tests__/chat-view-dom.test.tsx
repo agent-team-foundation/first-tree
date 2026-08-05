@@ -12,7 +12,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -71,6 +71,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
+  listNeedYouRequests: vi.fn(),
 }));
 
 const readStateMocks = vi.hoisted(() => ({
@@ -650,6 +651,15 @@ function buttonByTitle(container: ParentNode, title: string): HTMLButtonElement 
   return container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="loc">{location.pathname + location.search}</div>;
+}
+
+function locText(container: ParentNode): string | null {
+  return container.querySelector('[data-testid="loc"]')?.textContent ?? null;
+}
+
 function buttonByText(container: ParentNode, text: string): HTMLButtonElement | null {
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
@@ -797,6 +807,7 @@ beforeEach(() => {
   imageStoreMocks.getImage.mockResolvedValue(null);
   imageStoreMocks.putImage.mockResolvedValue(undefined);
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
+  meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
   sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
@@ -2880,7 +2891,7 @@ describe("ChatView", () => {
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).not.toBeNull();
     expect(container.textContent).toContain("Approve the migration?");
 
-    await click(container.querySelector('button[aria-label="Close question"]'));
+    await click(container.querySelector('button[aria-label="Show earlier chat"]'));
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).toBeNull();
     expect(container.querySelector("[data-inspect-ask-composer]")?.textContent).toContain("有 2 条待处理的问题");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
@@ -4834,6 +4845,104 @@ describe("timeline message filter", () => {
     await waitForText(container, "Showing your conversation with Design Critique");
     expect(container.textContent).toContain("Design notes for the banner.");
     expect(container.textContent).not.toContain("Deploy checked, all green.");
+
+    await act(async () => root.unmount());
+  });
+});
+
+describe("need-you queue session", () => {
+  const OPEN_ASK = message({
+    id: "nq-request",
+    senderId: "agent-1",
+    format: "request",
+    content: "Queue question: approve?",
+    metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+    createdAt: "2026-05-28T11:50:00.000Z",
+  });
+
+  async function answerOpenAsk(container: HTMLElement) {
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "resolving send");
+    await flush();
+    await flush();
+  }
+
+  it("advances to the next chat holding an open question after answering", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "agent-2" } }],
+      total: 1,
+      nextCursor: null,
+    });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await answerOpenAsk(container);
+
+    // Queue session active + next question lives in another chat: the
+    // resolution navigates there (a push — Back walks the queue hops) and
+    // keeps the session flag for the question after it.
+    await waitForCondition(() => locText(container)?.includes("c=chat-2") === true, "expected queue advance");
+    expect(locText(container)).toContain("nq=1");
+
+    await act(async () => root.unmount());
+  });
+
+  it("ends the queue session in place when the queue is empty", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await answerOpenAsk(container);
+
+    await waitForCondition(() => locText(container) === "/", "expected the session flag to clear in place");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not touch navigation when answering outside a queue session", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/",
+    );
+
+    await answerOpenAsk(container);
+    expect(locText(container)).toBe("/");
+    expect(meChatMocks.listNeedYouRequests).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

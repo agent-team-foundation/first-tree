@@ -14,10 +14,11 @@
  *     region, so Submit stays reachable at any viewport height (notably on phones,
  *     where the card is short and the answer surface used to overflow past the
  *     bottom edge with no way to scroll to it). Submit and Skip both RESOLVE the
- *     question; Ask agent adds a constrained clarification message while keeping
- *     it open. Chat may supply `onDismiss` to enter read-only inspect mode
- *     without resolving, while the Need you review surface intentionally has no
- *     close control on the card itself.
+ *     question; Ask agent swaps the answer surface into a clarification
+ *     composer that keeps the question open. The card has no close control:
+ *     the host may supply `onShowEarlierChat`, an explicit HIDE that shrinks
+ *     the card into the composer's pending-question affordance and reveals
+ *     the conversation (narrowed to the viewer ↔ asker pair) behind it.
  *
  * The free-text answer surface mirrors the chat composer: it supports `@mention`
  * autocomplete (against chat speakers plus host-supplied inviteable agents) and
@@ -31,8 +32,8 @@
  */
 import type { AskOption, AskRequest, AttachmentKind, MentionParticipant } from "@first-tree/shared";
 import { COMPOSER_ACCEPT_ATTRIBUTE, extractMentions } from "@first-tree/shared";
-import { AtSign, Paperclip, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AtSign, History, Paperclip, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { usePendingAttachments } from "../../lib/use-pending-attachments.js";
 import {
@@ -144,13 +145,10 @@ export function AskTakeover({
   mentionCandidates = [],
   markdownComponents,
   error,
-  contextBefore,
-  onRequestEarlierContext,
   askAgent,
   onReply,
   onSkip,
-  onDismiss,
-  onEscape,
+  onShowEarlierChat,
   isTrial = false,
   mobile = false,
 }: {
@@ -179,10 +177,12 @@ export function AskTakeover({
   /** A host-side send failure to surface in the card (the composer is covered,
    *  so a failed resolve must show here or it looks like nothing happened). */
   error?: string;
-  /** Lazy earlier-chat preview rendered above the current request. */
-  contextBefore?: ReactNode;
-  /** Mobile pull-down at the top of the card lazily requests earlier chat. */
-  onRequestEarlierContext?: () => void;
+  /** Shrink the card into the composer's pending-question affordance and show
+   *  the conversation behind it, narrowed to the viewer ↔ asker pair. This is
+   *  a HIDE, not a close — the question stays open and the bottom affordance
+   *  reopens this card. Also wired to Escape. The card deliberately has no
+   *  close/X control: "close" mis-states what happens to an unresolved ask. */
+  onShowEarlierChat?: () => void;
   /** Optional request clarification controller shared by Chat and Need you. */
   askAgent?: {
     exchanges: AskAgentExchange[];
@@ -195,12 +195,6 @@ export function AskTakeover({
   onReply: (answer: AskAnswer) => void;
   /** Resolve the question with a "skipped" answer (caller sends the reply). */
   onSkip: () => void;
-  /** Optional non-resolving close. Chat uses it to enter read-only inspect
-   *  mode; Need you omits it because page navigation owns leaving review. */
-  onDismiss?: () => void;
-  /** Optional non-resolving Escape action. Need you uses it to return to the
-   *  queue; without a handler Escape is intentionally inert. */
-  onEscape?: () => void;
 }) {
   const options = payload.options;
   const multi = payload.multiSelect === true;
@@ -214,7 +208,6 @@ export function AskTakeover({
   const scrollRegionRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const askAgentInputRef = useRef<HTMLTextAreaElement>(null);
-  const earlierPullStartY = useRef<number | null>(null);
   // Tighten the horizontal padding on phone widths so the card uses the
   // available width instead of burning it on gutters. Note this keys off the
   // measured *viewport width*, whereas the touch-target / Enter behavior keys
@@ -391,7 +384,7 @@ export function AskTakeover({
           setAskAgentLocalError(null);
           return;
         }
-        (onEscape ?? onDismiss)?.();
+        onShowEarlierChat?.();
         return;
       }
       // Mobile soft keyboards have no Shift+Enter, so Enter must insert a
@@ -408,7 +401,7 @@ export function AskTakeover({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [interactionLocked, canReply, onDismiss, onEscape, reply, mobile, askAgentOpen]);
+  }, [interactionLocked, canReply, onShowEarlierChat, reply, mobile, askAgentOpen]);
 
   // Visible chrome (border + fill + radius) lives on the WRAPPER, not the
   // textarea: the textarea is painted transparent so the mention overlay
@@ -754,27 +747,32 @@ export function AskTakeover({
           boxShadow: "var(--shadow-md)",
         }}
       >
-        {onDismiss ? (
+        {onShowEarlierChat ? (
           <button
             type="button"
-            aria-label="Close question"
-            onClick={onDismiss}
+            aria-label="Show earlier chat"
+            title="Show earlier chat (Esc)"
+            onClick={onShowEarlierChat}
             disabled={interactionLocked}
-            className="absolute inline-flex items-center justify-center"
+            className="absolute inline-flex items-center text-label"
             style={{
               top: "var(--sp-2)",
               right: "var(--sp-2)",
               zIndex: 2,
-              width: 44,
-              height: 44,
+              gap: "var(--sp-1_5)",
+              // Mobile: 44 height clears the touch minimum.
+              height: mobile ? 44 : 34,
+              padding: "0 var(--sp-3)",
               border: 0,
               borderRadius: "var(--radius-input)",
               background: "var(--bg-raised)",
               color: "var(--fg-3)",
+              cursor: interactionLocked ? "default" : "pointer",
               opacity: interactionLocked ? 0.5 : 1,
             }}
           >
-            <X aria-hidden className="h-5 w-5" />
+            <History aria-hidden className="h-4 w-4" />
+            Show earlier chat
           </button>
         ) : null}
         {/* Scrolling region: the ask body PLUS the answer surface. Keeping the
@@ -789,24 +787,7 @@ export function AskTakeover({
             minHeight: 0,
             overflowY: "auto",
           }}
-          onTouchStart={(event) => {
-            if (!mobile || !onRequestEarlierContext || (scrollRegionRef.current?.scrollTop ?? 1) > 0) {
-              earlierPullStartY.current = null;
-              return;
-            }
-            earlierPullStartY.current = event.touches[0]?.clientY ?? null;
-          }}
-          onTouchEnd={(event) => {
-            const startY = earlierPullStartY.current;
-            earlierPullStartY.current = null;
-            if (startY === null || !onRequestEarlierContext) return;
-            const endY = event.changedTouches[0]?.clientY ?? startY;
-            if (endY - startY >= 64) onRequestEarlierContext();
-          }}
         >
-          {contextBefore ? (
-            <div style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>{contextBefore}</div>
-          ) : null}
           {/* The ask — markdown body. */}
           <div
             className="text-body"
@@ -894,65 +875,15 @@ export function AskTakeover({
 
           {/* Answer surface — options + Other (or a single free-text box),
               both with `@mention` + attachments. Drop anywhere here to
-              stage attachments, matching the composer. */}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for attachment upload (keyboard users use the attach button) */}
-          <div
-            style={{
-              padding: `var(--sp-4) ${padX} var(--sp-5)`,
-              borderTop: "var(--hairline) solid var(--border-faint)",
-            }}
-            onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
-            onDrop={(e) => {
-              // No drag-and-drop attachments on the trial answer surface.
-              if (isTrial || interactionLocked) return;
-              e.preventDefault();
-              addFiles(Array.from(e.dataTransfer.files));
-            }}
-          >
-            {options ? (
-              <>
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
-                  {options.map((opt) => (
-                    <OptionRow
-                      key={opt.label}
-                      opt={opt}
-                      multi={multi}
-                      selected={selected.includes(opt.label)}
-                      disabled={interactionLocked}
-                      onToggle={() => toggle(opt.label)}
-                    />
-                  ))}
-                </div>
-                <div style={{ marginTop: "var(--sp-2)" }}>
-                  {renderAttachmentTray()}
-                  {renderAnswerInput("Other (type your own)…", 42)}
-                  {renderInputToolbar()}
-                </div>
-              </>
-            ) : (
-              <>
-                {renderAttachmentTray()}
-                {renderAnswerInput("Type your answer…", 110)}
-                {renderInputToolbar()}
-              </>
-            )}
-
-            {(attachmentError || error) && (
-              <p
-                className="mono text-label"
-                style={{ color: "var(--state-error)", padding: "var(--sp-2) var(--sp-0_5) 0" }}
-              >
-                {attachmentError ?? error}
-              </p>
-            )}
-          </div>
-
+              stage attachments, matching the composer. While Ask agent mode
+              is active, this whole surface is REPLACED by the clarification
+              composer — one input at a time, so the reply box and the
+              question box never compete for the same footer actions. */}
           {askAgentOpen && askAgent ? (
             <div
               style={{
-                padding: `var(--sp-4) ${padX}`,
+                padding: `var(--sp-4) ${padX} var(--sp-5)`,
                 borderTop: "var(--hairline) solid var(--border-faint)",
-                background: "var(--bg-raised)",
               }}
             >
               <label className="text-label font-medium" htmlFor={`ask-agent-${requestId ?? "request"}`}>
@@ -987,7 +918,85 @@ export function AskTakeover({
                   {askAgentLocalError ?? askAgent.error}
                 </p>
               ) : null}
-              <div className="flex items-center justify-end" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
+            </div>
+          ) : (
+            /* biome-ignore lint/a11y/noStaticElementInteractions: drop target for attachment upload (keyboard users use the attach button) */
+            <div
+              style={{
+                padding: `var(--sp-4) ${padX} var(--sp-5)`,
+                borderTop: "var(--hairline) solid var(--border-faint)",
+              }}
+              onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
+              onDrop={(e) => {
+                // No drag-and-drop attachments on the trial answer surface.
+                if (isTrial || interactionLocked) return;
+                e.preventDefault();
+                addFiles(Array.from(e.dataTransfer.files));
+              }}
+            >
+              {options ? (
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                    {options.map((opt) => (
+                      <OptionRow
+                        key={opt.label}
+                        opt={opt}
+                        multi={multi}
+                        selected={selected.includes(opt.label)}
+                        disabled={interactionLocked}
+                        onToggle={() => toggle(opt.label)}
+                      />
+                    ))}
+                  </div>
+                  <div style={{ marginTop: "var(--sp-2)" }}>
+                    {renderAttachmentTray()}
+                    {renderAnswerInput("Other (type your own)…", 42)}
+                    {renderInputToolbar()}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {renderAttachmentTray()}
+                  {renderAnswerInput("Type your answer…", 110)}
+                  {renderInputToolbar()}
+                </>
+              )}
+
+              {(attachmentError || error) && (
+                <p
+                  className="mono text-label"
+                  style={{ color: "var(--state-error)", padding: "var(--sp-2) var(--sp-0_5) 0" }}
+                >
+                  {attachmentError ?? error}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Pinned footer — Skip / Ask agent / Submit. */}
+        <div
+          data-ask-takeover-footer
+          className={mobile ? "pb-safe-bottom" : undefined}
+          style={{
+            flex: "0 0 auto",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div
+            className="flex items-center justify-end"
+            style={{
+              gap: "var(--sp-3)",
+              padding: `var(--sp-3) ${padX}`,
+            }}
+          >
+            {askAgentOpen && askAgent ? (
+              <>
+                {/* Ask agent MODE: the same footer button that entered the
+                    mode now SENDS the question — one affordance, two taps
+                    (enter mode, then submit). Cancel returns to answering;
+                    Skip/Submit hide so the resolving actions can't fire
+                    against a half-written clarification. */}
                 <button
                   type="button"
                   disabled={interactionLocked}
@@ -998,10 +1007,12 @@ export function AskTakeover({
                   className="text-label"
                   style={{
                     height: mobile ? 44 : 34,
-                    padding: "0 var(--sp-3)",
-                    border: 0,
+                    padding: "0 var(--sp-4)",
+                    borderRadius: "var(--radius-input)",
+                    border: "var(--hairline) solid transparent",
                     background: "transparent",
-                    color: "var(--fg-3)",
+                    color: "var(--fg-2)",
+                    cursor: interactionLocked ? "default" : "pointer",
                   }}
                 >
                   Cancel
@@ -1009,6 +1020,7 @@ export function AskTakeover({
                 <button
                   type="button"
                   disabled={interactionLocked || askAgentDraft.trim().length === 0}
+                  title="Send the clarification question"
                   onClick={() => {
                     const question = askAgentDraft.trim();
                     if (!question || interactionLocked) return;
@@ -1028,103 +1040,90 @@ export function AskTakeover({
                     height: mobile ? 44 : 34,
                     padding: "0 var(--sp-4)",
                     borderRadius: "var(--radius-input)",
-                    border: "var(--hairline) solid var(--border-strong)",
+                    borderWidth: "var(--hairline)",
+                    borderStyle: "solid",
+                    borderColor: "var(--border-strong)",
                     background: "var(--bg-raised)",
                     color: "var(--fg)",
+                    cursor: interactionLocked || askAgentDraft.trim().length === 0 ? "default" : "pointer",
                     opacity: interactionLocked || askAgentDraft.trim().length === 0 ? 0.5 : 1,
                   }}
                 >
                   {askAgent.sending ? "Asking…" : "Ask agent"}
                 </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        {/* Pinned footer — Skip / Ask agent / Submit. */}
-        <div
-          data-ask-takeover-footer
-          className={mobile ? "pb-safe-bottom" : undefined}
-          style={{
-            flex: "0 0 auto",
-            borderTop: "var(--hairline) solid var(--border-faint)",
-          }}
-        >
-          <div
-            className="flex items-center justify-end"
-            style={{
-              gap: "var(--sp-3)",
-              padding: `var(--sp-3) ${padX}`,
-            }}
-          >
-            <button
-              type="button"
-              onClick={onSkip}
-              disabled={interactionLocked}
-              title="Skip"
-              className="text-label"
-              style={{
-                // Mobile: 44 height clears the touch minimum.
-                height: mobile ? 44 : 34,
-                padding: "0 var(--sp-4)",
-                borderRadius: "var(--radius-input)",
-                borderWidth: "var(--hairline)",
-                borderStyle: "solid",
-                borderColor: "transparent",
-                background: "transparent",
-                color: "var(--fg-2)",
-                cursor: interactionLocked ? "default" : "pointer",
-              }}
-            >
-              Skip
-            </button>
-            {askAgent ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setAskAgentOpen(true);
-                  setAskAgentLocalError(null);
-                }}
-                disabled={interactionLocked}
-                title="Ask the agent to clarify"
-                className="text-label"
-                style={{
-                  height: mobile ? 44 : 34,
-                  padding: "0 var(--sp-4)",
-                  borderRadius: "var(--radius-input)",
-                  borderWidth: "var(--hairline)",
-                  borderStyle: "solid",
-                  borderColor: "var(--border-strong)",
-                  background: "transparent",
-                  color: "var(--fg)",
-                  cursor: interactionLocked ? "default" : "pointer",
-                  opacity: interactionLocked ? 0.5 : 1,
-                }}
-              >
-                {askAgent.waiting ? "Waiting…" : "Ask agent"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={reply}
-              disabled={!canReply}
-              title={mobile ? "Submit" : "Submit (Enter)"}
-              className="text-label"
-              style={{
-                // Mobile: 44 height clears the touch minimum (Reply is the only
-                // submit path there — Enter inserts a newline).
-                height: mobile ? 44 : 34,
-                padding: "0 var(--sp-4)",
-                borderRadius: "var(--radius-input)",
-                border: "var(--hairline) solid transparent",
-                background: "var(--primary)",
-                color: "var(--primary-on)",
-                cursor: canReply ? "pointer" : "default",
-                opacity: canReply ? 1 : 0.5,
-              }}
-            >
-              {sending ? "Submitting…" : "Submit"}
-            </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  disabled={interactionLocked}
+                  title="Skip"
+                  className="text-label"
+                  style={{
+                    // Mobile: 44 height clears the touch minimum.
+                    height: mobile ? 44 : 34,
+                    padding: "0 var(--sp-4)",
+                    borderRadius: "var(--radius-input)",
+                    borderWidth: "var(--hairline)",
+                    borderStyle: "solid",
+                    borderColor: "transparent",
+                    background: "transparent",
+                    color: "var(--fg-2)",
+                    cursor: interactionLocked ? "default" : "pointer",
+                  }}
+                >
+                  Skip
+                </button>
+                {askAgent ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAskAgentOpen(true);
+                      setAskAgentLocalError(null);
+                    }}
+                    disabled={interactionLocked}
+                    title="Ask the agent to clarify"
+                    className="text-label"
+                    style={{
+                      height: mobile ? 44 : 34,
+                      padding: "0 var(--sp-4)",
+                      borderRadius: "var(--radius-input)",
+                      borderWidth: "var(--hairline)",
+                      borderStyle: "solid",
+                      borderColor: "var(--border-strong)",
+                      background: "transparent",
+                      color: "var(--fg)",
+                      cursor: interactionLocked ? "default" : "pointer",
+                      opacity: interactionLocked ? 0.5 : 1,
+                    }}
+                  >
+                    {askAgent.waiting ? "Waiting…" : "Ask agent"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={reply}
+                  disabled={!canReply}
+                  title={mobile ? "Submit" : "Submit (Enter)"}
+                  className="text-label"
+                  style={{
+                    // Mobile: 44 height clears the touch minimum (Reply is the only
+                    // submit path there — Enter inserts a newline).
+                    height: mobile ? 44 : 34,
+                    padding: "0 var(--sp-4)",
+                    borderRadius: "var(--radius-input)",
+                    border: "var(--hairline) solid transparent",
+                    background: "var(--primary)",
+                    color: "var(--primary-on)",
+                    cursor: canReply ? "pointer" : "default",
+                    opacity: canReply ? 1 : 0.5,
+                  }}
+                >
+                  {sending ? "Submitting…" : "Submit"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

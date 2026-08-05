@@ -184,6 +184,7 @@ import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-con
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { MobileCurrentStateCard } from "../../mobile/current-state-card.js";
 import { applyPersistedChatRename } from "../chat-title-cache.js";
+import { needYouQueryOptions, removeResolvedNeedYouRequest } from "../need-you/query.js";
 import { GitHubSection } from "../right-sidebar/github-section.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ParticipantsSection } from "../right-sidebar/participants-section.js";
@@ -1748,7 +1749,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
   // Unsent draft text, cached per user + chat in browser-local storage so it
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
@@ -2687,13 +2688,43 @@ export function ChatView({
       // after the question was resolved, so the resolution itself restores
       // the full timeline. The stored (explicitly chosen) filter is not
       // touched — only the navigation-applied params clear.
-      if (searchParams.has("focus") || searchParams.has("focusMsg")) {
-        const next = new URLSearchParams(searchParams);
-        next.delete("focus");
-        next.delete("focusMsg");
-        setSearchParams(next, { replace: true });
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("focus");
+      nextParams.delete("focusMsg");
+      // Need-you queue session (`?nq=1`, set by the Need you entry): each
+      // resolution advances to the NEXT chat holding an open question. A
+      // next question in THIS chat needs no navigation — the FIFO takeover
+      // advances in place, and the session flag survives for the question
+      // after it. An empty queue (or an unavailable one — never strand a
+      // stale flag) ends the session; manual chat switches already delete
+      // `nq` on every ordinary selection path.
+      let advanced = false;
+      if (searchParams.get("nq") === "1") {
+        if (organizationId === null) {
+          nextParams.delete("nq");
+        } else {
+          removeResolvedNeedYouRequest(queryClient, organizationId, request.id);
+          try {
+            const queue = await queryClient.fetchQuery(needYouQueryOptions(organizationId));
+            const nextItem = queue.items.find((item) => item.request.id !== request.id) ?? null;
+            if (!nextItem) {
+              nextParams.delete("nq");
+            } else if (nextItem.chat.id !== chatId) {
+              nextParams.set("c", nextItem.chat.id);
+              nextParams.delete("showAsk");
+              advanced = true;
+            }
+          } catch {
+            nextParams.delete("nq");
+          }
+        }
       }
-      scrollToBottom("smooth");
+      if (nextParams.toString() !== searchParams.toString()) {
+        // Advancing is a navigation (push — Back walks the queue hops);
+        // param cleanup in place is not (replace).
+        setSearchParams(nextParams, { replace: !advanced });
+      }
+      if (!advanced) scrollToBottom("smooth");
       // Leave `askBusy` true: the overlay disables itself until the resolved
       // request unmounts it, so a slow refetch can't invite a second submit.
     } catch (err) {
@@ -2969,11 +3000,6 @@ export function ChatView({
     humanAgentId: myAgentId,
     askerAgentId: dockRequest?.senderId ?? null,
   });
-  const enterAskInspectMode = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.set("showAsk", "false");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
   // "Show earlier chat" from the blocking ask: inspect mode + the transient
   // pair filter on the asker, so the takeover gives way to exactly the
   // conversation the question grew out of. URL-only — leaving the chat drops
@@ -4368,8 +4394,7 @@ export function ChatView({
                   error: askAgent.error,
                   onAsk: askAgent.ask,
                 }}
-                onDismiss={enterAskInspectMode}
-                onRequestEarlierContext={showEarlierChatFromAsk}
+                onShowEarlierChat={showEarlierChatFromAsk}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
