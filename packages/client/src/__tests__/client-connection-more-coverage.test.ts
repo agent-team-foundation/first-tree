@@ -907,3 +907,67 @@ describe("ClientConnection — additional branch coverage", () => {
     priv(connection).clearTimers();
   });
 });
+
+describe("characterization — inbox:deliver identity and deferred ACK", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.doUnmock("ws");
+    vi.resetModules();
+  });
+
+  it("emits frame.inboxId as the first listener arg and does not ACK merely on deliver", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+    await bindAgent(connection, socket);
+
+    const received: Array<{ firstArg: string; inboxId: string; entryId: number }> = [];
+    connection.on("inbox:deliver", (firstArg, frame) => {
+      received.push({ firstArg, inboxId: frame.inboxId, entryId: frame.entryId });
+    });
+
+    const sentBefore = socket.sent.length;
+    const deliveredFrame = {
+      type: "inbox:deliver",
+      entryId: 777,
+      inboxId: "inbox-agent-1",
+      chatId: "chat-char",
+      message: {
+        id: "message-char",
+        chatId: "chat-char",
+        senderId: "agent-sender",
+        format: "text",
+        content: "hello",
+        metadata: {},
+        inReplyTo: null,
+        source: null,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        configVersion: 1,
+        recipientMode: "full",
+        precedingMessages: [],
+      },
+    };
+    socket.emitMessage(deliveredFrame);
+    await flushMicrotasks();
+
+    expect(received).toEqual([{ firstArg: "inbox-agent-1", inboxId: "inbox-agent-1", entryId: 777 }]);
+    // Receiving a deliver frame must not emit inbox:ack — ACK is owned by the
+    // handler turn completion path (SessionManager → ackEntry → sendInboxAck).
+    const newFrames = socket.sent.slice(sentBefore).map((raw) => JSON.parse(raw) as { type?: string });
+    expect(newFrames.every((frame) => frame.type !== "inbox:ack")).toBe(true);
+
+    // Explicit ACK path remains available and is the only ClientConnection ACK surface.
+    const ackPromise = connection.sendInboxAck(777, "agent-1");
+    const ackFrame = parseSent(socket, socket.sent.length - 1);
+    expect(ackFrame.type).toBe("inbox:ack");
+    expect(ackFrame.entryId).toBe(777);
+    socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: 777,
+      ref: ackFrame.ref,
+      disposition: "acked",
+    });
+    await expect(ackPromise).resolves.toBeUndefined();
+
+    priv(connection).clearTimers();
+  });
+});
