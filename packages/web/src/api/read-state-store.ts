@@ -145,6 +145,25 @@ export async function setReadState(
 }
 
 /**
+ * Remove every chat's scroll-position snapshot. Called on logout so no
+ * chat/message identifiers from the previous account linger in IndexedDB
+ * on a shared browser profile (SEC-042). Resolves silently on IndexedDB
+ * unavailability or clear failure — logout must never be blocked by
+ * best-effort local cleanup.
+ */
+export async function clearAllReadStates(): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(READ_STATE_STORE, "readwrite");
+    tx.objectStore(READ_STATE_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
+/**
  * Remove the scroll-position snapshot for `chatId`. Intended for
  * diagnostic / debug use today; the production UI never calls this.
  * Resolves silently on IndexedDB unavailability.
