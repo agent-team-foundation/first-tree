@@ -140,13 +140,13 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/collect any uncovered\s+tree-repo recovery returned/u);
   });
 
-  it("hands off Review Agent configuration to Setup without blocking ordinary Seed", () => {
+  it("hands off Review Agent configuration to Getting Started without blocking ordinary Seed", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open, check Review Agent configuration once");
     expect(skillMarkdown).toContain('first-tree org context-tree review-config --as-member --org "<team-id>" --json');
     expect(skillMarkdown).toContain("Use only the JSON `enabled` and `agentUuid` fields");
     expect(skillMarkdown).toMatch(/selecting an eligible managed Review Agent and\s+enabling Automatic Review/u);
     expect(skillMarkdown).toContain("the selection is retained");
-    expect(skillMarkdown).toMatch(/Setup owns\s+provider prerequisites and the Team mutation/u);
+    expect(skillMarkdown).toMatch(/Getting Started owns\s+provider prerequisites and the Team mutation/u);
     expect(skillMarkdown).toContain("This is not a health or readiness check");
     expect(skillMarkdown).toContain("first perform the Review Agent read");
     expect(skillMarkdown).toContain("send at most one combined setup handoff");

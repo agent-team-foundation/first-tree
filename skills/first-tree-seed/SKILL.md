@@ -321,7 +321,7 @@ PRs/MRs; report the attention gap, but consolidate the action here.
   prints a GitHub installation-settings URL — an absolute `https://` link, so
   it renders clickable in chat. Relay it and say to add the tree repo there.
 - **GitHub tree, no App installed:** give the admin a clickable link to the web
-  console's Setup surface, built from the server URL the agent knows — take
+  console's Getting Started surface, built from the server URL the agent knows — take
   the `Server:` value from `first-tree agent status` and append
   `/settings/setup` (an absolute `https://…/settings/setup` renders
   clickable; a bare `/settings/setup` path does **not** — the chat link guard
@@ -371,7 +371,7 @@ first-tree org context-tree review-config --as-member --org "<team-id>" --json
 - Send one milestone response: combine any GitHub App recovery or repository
   coverage action with the applicable Review setup action above. If only one is
   missing, mention only that action. If neither is missing, add no setup
-  guidance. Setup owns provider prerequisites and the Team mutation.
+  guidance. Getting Started owns provider prerequisites and the Team mutation.
 - A failed or ambiguous read creates no inferred debt. It does not block
   ordinary Seed. Context Review remains optional for Team, Chat, basic Tree use,
   and ordinary Seed completion. Under the explicit Welcome Reviewer contract,

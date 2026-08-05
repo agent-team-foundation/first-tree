@@ -22,7 +22,7 @@ together without a GitHub-specific post-delivery branch.
   the run cell.
 - Create a chat with an eligible human/delegate pair and follow one disposable issue or pull request in that chat.
 - Select different active, organization-visible managed Agents for Context Reviewer and GitHub Task Agent. Use Settings
-  → Setup for Context Reviewer and Settings → Integrations → GitHub → Task routing for GitHub Task Agent; confirm each
+  → Getting Started for Context Reviewer and Settings → Integrations → GitHub → Task routing for GitHub Task Agent; confirm each
   surface rejects an assignment that would reuse the other role's Agent. Leave Automatic Review off for the first non-Context
   repository observations so ordinary delegation is proven independently from Context Review.
 - Bind the Team's Context Tree to one GitHub repository. Use a second disposable GitHub repository for GitHub Task Agent

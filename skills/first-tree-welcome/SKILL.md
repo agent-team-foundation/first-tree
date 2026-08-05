@@ -481,12 +481,12 @@ run. The dedicated tree task owns its own post-PR/MR handoff through
   Read only the JSON `enabled` and `agentUuid` fields. If `agentUuid` is null,
   say once that **Settings → Getting Started** can select an eligible managed Review Agent
   and enable Automatic Review. If `agentUuid` is present while `enabled` is
-  false, say only that Setup can enable Automatic Review; the Agent is already
+  false, say only that **Settings → Getting Started** can enable Automatic Review; the Agent is already
   selected. If both are present/enabled, add no Review setup handoff.
 - This is not a health or readiness check. Do not prompt a member, infer
   Reviewer health, or infer debt when the read is invalid, fails, or is
   ambiguous. None of these states blocks onboarding.
-- Setup owns provider prerequisites, Reviewer selection and health; this
+- Getting Started owns provider prerequisites, Reviewer selection and health; this
   launcher performs no Team mutation.
 
 The ownership matrix is intentionally small:
