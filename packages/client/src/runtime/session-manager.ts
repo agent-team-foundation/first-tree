@@ -689,9 +689,6 @@ export class SessionManager {
    * shutdown that a lenient caller started still sees the failure.
    */
   private readonly handlerShutdowns = new WeakMap<AgentHandler, { raw: Promise<void>; observed: Promise<void> }>();
-  /** Cache of chatId → organizationId, resolved via `getChatDetail`. A chat's
-   *  org is immutable, so this is a cheap permanent memo that keeps doc-capture
-   *  uploads off the hot path after the first lookup. */
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
