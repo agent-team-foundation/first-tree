@@ -23,7 +23,7 @@ export function RepositoriesTab() {
   const ctx = useAgentDetailContext();
   // Gate on canEditConfig (not just !isHuman): non-editors hit the redirect
   // below, so there's no point firing an agent-resources GET for them.
-  const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig });
+  const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig, refetchOnMount: false });
   const canEditResources = ctx.canManageAgent && ctx.agent.status === "active";
   const readOnlyReason =
     ctx.canManageAgent && ctx.agent.status === "suspended"

@@ -38,6 +38,7 @@ export function PromptTab() {
     queryKey: ["agent-resources", ctx.uuid],
     queryFn: () => getAgentResources(ctx.uuid),
     enabled: !!ctx.uuid && ctx.canManageAgent && !ctx.isHuman,
+    refetchOnMount: false,
   });
   const savePromptMut = useMutation({
     mutationFn: (body: string) => {

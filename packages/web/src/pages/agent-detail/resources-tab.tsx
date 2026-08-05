@@ -11,7 +11,7 @@ const RESOURCE_TYPES: ResourceType[] = ["skill", "mcp"];
 
 export function ResourcesTab() {
   const ctx = useAgentDetailContext();
-  const resources = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && !ctx.isHuman });
+  const resources = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && !ctx.isHuman, refetchOnMount: false });
   // Skill and MCP share one resource mutation/justSaved flag, so flash "Saved"
   // only on the section that was actually edited (tracked at click time).
   const [lastSavedType, setLastSavedType] = useState<ResourceType | null>(null);

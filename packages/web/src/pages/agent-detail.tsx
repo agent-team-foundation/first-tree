@@ -29,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./../components/ui/dialog.js";
+import { LocalNavLink } from "./../components/ui/local-nav-link.js";
 import { Select } from "./../components/ui/select.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
 import { deriveAgentAvailability } from "./../lib/agent-availability.js";
@@ -578,10 +579,10 @@ function AgentDetailPageView() {
         >
           {currentTab ? (
             <div style={{ marginBottom: "var(--sp-5)" }}>
-              <h2 id="agent-detail-section-title" className="m-0 text-title" style={{ color: "var(--fg)" }}>
+              <h2 id="agent-detail-section-title" className="sr-only">
                 {currentTab.label}
               </h2>
-              <p className="m-0 text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+              <p className="m-0 text-body" style={{ color: "var(--fg-3)" }}>
                 {currentTab.description}
               </p>
             </div>
@@ -819,32 +820,12 @@ function AgentSectionNavigation({
   return (
     <aside style={{ position: "sticky", top: "var(--sp-4)", alignSelf: "start" }}>
       <nav aria-label="Agent sections">
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        <ul className="m-0 flex list-none flex-col p-0" style={{ gap: "var(--sp-0_5)" }}>
           {tabs.map((tab) => {
             const active = currentTabKey === tab.key;
             return (
               <li key={tab.key}>
-                <button
-                  type="button"
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => navigate(`/agents/${agentUuid}/${tab.path}`, { replace: true })}
-                  className={cn(
-                    "text-body w-full text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
-                    active ? "font-semibold" : "font-normal",
-                  )}
-                  style={{
-                    minHeight: "var(--sp-11)",
-                    padding: "var(--sp-2) var(--sp-3)",
-                    border: 0,
-                    borderLeft: `var(--hairline-bold) solid ${active ? "var(--fg)" : "transparent"}`,
-                    borderRadius: "var(--radius-input)",
-                    background: active ? "var(--bg-active)" : "transparent",
-                    color: active ? "var(--fg)" : "var(--fg-3)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {tab.label}
-                </button>
+                <LocalNavLink to={`/agents/${agentUuid}/${tab.path}`} label={tab.label} active={active} replace />
               </li>
             );
           })}

@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { useAuth } from "../auth/auth-context.js";
+import { LocalNavLink } from "../components/ui/local-nav-link.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 import {
@@ -270,46 +271,31 @@ function SidebarLink({
   attention?: boolean;
   activeOverride?: boolean;
 }) {
+  const { pathname } = useLocation();
+  const active = activeOverride ?? pathname.startsWith(to);
   return (
-    <NavLink
+    <LocalNavLink
       to={to}
-      aria-label={attention ? `${label} — Needs you` : undefined}
-      className={cn(
-        "block text-body transition-colors",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-      )}
-    >
-      {({ isActive }) => {
-        const active = activeOverride ?? isActive;
-        return (
+      label={label}
+      active={active}
+      ariaLabel={attention ? `${label} — Needs you` : undefined}
+      trailing={
+        attention ? (
           <span
-            className={cn("flex items-center justify-between", active && "font-medium")}
+            aria-hidden
+            data-setup-attention
+            title="Needs you"
             style={{
-              padding: "var(--sp-2) var(--sp-3)",
-              borderRadius: "var(--radius-input)",
-              color: active ? "var(--fg)" : "var(--fg-3)",
-              background: active ? "var(--bg-hover)" : "transparent",
+              width: "var(--sp-2)",
+              height: "var(--sp-2)",
+              flexShrink: 0,
+              borderRadius: "var(--radius-full)",
+              background: "var(--state-needs-you)",
             }}
-          >
-            <span>{label}</span>
-            {attention ? (
-              <span
-                aria-hidden
-                data-setup-attention
-                title="Needs you"
-                style={{
-                  width: "var(--sp-2)",
-                  height: "var(--sp-2)",
-                  flexShrink: 0,
-                  borderRadius: "var(--radius-full)",
-                  background: "var(--state-needs-you)",
-                }}
-              />
-            ) : null}
-          </span>
-        );
-      }}
-    </NavLink>
+          />
+        ) : null
+      }
+    />
   );
 }
 

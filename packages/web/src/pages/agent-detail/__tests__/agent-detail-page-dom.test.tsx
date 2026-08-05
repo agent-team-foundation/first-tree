@@ -341,6 +341,7 @@ async function renderDom(
   route: string,
   child: ReactElement,
   setup?: (queryClient: QueryClient) => void | Promise<void>,
+  routeChildren?: { prompt?: ReactElement },
 ): Promise<{ container: HTMLElement; root: Root; queryClient: QueryClient }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -362,7 +363,7 @@ async function renderDom(
               <Route path="/agents/:uuid" element={<AgentDetailPage />}>
                 <Route path="profile" element={child} />
                 <Route path="responsibilities" element={<ResponsibilitiesTab />} />
-                <Route path="prompt" element={child} />
+                <Route path="prompt" element={routeChildren?.prompt ?? child} />
                 <Route path="capabilities" element={child} />
                 <Route path="resources" element={<div>Resources route</div>} />
                 <Route path="runtime" element={child} />
@@ -415,7 +416,12 @@ function exactButtonByText(container: ParentNode, text: string): HTMLButtonEleme
 
 function agentSectionLabels(container: ParentNode): Array<string | undefined> {
   const nav = container.querySelector('nav[aria-label="Agent sections"]');
-  return nav ? [...nav.querySelectorAll("button")].map((button) => button.textContent?.trim()) : [];
+  return nav ? [...nav.querySelectorAll("a")].map((link) => link.textContent?.trim()) : [];
+}
+
+function agentSectionLink(container: ParentNode, label: string): HTMLAnchorElement | null {
+  const nav = container.querySelector('nav[aria-label="Agent sections"]');
+  return [...(nav?.querySelectorAll("a") ?? [])].find((link) => link.textContent?.trim() === label) ?? null;
 }
 
 function menuItemByText(container: ParentNode, text: string): HTMLButtonElement | null {
@@ -577,6 +583,27 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
+  it("uses the shared local-navigation treatment without a repeated visible tab title", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+
+    const activeLink = view.container.querySelector<HTMLAnchorElement>(
+      'nav[aria-label="Agent sections"] a[aria-current="page"]',
+    );
+    const activeSurface = activeLink?.querySelector<HTMLElement>(":scope > span");
+    expect(activeLink?.textContent?.trim()).toBe("Profile");
+    expect(activeSurface?.classList.contains("font-medium")).toBe(true);
+    expect(activeSurface?.style.background).toBe("var(--bg-hover)");
+    expect(activeSurface?.style.borderLeft).toBe("");
+
+    const sectionTitle = view.container.querySelector<HTMLHeadingElement>("#agent-detail-section-title");
+    expect(sectionTitle?.textContent?.trim()).toBe("Profile");
+    expect(sectionTitle?.classList.contains("sr-only")).toBe(true);
+    expect(view.container.textContent).toContain("Identity, ownership, and lifecycle for this agent.");
+    await act(async () => view.root.unmount());
+  });
+
   it("keeps reactivation failures and retry beside the shared header action", async () => {
     const { ResourcesTab } = await import("../resources-tab.js");
     agentMocks.getAgent.mockResolvedValueOnce(agent({ status: "suspended", runtimeState: null }));
@@ -637,7 +664,7 @@ describe("AgentDetailPage", () => {
     );
     const profileNav = profile.container.querySelector('nav[aria-label="Agent sections"]');
     if (!profileNav) throw new Error("Expected Agent navigation");
-    expect([...profileNav.querySelectorAll("button")].map((tab) => tab.textContent?.trim())).toEqual([
+    expect([...profileNav.querySelectorAll("a")].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
       "Responsibilities",
       "Runtime",
@@ -654,6 +681,11 @@ describe("AgentDetailPage", () => {
     expect(
       [...responsibilities.container.querySelectorAll("h2")].map((heading) => heading.textContent?.trim()),
     ).toContain("Responsibilities");
+    expect(
+      [...responsibilities.container.querySelectorAll("h2")]
+        .find((heading) => heading.textContent?.trim() === "Responsibilities")
+        ?.classList.contains("sr-only"),
+    ).toBe(true);
     expect(
       [...responsibilities.container.querySelectorAll("h3")].map((heading) => heading.textContent?.trim()),
     ).not.toContain("Responsibilities");
@@ -675,7 +707,7 @@ describe("AgentDetailPage", () => {
     await waitForText(view.container, "PR Engineer");
     const viewerNav = view.container.querySelector('nav[aria-label="Agent sections"]');
     if (!viewerNav) throw new Error("Expected Agent navigation");
-    expect([...viewerNav.querySelectorAll("button")].map((tab) => tab.textContent?.trim())).toEqual([
+    expect([...viewerNav.querySelectorAll("a")].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
       "Responsibilities",
       "Tools & skills",
@@ -849,6 +881,31 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
+  it("does not flash Responsibilities when opening a resource-backed tab", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    templateMocks.listAgentTemplates.mockResolvedValue({ templates: [] });
+    agentResourceMocks.getAgentResources.mockResolvedValue(agentResources({ templateIds: [], adoptedTemplates: [] }));
+
+    const view = await renderDom("/agents/agent-1/profile", <div>Profile route</div>, undefined, {
+      prompt: <PromptTab />,
+    });
+    await waitForText(view.container, "Profile route");
+    await waitForCondition(
+      () => !agentSectionLabels(view.container).includes("Responsibilities"),
+      "Expected Responsibilities to close after confirmed empty",
+    );
+
+    const requestsBeforeNavigation = agentResourceMocks.getAgentResources.mock.calls.length;
+    agentResourceMocks.getAgentResources.mockImplementation(() => new Promise(() => undefined));
+
+    await click(agentSectionLink(view.container, "Instructions"));
+    await flush();
+    expect(agentResourceMocks.getAgentResources).toHaveBeenCalledTimes(requestsBeforeNavigation);
+    expect(agentSectionLabels(view.container)).not.toContain("Responsibilities");
+
+    await act(async () => view.root.unmount());
+  });
+
   it("renders prompt resource blocks and edits the custom prompt inline", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     agentResourceMocks.getAgentResources.mockResolvedValue(
@@ -884,7 +941,7 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Start chat");
     const nav = container.querySelector('nav[aria-label="Agent sections"]');
     if (!nav) throw new Error("Expected Agent navigation");
-    expect([...nav.querySelectorAll("button")].map((tab) => tab.textContent?.trim())).toEqual([
+    expect([...nav.querySelectorAll("a")].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
       "Responsibilities",
       "Runtime",

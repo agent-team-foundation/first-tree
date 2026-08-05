@@ -8,7 +8,7 @@ import { responsibilitiesSideFromQuery, shouldShowResponsibilitiesTab } from "./
 
 export function ResponsibilitiesTab() {
   const ctx = useAgentDetailContext();
-  const resources = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && !ctx.isHuman });
+  const resources = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && !ctx.isHuman, refetchOnMount: false });
   // Same catalog key as the Agent Detail shell / edit dialog — hide this route
   // when the public catalog and this agent's adopted templateIds are both empty.
   const catalogQuery = useQuery({
@@ -16,6 +16,7 @@ export function ResponsibilitiesTab() {
     queryFn: listAgentTemplates,
     enabled: !!ctx.uuid && !ctx.isHuman,
     retry: 1,
+    refetchOnMount: false,
   });
 
   const showResponsibilities = shouldShowResponsibilitiesTab(ctx.isHuman, {

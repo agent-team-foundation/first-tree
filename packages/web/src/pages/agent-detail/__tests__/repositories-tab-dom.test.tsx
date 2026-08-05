@@ -172,7 +172,10 @@ describe("RepositoriesTab", () => {
     const { container } = await renderTab({ context });
 
     expect(container.textContent).toContain("Profile tab");
-    expect(resourceMocks.useAgentResources).toHaveBeenCalledWith("agent-1", { enabled: false });
+    expect(resourceMocks.useAgentResources).toHaveBeenCalledWith("agent-1", {
+      enabled: false,
+      refetchOnMount: false,
+    });
   });
 
   it("renders the repository section and configured context tree row", async () => {

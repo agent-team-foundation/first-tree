@@ -97,7 +97,10 @@ export function agentResourcesMutationHandlers(
   };
 }
 
-export function useAgentResources(uuid: string, opts: { enabled: boolean }): AgentResourcesController {
+export function useAgentResources(
+  uuid: string,
+  opts: { enabled: boolean; refetchOnMount?: boolean },
+): AgentResourcesController {
   const queryClient = useQueryClient();
   const { justSaved, markSaved } = useJustSaved();
   const [reloading, setReloading] = useState(false);
@@ -106,6 +109,7 @@ export function useAgentResources(uuid: string, opts: { enabled: boolean }): Age
     queryKey: ["agent-resources", uuid],
     queryFn: () => getAgentResources(uuid),
     enabled: opts.enabled,
+    refetchOnMount: opts.refetchOnMount,
   });
   const updateMut = useMutation({
     mutationFn: (bindings: AgentResourceBindingInput[]) => {
