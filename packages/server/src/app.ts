@@ -99,6 +99,7 @@ import {
   reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
+import { registerBrowserSecurityHeaders } from "./security/browser-security-headers.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { backfillExternalAttachmentsToPostgres } from "./services/attachment.js";
 import {
@@ -213,6 +214,10 @@ export async function buildApp(config: Config, options: BuildAppOptions = {}) {
     // upstream proxy chain.
     trustProxy: config.trustProxy,
   });
+
+  // Establish one enforceable browser-security contract for API responses,
+  // static assets, SPA fallbacks, and errors before any route is registered.
+  registerBrowserSecurityHeaders(app);
 
   // Loud security reminder: trustProxy=true makes Fastify trust ANY upstream's
   // x-forwarded-for header. Safe iff the First Tree container only receives traffic
