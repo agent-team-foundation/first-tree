@@ -11,17 +11,20 @@ const REQUIRED_STAGES = ["initTelemetry", "runMigrations", "buildApp", "appListe
 
 /**
  * Readiness endpoint — distinct from `/healthz` (liveness). Returns 200 only
- * when every bootstrap stage is done. The body carries the stage detail so
- * operators can see which stage stalled. See
- * docs/server-bootstrap-resilience-design.md §3 (T6).
+ * when every bootstrap stage is done and the bounded database probe is
+ * connected. The body carries stage detail so operators can see which stage
+ * stalled without querying PostgreSQL before bootstrap completes.
  */
 export async function readyzRoutes(app: FastifyInstance): Promise<void> {
   app.get("/readyz", { config: { rateLimit: false } }, async (_request, reply) => {
     const allStagesDone = REQUIRED_STAGES.every((s) => bootstrapState.stages[s]?.status === "done");
-    const ready = allStagesDone && bootstrapState.readyAt !== null;
+    const bootstrapReady = allStagesDone && bootstrapState.readyAt !== null;
+    const db = bootstrapReady ? await app.databaseReadinessProbe.check() : "unchecked";
+    const ready = bootstrapReady && db === "connected";
 
     const body = {
       ready,
+      db,
       startedAt: bootstrapState.startedAt.toISOString(),
       readyAt: bootstrapState.readyAt?.toISOString() ?? null,
       stages: bootstrapState.stages,

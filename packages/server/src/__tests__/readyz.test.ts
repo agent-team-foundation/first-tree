@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bootstrapState, markReady, markStage } from "../bootstrap-state.js";
 import { useTestApp } from "./helpers.js";
 
@@ -28,49 +28,97 @@ describe("/readyz", () => {
     resetState();
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     resetState();
   });
 
-  it("returns 503 with stage detail when stages have not been marked done", async () => {
+  it("returns 503 with unchecked database state and skips the probe before bootstrap completes", async () => {
+    const check = vi
+      .spyOn(getApp().databaseReadinessProbe, "check")
+      .mockRejectedValue(new Error("readiness probe must not run"));
+
     const res = await getApp().inject({ method: "GET", url: "/readyz" });
     expect(res.statusCode).toBe(503);
-    const body = res.json();
-    expect(body.ready).toBe(false);
-    expect(body.readyAt).toBeNull();
-    expect(body.stages).toEqual({});
+    expect(res.json()).toEqual({
+      ready: false,
+      db: "unchecked",
+      startedAt: bootstrapState.startedAt.toISOString(),
+      readyAt: null,
+      stages: {},
+    });
+    expect(check).not.toHaveBeenCalled();
   });
 
-  it("returns 200 when all stages done and readyAt is set", async () => {
+  it("returns 200 with connected database state after bootstrap completes", async () => {
     markAllStagesDone();
     markReady();
+    const check = vi.spyOn(getApp().databaseReadinessProbe, "check").mockResolvedValue("connected");
 
     const res = await getApp().inject({ method: "GET", url: "/readyz" });
     expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.ready).toBe(true);
-    expect(body.readyAt).toBeTruthy();
-    expect(body.stages.appListen?.status).toBe("done");
+    expect(res.json()).toEqual({
+      ready: true,
+      db: "connected",
+      startedAt: bootstrapState.startedAt.toISOString(),
+      readyAt: bootstrapState.readyAt?.toISOString(),
+      stages: bootstrapState.stages,
+    });
+    expect(check).toHaveBeenCalledOnce();
   });
 
-  it("returns 503 when any required stage failed", async () => {
+  it("returns 503 with unchecked database state and skips the probe when bootstrap failed", async () => {
     markAllStagesDone();
     markStage("runMigrations", { status: "failed", error: "boom" });
     markReady();
+    const check = vi
+      .spyOn(getApp().databaseReadinessProbe, "check")
+      .mockRejectedValue(new Error("readiness probe must not run"));
 
     const res = await getApp().inject({ method: "GET", url: "/readyz" });
     expect(res.statusCode).toBe(503);
-    const body = res.json();
-    expect(body.ready).toBe(false);
-    expect(body.stages.runMigrations?.status).toBe("failed");
-    expect(body.stages.runMigrations?.error).toBe("boom");
+    expect(res.json()).toEqual({
+      ready: false,
+      db: "unchecked",
+      startedAt: bootstrapState.startedAt.toISOString(),
+      readyAt: bootstrapState.readyAt?.toISOString(),
+      stages: bootstrapState.stages,
+    });
+    expect(check).not.toHaveBeenCalled();
   });
 
   it("returns 503 when stages done but markReady has not been called", async () => {
     markAllStagesDone();
     // readyAt left null on purpose
+    const check = vi
+      .spyOn(getApp().databaseReadinessProbe, "check")
+      .mockRejectedValue(new Error("readiness probe must not run"));
 
     const res = await getApp().inject({ method: "GET", url: "/readyz" });
     expect(res.statusCode).toBe(503);
-    expect(res.json().ready).toBe(false);
+    expect(res.json()).toEqual({
+      ready: false,
+      db: "unchecked",
+      startedAt: bootstrapState.startedAt.toISOString(),
+      readyAt: null,
+      stages: bootstrapState.stages,
+    });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when the bounded database probe reports disconnected after failure or timeout", async () => {
+    markAllStagesDone();
+    markReady();
+    const check = vi.spyOn(getApp().databaseReadinessProbe, "check").mockResolvedValue("disconnected");
+
+    const res = await getApp().inject({ method: "GET", url: "/readyz" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({
+      ready: false,
+      db: "disconnected",
+      startedAt: bootstrapState.startedAt.toISOString(),
+      readyAt: bootstrapState.readyAt?.toISOString(),
+      stages: bootstrapState.stages,
+    });
+    expect(check).toHaveBeenCalledOnce();
   });
 });
