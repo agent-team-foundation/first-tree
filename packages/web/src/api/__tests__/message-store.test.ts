@@ -116,3 +116,47 @@ describe("message-store / clearChatCache", () => {
     expect(await getCachedMessages("chat-1")).toEqual([]);
   });
 });
+
+describe("message-store / storage namespace (SEC-042)", () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory();
+  });
+
+  async function loadStoreWithScope() {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const scope = await import("../storage-scope.js");
+    const store = await import("../message-store.js");
+    return { scope, store };
+  }
+
+  it("isolates cached messages between account namespaces", async () => {
+    const { scope, store } = await loadStoreWithScope();
+    scope.setStorageNamespace("user-a");
+    await store.cacheMessages("chat-1", [msg("a-1", T(1))]);
+
+    // A different account on the same browser sees none of user-a's rows.
+    scope.setStorageNamespace("user-b");
+    expect(await store.getCachedMessages("chat-1")).toEqual([]);
+    await store.cacheMessages("chat-1", [msg("b-1", T(2))]);
+
+    // ...and switching back and forth keeps each account's cache intact.
+    scope.setStorageNamespace("user-a");
+    expect((await store.getCachedMessages("chat-1")).map((m) => m.id)).toEqual(["a-1"]);
+    scope.setStorageNamespace("user-b");
+    expect((await store.getCachedMessages("chat-1")).map((m) => m.id)).toEqual(["b-1"]);
+  });
+
+  it("drops writes and empties reads once the namespace is purged", async () => {
+    const { scope, store } = await loadStoreWithScope();
+    scope.setStorageNamespace("user-a");
+    await store.cacheMessages("chat-1", [msg("a-1", T(1))]);
+
+    await scope.purgeAccountLocalData("user-a");
+
+    // Late in-flight writes under the purged namespace are dropped, and
+    // reads degrade to empty without throwing.
+    await store.cacheMessages("chat-1", [msg("a-late", T(2))]);
+    expect(await store.getCachedMessages("chat-1")).toEqual([]);
+  });
+});

@@ -261,3 +261,60 @@ describe("read-state-store", () => {
     await expect(clear).resolves.toBeUndefined();
   });
 });
+
+describe("browser stores / storage namespace (SEC-042)", () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory();
+  });
+
+  it("isolates cached images between account namespaces and rejects writes after purge", async () => {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const scope = await import("../storage-scope.js");
+    const { getImage, putImage } = await import("../image-store.js");
+
+    scope.setStorageNamespace("user-a");
+    await putImage({ imageId: "img-1", base64: "a-bytes", mimeType: "image/png" });
+
+    scope.setStorageNamespace("user-b");
+    await expect(getImage("img-1")).resolves.toBeNull();
+
+    // Purge user-b (logout): the namespace is write-blocked — `putImage`
+    // degrades to the IndexedDB-unavailable contract and rejects for callers
+    // to swallow, reads return null.
+    await scope.purgeAccountLocalData("user-b");
+    await expect(putImage({ imageId: "img-2", base64: "b", mimeType: "image/png" })).rejects.toThrow(
+      "Image storage unavailable",
+    );
+    await expect(getImage("img-2")).resolves.toBeNull();
+
+    // user-a's cache is untouched by user-b's purge.
+    scope.setStorageNamespace("user-a");
+    await expect(getImage("img-1")).resolves.toEqual({ base64: "a-bytes", mimeType: "image/png" });
+  });
+
+  it("isolates read state between account namespaces and no-ops after purge", async () => {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const scope = await import("../storage-scope.js");
+    const { getReadState, setReadState } = await import("../read-state-store.js");
+
+    scope.setStorageNamespace("user-a");
+    await setReadState("chat-1", "msg-1", "msg-3");
+
+    scope.setStorageNamespace("user-b");
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+
+    // Logout purge of user-b: writes no-op, reads return null — never throws.
+    await scope.purgeAccountLocalData("user-b");
+    await setReadState("chat-1", "msg-9", "msg-9");
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+
+    scope.setStorageNamespace("user-a");
+    await expect(getReadState("chat-1")).resolves.toMatchObject({
+      chatId: "chat-1",
+      bottomVisibleMessageId: "msg-1",
+      latestKnownMessageId: "msg-3",
+    });
+  });
+});
