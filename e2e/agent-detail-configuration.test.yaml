@@ -22,11 +22,13 @@ steps:
       than a second page-level Instructions title
   - click: Tools & skills in the Agent sections navigation
   - assert: Tools & skills is the current section and the content separately shows Skills and Integrations;
-      because neither is configured, each empty state explains the impact and offers a clear setup action
+      because neither is configured, each empty state explains the impact and offers a clear setup action; each section
+      uses one clean divider below its heading, and the empty content is plain rather than enclosed by a second outlined card
   - click: Repositories in the Agent sections navigation
   - assert: Repositories is the current section and the content does not add a visible page title above its actual
       Repositories and Context tree sections
   - click: Tools & skills in the Agent sections navigation
   - click: Set up integration button in the Integrations empty state
   - waitForUrl: /settings/resources
-  - assert: Team Settings opens on Resources, where MCP integrations are managed alongside Instructions and Skills
+  - assert: Team Settings opens on Resources, where MCP integrations are managed alongside Instructions and Skills;
+      resource sections use the same single-divider and flat-content treatment without doubled or clipped border edges

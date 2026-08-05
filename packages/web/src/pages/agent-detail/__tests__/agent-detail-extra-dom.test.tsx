@@ -936,6 +936,14 @@ describe("Resources and runtime extra sections", () => {
     expect(recovery.textContent).toContain("Claim unknown is in phase unknown");
     expect(recovery.textContent).toContain("recovery failed");
     expect(buttonByText(recovery, "Recovering")?.disabled).toBe(true);
+    const recoverySection = [...recovery.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === "Runtime switch recovery",
+    );
+    const recoveryContent = recoverySection?.children.item(1) as HTMLElement | null;
+    const recoveryRow = recoveryContent?.firstElementChild as HTMLElement | null;
+    expect(recoveryContent?.style.cssText).toContain("border-top");
+    expect(recoveryRow?.style.border).toBe("");
+    expect(recoveryRow?.style.borderRadius).toBe("");
   });
 });
 

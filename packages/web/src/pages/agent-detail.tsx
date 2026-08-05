@@ -891,10 +891,10 @@ function BindClientList({
         listStyle: "none",
       }}
     >
-      {bindable.map((c) => {
+      {bindable.map((c, index) => {
         const picked = c.id === selected;
         return (
-          <li key={c.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
+          <li key={c.id} style={index > 0 ? { borderTop: "var(--hairline) solid var(--border-faint)" } : undefined}>
             <button
               type="button"
               onClick={() => onSelect(c.id)}
@@ -1061,12 +1061,15 @@ function RuntimeSwitchControls({
             listStyle: "none",
           }}
         >
-          {clients.map((client) => {
+          {clients.map((client, index) => {
             const picked = client.id === selectedClientId;
             const blocker = runtimeSwitchClientBlocker(client);
             const disabled = blocker !== null;
             return (
-              <li key={client.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
+              <li
+                key={client.id}
+                style={index > 0 ? { borderTop: "var(--hairline) solid var(--border-faint)" } : undefined}
+              >
                 <button
                   type="button"
                   onClick={() => {

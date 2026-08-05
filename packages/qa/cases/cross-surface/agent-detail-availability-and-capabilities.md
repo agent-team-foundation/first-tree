@@ -49,6 +49,11 @@ axes as a health score.
   Each configured row must expose its purpose, neutral Enabled/Disabled state,
   effective rule, and origin without implying that an enabled resource makes an
   offline or suspended agent runnable.
+- Confirm Agent Detail and the matching Settings resource sections use one
+  structural divider below each heading. Empty informational content remains
+  flat rather than gaining a nested outline; selectable lists keep one complete
+  outer frame with separators only between rows. No edge is doubled, clipped,
+  or missing at 100% and 200% zoom.
 - As the admin, toggle or add an Agent-level capability and observe
   **Saving… → Saved**. Force a save failure, verify the attempted state remains
   understandable, then reload the latest settings and repeat the narrow control

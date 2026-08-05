@@ -191,6 +191,12 @@ describe("SettingsGithubPage — task routing", () => {
     expect(connection.compareDocumentPosition(taskRouting) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(taskRouting.textContent).toContain("GitHub Task Agent");
 
+    const controls = await waitForSelector<HTMLElement>(taskRouting, '[data-github-task-agent-controls="admin"]');
+    expect(controls.parentElement?.style.cssText).toContain("border-top");
+    expect(controls.style.border).toBe("");
+    expect(controls.style.borderRadius).toBe("");
+    expect(controls.style.background).toBe("");
+
     const select = await waitForSelector<HTMLButtonElement>(taskRouting, '[aria-label="GitHub Task Agent"]');
     await act(async () => select.click());
     const option = [...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((candidate) =>

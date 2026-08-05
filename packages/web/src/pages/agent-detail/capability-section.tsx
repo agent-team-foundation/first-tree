@@ -205,20 +205,7 @@ export function ResourceTypeSection(props: {
       description={type === "mcp" ? "Services this agent can access through MCP." : undefined}
       action={rows.length > 0 ? addControl : null}
     >
-      <div
-        className="ad-tail-trim"
-        style={
-          rows.length > 0
-            ? {
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-panel)",
-                paddingLeft: "var(--sp-3)",
-                paddingRight: "var(--sp-3)",
-                overflow: "hidden",
-              }
-            : undefined
-        }
-      >
+      <div className="ad-tail-trim">
         {rows.length === 0 ? (
           <CapabilityEmptyState
             type={type}
@@ -312,16 +299,7 @@ function CapabilityEmptyState(props: {
     <div
       className={props.canEdit ? "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" : undefined}
       style={{
-        paddingTop: "var(--sp-4)",
-        paddingBottom: "var(--sp-4)",
-        paddingLeft: props.canEdit ? "var(--sp-4)" : 0,
-        paddingRight: props.canEdit ? "var(--sp-4)" : 0,
-        ...(props.canEdit
-          ? {
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-panel)",
-            }
-          : null),
+        padding: "var(--sp-4) 0",
       }}
     >
       <div className="min-w-0">

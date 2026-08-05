@@ -117,10 +117,7 @@ export function GithubTaskAgentControls({
       className="flex flex-col"
       style={{
         gap: "var(--sp-3)",
-        padding: "var(--sp-4)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        background: "var(--bg-sunken)",
+        padding: "var(--sp-3) 0",
       }}
     >
       <div>

@@ -81,10 +81,11 @@ export function ResourceRowView(props: {
   const expandNoun = typeof props.name === "string" && props.name ? props.name : (props.expandLabel ?? "");
   return (
     <div
+      data-resource-row
       data-dimmed={props.dimmed ? "true" : undefined}
+      className="ad-resource-row"
       style={{
         padding: "var(--sp-3) 0",
-        borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
       {/* Title + action cluster. On mobile they stack (title, then the controls

@@ -206,6 +206,14 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
 }
 
+function sectionByHeading(container: ParentNode, heading: string): HTMLElement | null {
+  return (
+    [...container.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === heading,
+    ) ?? null
+  );
+}
+
 async function setInputValue(element: HTMLInputElement, value: string): Promise<void> {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -428,6 +436,12 @@ describe("ResourcesTab", () => {
 
     expect(container.textContent).toContain("Repositories");
     expect(container.textContent).toContain("Team repo");
+    const section = sectionByHeading(container, "Repositories · 1");
+    const sectionContent = section?.children.item(1) as HTMLElement | null;
+    const resourceList = sectionContent?.firstElementChild as HTMLElement | null;
+    expect(sectionContent?.style.cssText).toContain("border-top");
+    expect(resourceList?.style.border).toBe("");
+    expect(resourceList?.style.borderRadius).toBe("");
     // Repo peek is the compact `owner/repo` coordinate (default branch + derived
     // path are omitted), not the full clone URL.
     expect(container.textContent).toContain("acme/web");
@@ -458,6 +472,13 @@ describe("ResourcesTab", () => {
     const container = await renderRouted(
       <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={onMutate} />,
     );
+    const section = sectionByHeading(container, "Repositories · 0");
+    const sectionContent = section?.children.item(1) as HTMLElement | null;
+    const resourceList = sectionContent?.firstElementChild as HTMLElement | null;
+    const emptyState = resourceList?.firstElementChild as HTMLElement | null;
+    expect(sectionContent?.style.cssText).toContain("border-top");
+    expect(emptyState?.style.border).toBe("");
+    expect(emptyState?.style.borderRadius).toBe("");
     await click(container.querySelector('button[aria-label="Add repository"]'));
     await click(buttonByText(document.body, "Add agent repo"));
     // Two fields only — URL + Default branch — no Name (matches Settings → Resources).

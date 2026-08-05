@@ -1452,6 +1452,10 @@ describe("AgentDetailPage", () => {
     await click(buttonByText(first.container, "Choose computer"));
     await waitForText(document.body, "gandy-macbook");
     expect(document.body.textContent).toContain("Choose a computer");
+    const bindList = buttonByText(document.body, "gandy-macbook")?.closest("ul");
+    const bindRows = bindList?.querySelectorAll<HTMLElement>(":scope > li");
+    expect(bindRows?.item(0).style.cssText).not.toContain("border-top");
+    expect(bindRows?.item(1).style.cssText).toContain("border-top");
     await click(buttonByText(document.body, "gandy-macbook"));
     await click(exactButtonByText(document.body, "Assign"));
     await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected bind mutation");
@@ -1473,6 +1477,10 @@ describe("AgentDetailPage", () => {
 
     await click(buttonByText(view.container, "Switch runtime"));
     await waitForText(document.body, "Switch runtime");
+    const runtimeList = buttonByText(document.body, "gandy-macbook")?.closest("ul");
+    const runtimeRows = runtimeList?.querySelectorAll<HTMLElement>(":scope > li");
+    expect(runtimeRows?.item(0).style.cssText).not.toContain("border-top");
+    expect(runtimeRows?.item(1).style.cssText).toContain("border-top");
     await click(buttonByText(document.body, "Codex"));
     await click(exactButtonByText(document.body, "Review impact"));
     await waitForText(document.body, "Existing runtime sessions stop");

@@ -63,9 +63,7 @@ export function RuntimeSwitchRecoveryNotice({
       <div
         className="flex items-start gap-3"
         style={{
-          padding: "var(--sp-3)",
-          border: "var(--hairline) solid var(--state-blocked)",
-          borderRadius: "var(--radius-panel)",
+          padding: "var(--sp-3) 0",
         }}
       >
         <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: "var(--state-blocked)", marginTop: 2 }} />
