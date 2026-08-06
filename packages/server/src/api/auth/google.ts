@@ -32,6 +32,9 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return reply.status(503).send({ code: "provider-not-configured", error: "Google is not configured" });
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled", error: "Google sign-in is disabled" });
+    }
     const { next } = oauthStartQuerySchema.parse(request.query);
     const oidcNonce = randomBytes(24).toString("base64url");
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeRedirectPath(next ?? null), {
@@ -92,6 +95,16 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     } catch (error) {
       app.log.warn({ err: error, event: "oauth.exchange_failed", provider: "google" }, "Google OAuth exchange failed");
       return redirectError(reply, "provider-exchange-failed", verified.next);
+    }
+
+    // In oidc-required mode, reject sign-in and link/unlink intents
+    if (app.config.authMode === "oidc-required") {
+      if (verified.intent === "sign-in") {
+        return redirectError(reply, "sign-in-method-disabled", verified.next);
+      }
+      if (verified.intent === "link" || verified.intent === "unlink") {
+        return redirectError(reply, "sign-in-method-disabled", ACCOUNT_RETURN_PATH);
+      }
     }
 
     if (verified.intent === "link" || verified.intent === "unlink") {

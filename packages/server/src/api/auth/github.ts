@@ -87,6 +87,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
 
+    // In oidc-required mode, reject sign-in intent; capability intents (link/unlink/install) remain allowed
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled", error: "GitHub sign-in is disabled" });
+    }
+
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, {
       intent: "sign-in",
       provider: "github",
@@ -370,6 +375,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // In oidc-required mode, reject sign-in intent (install is allowed and doesn't mint session)
+    if (app.config.authMode === "oidc-required" && intent === "sign-in") {
+      return redirectCallbackError(reply, "sign-in-method-disabled", next, { callbackIntent: intent });
+    }
+
     return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
       browserFacing: true,
@@ -470,6 +480,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         // attempted below and will simply fail to find the row.
         app.log.warn({ err, installationId: devInstallationId }, "dev-callback installation stub upsert failed");
       }
+    }
+
+    // In oidc-required mode, reject dev-callback sign-in
+    if (app.config.authMode === "oidc-required") {
+      return redirectCallbackError(reply, "sign-in-method-disabled", next);
     }
 
     // Dev bypass never carries a `targetOrganizationId` — the install

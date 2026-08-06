@@ -114,11 +114,9 @@ const oidcIssuerSchema = z
         ctx.addIssue({ code: "custom", message: "OIDC issuer must have no userinfo, query, or fragment" });
         return z.NEVER;
       }
-      if (url.pathname !== "/" && url.pathname !== "") {
-        ctx.addIssue({ code: "custom", message: "OIDC issuer must have no path component" });
-        return z.NEVER;
-      }
-      return url.origin;
+      // Return full URL including path (Keycloak/Azure need it), removing trailing slash
+      const issuer = url.href.endsWith("/") ? url.href.slice(0, -1) : url.href;
+      return issuer;
     } catch {
       ctx.addIssue({ code: "custom", message: "OIDC issuer must be a valid URL" });
       return z.NEVER;

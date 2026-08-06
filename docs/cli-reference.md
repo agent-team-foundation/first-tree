@@ -2029,6 +2029,22 @@ server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.
 | `FIRST_TREE_AUTH_REFRESH_TOKEN_EXPIRY` | `30d` |
 | `FIRST_TREE_AUTH_CONNECT_TOKEN_EXPIRY` | `10m` |
 
+**Auth mode:**
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIRST_TREE_AUTH_MODE` | Authentication provider mode: `standard` (Google/GitHub) or `oidc-required` (OIDC only). | `standard` |
+
+**OIDC (OpenID Connect) for enterprise private deployments:**
+
+| Variable | Purpose | Production |
+|---|---|---|
+| `FIRST_TREE_OIDC_ISSUER` | OIDC provider issuer URL (e.g., `https://idp.example.com/realms/company`). Must have no userinfo, query, or fragment. | Required when `AUTH_MODE=oidc-required` |
+| `FIRST_TREE_OIDC_CLIENT_ID` | OIDC client identifier. | Required when `AUTH_MODE=oidc-required` |
+| `FIRST_TREE_OIDC_CLIENT_SECRET` | OIDC client secret. | Required when `AUTH_MODE=oidc-required` |
+
+When `AUTH_MODE=oidc-required`, Google and GitHub sign-in are disabled. See `docs/oidc-sso-guide.md` for setup instructions.
+
 **GitHub App / OAuth:**
 
 | Variable | Purpose |
