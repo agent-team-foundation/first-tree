@@ -160,10 +160,11 @@ function parseExactCredentialFreeSourceLink(value: string): ExactSourceLink | nu
 }
 
 function isObjectiveImpactSummary(summary: string): boolean {
+  const hasEnglishFirstPerson =
+    /\b(?:we|our|my|me|us|ours|mine)\b/iu.test(summary) || /(?<!\bphase )\bi\b/iu.test(summary);
   const hasFirstPerson =
-    /^(?:I|We|Our|My)\b|(?:^|[\s,;:])(?:we|our|my|me|us|ours|mine)\b|我们|我的|(^|[\s，。！？，；：])我(?=[\s，。！？，；：]|使用|读取|参考|认为|选择|决定)/u.test(
-      summary,
-    );
+    hasEnglishFirstPerson ||
+    /我们|我的|(^|[\s，。！？，；：])我(?=[\s，。！？，；：]|使用|读取|参考|认为|选择|决定)/u.test(summary);
   const withoutAbbreviationPeriods = summary.replace(/\b(?:[A-Za-z]\.){2,}/gu, (value) => value.replaceAll(".", ""));
   const hasMultipleSentences = /(?:[!?。！？]\s*|\.\s+)[*_`"'“‘([]*\S/u.test(withoutAbbreviationPeriods);
   return !hasFirstPerson && !hasMultipleSentences;
@@ -179,18 +180,23 @@ function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservat
       const titleMatch = /^> \*\*(How Context Tree affected this work|Context Tree 如何影响本次工作)\*\*\\$/u.exec(
         firstLine,
       );
-      const legacyTitleMatch = /^> \*\*(Context Tree impact|Context Tree 影响)(?: · ([^*]+))?\*\*\\?$/u.exec(firstLine);
-      if (!titleMatch && !legacyTitleMatch) continue;
+      const currentTitleScaffoldMatch =
+        /^> \*\*(How Context Tree affected this work|Context Tree 如何影响本次工作)\*\*\\?\s*$/u.exec(firstLine);
+      const legacyTitleMatch = /^> \*\*(Context Tree impact|Context Tree 影响)(?: · ([^*]+))?\*\*\\?\s*$/u.exec(
+        firstLine,
+      );
+      if (!currentTitleScaffoldMatch && !legacyTitleMatch) continue;
 
       const language: ImpactNoteLanguage =
-        titleMatch?.[1] === "Context Tree 如何影响本次工作" || legacyTitleMatch?.[1] === "Context Tree 影响"
+        currentTitleScaffoldMatch?.[1] === "Context Tree 如何影响本次工作" ||
+        legacyTitleMatch?.[1] === "Context Tree 影响"
           ? "zh"
           : "en";
       const secondLine = lines[index + 1] ?? "";
       const thirdLine = lines[index + 2] ?? "";
       const effectMatch =
         language === "zh"
-          ? /^> \*\*([^*]+)：\*\*(.+)\\$/u.exec(secondLine)
+          ? /^> \*\*([^*]+)：\*\*([^\s].*)\\$/u.exec(secondLine)
           : /^> \*\*([^*]+):\*\* (.+)\\$/u.exec(secondLine);
       const sourcePrefix =
         language === "zh" ? /^> \*\*Context Tree 来源：\*\*/u : /^> \*\*Context Tree (source|sources):\*\* /u;

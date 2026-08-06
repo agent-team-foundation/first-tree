@@ -456,7 +456,7 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.managedFinalTransportOk).toBe(true);
   });
 
-  it("rejects the legacy impact-note scaffolding", () => {
+  it("rejects legacy or malformed impact-note scaffolding", () => {
     const body = `JWT routes must enforce the tree constraints.
 
 > **Context Tree impact · Options narrowed**\\
@@ -492,6 +492,15 @@ describe("first-tree-read metrics pass criteria", () => {
       `> **Context Tree impact**\\
 > **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
 > **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
+      `> **How Context Tree affected this work**
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
+      `> **How Context Tree affected this work**${"  "}
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
+      `> **Context Tree impact · Options narrowed**${"  "}
+> The organization-isolation rule ruled out a global shared index.\\
+> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
     ].map((note) => impactMetrics(managedMessage(`Answer.\n\n${note}`), { mode: "absent" }));
 
     expect(result.impactNoteCount).toBe(1);
@@ -594,6 +603,7 @@ describe("first-tree-read metrics pass criteria", () => {
     "Our review ruled out the shared index because of the organization-isolation rule.",
     "The organization-isolation rule led us away from the shared index.",
     "The organization-isolation rule allowed me to choose the local index.",
+    "The rule shows I should choose tenant-local storage.",
     "根据我们的评审，组织隔离规则排除了共享索引。",
     "根据我的评审，组织隔离规则排除了共享索引。",
     "The organization-isolation rule ruled out the shared index. Then the approach changed.",
@@ -790,12 +800,21 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(sentForTerminalCase.managedFinalTransportOk).toBe(true);
   });
 
-  it("rejects spaces after Chinese scaffolding colons", () => {
+  it.each([
+    {
+      effectLine: "> **发现约束冲突：** 固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\",
+      sourceLine: `> **Context Tree 来源：**[Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`,
+    },
+    {
+      effectLine: "> **发现约束冲突：**固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\",
+      sourceLine: `> **Context Tree 来源：** [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`,
+    },
+  ])("rejects a space after either Chinese scaffolding colon", ({ effectLine, sourceLine }) => {
     const body = `需要你决定如何处理冲突。
 
 > **Context Tree 如何影响本次工作**\\
-> **发现约束冲突：** 固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\
-> **Context Tree 来源：** [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`;
+${effectLine}
+${sourceLine}`;
     const result = impactMetrics(managedMessage(body), {
       effect: "conflicted",
       language: "zh",
