@@ -94,14 +94,16 @@ describe("extractAuthProviderAvailability", () => {
     expect(extractAuthProviderAvailability({ authProviders: { google: true, github: false } })).toEqual({
       google: true,
       github: false,
+      oidc: false,
     });
   });
 
   it("fails closed for missing or malformed availability", () => {
-    expect(extractAuthProviderAvailability({})).toEqual({ google: false, github: false });
+    expect(extractAuthProviderAvailability({})).toEqual({ google: false, github: false, oidc: false });
     expect(extractAuthProviderAvailability({ authProviders: { google: "yes", github: true } })).toEqual({
       google: false,
       github: false,
+      oidc: false,
     });
   });
 });

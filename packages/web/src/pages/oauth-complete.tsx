@@ -135,7 +135,30 @@ export function OAuthCompletePage() {
       return;
     }
 
+    // In oidc-required mode, GitHub install callbacks return metadata-only (no tokens)
+    // to preserve the existing OIDC session. Handle this as a successful capability completion.
     if (!accessToken || !refreshToken) {
+      // If this is an error-free install callback without tokens, it's the metadata-only
+      // OIDC-mode install completion. Apply org, clear fragment, and navigate.
+      if (!errorCode && callbackIntent === "install") {
+        window.history.replaceState(null, "", window.location.pathname);
+        // Apply the pinned org when present
+        if (org && orgPinned) {
+          void (async () => {
+            try {
+              await selectOrganization(org);
+              navigate(safeRedirectPath(next) ?? "/");
+            } catch (err) {
+              setError("Failed to activate organization. Please try again.");
+            }
+          })();
+        } else {
+          navigate(safeRedirectPath(next) ?? "/");
+        }
+        return;
+      }
+
+      // Otherwise, missing tokens is a sign-in failure
       if (shouldReportAuth)
         finishAuthAttempt({
           provider,

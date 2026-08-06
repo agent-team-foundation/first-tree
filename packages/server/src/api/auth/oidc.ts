@@ -193,13 +193,22 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
           accessToken: tokenSet.access_token,
           expectedSub: claims.sub,
         });
-        // Only override profile fields; keep email + email_verified as a pair from one source.
-        // If userInfo provides both, use them together; otherwise keep id_token's pair.
+        // Whitelist only profile fields from UserInfo; retain identity and security claims from ID token.
+        // Email and email_verified must be tracked together from the same source.
         const emailSource =
           userInfo.email !== undefined
             ? { email: userInfo.email, email_verified: userInfo.email_verified }
             : { email: claims.email, email_verified: claims.email_verified };
-        claims = { ...claims, ...userInfo, ...emailSource };
+        // Only merge whitelisted profile fields, not security claims (iss, aud, exp, iat, nonce, azp)
+        claims = {
+          ...claims,
+          ...emailSource,
+          // Profile fields that can be supplemented from UserInfo
+          name: userInfo.name ?? claims.name,
+          nickname: userInfo.nickname ?? claims.nickname,
+          preferred_username: userInfo.preferred_username ?? claims.preferred_username,
+          picture: userInfo.picture ?? claims.picture,
+        };
       } catch (error) {
         app.log.error({ err: error, event: "oidc.userinfo_failed", provider: "oidc" }, "OIDC userinfo failed");
         return redirectError(reply, "provider-exchange-failed", verified.next);

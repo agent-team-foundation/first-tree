@@ -82,6 +82,18 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
+    // In oidc-required mode, reject sign-in and link/unlink intents BEFORE provider exchange
+    // Legacy callbacks with undefined intent are treated as sign-in
+    if (app.config.authMode === "oidc-required") {
+      const effectiveIntent = verified.intent ?? "sign-in";
+      if (effectiveIntent === "sign-in") {
+        return redirectError(reply, "sign-in-method-disabled", verified.next);
+      }
+      if (effectiveIntent === "link" || effectiveIntent === "unlink") {
+        return redirectError(reply, "sign-in-method-disabled", ACCOUNT_RETURN_PATH);
+      }
+    }
+
     let profile: ReturnType<typeof googleExternalProfile>;
     try {
       const claims = await exchangeGoogleCode({
@@ -95,18 +107,6 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     } catch (error) {
       app.log.warn({ err: error, event: "oauth.exchange_failed", provider: "google" }, "Google OAuth exchange failed");
       return redirectError(reply, "provider-exchange-failed", verified.next);
-    }
-
-    // In oidc-required mode, reject sign-in and link/unlink intents
-    // Legacy callbacks with undefined intent are treated as sign-in
-    if (app.config.authMode === "oidc-required") {
-      const effectiveIntent = verified.intent ?? "sign-in";
-      if (effectiveIntent === "sign-in") {
-        return redirectError(reply, "sign-in-method-disabled", verified.next);
-      }
-      if (effectiveIntent === "link" || effectiveIntent === "unlink") {
-        return redirectError(reply, "sign-in-method-disabled", ACCOUNT_RETURN_PATH);
-      }
     }
 
     if (verified.intent === "link" || verified.intent === "unlink") {
