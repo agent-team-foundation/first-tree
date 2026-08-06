@@ -18,7 +18,7 @@ const hoursAgo = (h: number): string => new Date(Date.now() - h * 3_600_000).toI
 
 const CURRENT_STATE = [
   "Chat Summary now leads with the **current result and user impact**.",
-  "Supporting context stays quieter inside a rem-sized card measure, so a wide Workspace does not leave empty half-width chrome.",
+  "Supporting context stays quieter and follows the card's own width, which matches the header and the collapsed bar above it.",
   "**Next:** Validate the same hierarchy in the live Workspace.",
 ].join("\n");
 
@@ -30,8 +30,11 @@ const HEADING_FIRST = [
   "首个正文段落会被折叠行采用，这一句刻意写得很长，用来验证去掉 markdown 标记后仍以单行省略号截断、不撑高 chrome。",
 ].join("\n");
 
+// Stands in for a real Workspace centre column. The summary surfaces stretch to
+// this width, so the gallery shows the header, the collapsed bar, and the
+// expanded card sharing one edge.
 const PANEL: React.CSSProperties = {
-  width: "calc(var(--chat-summary-readable-rail) + var(--sp-95))",
+  width: "71.25rem" /* 1140px */,
   maxWidth: "100%",
   background: "var(--bg)",
   border: "var(--hairline) solid var(--border)",

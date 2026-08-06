@@ -657,11 +657,13 @@ export function ChatSummary({
                 position: "absolute",
                 top: 0,
                 left: 0,
-                // Constrain the raised card itself (not only inner copy) so the
-                // surface and text share one readable edge. `width: 100%` keeps
-                // narrow message areas responsive under the rem max.
-                width: "100%",
-                maxWidth: "var(--chat-summary-readable-rail)",
+                // Stretched edge to edge: the card takes the width of the chat
+                // header and the collapsed bar it drops from, so the expanded and
+                // collapsed forms of the same surface line up. The copy inherits
+                // that width — deliberately NO measure of its own, which would
+                // both wrap the text early and leave the card wider than its own
+                // content.
+                right: 0,
                 background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-raised)",
                 border: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border)"}`,
                 borderRadius: "var(--radius-dialog)",

@@ -172,7 +172,7 @@ describe("ChatSummary", () => {
     overlayEl.remove();
   });
 
-  it("renders a current-state headline and quieter supporting copy on a readable rail", async () => {
+  it("renders a current-state headline and quieter supporting copy across the full card width", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     const { container, overlayEl, root } = await renderSummary(scrollEl, {
@@ -199,9 +199,16 @@ describe("ChatSummary", () => {
     expect(paragraphs?.[1]?.textContent).toContain("Supporting context is secondary.");
     expect(paragraphs?.[2]?.textContent).toContain("Next: Observe usage.");
     expect(summaryDocument?.style.color).toBe("var(--fg-2)");
-    expect(card?.getAttribute("style")).toContain("var(--chat-summary-readable-rail)");
-    expect(card?.getAttribute("style")).toContain("max-width");
-    // Card is the constrained surface — no nested full-bleed wrapper.
+    // The card spans its overlay container edge to edge, so it lines up with the
+    // chat header and the collapsed bar above it instead of carrying a measure of
+    // its own. Verified as real geometry in the browser; asserted here as the
+    // stretch that produces it.
+    expect(card?.style.left).toBe("0px");
+    expect(card?.style.right).toBe("0px");
+    expect(card?.style.maxWidth).toBe("");
+    expect(card?.style.width).toBe("");
+    expect(card?.getAttribute("style")).not.toContain("chat-summary-readable-rail");
+    // No nested wrapper between the card and its rendered document.
     expect(card?.firstElementChild?.getAttribute("data-summary-part")).toBe("document");
 
     await act(async () => root.unmount());
