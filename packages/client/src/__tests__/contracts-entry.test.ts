@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import type {
   AgentHandler,
@@ -52,26 +53,90 @@ const FORBIDDEN_CONTRACT_EXPORTS = [
   "createBuiltinHandlerRegistry",
 ] as const;
 
+type ParsedContractsExports = {
+  typeNames: string[];
+  valueNames: string[];
+  /** Any export form outside the two allowlisted shapes. */
+  violations: string[];
+};
+
 /**
- * Collect every name from `export type { ... }` blocks.
- * Supports multiline lists and `Foo as Bar` (records the exported local name).
+ * Enumerate every top-level export via the TypeScript AST.
+ *
+ * Allowed shapes only:
+ * - `export type { A, B } from "..."`  → type allowlist
+ * - `export { a, b } from "..."` with no inline `type` modifiers → value allowlist
+ *
+ * Anything else (`export { type X }`, `export interface`, `export type Alias =`,
+ * `export *`, `export default`, exported classes/functions/vars, …) is a violation.
  */
-function extractExportTypeNames(source: string): string[] {
-  const names: string[] = [];
-  for (const match of source.matchAll(/export\s+type\s*\{([\s\S]*?)\}/g)) {
-    const body = match[1] ?? "";
-    for (const rawPart of body.split(",")) {
-      const part = rawPart
-        .replace(/\/\/[^\n]*/g, "")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .trim();
-      if (!part) continue;
-      const asParts = part.split(/\bas\b/).map((s) => s.trim());
-      const exported = (asParts[1] ?? asParts[0] ?? "").replace(/^type\s+/, "").trim();
-      if (exported) names.push(exported);
+function parseContractsExports(source: string): ParsedContractsExports {
+  const sf = ts.createSourceFile("contracts.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const typeNames: string[] = [];
+  const valueNames: string[] = [];
+  const violations: string[] = [];
+
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt)) {
+      if (
+        (ts.isTypeAliasDeclaration(stmt) ||
+          ts.isInterfaceDeclaration(stmt) ||
+          ts.isEnumDeclaration(stmt) ||
+          ts.isClassDeclaration(stmt) ||
+          ts.isFunctionDeclaration(stmt) ||
+          ts.isModuleDeclaration(stmt) ||
+          ts.isVariableStatement(stmt)) &&
+        stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      ) {
+        violations.push(`exported-declaration:${ts.SyntaxKind[stmt.kind]}`);
+      } else if (ts.isExportAssignment(stmt)) {
+        violations.push("export-assignment");
+      } else {
+        // Non-export statements are unexpected in this file (imports, bare decls, …).
+        violations.push(`non-export-statement:${ts.SyntaxKind[stmt.kind]}`);
+      }
+      continue;
+    }
+
+    if (stmt.exportClause == null) {
+      violations.push(stmt.moduleSpecifier ? "export-star" : "export-declaration-empty");
+      continue;
+    }
+    if (!ts.isNamedExports(stmt.exportClause)) {
+      violations.push("export-namespace");
+      continue;
+    }
+    if (stmt.moduleSpecifier == null) {
+      violations.push("local-named-export");
+      continue;
+    }
+
+    if (stmt.isTypeOnly) {
+      // Exact allowlisted shape: `export type { ... } from "..."`
+      for (const el of stmt.exportClause.elements) {
+        if (el.isTypeOnly) {
+          violations.push(`redundant-inline-type-in-type-only-export:${el.name.text}`);
+        }
+        typeNames.push(el.name.text);
+      }
+      continue;
+    }
+
+    // `export { ... } from "..."` — must be values only (no `export { type X }`).
+    for (const el of stmt.exportClause.elements) {
+      if (el.isTypeOnly) {
+        violations.push(`inline-type-named-export:${el.name.text}`);
+        continue;
+      }
+      valueNames.push(el.name.text);
     }
   }
-  return names.sort();
+
+  return {
+    typeNames: typeNames.sort(),
+    valueNames: valueNames.sort(),
+    violations: violations.sort(),
+  };
 }
 
 describe("runtime/contracts entry", () => {
@@ -92,22 +157,49 @@ describe("runtime/contracts entry", () => {
     }
 
     const source = readFileSync(join(clientSrc, "runtime/contracts.ts"), "utf8");
-    // Exact type allowlist: every `export type { ... }` name, nothing more.
-    expect(extractExportTypeNames(source)).toEqual([...CONTRACT_TYPE_EXPORTS].sort());
-    // Reject alternate type-export shapes that would bypass the brace allowlist.
-    expect(source).not.toMatch(/export\s+type\s+[A-Za-z_][\w]*\s*=/);
-    expect(source).not.toMatch(/export\s+type\s+\*/);
+    const parsed = parseContractsExports(source);
 
-    for (const name of CONTRACT_VALUE_EXPORTS) {
-      expect(source, `contracts.ts must export value ${name}`).toMatch(new RegExp(`export\\s*\\{[^}]*\\b${name}\\b`));
+    // Catch-all: no other export morphologies beyond the two allowlisted shapes.
+    expect(parsed.violations, `unexpected export forms: ${parsed.violations.join(", ")}`).toEqual([]);
+    expect(parsed.typeNames).toEqual([...CONTRACT_TYPE_EXPORTS].sort());
+    expect(parsed.valueNames).toEqual([...CONTRACT_VALUE_EXPORTS].sort());
+
+    for (const name of FORBIDDEN_CONTRACT_EXPORTS) {
+      expect(source).not.toMatch(new RegExp(`\\b${name}\\b`));
     }
-    // No barrel-style star re-exports that could leak owner modules.
-    expect(source).not.toMatch(/export\s+\*\s+from/);
-    expect(source).not.toMatch(/\bSessionManager\b/);
-    expect(source).not.toMatch(/\bSessionRegistry\b/);
-    expect(source).not.toMatch(/\bAgentSlot\b/);
-    expect(source).not.toMatch(/\bAgentRuntime\b/);
-    expect(source).not.toMatch(/\bReplayFenceStore\b/);
+  });
+
+  it("rejects inline type re-exports and other declaration exports via AST catch-all", () => {
+    const bypassInlineType = `
+export type { AgentHandler } from "./handler.js";
+export { type HandlerContext } from "./handler.js";
+export { noopDeliveryToken, requireDeliveryToken } from "./handler.js";
+`;
+    const inline = parseContractsExports(bypassInlineType);
+    expect(inline.violations.some((v) => v.startsWith("inline-type-named-export:"))).toBe(true);
+
+    const bypassInterface = `
+export type { AgentHandler } from "./handler.js";
+export interface Extra {}
+export { noopDeliveryToken, requireDeliveryToken } from "./handler.js";
+`;
+    const iface = parseContractsExports(bypassInterface);
+    expect(iface.violations).toContain("exported-declaration:InterfaceDeclaration");
+
+    const bypassTypeAlias = `
+export type { AgentHandler } from "./handler.js";
+export type Extra = string;
+export { noopDeliveryToken, requireDeliveryToken } from "./handler.js";
+`;
+    const alias = parseContractsExports(bypassTypeAlias);
+    expect(alias.violations).toContain("exported-declaration:TypeAliasDeclaration");
+
+    const bypassStar = `
+export type { AgentHandler } from "./handler.js";
+export * from "./handler.js";
+`;
+    const star = parseContractsExports(bypassStar);
+    expect(star.violations).toContain("export-star");
   });
 
   it("compiles the allowlisted type surface for provider consumers", () => {
