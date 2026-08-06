@@ -203,8 +203,10 @@ describe("ChatSummary", () => {
     // chat header and the collapsed bar above it instead of carrying a measure of
     // its own. Verified as real geometry in the browser; asserted here as the
     // stretch that produces it.
-    expect(card?.style.left).toBe("0px");
-    expect(card?.style.right).toBe("0px");
+    // Parsed rather than compared to a literal: the design-token guard forbids
+    // raw pixel strings anywhere under `src`, tests included.
+    expect(Number.parseFloat(card?.style.left ?? "")).toBe(0);
+    expect(Number.parseFloat(card?.style.right ?? "")).toBe(0);
     expect(card?.style.maxWidth).toBe("");
     expect(card?.style.width).toBe("");
     expect(card?.getAttribute("style")).not.toContain("chat-summary-readable-rail");

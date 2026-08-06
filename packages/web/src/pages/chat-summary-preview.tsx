@@ -34,7 +34,7 @@ const HEADING_FIRST = [
 // this width, so the gallery shows the header, the collapsed bar, and the
 // expanded card sharing one edge.
 const PANEL: React.CSSProperties = {
-  width: "71.25rem" /* 1140px */,
+  width: "calc(var(--sp-95) * 3)",
   maxWidth: "100%",
   background: "var(--bg)",
   border: "var(--hairline) solid var(--border)",
