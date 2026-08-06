@@ -434,9 +434,9 @@ describe("first-tree-read metrics pass criteria", () => {
   it("accepts one exact-version English impact note in a managed chat body", () => {
     const body = `JWT routes must enforce the tree constraints.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization-isolation rule ruled out a global shared index.\\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
     const result = impactMetrics(managedMessage(body), {
       effect: "constrained",
       language: "en",
@@ -454,6 +454,54 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.impactNoteSourceLabels).toEqual(["Organization isolation"]);
     expect(result.impactNoteMetadataFree).toBe(true);
     expect(result.managedFinalTransportOk).toBe(true);
+  });
+
+  it("rejects the legacy impact-note scaffolding", () => {
+    const body = `JWT routes must enforce the tree constraints.
+
+> **Context Tree impact · Options narrowed**\\
+> The organization-isolation rule ruled out a global shared index.\\
+> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+    const result = impactMetrics(managedMessage(body), {
+      effect: "constrained",
+      language: "en",
+      mode: "present",
+      sourceAuthority: TEST_SOURCE_AUTHORITY,
+      sourceCount: { max: 1, min: 1 },
+    });
+
+    const absentResult = impactMetrics(managedMessage(body), { mode: "absent" });
+    const mixedResult = impactMetrics(
+      managedMessage(`JWT routes must enforce the tree constraints.
+
+> **Context Tree impact · Options narrowed**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`),
+      {
+        effect: "constrained",
+        language: "en",
+        mode: "present",
+        sourceAuthority: TEST_SOURCE_AUTHORITY,
+        sourceCount: { max: 1, min: 1 },
+      },
+    );
+    const malformedResults = [
+      `> **Context Tree impact · Options narrowed**
+> The organization-isolation rule ruled out a global shared index.\\
+> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
+      `> **Context Tree impact**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`,
+    ].map((note) => impactMetrics(managedMessage(`Answer.\n\n${note}`), { mode: "absent" }));
+
+    expect(result.impactNoteCount).toBe(1);
+    expect(result.impactNoteBehaviorOk).toBe(false);
+    expect(absentResult.impactNoteCount).toBe(1);
+    expect(absentResult.impactNoteBehaviorOk).toBe(false);
+    expect(mixedResult.impactNoteCount).toBe(1);
+    expect(mixedResult.impactNoteBehaviorOk).toBe(false);
+    expect(malformedResults.every((item) => item.impactNoteCount === 1)).toBe(true);
+    expect(malformedResults.every((item) => item.impactNoteBehaviorOk === false)).toBe(true);
   });
 
   it("makes material trigger cases fail until the final visible note satisfies the behavior contract", () => {
@@ -474,9 +522,9 @@ describe("first-tree-read metrics pass criteria", () => {
     ];
     const note = `Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> The payment rule narrowed the implementation boundary.\\
-> **Source** · [Payments](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/domains/payments/NODE.md)`;
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The payment rule narrowed the implementation boundary.\\
+> **Context Tree source:** [Payments](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/domains/payments/NODE.md)`;
     const withoutNote = impactMetrics(
       [...baseEvents, ...managedMessage(`The tree says ${EXPECTED_FACT}. Final answer without the note.`)],
       expectation,
@@ -498,9 +546,9 @@ describe("first-tree-read metrics pass criteria", () => {
   });
 
   it("rejects duplicate notes, mutable links, and visible receipt metadata", () => {
-    const note = `> **Context Tree impact · Options narrowed**\\
-> The rule ruled out a shared index.\\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/main/systems/server/auth/scopes/NODE.md)`;
+    const note = `> **How Context Tree affected this work**\\
+> **Options narrowed:** The rule ruled out a shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/main/systems/server/auth/scopes/NODE.md)`;
     const result = impactMetrics(
       [assistantTextEvent(`Answer.\n\n${note}\n\n${note}\n\n{ "contextDecision": { "effect": "constrained" } }`)],
       {
@@ -523,9 +571,9 @@ describe("first-tree-read metrics pass criteria", () => {
       [
         assistantTextEvent(`Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> I used Context Tree to rule out a shared index.\\
-> **Source** · [Organization isolation](https://x-access-token:secret@github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`),
+> **How Context Tree affected this work**\\
+> **Options narrowed:** I used Context Tree to rule out a shared index.\\
+> **Context Tree source:** [Organization isolation](https://x-access-token:secret@github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`),
       ],
       {
         effect: "constrained",
@@ -541,12 +589,70 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.impactNoteBehaviorOk).toBe(false);
   });
 
+  it.each([
+    "I ruled out the shared index because of the organization-isolation rule.",
+    "Our review ruled out the shared index because of the organization-isolation rule.",
+    "The organization-isolation rule led us away from the shared index.",
+    "The organization-isolation rule allowed me to choose the local index.",
+    "根据我们的评审，组织隔离规则排除了共享索引。",
+    "根据我的评审，组织隔离规则排除了共享索引。",
+    "The organization-isolation rule ruled out the shared index. Then the approach changed.",
+    "The organization-isolation rule ruled out the shared index. another option remains.",
+    "The organization-isolation rule ruled out the shared index. **This remains unresolved.**",
+  ])("rejects non-objective or multi-sentence impact summaries: %s", (summary) => {
+    const result = impactMetrics(
+      [
+        assistantTextEvent(`Answer.
+
+> **How Context Tree affected this work**\\
+> **Options narrowed:** ${summary}\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`),
+      ],
+      {
+        effect: "constrained",
+        language: "en",
+        mode: "present",
+        sourceAuthority: TEST_SOURCE_AUTHORITY,
+        sourceCount: { max: 1, min: 1 },
+      },
+    );
+
+    expect(result.impactNoteSummaryObjectiveOk).toBe(false);
+    expect(result.impactNoteBehaviorOk).toBe(false);
+  });
+
+  it.each([
+    "The U.S. isolation rule ruled out the shared index.",
+    "The U.S. Organization rule ruled out the shared index.",
+    "Phase I narrowed the acceptable rollout scope.",
+  ])("does not treat abbreviations or phase labels as first person or sentence boundaries: %s", (summary) => {
+    const result = impactMetrics(
+      [
+        assistantTextEvent(`Answer.
+
+> **How Context Tree affected this work**\\
+> **Options narrowed:** ${summary}\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`),
+      ],
+      {
+        effect: "constrained",
+        language: "en",
+        mode: "present",
+        sourceAuthority: TEST_SOURCE_AUTHORITY,
+        sourceCount: { max: 1, min: 1 },
+      },
+    );
+
+    expect(result.impactNoteSummaryObjectiveOk).toBe(true);
+    expect(result.impactNoteBehaviorOk).toBe(true);
+  });
+
   it("rejects contextDecision metadata in successful chat transport while allowing unrelated metadata", () => {
     const body = `Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization-isolation rule ruled out a global shared index.\\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
     const expectation: ImpactNoteExpectation = {
       effect: "constrained",
       language: "en",
@@ -596,9 +702,9 @@ describe("first-tree-read metrics pass criteria", () => {
     const noteFor = (url: string) =>
       assistantTextEvent(`Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization-isolation rule ruled out a global shared index.\\
-> **Source** · [Organization isolation](${url})`);
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](${url})`);
     const invalidUrls = [
       `https://evil.example/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md`,
       `https://github.com/another/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md`,
@@ -615,9 +721,9 @@ describe("first-tree-read metrics pass criteria", () => {
   });
 
   it("requires the note to end the final successful managed message", () => {
-    const note = `> **Context Tree impact · Options narrowed**\\
-> The organization-isolation rule ruled out a global shared index.\\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+    const note = `> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
     const expectation: ImpactNoteExpectation = {
       effect: "constrained",
       language: "en",
@@ -658,9 +764,9 @@ describe("first-tree-read metrics pass criteria", () => {
   it("uses the case transport contract rather than deriving transport from the impact effect", () => {
     const body = `需要你决定如何处理冲突。
 
-> **Context Tree 影响 · 发现约束冲突**\\
-> 固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\
-> **来源** · [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`;
+> **Context Tree 如何影响本次工作**\\
+> **发现约束冲突：**固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\
+> **Context Tree 来源：**[Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`;
     const expectation: ImpactNoteExpectation = {
       effect: "conflicted",
       language: "zh",
@@ -684,12 +790,30 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(sentForTerminalCase.managedFinalTransportOk).toBe(true);
   });
 
+  it("rejects spaces after Chinese scaffolding colons", () => {
+    const body = `需要你决定如何处理冲突。
+
+> **Context Tree 如何影响本次工作**\\
+> **发现约束冲突：** 固定发布日期与发布前安全审计无法同时满足，取舍仍待决定。\\
+> **Context Tree 来源：** [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`;
+    const result = impactMetrics(managedMessage(body), {
+      effect: "conflicted",
+      language: "zh",
+      mode: "present",
+      sourceAuthority: TEST_SOURCE_AUTHORITY,
+      sourceCount: { max: 1, min: 1 },
+    });
+
+    expect(result.impactNoteCount).toBe(1);
+    expect(result.impactNoteBehaviorOk).toBe(false);
+  });
+
   it("counts identical impact notes from separate BYO assistant messages", () => {
     const note = `Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization-isolation rule ruled out a global shared index.\\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
     const result = impactMetrics([assistantTextEvent(note), assistantTextEvent(note)], {
       effect: "constrained",
       language: "en",
@@ -711,13 +835,13 @@ describe("first-tree-read metrics pass criteria", () => {
       sourceCount: { max: 1, min: 1 },
       summaryConcepts: [["organization isolation"], ["shared index"], ["ruled out"]],
     };
-    const source = `> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
+    const source = `> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/systems/server/auth/scopes/NODE.md)`;
     const generic = impactMetrics(
       [
         assistantTextEvent(`Answer.
 
-> **Context Tree impact · Options narrowed**\\
-> Context Tree narrowed the choice.\\
+> **How Context Tree affected this work**\\
+> **Options narrowed:** Context Tree narrowed the choice.\\
 ${source}`),
       ],
       expectation,
@@ -733,8 +857,8 @@ ${source}`),
         [
           assistantTextEvent(`See ${url}.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization isolation rule ruled out a global shared index.\\
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization isolation rule ruled out a global shared index.\\
 ${source}`),
         ],
         expectation,
@@ -744,8 +868,8 @@ ${source}`),
       [
         assistantTextEvent(`The binding clone identity is ssh://git@github.com/example/context-tree.git.
 
-> **Context Tree impact · Options narrowed**\\
-> The organization isolation rule ruled out a global shared index.\\
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The organization isolation rule ruled out a global shared index.\\
 ${source}`),
       ],
       expectation,
@@ -776,9 +900,9 @@ ${source}`),
       [
         assistantTextEvent(`不能直接发布。
 
-> **Context Tree 影响 · 发现约束冲突**\\
-> 固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\\
-> **来源** · [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`),
+> **Context Tree 如何影响本次工作**\\
+> **发现约束冲突：**固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\\
+> **Context Tree 来源：**[Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`),
       ],
       expectation,
     );
@@ -786,9 +910,9 @@ ${source}`),
       [
         assistantTextEvent(`方案如下。
 
-> **Context Tree 影响 · 发现约束冲突**\\
-> 发布日期与安全审计发生冲突，方案已调整并已解决。\\
-> **来源** · [Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`),
+> **Context Tree 如何影响本次工作**\\
+> **发现约束冲突：**发布日期与安全审计发生冲突，方案已调整并已解决。\\
+> **Context Tree 来源：**[Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md)`),
       ],
       expectation,
     );
@@ -806,9 +930,9 @@ ${source}`),
       [
         assistantTextEvent(`The rollout is bounded by all three decisions.
 
-> **Context Tree impact · Options narrowed**\\
-> The rollout rules require one reviewable scope, audit approval, and core-release stability.\\
-> **Sources** · [First Tree Read Eval Context](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/NODE.md) · [Release · Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md) · [Billing · Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/billing/rollout-policy/NODE.md)`),
+> **How Context Tree affected this work**\\
+> **Options narrowed:** The rollout rules require one reviewable scope, audit approval, and core-release stability.\\
+> **Context Tree sources:** [First Tree Read Eval Context](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/NODE.md) · [Release · Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/release/rollout-policy/NODE.md) · [Billing · Rollout Policy](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/product/billing/rollout-policy/NODE.md)`),
       ],
       {
         effect: "constrained",
@@ -832,9 +956,9 @@ ${source}`),
       [
         assistantTextEvent(`systems, domains, operations
 
-> **Context Tree impact · Direction supported**\\
-> The root confirmed the domain names.\\
-> **Source** · [First Tree Read Eval Context](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/NODE.md)`),
+> **How Context Tree affected this work**\\
+> **Direction supported:** The root confirmed the domain names.\\
+> **Context Tree source:** [First Tree Read Eval Context](https://github.com/example/context-tree/blob/${EXACT_COMMIT}/NODE.md)`),
       ],
       absent,
     );

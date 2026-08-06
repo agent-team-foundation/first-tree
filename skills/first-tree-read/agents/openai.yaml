@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree Read"
   short_description: "Read repo context and show decision influence"
-  default_prompt: "Use $first-tree-read to read relevant Context Tree files before acting, then show one compact Context Tree impact note only when that context materially influences the final choice."
+  default_prompt: "Use $first-tree-read to read relevant Context Tree files before acting, then show one compact note explaining how Context Tree affected the work only when that context materially influences the final choice."

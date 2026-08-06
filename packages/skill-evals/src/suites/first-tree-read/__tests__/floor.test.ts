@@ -76,21 +76,26 @@ describe("first-tree-read floor contract", () => {
     );
     expect(skill).toContain("Match the note's language to the surrounding final response");
     expect(skill).toContain("one Markdown blockquote with exactly three **logical Markdown lines**");
-    expect(skill).toContain("Natural wrapping at narrow display widths\nis expected; never truncate");
+    expect(skill).toMatch(/Natural wrapping at narrow display\s+widths is expected; never truncate/);
+    expect(skill).toContain("keep the colon inside the bold\ntext");
+    expect(skill).toContain("bold `Options narrowed:`");
+    expect(skill).toContain("bold `收窄可选范围：`");
     expect(skill).toContain("Leave one blank line between the preceding answer and the note");
     expect(skill).toMatch(
-      /a backslash so\s+Markdown renders a portable hard line break without trailing whitespace; do\s+not use HTML/,
+      /a\s+backslash so Markdown renders a\s+portable hard line break without trailing\s+whitespace; do not use HTML/,
     );
     expect(skill).toMatch(/Use objective language/);
     expect(skill).toMatch(/roughly 160 English characters or\s+80 CJK characters/);
-    expect(skill).toContain("Use `Context Tree impact` and `Source` / `Sources` in English");
-    expect(skill).toContain("Use\n`Context Tree 影响` and `来源` in Chinese");
+    expect(skill).toMatch(
+      /Use `How Context Tree affected this work` and `Context Tree source` \/\s+`Context Tree sources` in English/,
+    );
+    expect(skill).toMatch(/Use\s+`Context Tree 如何影响本次工作` and `Context Tree 来源` in Chinese/);
     expect(skill).toMatch(
       /`conflicted` \| `Conflict surfaced` \| `发现约束冲突`[\s\S]+`redirected` \| `Approach changed` \| `改变方案路径`[\s\S]+`constrained` \| `Options narrowed` \| `收窄可选范围`[\s\S]+`confirmed` \| `Direction supported` \| `支持当前方向`/,
     );
     expect(skill).toContain("For `conflicted`, name the two incompatible constraints and the\nunresolved tradeoff");
     expect(skill).toContain("do not imply that the plan changed or the conflict was\nresolved");
-    expect(skill).toContain("In Chinese, use bold `来源` for either\ncount");
+    expect(skill).toContain("In Chinese, use bold `Context Tree 来源：` for either count, with no space");
     expect(skill).toContain("For a root `NODE.md`, use the root title or the relevant heading — never display\n`Node`");
     expect(skill).toContain("When two cited labels would be identical, prefix the nearest meaningful\nparent title");
     expect(skill).toContain("Never link to a mutable branch");
@@ -129,23 +134,27 @@ describe("first-tree-read floor contract", () => {
     const noteLines = noteBlock.split("\n");
     expect(noteLines).toHaveLength(3);
     expect(noteLines.every((line) => line.startsWith("> "))).toBe(true);
-    expect(noteLines[0]).toBe("> **Context Tree impact · Options narrowed**\\");
-    expect(noteLines[1]).toBe("> The organization-isolation rule ruled out a global shared index.\\");
+    expect(noteLines[0]).toBe("> **How Context Tree affected this work**\\");
+    expect(noteLines[1]).toBe(
+      "> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\\",
+    );
     expect(noteLines[2]).toContain(
-      "> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/",
+      "> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/",
     );
     expect(noteLines[2]).toContain("/system/cloud/team/tenancy-and-identity.md)");
     expect(noteLines[2]?.match(/\/blob\/([0-9a-f]+)\//u)?.[1]).toMatch(/^[0-9a-f]{40}$/);
 
     const markdownBlocks = [...skill.matchAll(/```markdown\n([\s\S]*?)\n```/gu)].map((match) => match[1] ?? "");
-    const conflictBlock = markdownBlocks.find((block) => block.includes("Context Tree 影响 · 发现约束冲突")) ?? "";
+    const conflictBlock = markdownBlocks.find((block) => block.includes("Context Tree 如何影响本次工作")) ?? "";
     expect(conflictBlock.split("\n")).toHaveLength(3);
-    expect(conflictBlock).toContain("固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定");
-    expect(conflictBlock).toContain("**来源** · [发布安全门槛]");
+    expect(conflictBlock).toContain(
+      "**发现约束冲突：**固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定",
+    );
+    expect(conflictBlock).toContain("**Context Tree 来源：**[发布安全门槛]");
   });
 
   it("keeps version metadata aligned", () => {
-    expect(skillVersion).toBe("0.6.0");
+    expect(skillVersion).toBe("0.6.1");
     expect(skill).toContain(`version: ${skillVersion}`);
   });
 });

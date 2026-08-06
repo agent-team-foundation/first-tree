@@ -159,6 +159,16 @@ function parseExactCredentialFreeSourceLink(value: string): ExactSourceLink | nu
   }
 }
 
+function isObjectiveImpactSummary(summary: string): boolean {
+  const hasFirstPerson =
+    /^(?:I|We|Our|My)\b|(?:^|[\s,;:])(?:we|our|my|me|us|ours|mine)\b|我们|我的|(^|[\s，。！？，；：])我(?=[\s，。！？，；：]|使用|读取|参考|认为|选择|决定)/u.test(
+      summary,
+    );
+  const withoutAbbreviationPeriods = summary.replace(/\b(?:[A-Za-z]\.){2,}/gu, (value) => value.replaceAll(".", ""));
+  const hasMultipleSentences = /(?:[!?。！？]\s*|\.\s+)[*_`"'“‘([]*\S/u.test(withoutAbbreviationPeriods);
+  return !hasFirstPerson && !hasMultipleSentences;
+}
+
 function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservation[] {
   const observations: ImpactNoteObservation[] = [];
 
@@ -166,42 +176,51 @@ function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservat
     const lines = text.replace(/\r/gu, "").split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const firstLine = lines[index] ?? "";
-      const titleMatch = /^> \*\*(Context Tree impact|Context Tree 影响) · ([^*]+)\*\*\\$/u.exec(firstLine);
-      if (!titleMatch) continue;
+      const titleMatch = /^> \*\*(How Context Tree affected this work|Context Tree 如何影响本次工作)\*\*\\$/u.exec(
+        firstLine,
+      );
+      const legacyTitleMatch = /^> \*\*(Context Tree impact|Context Tree 影响)(?: · ([^*]+))?\*\*\\?$/u.exec(firstLine);
+      if (!titleMatch && !legacyTitleMatch) continue;
 
-      const language: ImpactNoteLanguage = titleMatch[1] === "Context Tree 影响" ? "zh" : "en";
+      const language: ImpactNoteLanguage =
+        titleMatch?.[1] === "Context Tree 如何影响本次工作" || legacyTitleMatch?.[1] === "Context Tree 影响"
+          ? "zh"
+          : "en";
       const secondLine = lines[index + 1] ?? "";
       const thirdLine = lines[index + 2] ?? "";
-      const summaryMatch = /^> (.+)\\$/u.exec(secondLine);
-      const sourcePrefix = language === "zh" ? /^> \*\*来源\*\* · /u : /^> \*\*(Source|Sources)\*\* · /u;
+      const effectMatch =
+        language === "zh"
+          ? /^> \*\*([^*]+)：\*\*(.+)\\$/u.exec(secondLine)
+          : /^> \*\*([^*]+):\*\* (.+)\\$/u.exec(secondLine);
+      const sourcePrefix =
+        language === "zh" ? /^> \*\*Context Tree 来源：\*\*/u : /^> \*\*Context Tree (source|sources):\*\* /u;
       const sourcePrefixMatch = sourcePrefix.exec(thirdLine);
       const markdownLinks = [...thirdLine.matchAll(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu)];
       const exactLinks = markdownLinks.filter((match) => parseExactCredentialFreeSourceLink(match[2] ?? "") !== null);
-      const expectedEnglishSource = markdownLinks.length === 1 ? "Source" : "Sources";
-      const sourceLabel = language === "zh" ? "来源" : expectedEnglishSource;
-      const expectedSourceLine = `> **${sourceLabel}** · ${markdownLinks.map((match) => match[0]).join(" · ")}`;
+      const expectedEnglishSource = markdownLinks.length === 1 ? "source" : "sources";
+      const sourceLabel = language === "zh" ? "Context Tree 来源：" : `Context Tree ${expectedEnglishSource}:`;
+      const sourceSeparator = language === "zh" ? "" : " ";
+      const expectedSourceLine = `> **${sourceLabel}**${sourceSeparator}${markdownLinks.map((match) => match[0]).join(" · ")}`;
       const sourceScaffoldingOk =
+        titleMatch !== null &&
         sourcePrefixMatch !== null &&
         (language === "zh" || sourcePrefixMatch[1] === expectedEnglishSource) &&
         markdownLinks.length > 0 &&
         thirdLine === expectedSourceLine;
-      const summary = summaryMatch?.[1]?.trim() ?? "";
+      const summary = effectMatch?.[2]?.trim() ?? "";
 
       observations.push({
         atEnd: lines.slice(index + 3).every((line) => line.trim() === ""),
         blankLineBefore: index > 0 && (lines[index - 1] ?? "").trim() === "",
-        effectLabel: titleMatch[2]?.trim() ?? "",
+        effectLabel: effectMatch?.[1]?.trim() ?? legacyTitleMatch?.[2]?.trim() ?? "",
         exactLinksOk: exactLinks.length === markdownLinks.length && exactLinks.length > 0,
         language,
-        logicalLinesOk:
-          summaryMatch !== null && sourcePrefixMatch !== null && !(lines[index + 3] ?? "").startsWith(">"),
+        logicalLinesOk: effectMatch !== null && sourcePrefixMatch !== null && !(lines[index + 3] ?? "").startsWith(">"),
         sourceLabels: markdownLinks.map((match) => match[1] ?? ""),
         sourceScaffoldingOk,
         sourceUrls: markdownLinks.map((match) => match[2] ?? ""),
         summary,
-        summaryObjectiveOk: !/(^|\s)(I|We)\s+(used?|read|consulted)|我(使用|读取|参考)了?\s*Context Tree/iu.test(
-          summary,
-        ),
+        summaryObjectiveOk: isObjectiveImpactSummary(summary),
         textIndex,
       });
     }

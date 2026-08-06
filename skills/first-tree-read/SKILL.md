@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-version: 0.6.0
+version: 0.6.1
 description: Read the applicable Context Tree before acting. In BYO sessions, route only among locally authorized Teams by reading each exact root SCOPE.md before selecting one task snapshot; in managed workspaces, use the bound Tree. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content.
 ---
 
@@ -258,24 +258,29 @@ English and Chinese so different agents produce one recognizable format:
 | `constrained` | `Options narrowed` | `收窄可选范围` |
 | `confirmed` | `Direction supported` | `支持当前方向` |
 
-Use `Context Tree impact` and `Source` / `Sources` in English. Use
-`Context Tree 影响` and `来源` in Chinese. For other languages, translate the
-complete scaffolding and preserve each category's meaning. Never expose the
-enum key.
+Use `How Context Tree affected this work` and `Context Tree source` /
+`Context Tree sources` in English. Use
+`Context Tree 如何影响本次工作` and `Context Tree 来源` in Chinese. For other
+languages, translate the complete scaffolding and preserve each category's
+meaning. Never expose the enum key.
 
 Leave one blank line between the preceding answer and the note. Write the note
 as one Markdown blockquote with exactly three **logical Markdown lines** and
-information levels: the effect, one objective sentence naming the concrete
-impact, and the inspectable source. Natural wrapping at narrow display widths
-is expected; never truncate or weaken the impact or source merely to keep three
-physical display lines. End the first two logical lines with a backslash so
-Markdown renders a portable hard line break without trailing whitespace; do
-not use HTML. For example:
+information levels: what the note explains, the effect plus one objective
+sentence naming the concrete impact, and the inspectable source. Put the fixed
+effect label at the start of the middle line and keep the colon inside the bold
+text. In English, use a half-width colon followed by one space, for example
+bold `Options narrowed:`. In Chinese, use a full-width colon with no following
+space, for example bold `收窄可选范围：`. Natural wrapping at narrow display
+widths is expected; never truncate or weaken the impact or source merely to
+keep three physical display lines. End the first two logical lines with a
+backslash so Markdown renders a portable hard line break without trailing
+whitespace; do not use HTML. For example:
 
 ```markdown
-> **Context Tree impact · Options narrowed**\
-> The organization-isolation rule ruled out a global shared index.\
-> **Source** · [Organization isolation](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md)
+> **How Context Tree affected this work**\
+> **Options narrowed:** The organization-isolation rule ruled out a global shared index.\
+> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md)
 ```
 
 Keep the middle sentence concrete and task-specific. Name the Tree decision or
@@ -291,15 +296,16 @@ Context Tree...". Keep it to one sentence and roughly 160 English characters or
 For an unresolved conflict in a Chinese response, the complete note looks like:
 
 ```markdown
-> **Context Tree 影响 · 发现约束冲突**\
-> 固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\
-> **来源** · [发布安全门槛](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/operations/release/safety-gates.md)
+> **Context Tree 如何影响本次工作**\
+> **发现约束冲突：**固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\
+> **Context Tree 来源：**[发布安全门槛](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/operations/release/safety-gates.md)
 ```
 
-Show one to three sources on the final line. In English, use bold `Source` for
-one and bold `Sources` for more than one. In Chinese, use bold `来源` for either
-count. Follow the label with ` · ` and separate multiple Markdown links with
-the same delimiter.
+Show one to three sources on the final line. In English, use bold
+`Context Tree source:` for one and bold `Context Tree sources:` for more than
+one. In Chinese, use bold `Context Tree 来源：` for either count, with no space
+before the first link. In English, follow the label with one space. Separate
+multiple Markdown links with ` · ` in either language.
 Build each readable label from the node's frontmatter title plus the relevant
 heading when that adds meaning, for example `Rollout Policy · Expansion gates`.
 For a root `NODE.md`, use the root title or the relevant heading — never display
