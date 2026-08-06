@@ -19,6 +19,13 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(api).not.toHaveProperty("registerHandler");
     expect(api).not.toHaveProperty("getHandlerFactory");
     expect(api).not.toHaveProperty("hasHandler");
+    // S1d contracts entry is not a package public API / temporary subpath export.
+    expect(api).not.toHaveProperty("contracts");
+    const publicKeys = Object.keys(api).sort();
+    expect(publicKeys).not.toContain("SessionManager");
+    expect(publicKeys).not.toContain("SessionRegistry");
+    expect(publicKeys).not.toContain("noopDeliveryToken");
+    expect(publicKeys).not.toContain("requireDeliveryToken");
   });
 
   it("loads runtime barrel exports", async () => {

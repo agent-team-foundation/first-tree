@@ -28,11 +28,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../../runtime/context-tree-git-status.js";
-import {
-  CursorBinaryVerifyTransientError,
-  formatCursorBinaryMissingMessage,
-  resolveCursorRuntimeBinary,
-} from "../../runtime/cursor-binary.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -40,8 +35,13 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+import {
+  CursorBinaryVerifyTransientError,
+  formatCursorBinaryMissingMessage,
+  resolveCursorRuntimeBinary,
+} from "../../runtime/cursor-binary.js";
 
 import {
   isManagedSkillsUnsafeDiscoveryError,

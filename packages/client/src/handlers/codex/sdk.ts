@@ -43,7 +43,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../../runtime/context-tree-git-status.js";
-import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -52,8 +51,9 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 
 import {
   isManagedSkillsUnsafeDiscoveryError,

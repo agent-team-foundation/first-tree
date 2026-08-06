@@ -337,6 +337,8 @@ describe("runtime provider architecture guard", () => {
       expect(source, `${label} must not re-export SessionManager`).not.toMatch(/export\s*\{[^}]*\bSessionManager\b/);
       expect(source, `${label} must not re-export SessionRegistry`).not.toMatch(/export\s*\{[^}]*\bSessionRegistry\b/);
       expect(source, `${label} must expose cleanAgentWorkspaces`).toContain("cleanAgentWorkspaces");
+      // contracts entry is provider-internal, not a new package public API / barrel export.
+      expect(source, `${label} must not re-export runtime/contracts`).not.toMatch(/runtime\/contracts/);
     }
 
     const cliProduction = listFilesRecursive(join(repoRoot, "apps/cli/src"), (p) => {
@@ -382,6 +384,83 @@ describe("runtime provider architecture guard", () => {
 
     const cliRuntime = readFileSync(join(repoRoot, "apps/cli/src/core/client-runtime.ts"), "utf8");
     expect(cliRuntime).toMatch(/resolveHandlerFactory[\s\S]*Object\.hasOwn/);
+  });
+
+  it("routes provider production contract imports through runtime/contracts only", () => {
+    const contractSymbols = [
+      "AgentHandler",
+      "AgentIdentity",
+      "DeliveryToken",
+      "HandlerConfig",
+      "HandlerFactory",
+      "HandlerShutdownOptions",
+      "SessionContext",
+      "SessionMessage",
+      "TurnConsumedErrorReason",
+      "TurnOutcome",
+      "noopDeliveryToken",
+      "requireDeliveryToken",
+      "LoginOutcome",
+      "ReplayFenceEntry",
+      "ReplayFenceWriter",
+    ] as const;
+    const forbiddenOwners = ["runtime/handler.js", "runtime/runtime-login.js", "runtime/replay-fence.js"] as const;
+
+    const productionProviderFiles = [
+      ...listFilesRecursive(join(clientSrc, "handlers"), (p) => p.endsWith(".ts") && !p.includes("__tests__")),
+      ...listFilesRecursive(join(clientSrc, "providers"), (p) => p.endsWith(".ts") && !p.includes("__tests__")),
+    ];
+
+    for (const file of productionProviderFiles) {
+      const source = readFileSync(file, "utf8");
+      const rel = relative(clientSrc, file).replaceAll("\\", "/");
+      for (const owner of forbiddenOwners) {
+        expect(source, `${rel} must not deep-import ${owner}`).not.toMatch(
+          new RegExp(`from\\s+["'][^"']*${owner.replace(".", "\\.")}["']`),
+        );
+      }
+    }
+
+    // Positive: at least the known contract consumers resolve contracts.js.
+    const mustUseContracts = [
+      "handlers/claude-code.ts",
+      "handlers/claude-code-tui/index.ts",
+      "handlers/codex/index.ts",
+      "handlers/codex/sdk.ts",
+      "handlers/codex/app-server/index.ts",
+      "handlers/codex/turn-completion.ts",
+      "handlers/cursor/index.ts",
+      "handlers/grok/index.ts",
+      "handlers/kimi-code.ts",
+      "handlers/opencode/index.ts",
+      "handlers/pi/index.ts",
+      "handlers/turn-settlement.ts",
+      "providers/builtin-registry.ts",
+      "providers/auth-driver.ts",
+    ] as const;
+    for (const rel of mustUseContracts) {
+      const source = readFileSync(join(clientSrc, rel), "utf8");
+      expect(source, `${rel} must import runtime/contracts.js`).toMatch(/runtime\/contracts\.js/);
+    }
+
+    // contracts entry itself stays an allowlist and does not import forbidden owners as values beyond the declared re-exports.
+    const contractsSource = readFileSync(join(clientSrc, "runtime/contracts.ts"), "utf8");
+    expect(contractsSource).toContain('from "./handler.js"');
+    expect(contractsSource).toContain('from "./runtime-login.js"');
+    expect(contractsSource).toContain('from "./replay-fence.js"');
+    for (const name of contractSymbols) {
+      expect(contractsSource, `contracts allowlist must mention ${name}`).toMatch(new RegExp(`\\b${name}\\b`));
+    }
+    for (const banned of [
+      "SessionManager",
+      "SessionRegistry",
+      "AgentSlot",
+      "AgentRuntime",
+      "ReplayFenceStore",
+      "createBuiltinHandlerRegistry",
+    ]) {
+      expect(contractsSource, `contracts must not mention ${banned}`).not.toMatch(new RegExp(`\\b${banned}\\b`));
+    }
   });
 
   it("keeps the runtime-auth driver projection in one frozen, schema-exhaustive composition root", () => {

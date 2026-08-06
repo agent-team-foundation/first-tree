@@ -32,8 +32,8 @@ import type {
   HandlerFactory,
   SessionContext,
   SessionMessage,
-} from "../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../runtime/handler.js";
+} from "../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
 
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";

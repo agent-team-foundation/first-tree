@@ -9,7 +9,7 @@ import { createKimiCodeHandler } from "../handlers/kimi-code.js";
 import { createOpenCodeHandler } from "../handlers/opencode/index.js";
 import { createPiHandler } from "../handlers/pi/index.js";
 import { createLogger } from "../observability/logger.js";
-import type { HandlerFactory } from "../runtime/handler.js";
+import type { HandlerFactory } from "../runtime/contracts.js";
 
 /** Injectable seam for Claude executable resolution in tests. */
 export type BuiltinHandlerRegistryDeps = {

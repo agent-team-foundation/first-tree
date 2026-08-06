@@ -42,15 +42,15 @@ import type {
   AgentHandler,
   DeliveryToken,
   HandlerFactory,
+  ReplayFenceWriter,
   SessionContext,
   SessionMessage,
-} from "../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../runtime/handler.js";
+} from "../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
 
 import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../runtime/managed-skills.js";
 import { ProviderAttempt, type ProviderAttemptSettlement } from "../runtime/provider-attempt.js";
 import { maxProviderTurnRetryAttempts } from "../runtime/provider-retry-policy.js";
-import type { ReplayFenceWriter } from "../runtime/replay-fence.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { teamSkillBundleResolverFromSdk } from "../runtime/team-skill-bundle-resolver.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";

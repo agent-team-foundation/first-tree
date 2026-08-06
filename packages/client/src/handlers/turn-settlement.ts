@@ -1,4 +1,4 @@
-import type { TurnConsumedErrorReason, TurnOutcome } from "../runtime/handler.js";
+import type { TurnConsumedErrorReason, TurnOutcome } from "../runtime/contracts.js";
 
 export type TurnSettlementStatus = "success" | "error";
 

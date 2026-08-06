@@ -1,5 +1,5 @@
 import { isLandingCampaignTrialAgentMetadata } from "@first-tree/shared";
-import type { AgentHandler, HandlerFactory, SessionContext } from "../../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext } from "../../runtime/contracts.js";
 
 import { CodexAppServerStartupError, createCodexAppServerHandler } from "./app-server/index.js";
 import { createCodexSdkHandler } from "./sdk.js";

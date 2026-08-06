@@ -33,8 +33,8 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../../../runtime/handler.js";
+} from "../../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../../runtime/contracts.js";
 
 import {
   isManagedSkillsUnsafeDiscoveryError,

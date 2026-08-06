@@ -19,8 +19,8 @@ import type {
   HandlerFactory,
   SessionContext,
   SessionMessage,
-} from "../../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
 
 import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../../runtime/managed-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";

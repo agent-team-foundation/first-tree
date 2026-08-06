@@ -24,11 +24,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../../runtime/context-tree-git-status.js";
-import {
-  formatGrokBinaryMissingMessage,
-  GrokBinaryVerifyTransientError,
-  resolveGrokRuntimeBinary,
-} from "../../runtime/grok-binary.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -36,8 +31,13 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+import {
+  formatGrokBinaryMissingMessage,
+  GrokBinaryVerifyTransientError,
+  resolveGrokRuntimeBinary,
+} from "../../runtime/grok-binary.js";
 
 import {
   isManagedSkillsUnsafeDiscoveryError,

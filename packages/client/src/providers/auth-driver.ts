@@ -1,5 +1,5 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
-import type { LoginOutcome } from "../runtime/runtime-login.js";
+import type { LoginOutcome } from "../runtime/contracts.js";
 
 /**
  * Provider-neutral contract for one in-product runtime-auth login.
