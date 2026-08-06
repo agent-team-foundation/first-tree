@@ -16,16 +16,12 @@ import { ChatSummary } from "./workspace/center/chat-summary.js";
 
 const hoursAgo = (h: number): string => new Date(Date.now() - h * 3_600_000).toISOString();
 
-const RICH = [
-  "## 任务",
-  "把右侧 summary 从「侧栏一段文字」改为**置顶可折叠摘要**。",
+const CURRENT_STATE = [
+  "Chat Summary now leads with the **current result and user impact**.",
   "",
-  "## 进展",
-  "- 后端：`description_updated_at` 已落库",
-  "- 前端：摘要组件接入 chat-view，右栏只留成员",
+  "Supporting context stays quieter and within a readable text measure, so a wide Workspace does not become one long scanning line.",
   "",
-  "## 下一步",
-  "- gate 全绿后开 PR，详见 [关联 PR](#)。",
+  "**Next:** Validate the same hierarchy in the live Workspace.",
 ].join("\n");
 
 const PLAIN = "Reviewing PR 1207 — server-side freshness fields landed; wiring the collapsed-bar first line next.";
@@ -37,7 +33,7 @@ const HEADING_FIRST = [
 ].join("\n");
 
 const PANEL: React.CSSProperties = {
-  width: 720,
+  width: "calc(var(--chat-summary-readable-rail) + var(--sp-95))",
   maxWidth: "100%",
   background: "var(--bg)",
   border: "var(--hairline) solid var(--border)",
@@ -137,7 +133,12 @@ export function ChatSummaryPreviewPage() {
 
       <section style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
         <Col label="Unread new summary version" note="auto-expands once + amber highlight · freshness on the bar">
-          <Demo chatId="preview-unread" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
+          <Demo
+            chatId="preview-unread"
+            description={CURRENT_STATE}
+            descriptionUpdatedAt={hoursAgo(2)}
+            lastReadAt={null}
+          />
         </Col>
 
         <Col label="Recently updated, already seen" note="collapsed · freshness on the bar · vertical chevron">
@@ -178,7 +179,12 @@ export function ChatSummaryPreviewPage() {
           note="same as the first, wrapped in .dark (how it renders in the live workspace)"
         >
           <div className="dark" style={{ borderRadius: "var(--radius-panel)" }}>
-            <Demo chatId="preview-dark" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
+            <Demo
+              chatId="preview-dark"
+              description={CURRENT_STATE}
+              descriptionUpdatedAt={hoursAgo(2)}
+              lastReadAt={null}
+            />
           </div>
         </Col>
       </section>

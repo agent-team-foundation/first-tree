@@ -3,14 +3,15 @@ import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:
 import { dirname, join } from "node:path";
 import {
   AgentSlot,
+  type BuiltinHandlerRegistry,
   ClientConnection,
+  createBuiltinHandlerRegistry,
   createLogger,
   getChildProcessRegistry,
-  getHandlerFactory,
-  hasHandler,
+  type HandlerFactory,
   type ProviderModelsListCommand,
   type RuntimeAuthCommand,
-  registerBuiltinHandlers,
+  resolveAndLogClaudeExecutable,
   type UpdateHooks,
   UpdateManager,
 } from "@first-tree/client";
@@ -143,6 +144,12 @@ export class ClientRuntime {
   private readonly agentIds = new Set<string>();
   private readonly options: ClientRuntimeOptions;
   private readonly output: ClientRuntimeOutput;
+  /**
+   * Frozen built-in handler factory table. Created once in the constructor
+   * (with a single cheap Claude executable resolution + log) and held as an
+   * instance value — never process-global.
+   */
+  private readonly handlerFactories: BuiltinHandlerRegistry;
   private updateManager: UpdateManager | null = null;
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -188,7 +195,18 @@ export class ClientRuntime {
       // missing / corrupt state file simply omits the field.
       getLastUpdateAttempt: () => readUpdateState()?.last ?? null,
     });
-    registerBuiltinHandlers();
+    // Composition runs synchronously BEFORE the WS connects — so it must not
+    // block. Resolve cheap-only (`includeLoginShell: false`): daemon PATH +
+    // well-known dirs, never a login-shell `spawnSync`. A `claude` that lives
+    // only on the user's interactive shell PATH resolves to `undefined` here
+    // and is picked up lazily by the handler at session start (which
+    // re-resolves with the login-shell probe) and by the capability probe
+    // (post-construction) — neither of which is on the pre-connect path.
+    // Log once per ClientRuntime construction.
+    const resolution = resolveAndLogClaudeExecutable();
+    this.handlerFactories = createBuiltinHandlerRegistry({
+      resolveExecutable: () => resolution,
+    });
 
     this.connection.on("auth:expired", () => {
       this.output.status("⚠️", "access token expired — reconnecting after refresh...");
@@ -302,14 +320,15 @@ export class ClientRuntime {
 
   addAgent(name: string, config: AgentConfig): void {
     if (this.agentNames.has(name)) return;
-    // The runtime provider is a valid enum value, but this client build may not
-    // ship a handler for it yet (e.g. a `claude-code-tui` agent pinned to a
-    // client that predates the TUI handler). Skip it with a clear warning
-    // rather than letting `getHandlerFactory` throw and crash daemon startup —
-    // which would also stop every other agent in the same load loop. Record the
-    // name/id so rescans and reconnects don't re-warn; a client upgrade + restart
-    // picks the agent up once its handler is registered.
-    if (!hasHandler(config.runtime)) {
+    // The runtime provider may be a valid wire value, but this client build may
+    // not ship a factory for it yet (e.g. a newer provider pinned to an older
+    // client). Skip with a clear warning rather than throwing and crashing
+    // daemon startup — which would also stop every other agent in the same
+    // load loop. Record the name/id so rescans and reconnects don't re-warn; a
+    // client upgrade + restart picks the agent up once its factory is present.
+    // Keep this fail-closed check even though the built-in table is TS-exhaustive:
+    // runtime/config can still carry a value this build does not support.
+    if (!this.hasHandlerFactory(config.runtime)) {
       this.output.status(
         "⚠️",
         `agent "${name}" uses runtime "${config.runtime}" which this client build does not support yet — skipping. Update the client to run it.`,
@@ -325,8 +344,21 @@ export class ClientRuntime {
     this.refreshConnectionListenerLimit();
   }
 
+  private hasHandlerFactory(type: string): boolean {
+    return Object.hasOwn(this.handlerFactories, type);
+  }
+
+  private resolveHandlerFactory(type: string): HandlerFactory {
+    const factory = (this.handlerFactories as Readonly<Record<string, HandlerFactory>>)[type];
+    if (!factory) {
+      const available = Object.keys(this.handlerFactories).join(", ") || "(none)";
+      throw new Error(`Unknown handler type "${type}". Available: ${available}`);
+    }
+    return factory;
+  }
+
   private createAgentSlot(name: string, config: AgentConfig): AgentSlot {
-    const handlerFactory = getHandlerFactory(config.runtime);
+    const handlerFactory = this.resolveHandlerFactory(config.runtime);
     return new AgentSlot({
       name,
       agentId: config.agentId,
@@ -604,7 +636,7 @@ export class ClientRuntime {
         reportSuspendedSessions: false,
       },
     };
-    if (!hasHandler(runtimeProvider)) {
+    if (!this.hasHandlerFactory(runtimeProvider)) {
       this.output.status(
         "⚠️",
         `agent "${existing.name}" switched to runtime "${runtimeProvider}" which this client build does not support yet — update the client to run it.`,

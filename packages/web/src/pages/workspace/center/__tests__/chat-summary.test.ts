@@ -156,11 +156,75 @@ describe("ChatSummary", () => {
       lastReadAt: readRecentlyAt,
     });
 
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
-      "Summary",
-    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Collapse current state"]')?.textContent,
+    ).toContain("Current state");
     // Expanded body is the floating card, portaled into the message-area node.
     expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
+  it("renders a current-state headline and quieter supporting copy on a readable rail", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      description:
+        "The **current result** is ready for readers.\n\nSupporting context is secondary.\n\n**Next:** Observe usage.",
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+
+    const card = overlayEl.querySelector<HTMLElement>('section[aria-label="Current state"]');
+    const summaryDocument = card?.querySelector<HTMLElement>('[data-summary-part="document"]');
+    const paragraphs = summaryDocument?.querySelectorAll("p");
+    expect(summaryDocument?.dataset.summaryLayout).toBe("lead");
+    expect(paragraphs?.[0]?.textContent).toContain("The current result is ready for readers.");
+    expect(paragraphs?.[0]?.querySelector("strong")?.textContent).toBe("current result");
+    expect(paragraphs?.[1]?.textContent).toContain("Supporting context is secondary.");
+    expect(paragraphs?.[2]?.textContent).toContain("Next: Observe usage.");
+    expect(summaryDocument?.style.color).toBe("var(--fg-2)");
+    expect(summaryDocument?.firstElementChild?.className).toContain("[&>p:first-of-type]:text-subtitle");
+    expect(card?.firstElementChild?.getAttribute("style")).toContain("var(--chat-summary-readable-rail)");
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
+  it("keeps reference links connected while styling the first paragraph", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      description:
+        "The current result links to [details][result].\n\nSupporting context.\n\n[result]: https://example.com/result",
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+
+    const link = overlayEl.querySelector<HTMLAnchorElement>('[data-summary-layout="lead"] a');
+    expect(link?.textContent).toBe("details");
+    expect(link?.href).toBe("https://example.com/result");
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
+  it("keeps indented code in the faithful block-first layout", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      description: "    const result = 'ready';\n\nSupporting context.",
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+
+    const summaryDocument = overlayEl.querySelector<HTMLElement>('[data-summary-part="document"]');
+    expect(summaryDocument?.dataset.summaryLayout).toBe("faithful");
+    expect(summaryDocument?.querySelector("pre code")?.textContent).toContain("const result = 'ready';");
 
     await act(async () => root.unmount());
     container.remove();
@@ -176,7 +240,7 @@ describe("ChatSummary", () => {
       autoExpandUnread: false,
     });
 
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).toBeNull();
     expect(container.textContent).toContain("Updated");
 
@@ -196,7 +260,7 @@ describe("ChatSummary", () => {
       restoreManualExpansion: false,
     });
 
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).toBeNull();
     expect(container.textContent).toContain("Updated");
 
@@ -213,7 +277,9 @@ describe("ChatSummary", () => {
       lastReadAt: readRecentlyAt,
     };
     const first = await renderSummary(scrollEl, unreadProps);
-    const collapseButton = first.container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]');
+    const collapseButton = first.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse current state"]',
+    );
     if (!collapseButton) throw new Error("summary collapse button missing");
     await act(async () => {
       collapseButton.click();
@@ -223,7 +289,9 @@ describe("ChatSummary", () => {
     first.overlayEl.remove();
 
     const second = await renderSummary(scrollEl, unreadProps);
-    expect(second.container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(
+      second.container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]'),
+    ).not.toBeNull();
     expect(second.overlayEl.querySelector("strong")).toBeNull();
     expect(second.container.textContent).toContain("Updated");
 
@@ -239,14 +307,14 @@ describe("ChatSummary", () => {
       descriptionUpdatedAt: readRecentlyAt,
       lastReadAt: unreadVersionAt,
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
 
     await rerender({
       descriptionUpdatedAt: newerUnreadVersionAt,
       lastReadAt: unreadVersionAt,
     });
 
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).toBeNull();
     expect(container.textContent).toContain("Updated");
 
@@ -260,15 +328,15 @@ describe("ChatSummary", () => {
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 120;
     const { container, overlayEl, root } = await renderSummary(scrollEl);
-    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]');
     if (!button) throw new Error("summary button missing");
 
     await act(async () => {
       button.click();
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
-      "Summary",
-    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Collapse current state"]')?.textContent,
+    ).toContain("Current state");
     expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -286,15 +354,15 @@ describe("ChatSummary", () => {
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 120;
     const { container, overlayEl, root } = await renderSummary(scrollEl);
-    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]');
     if (!button) throw new Error("summary button missing");
 
     await act(async () => {
       button.click();
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
-      "Summary",
-    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Collapse current state"]')?.textContent,
+    ).toContain("Current state");
     expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -302,7 +370,7 @@ describe("ChatSummary", () => {
       scrollEl.dispatchEvent(new Event("scroll"));
     });
     expect(overlayEl.querySelector("strong")).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
 
     await act(async () => root.unmount());
     container.remove();
@@ -317,7 +385,7 @@ describe("ChatSummary", () => {
       lastReadAt: readRecentlyAt,
     });
     // Auto-expanded on entry (unread): the floating card is up.
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).not.toBeNull();
 
     // Scroll down → sticky-collapse folds it to the bar.
@@ -325,7 +393,7 @@ describe("ChatSummary", () => {
       scrollEl.scrollTop = 120;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).toBeNull();
 
     // Scroll back to the top → must NOT re-expand (regression guard for PR 1252).
@@ -333,7 +401,7 @@ describe("ChatSummary", () => {
       scrollEl.scrollTop = 0;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
     expect(overlayEl.querySelector("strong")).toBeNull();
 
     await act(async () => root.unmount());
@@ -345,15 +413,15 @@ describe("ChatSummary", () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     const { container, overlayEl, root } = await renderSummary(scrollEl);
-    const initialButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    const initialButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]');
     if (!initialButton) throw new Error("summary button missing");
 
     await act(async () => {
       initialButton.click();
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
-      "Summary",
-    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Collapse current state"]')?.textContent,
+    ).toContain("Current state");
     expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -362,7 +430,7 @@ describe("ChatSummary", () => {
     });
     expect(overlayEl.querySelector("strong")).toBeNull();
 
-    const stickyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    const stickyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]');
     if (!stickyButton) throw new Error("sticky summary button missing");
     await act(async () => {
       stickyButton.click();
@@ -385,7 +453,7 @@ describe("ChatSummary", () => {
     // (so it never pushes the message stream down).
     expect(container.querySelector("strong")).toBeNull();
     // It lives in the message-area node as an absolute, self-scrolling card.
-    const card = overlayEl.querySelector<HTMLElement>('section[aria-label="Chat summary"]');
+    const card = overlayEl.querySelector<HTMLElement>('section[aria-label="Current state"]');
     expect(card).not.toBeNull();
     expect(card?.style.position).toBe("absolute");
     expect(card?.querySelector("strong")?.textContent).toBe("DescBody");
@@ -437,7 +505,7 @@ describe("ChatSummary", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
     expect(overlayEl.querySelector("strong")).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand current state"]')).not.toBeNull();
 
     await act(async () => root.unmount());
     container.remove();

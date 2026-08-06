@@ -45,8 +45,10 @@ project/Team activation.
 - Disable the Hook while retaining trust, then change the installed Hook
   definition so Codex reports modified trust; inspect status after each state.
 - Repeat enable with the already trusted and enabled Hook.
-- Repeat in a projectless Codex scratch directory, choose session-only, and
-  confirm setup completes without Plugin installation or Hook consent.
+- Repeat in a projectless Codex scratch directory. Confirm the plan returns
+  only global and session choices, has no directory choice or directory apply
+  command, then choose session-only and confirm setup completes without Plugin
+  installation or Hook consent.
 
 ## Observe
 
@@ -79,7 +81,8 @@ project/Team activation.
 - The ordinary non-Git parent and both nested repositories resolve all Teams at
   the same deepest directory root without Git remote inspection.
 - A Codex scratch path is shown as a real temporary directory with a warning;
-  session-only does not auto-activate a future session.
+  its plan contains only global and session choices, and session-only does not
+  auto-activate a future session.
 
 ## Expected Result
 

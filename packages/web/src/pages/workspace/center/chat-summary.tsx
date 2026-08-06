@@ -12,8 +12,13 @@ import { formatRelative } from "../../../lib/utils.js";
  * rather than buried in the right rail. Read-only: the description is the chat
  * `description`, maintained by agents via `chat update --description`; there is
  * deliberately NO edit affordance anywhere here (correcting it means telling an
- * agent in chat). The component renders the description's markdown faithfully —
- * it never invents sections, fields, or a "stage".
+ * agent in chat). The component preserves the description's authored markdown
+ * without inventing sections, fields, or a "stage". When the description follows
+ * the current-state contract, its first prose block is promoted into a readable
+ * lead and the remaining markdown stays as supporting copy. The description is
+ * always rendered as one markdown document so document-scoped syntax (reference
+ * links, multiline constructs, and definitions) keeps working. Complex
+ * block-first markdown falls back to the faithful full-document presentation.
  *
  * The persistent form is a one-line bar in flow between header and stream; the
  * expanded form is a FLOATING CARD portaled over the top of the message area
@@ -29,7 +34,7 @@ import { formatRelative } from "../../../lib/utils.js";
  *     ellipsis-truncated), an "Updated" chip when there's an unread change, the
  *     freshness ("9 days ago"), and a quiet chevron. Freshness shows in BOTH
  *     states, so an auto-expanded summary still surfaces when it last changed.
- *   - Expanded card: the bar stays put (label flips to "Summary", chevron up)
+ *   - Expanded card: the bar stays put (label flips to "Current state", chevron up)
  *     while a non-modal overlay floats below it with the description rendered as
  *     markdown — own scroll (`overscroll: contain`), `--shadow-md` + border for
  *     separation, NO scrim (a summary surfacing is awareness, not a modal
@@ -118,9 +123,15 @@ function clearDismissedVersion(chatId: string, version: string): void {
  * truncation is left to CSS; this only removes markup noise. Returns "" when
  * nothing usable is found (the caller shows a fallback).
  */
-export function descriptionFirstLine(description: string): string {
+type DescriptionLead = {
+  preview: string;
+  promotable: boolean;
+};
+
+function findDescriptionLead(description: string): DescriptionLead | null {
+  const lines = description.split(/\r?\n/);
   let headingFallback = "";
-  for (const rawLine of description.split(/\r?\n/)) {
+  for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (!line) continue;
     // Skip structural-only lines that carry no readable text: thematic breaks
@@ -147,12 +158,33 @@ export function descriptionFirstLine(description: string): string {
     if (!stripped) continue;
     if (isHeading) {
       // Remember the first heading as a fallback, but keep scanning for prose.
-      if (!headingFallback) headingFallback = stripped;
+      if (!headingFallback) {
+        headingFallback = stripped;
+      }
       continue;
     }
-    return stripped;
+    const nextLine = lines[index + 1]?.trim() ?? "";
+    const startsTable = line.includes("|") && /^\|?[\s:|-]+\|?$/.test(nextLine) && nextLine.includes("-");
+    const startsSetextHeading = /^ {0,3}(?:=+|-+)\s*$/.test(lines[index + 1] ?? "");
+    const startsComplexBlock =
+      /^(?:\t| {4})/.test(rawLine) ||
+      /^([-*+]\s+|\d+[.)]\s+|>\s?|\||`{3,}|~{3,})/.test(line) ||
+      startsTable ||
+      startsSetextHeading;
+    return {
+      preview: stripped,
+      promotable: !startsComplexBlock,
+    };
   }
-  return headingFallback;
+  if (!headingFallback) return null;
+  return {
+    preview: headingFallback,
+    promotable: false,
+  };
+}
+
+export function descriptionFirstLine(description: string): string {
+  return findDescriptionLead(description)?.preview ?? "";
 }
 
 export function ChatSummary({
@@ -186,8 +218,8 @@ export function ChatSummary({
    *  portaled here and floated `absolute; top:0` over the message area. */
   overlayContainerRef: RefObject<HTMLDivElement | null>;
 }) {
-  const trimmed = description?.trim() ?? "";
-  const hasDescription = trimmed.length > 0;
+  const markdownDescription = description ?? "";
+  const hasDescription = markdownDescription.trim().length > 0;
 
   const updatedAtMs = useMemo(() => {
     if (!descriptionUpdatedAt) return null;
@@ -379,7 +411,8 @@ export function ChatSummary({
 
   if (!hasDescription) return null;
 
-  const firstLine = descriptionFirstLine(trimmed);
+  const firstLine = descriptionFirstLine(markdownDescription);
+  const promotesHeadline = findDescriptionLead(markdownDescription)?.promotable ?? false;
   const freshnessText = updatedAtMs !== null ? formatRelative(descriptionUpdatedAt) : null;
   const showAmberChip = unread && !unreadCleared && !expanded;
   const amberActive = highlighted && expanded;
@@ -407,7 +440,7 @@ export function ChatSummary({
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          aria-label={expanded ? "Collapse summary" : "Expand summary"}
+          aria-label={expanded ? "Collapse current state" : "Expand current state"}
           className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
           style={{
             gap: "var(--sp-2)",
@@ -428,7 +461,7 @@ export function ChatSummary({
               fontWeight: expanded ? 600 : undefined,
             }}
           >
-            {expanded ? "Summary" : firstLine || "No summary yet"}
+            {expanded ? "Current state" : firstLine || "No summary yet"}
           </span>
           {showAmberChip ? (
             <span
@@ -474,7 +507,7 @@ export function ChatSummary({
         ? createPortal(
             <section
               ref={cardRef}
-              aria-label="Chat summary"
+              aria-label="Current state"
               className="chat-summary-card-in z-10"
               style={{
                 position: "absolute",
@@ -485,18 +518,32 @@ export function ChatSummary({
                 border: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border)"}`,
                 borderRadius: "var(--radius-dialog)",
                 boxShadow: "var(--shadow-md)",
-                padding: "var(--sp-1) var(--sp-6) var(--sp-3)",
+                padding: "var(--sp-4) var(--sp-6) var(--sp-5)",
                 maxHeight: "min(46vh, 30rem)",
                 overflowY: "auto",
                 overscrollBehavior: "contain",
               }}
             >
-              <div className="text-body" style={{ color: "var(--fg)" }}>
-                {/* Faithful markdown render; headings flattened to body size so
-                    hierarchy is weight + spacing, not shouting over the bar. */}
-                <Markdown className="[&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
-                  {trimmed}
-                </Markdown>
+              <div style={{ maxWidth: "var(--chat-summary-readable-rail)" }}>
+                <div
+                  data-summary-part="document"
+                  data-summary-layout={promotesHeadline ? "lead" : "faithful"}
+                  className="text-body"
+                  style={{ color: promotesHeadline ? "var(--fg-2)" : "var(--fg)" }}
+                >
+                  {/* Keep one markdown tree so reference definitions and other
+                      document-scoped syntax remain available to every block.
+                      The current-state contract makes the first top-level prose
+                      block the lead; legacy block-first markdown stays faithful. */}
+                  <Markdown
+                    className={
+                      `${promotesHeadline ? "[&>p:first-of-type]:text-subtitle [&>p:first-of-type]:text-[color:var(--fg)] [&>p:first-of-type]:mt-0 [&>p:first-of-type]:mb-[var(--sp-3)] " : ""}` +
+                      "[&_p]:text-body [&_li]:text-body [&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4"
+                    }
+                  >
+                    {markdownDescription}
+                  </Markdown>
+                </div>
               </div>
             </section>,
             overlayEl,

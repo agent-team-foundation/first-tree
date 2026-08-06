@@ -55,35 +55,22 @@ export function inspectContextSetupLocation(
 ): ContextSetupLocation {
   assertSignedIn();
   if (input.pathless) {
-    return {
-      project: { kind: "pathless" },
-      directory: null,
-      directoryAvailable: false,
-      temporaryDirectory: false,
-      warning: "This provider session did not expose a usable directory. Directory activation is unavailable.",
-    };
+    return pathlessSetupLocation();
   }
   const env = input.env ?? process.env;
   const candidate =
-    input.projectRoot ??
-    (provider === "claude-code"
-      ? (env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd())
-      : (input.cwd ?? process.cwd()));
+    input.projectRoot ?? (provider === "claude-code" ? env.CLAUDE_PROJECT_DIR : (input.cwd ?? process.cwd()));
   if (!candidate) {
-    return {
-      project: { kind: "pathless" },
-      directory: null,
-      directoryAvailable: false,
-      temporaryDirectory: false,
-      warning: "This provider session did not expose a usable directory. Directory activation is unavailable.",
-    };
+    return pathlessSetupLocation();
   }
-  const resolved = requireKnownProject(
-    resolvePathProject(
-      candidate,
-      input.projectRoot ? "explicit_path" : provider === "claude-code" ? "claude_project_dir" : "codex_cwd_best_effort",
-    ),
+  const projectResolution = resolvePathProject(
+    candidate,
+    input.projectRoot ? "explicit_path" : provider === "claude-code" ? "claude_project_dir" : "codex_cwd_best_effort",
   );
+  if (projectResolution.kind === "unknown" && provider === "claude-code" && !input.projectRoot) {
+    return pathlessSetupLocation();
+  }
+  const resolved = requireKnownProject(projectResolution);
   if (resolved.project.kind !== "path") {
     throw new ContextClientPreflightError(
       contextClientPreflightErrorCode.projectUnknown,
@@ -92,15 +79,27 @@ export function inspectContextSetupLocation(
     );
   }
   const temporaryDirectory =
-    provider === "codex" && classifyCodexProjectlessPath(resolved.project.root, env, input.classifierOptions);
+    provider === "codex" &&
+    (classifyCodexProjectlessPath(resolved.project.root, env, input.classifierOptions) ||
+      classifyCodexManagedWorktreePath(resolved.project.root, env, input.classifierOptions));
   return {
     project: resolved.project,
     directory: resolved.project.root,
-    directoryAvailable: true,
+    directoryAvailable: !temporaryDirectory,
     temporaryDirectory,
     warning: temporaryDirectory
-      ? "This looks like a Codex session temporary directory. A future session will usually use a different path; current-session activation is recommended."
+      ? "This looks like a Codex temporary directory. Directory activation is unavailable because future sessions may use a different path."
       : null,
+  };
+}
+
+function pathlessSetupLocation(): ContextSetupLocation {
+  return {
+    project: { kind: "pathless" },
+    directory: null,
+    directoryAvailable: false,
+    temporaryDirectory: false,
+    warning: "This provider session did not expose a usable directory. Directory activation is unavailable.",
   };
 }
 
@@ -243,6 +242,44 @@ export function classifyCodexProjectlessPath(
     }
     const [date, slug] = relativePath.split(pathApi.sep);
     if (date && slug && validIsoDate(date)) return true;
+  }
+  return false;
+}
+
+export function classifyCodexManagedWorktreePath(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { platform?: NodeJS.Platform; home?: string; realpath?: typeof realpathSync } = {},
+): boolean {
+  const platform = options.platform ?? process.platform;
+  const pathApi = platform === "win32" ? win32 : posix;
+  const home = options.home ?? (platform === "win32" ? env.USERPROFILE : homedir());
+  const codexHome = env.CODEX_HOME || (home ? pathApi.join(home, ".codex") : null);
+  if (!codexHome) return false;
+
+  const worktreesRoot = pathApi.join(codexHome, "worktrees");
+  const comparableRoots = new Set([worktreesRoot]);
+  try {
+    comparableRoots.add((options.realpath ?? realpathSync)(worktreesRoot));
+  } catch {
+    // The logical root is sufficient for synthetic platform tests and for a
+    // configured root that has not been created yet. Existing symlinked roots
+    // add their canonical target so both paths use the same namespace.
+  }
+
+  const normalizedCwd = normalizeForComparison(cwd, platform);
+  for (const root of comparableRoots) {
+    const relativePath = pathApi.relative(normalizeForComparison(root, platform), normalizedCwd);
+    if (
+      !relativePath ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${pathApi.sep}`) ||
+      pathApi.isAbsolute(relativePath)
+    ) {
+      continue;
+    }
+    const [worktreeId, repository] = relativePath.split(pathApi.sep);
+    if (worktreeId && repository) return true;
   }
   return false;
 }

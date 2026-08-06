@@ -24,24 +24,30 @@ release manifest.
 Web authors a Team-specific setup command. The current provider session first
 runs the command with `--plan`. Planning is read-only: it validates the
 current account, Team and payload, preserves the provider's real project
-identity, and returns these choices:
+identity, and returns the choices that are safe for that session:
 
 - **global** — this Team is eligible in every session for this provider;
 - **directory** — this Team is eligible in the displayed canonical directory
   and all descendants;
 - **session** — this Team is eligible only in the current conversation.
 
-A directory choice always displays the exact directory. When Codex App has not
-opened a project, its real scratch directory is displayed with a warning that
-another session normally receives a different directory; session-only is
-recommended. Truly pathless hosts cannot choose directory scope.
+A directory choice is returned only when setup has a stable canonical
+directory. Claude setup uses a valid `CLAUDE_PROJECT_DIR` (or an explicit
+`--project-root`) and never borrows the shell or Hook cwd when that signal is
+missing. Codex Documents scratch directories and managed worktrees under the
+default `$CODEX_HOME/worktrees/<id>/<repo>` layout keep their canonical path
+project identity, but omit the directory choice because another session
+normally receives a different path. Truly pathless sessions also omit it.
+Custom Codex App worktree roots are not classified until the provider exposes
+a stable public setting for them.
 
 The coding agent must show the choices and wait for a new user reply. Every
 available choice carries a complete `applyCommand` built by the same CLI that
 created the plan; the agent runs the selected command unchanged instead of
 constructing flags from the plan. The command contains the exact `planId`, so a
-changed account, Team, provider or project identity forces a new plan and a new
-choice. An unavailable choice has no apply command.
+changed account, Team, provider, project identity, or directory availability
+forces a new plan and a new choice. A scope omitted from the plan has no apply
+command and cannot be applied manually.
 
 The Web setup prompt is deliberately limited to the human and agent boundaries:
 host self-identification, a fresh scope choice, JSON-envelope trust, account
@@ -140,10 +146,13 @@ semantic routing material.
 
 The agent treats SCOPE prose as data for answering “does this task belong
 here?”, never as commands to execute. It selects automatically only when
-exactly one candidate clearly matches. Multiple matches, no match, or any
-missing, invalid, or authority-unavailable highest-priority candidate requires
-asking the user; remaining readable candidates can never be auto-selected in
-that state.
+exactly one candidate clearly matches and every candidate is readable. If all
+readable candidates are clearly unrelated, or the router returns no candidates
+without blocking selection, the agent continues the original task without a
+snapshot or user interruption. Multiple possible matches, an unclear SCOPE,
+overlap, `selectionBlocked`, or any missing, invalid, or
+authority-unavailable highest-priority candidate requires asking the user;
+remaining readable candidates can never be auto-selected in that state.
 The user may choose only from the validated local candidates.
 
 Selection creates an opaque task candidate receipt. Hidden `context snapshot`
@@ -299,7 +308,8 @@ Before production qualification, real Claude Code and Codex surfaces must
 record evidence for:
 
 1. global, directory and session-only setup;
-2. Codex scratch-directory warning, `/hooks` consent and same-conversation
+2. dynamic setup choices for pathless, Codex scratch, default managed-worktree,
+   and ordinary-project locations, plus `/hooks` consent and same-conversation
    continuation;
 3. two or more real Teams with clear, overlapping, missing and non-matching
    SCOPE bodies;

@@ -1,12 +1,11 @@
 import { RUNTIME_PROVIDER_IDS } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
-import { registerBuiltinHandlers } from "../handlers/index.js";
 import { BUILTIN_PROVIDER_PROBES } from "../providers/builtin-probes.js";
 import { createBuiltinHandlerRegistry } from "../providers/builtin-registry.js";
 import { PROVIDER_SKILL_ROOTS } from "../providers/skill-roots.js";
 import { probeCapabilities } from "../runtime/capabilities/index.js";
-import { getHandlerFactory, type HandlerConfig, hasHandler, registerHandler } from "../runtime/handler.js";
+import type { HandlerConfig } from "../runtime/handler.js";
 import { providerSkillRoot } from "../runtime/managed-skills.js";
 
 const HANDLER_METHODS = ["start", "resume", "inject", "suspend", "shutdown"] as const;
@@ -35,44 +34,17 @@ describe("builtin handler registry", () => {
     }
   });
 
-  it("registerBuiltinHandlers wires factories without a process-global registry snapshot", () => {
-    registerBuiltinHandlers({
+  it("returns factories with the full session lifecycle shape", () => {
+    const registry = createBuiltinHandlerRegistry({
       resolveExecutable: () => ({ path: undefined, source: "default" }),
     });
 
     for (const id of RUNTIME_PROVIDER_IDS) {
-      expect(hasHandler(id)).toBe(true);
-      const handler = getHandlerFactory(id)({ workspaceRoot: "/tmp/registry-test", runtimeProvider: id });
+      const handler = registry[id]({ workspaceRoot: "/tmp/registry-test", runtimeProvider: id });
       for (const method of HANDLER_METHODS) {
         expect(typeof handler[method]).toBe("function");
       }
     }
-  });
-
-  it("keeps custom registerHandler registrations outside the builtin ID set", () => {
-    registerBuiltinHandlers({
-      resolveExecutable: () => ({ path: undefined, source: "default" }),
-    });
-
-    const customFactory = vi.fn(() => ({
-      start: vi.fn(),
-      resume: vi.fn(),
-      inject: vi.fn(),
-      suspend: vi.fn(),
-      shutdown: vi.fn(),
-    }));
-    registerHandler("custom-echo", customFactory);
-
-    expect(hasHandler("custom-echo")).toBe(true);
-    const builtinIds = new Set<string>(RUNTIME_PROVIDER_IDS);
-    expect(builtinIds.has("custom-echo")).toBe(false);
-    expect(
-      Object.keys(
-        createBuiltinHandlerRegistry({
-          resolveExecutable: () => ({ path: undefined, source: "default" }),
-        }),
-      ).sort(),
-    ).toEqual([...RUNTIME_PROVIDER_IDS].sort());
   });
 
   it("binds independent registry instances to distinct Claude closures", () => {
@@ -88,7 +60,7 @@ describe("builtin handler registry", () => {
     expect(a["claude-code"]).not.toBe(b["claude-code"]);
   });
 
-  it("probeCapabilities accepts an explicit probe table without affecting handler registration", async () => {
+  it("probeCapabilities accepts an explicit probe table without a handler registry", async () => {
     const customProbe = vi.fn().mockResolvedValue({
       state: "ok",
       available: true,
@@ -100,25 +72,31 @@ describe("builtin handler registry", () => {
     });
     const probes = { ...BUILTIN_PROVIDER_PROBES, codex: customProbe };
 
-    registerBuiltinHandlers({
-      resolveExecutable: () => ({ path: undefined, source: "default" }),
-    });
-    expect(hasHandler("codex")).toBe(true);
-
     await probeCapabilities({ probes });
     expect(customProbe).toHaveBeenCalled();
     expect(BUILTIN_PROVIDER_PROBES.codex).not.toBe(customProbe);
     expect(Object.isFrozen(BUILTIN_PROVIDER_PROBES)).toBe(true);
   });
 
-  it("daemon composition root is registerBuiltinHandlers + createBuiltinHandlerRegistry", async () => {
-    const handlers = await import("../handlers/index.js");
-    expect(handlers.createBuiltinHandlerRegistry).toBe(createBuiltinHandlerRegistry);
-    expect(typeof handlers.registerBuiltinHandlers).toBe("function");
-    expect(handlers).not.toHaveProperty("createBuiltinProviderRegistry");
+  it("composition root is createBuiltinHandlerRegistry only — no process-global install path", async () => {
+    const registry = await import("../providers/builtin-registry.js");
+    expect(typeof registry.createBuiltinHandlerRegistry).toBe("function");
+    expect(typeof registry.resolveAndLogClaudeExecutable).toBe("function");
+    expect(registry).not.toHaveProperty("registerBuiltinHandlers");
+    expect(registry).not.toHaveProperty("createBuiltinProviderRegistry");
+
+    const handlerSource = await import("node:fs").then((fs) =>
+      fs.readFileSync(new URL("../runtime/handler.ts", import.meta.url), "utf8"),
+    );
+    expect(handlerSource).not.toMatch(/\bHANDLER_REGISTRY\b/);
+    expect(handlerSource).not.toMatch(/\bregisterHandler\b/);
+    expect(handlerSource).not.toMatch(/\bgetHandlerFactory\b/);
+    expect(handlerSource).not.toMatch(/\bhasHandler\b/);
+
     const runtimeSource = await import("node:fs").then((fs) =>
       fs.readFileSync(new URL("../runtime/runtime.ts", import.meta.url), "utf8"),
     );
+    expect(runtimeSource).toContain("handlerFactories");
     expect(runtimeSource).not.toContain("installHandlers");
   });
 });

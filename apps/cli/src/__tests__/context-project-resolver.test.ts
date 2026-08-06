@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  classifyCodexManagedWorktreePath,
   classifyCodexProjectlessPath,
   inspectContextClientPreflight,
   inspectContextSetupLocation,
@@ -84,7 +85,7 @@ describe("Context project resolver", () => {
       expect(resolution).toMatchObject({
         project: { kind: "path", root: scratch },
         directory: scratch,
-        directoryAvailable: true,
+        directoryAvailable: false,
         temporaryDirectory: true,
       });
     } finally {
@@ -204,6 +205,91 @@ describe("Context project resolver", () => {
     });
   });
 
+  it("treats Claude setup as pathless when CLAUDE_PROJECT_DIR is missing or invalid", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "claude-setup-cwd-"));
+    withSignedIn(() => {
+      expect(inspectContextSetupLocation("claude-code", { cwd, env: {} })).toMatchObject({
+        project: { kind: "pathless" },
+        directory: null,
+        directoryAvailable: false,
+      });
+      expect(
+        inspectContextSetupLocation("claude-code", {
+          cwd,
+          env: { CLAUDE_PROJECT_DIR: join(cwd, "missing") },
+        }),
+      ).toMatchObject({ project: { kind: "pathless" }, directoryAvailable: false });
+    });
+  });
+
+  it("uses valid Claude project roots and preserves an explicit setup root", () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-setup-root-"));
+    const cwd = join(root, "nested");
+    mkdirSync(cwd);
+    withSignedIn(() => {
+      expect(inspectContextSetupLocation("claude-code", { cwd, env: { CLAUDE_PROJECT_DIR: root } })).toMatchObject({
+        project: { kind: "path", root },
+        directory: root,
+        directoryAvailable: true,
+      });
+      expect(inspectContextSetupLocation("claude-code", { projectRoot: cwd, env: {} })).toMatchObject({
+        project: { kind: "path", root: cwd },
+        directoryAvailable: true,
+      });
+    });
+  });
+
+  it.each([
+    ["darwin", "/Users/alice/.codex/worktrees/9aad/first-tree", "/Users/alice", {}, true],
+    ["darwin", "/Users/alice/.codex/worktrees/9aad/first-tree/packages/cli", "/Users/alice", {}, true],
+    ["darwin", "/Users/alice/.codex/worktrees/9aad", "/Users/alice", {}, false],
+    ["darwin", "/Users/alice/.codex/worktrees-copy/9aad/first-tree", "/Users/alice", {}, false],
+    ["win32", "C:\\Users\\Alice\\.codex\\WORKTREES\\9AAD\\first-tree", "C:\\Users\\Alice", {}, true],
+    ["darwin", "/opt/codex/worktrees/9aad/first-tree", "/Users/alice", { CODEX_HOME: "/opt/codex" }, true],
+  ] as const)("classifies Codex managed worktree path %s %s", (platform, cwd, home, env, expected) => {
+    expect(classifyCodexManagedWorktreePath(cwd, env, { platform, home })).toBe(expected);
+  });
+
+  it("hides directory setup for a canonical Codex managed worktree without changing project identity", () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-managed-worktree-"));
+    const codexHomeTarget = join(root, "codex-home-target");
+    const codexHomeLink = join(root, "codex-home-link");
+    const worktree = join(codexHomeTarget, "worktrees", "9aad", "first-tree");
+    const nested = join(worktree, "apps", "cli");
+    mkdirSync(nested, { recursive: true });
+    symlinkSync(codexHomeTarget, codexHomeLink);
+
+    withSignedIn(() => {
+      const resolution = inspectContextSetupLocation("codex", {
+        cwd: join(codexHomeLink, "worktrees", "9aad", "first-tree", "apps", "cli"),
+        env: { CODEX_HOME: codexHomeLink },
+      });
+      expect(resolution).toMatchObject({
+        project: { kind: "path", root: nested },
+        directory: nested,
+        directoryAvailable: false,
+        temporaryDirectory: true,
+      });
+    });
+  });
+
+  it("keeps directory setup available for an ordinary Codex project", () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-ordinary-setup-"));
+    withSignedIn(() => {
+      expect(
+        inspectContextSetupLocation("codex", {
+          cwd: root,
+          env: { CODEX_HOME: join(root, ".different-codex-home") },
+        }),
+      ).toMatchObject({
+        project: { kind: "path", root },
+        directory: root,
+        directoryAvailable: true,
+        temporaryDirectory: false,
+      });
+    });
+  });
+
   it("caches the first Codex classification by session id across cwd changes", () => {
     const pluginData = mkdtempSync(join(tmpdir(), "codex-project-cache-"));
     const first = mkdtempSync(join(tmpdir(), "codex-project-first-"));
@@ -259,3 +345,20 @@ describe("Context project resolver", () => {
     }
   });
 });
+
+function withSignedIn<T>(run: () => T): T {
+  const root = mkdtempSync(join(tmpdir(), "context-project-signed-in-"));
+  const previousHome = process.env.FIRST_TREE_HOME;
+  mkdirSync(join(root, "config"));
+  writeFileSync(
+    join(root, "config", "credentials.json"),
+    JSON.stringify({ accessToken: "access", refreshToken: "refresh", serverUrl: "https://first-tree.test" }),
+  );
+  process.env.FIRST_TREE_HOME = root;
+  try {
+    return run();
+  } finally {
+    if (previousHome === undefined) delete process.env.FIRST_TREE_HOME;
+    else process.env.FIRST_TREE_HOME = previousHome;
+  }
+}

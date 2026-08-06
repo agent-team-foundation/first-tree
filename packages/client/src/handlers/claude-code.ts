@@ -398,7 +398,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const runtimeProvider: RuntimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
+  // Pre-resolved by the CLI composition root when building the frozen
+  // handler factory table (cheap PATH / well-known dirs only). Undefined =
   // defer to the SDK's bundled native binary (see claude-executable.ts for
   // why we can't always rely on it).
   const claudeCodeExecutable =

@@ -1239,19 +1239,29 @@ first-tree context
 
 The server-authored Web prompt first runs `enable --plan`. This operation is
 read-only and returns an exact `planId`, the real provider directory/pathless
-identity, a Codex temporary-directory warning when applicable, and three
-choices:
+identity, a Codex temporary-directory warning when applicable, and the choices
+available for that location:
 
 - `global`: make this Team eligible in all sessions for the provider;
 - `directory`: make it eligible under the displayed canonical directory;
 - `session`: use it only now, without a Plugin, Hook or persistent grant.
 
-Every available choice includes an authoritative `applyCommand` that is ready
+`directory` is present only when setup has a stable canonical directory.
+Claude uses `CLAUDE_PROJECT_DIR` unless `--project-root` is explicit; it does
+not fall back to cwd when the variable is missing or invalid. Pathless sessions,
+Codex Documents scratch directories, and default managed worktrees under
+`$CODEX_HOME/worktrees/<id>/<repo>` return only `global` and `session`. Codex
+temporary paths retain their canonical project identity in those commands.
+Custom Codex App worktree roots remain best-effort because the provider does
+not expose a stable public setting for them.
+
+Every returned choice includes an authoritative `applyCommand` that is ready
 to execute unchanged. It pins the channel-appropriate executable (the portable
 CLI path outside development), provider, Team, canonical `--project-root` or
 `--pathless` identity, selected scope, exact `planId`, and non-interactive
-consent flag. An unavailable directory choice has `applyCommand: null`;
-human-readable output omits a command for that choice.
+consent flag. A scope omitted from the plan has no apply command and manual
+application fails closed. Directory availability is part of plan identity, so
+a change before apply invalidates the plan.
 
 The current agent displays the choices and waits for a new user reply, then
 runs only the selected choice's exact command. Apply must use the unchanged
@@ -1312,8 +1322,11 @@ otherwise every global Team. It batch-validates only those Teams, fetches only
 each exact root `SCOPE.md`, and returns complete natural-language bodies plus
 opaque candidate ids. SCOPE text is semantic routing data, never executable
 instructions. The agent selects automatically only when exactly one candidate
-clearly matches; ambiguity or an unavailable plausible candidate requires a
-user choice from the validated set.
+clearly matches and every candidate is readable. If every readable candidate
+is clearly unrelated, or no candidates are returned without blocked
+selection, it continues without a snapshot or user interruption. Multiple
+possible matches, an unclear or overlapping SCOPE, `selectionBlocked`, or any
+unavailable candidate requires a user choice from the validated set.
 
 After selection, the projected Skill uses:
 

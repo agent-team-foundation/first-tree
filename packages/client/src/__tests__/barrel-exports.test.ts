@@ -10,7 +10,12 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(api.AgentSlot).toBeDefined();
     expect(api.AgentRuntime).toBeDefined();
     expect(api.SessionManager).toBeDefined();
-    expect(api.registerBuiltinHandlers).toBeDefined();
+    expect(api.createBuiltinHandlerRegistry).toBeDefined();
+    expect(api.resolveAndLogClaudeExecutable).toBeDefined();
+    expect(api).not.toHaveProperty("registerBuiltinHandlers");
+    expect(api).not.toHaveProperty("registerHandler");
+    expect(api).not.toHaveProperty("getHandlerFactory");
+    expect(api).not.toHaveProperty("hasHandler");
   });
 
   it("loads runtime barrel exports", async () => {

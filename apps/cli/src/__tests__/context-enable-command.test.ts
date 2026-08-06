@@ -184,7 +184,7 @@ describe("context enable v3 command", () => {
     expect(mocks.buildHandoff).not.toHaveBeenCalled();
   });
 
-  it("omits an apply command for an unavailable directory choice", async () => {
+  it("omits an unavailable directory choice and its after-fingerprint", async () => {
     mocks.inspectLocation.mockReturnValue({
       project: { kind: "pathless" },
       directory: null,
@@ -196,14 +196,72 @@ describe("context enable v3 command", () => {
     expect(output.result).toHaveBeenCalledWith(
       expect.objectContaining({
         plan: expect.objectContaining({
-          choices: expect.arrayContaining([
-            expect.objectContaining({ kind: "directory", available: false, applyCommand: null }),
+          planId: expect.stringMatching(
+            new RegExp(`^v2\\.[0-9a-f]{64}\\.${"a".repeat(64)}\\.[0-9a-f]{64}\\.-\\.[0-9a-f]{64}$`, "u"),
+          ),
+          choices: [
             expect.objectContaining({ kind: "global", applyCommand: expect.stringContaining(" --pathless ") }),
             expect.objectContaining({ kind: "session", applyCommand: expect.stringContaining(" --pathless ") }),
-          ]),
+          ],
         }),
       }),
     );
+    expect(mocks.fingerprintAfter).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps canonical project identity in managed-worktree global and session commands", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: "This looks like a Codex temporary directory.",
+    });
+    await runContextEnable(context({ plan: true }));
+    const result = output.result.mock.calls[0]?.[0] as {
+      plan: { choices: Array<{ kind: string; applyCommand: string }> };
+    };
+    expect(result.plan.choices.map((choice) => choice.kind)).toEqual(["global", "session"]);
+    expect(result.plan.choices.every((choice) => choice.applyCommand.includes(" --project-root '/work/repo' "))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a manually constructed directory apply when the choice is hidden", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: null,
+    });
+    const planId = await createPlanId();
+    await expect(runContextEnable(context({ scope: "directory", planId, yes: true }))).rejects.toMatchObject({
+      code: "CONTEXT_DIRECTORY_UNAVAILABLE",
+    });
+    expect(mocks.enableOperation).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the plan when directory availability changes", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: null,
+    });
+    const planId = await createPlanId();
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: true,
+      temporaryDirectory: false,
+      warning: null,
+    });
+    await expect(runContextEnable(context({ scope: "global", planId, yes: true }))).rejects.toMatchObject({
+      code: "CONTEXT_ENABLE_PLAN_CHANGED",
+    });
+    expect(mocks.enableOperation).not.toHaveBeenCalled();
   });
 
   it("renders exact apply commands in the human-readable plan", async () => {
@@ -213,6 +271,20 @@ describe("context enable v3 command", () => {
       `Apply command: 'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --project-root '/work/repo' --scope 'global'`,
     );
     expect(statusRows).toContain("Next: Choose one scope, then run its exact apply command unchanged.");
+  });
+
+  it("does not render a hidden directory choice in the human-readable plan", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: "This looks like a Codex temporary directory.",
+    });
+    await runContextEnable({ ...context({ plan: true }), options: { json: false, debug: false, quiet: false } });
+    const statusRows = output.status.mock.calls.map(([label, value]) => `${label}: ${value}`).join("\n");
+    expect(statusRows).not.toContain("This directory:");
+    expect(statusRows.match(/Apply command:/gu)).toHaveLength(2);
   });
 
   it("pins non-dev apply commands to the portable executable without quoting away tilde expansion", async () => {

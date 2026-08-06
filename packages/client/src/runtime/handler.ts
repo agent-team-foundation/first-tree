@@ -399,33 +399,11 @@ export type HandlerConfig = {
   [key: string]: unknown;
 };
 
-/** Built-in handler registry. Populated by handler modules. */
-const HANDLER_REGISTRY = new Map<string, HandlerFactory>();
-
-/** Register a built-in handler type. */
-export function registerHandler(type: string, factory: HandlerFactory): void {
-  HANDLER_REGISTRY.set(type, factory);
-}
-
 /**
- * Non-throwing check for whether a handler factory is registered for `type`.
+ * Instance-level readonly map of handler type → factory.
  *
- * Callers that materialise agents from config (daemon startup, `agent:pinned`
- * pushes, fs-watch rescans) use this to skip an agent whose runtime provider is
- * a valid enum value but has no handler on this client build yet — e.g. a
- * `claude-code-tui` agent on a client that predates the TUI handler. Without it
- * `getHandlerFactory` throws and takes down the whole startup loop.
+ * Composition roots (CLI `ClientRuntime`) hold a frozen built-in table;
+ * standalone `AgentRuntime` receives an explicit map. There is no
+ * process-global handler registry.
  */
-export function hasHandler(type: string): boolean {
-  return HANDLER_REGISTRY.has(type);
-}
-
-/** Resolve a handler factory by type name. */
-export function getHandlerFactory(type: string): HandlerFactory {
-  const factory = HANDLER_REGISTRY.get(type);
-  if (!factory) {
-    const available = [...HANDLER_REGISTRY.keys()].join(", ") || "(none)";
-    throw new Error(`Unknown handler type "${type}". Available: ${available}`);
-  }
-  return factory;
-}
+export type HandlerFactoryMap = Readonly<Record<string, HandlerFactory>>;

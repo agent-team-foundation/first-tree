@@ -36,7 +36,6 @@ const COMPOSITION_ALLOWLIST = new Set([
   "providers/builtin-registry.ts",
   "providers/builtin-probes.ts",
   "providers/skill-roots.ts",
-  "handlers/index.ts",
 ]);
 
 /** Generic modules that must stay provider-neutral after this foundation PR. */
@@ -267,30 +266,65 @@ describe("runtime provider architecture guard", () => {
     expect(piHandler).not.toContain("PROVIDER_BINARY_FAILURE_REASON_CODES");
   });
 
-  it("names only the concrete composition files as registration roots", () => {
-    for (const rel of ["handlers/index.ts", "providers/builtin-registry.ts"] as const) {
-      const source = readFileSync(join(clientSrc, rel), "utf8");
-      expect(source).toContain("createBuiltinHandlerRegistry");
-      expect(source).not.toContain("installBuiltinProviderRegistry");
-      expect(source).not.toContain("installedRegistry");
-      expect(source).not.toContain("createBuiltinProviderRegistry");
-      expect(source).not.toContain("BuiltinProviderRegistry");
-      expect(source).not.toContain("builtinRegistryProviderIds");
-      expect(source).not.toMatch(/probe\s*:/);
-      expect(source).not.toMatch(/skillRoot\s*:/);
-      expect(source).not.toMatch(/\{\s*factory\s*:/);
-    }
-    const handlersIndex = readFileSync(join(clientSrc, "handlers/index.ts"), "utf8");
-    expect(handlersIndex).toContain("RUNTIME_PROVIDER_IDS");
+  it("names only the concrete composition file as the built-in handler factory root", () => {
     const registry = readFileSync(join(clientSrc, "providers/builtin-registry.ts"), "utf8");
-    const probes = readFileSync(join(clientSrc, "providers/builtin-probes.ts"), "utf8");
-    const skills = readFileSync(join(clientSrc, "providers/skill-roots.ts"), "utf8");
+    expect(registry).toContain("createBuiltinHandlerRegistry");
     expect(registry).toContain("Object.freeze");
     expect(registry).toContain("satisfies Record<RuntimeProvider, HandlerFactory>");
+    expect(registry).not.toContain("installBuiltinProviderRegistry");
+    expect(registry).not.toContain("installedRegistry");
+    expect(registry).not.toContain("createBuiltinProviderRegistry");
+    expect(registry).not.toContain("BuiltinProviderRegistry");
+    expect(registry).not.toContain("builtinRegistryProviderIds");
+    expect(registry).not.toContain("HANDLER_REGISTRY");
+    expect(registry).not.toContain("registerHandler");
+    expect(registry).not.toContain("registerBuiltinHandlers");
+    expect(registry).not.toMatch(/probe\s*:/);
+    expect(registry).not.toMatch(/skillRoot\s*:/);
+    expect(registry).not.toMatch(/\{\s*factory\s*:/);
+
+    const probes = readFileSync(join(clientSrc, "providers/builtin-probes.ts"), "utf8");
+    const skills = readFileSync(join(clientSrc, "providers/skill-roots.ts"), "utf8");
     expect(probes).toContain("Object.freeze");
     expect(probes).not.toContain("builtinProbeProviderIds");
     expect(skills).toContain("Object.freeze");
     expect(skills).not.toContain("assertSkillRootsComplete");
+  });
+
+  it("forbids process-global handler registry symbols and keeps CLI on the package entry", () => {
+    const forbidden = [
+      "HANDLER_REGISTRY",
+      "registerHandler",
+      "getHandlerFactory",
+      "hasHandler",
+      "registerBuiltinHandlers",
+    ] as const;
+    const productionFiles = listFilesRecursive(clientSrc, (p) => p.endsWith(".ts") && !p.includes("__tests__"));
+    for (const file of productionFiles) {
+      const source = readFileSync(file, "utf8");
+      const rel = relative(clientSrc, file).replaceAll("\\", "/");
+      for (const symbol of forbidden) {
+        expect(source, `${rel} must not retain ${symbol}`).not.toMatch(new RegExp(`\\b${symbol}\\b`));
+      }
+    }
+
+    // handlers/index.ts was the old process-global registration root — gone.
+    expect(() => readFileSync(join(clientSrc, "handlers/index.ts"), "utf8")).toThrow();
+
+    const cliRuntime = readFileSync(join(repoRoot, "apps/cli/src/core/client-runtime.ts"), "utf8");
+    expect(cliRuntime).toContain("createBuiltinHandlerRegistry");
+    expect(cliRuntime).toContain("resolveAndLogClaudeExecutable");
+    expect(cliRuntime).toContain('from "@first-tree/client"');
+    expect(cliRuntime).not.toMatch(/from ["']@first-tree\/client\//);
+    expect(cliRuntime).not.toMatch(/from ["']\.\.\/\.\.\/packages\/client/);
+    for (const symbol of forbidden) {
+      expect(cliRuntime, `CLI must not retain ${symbol}`).not.toMatch(new RegExp(`\\b${symbol}\\b`));
+    }
+
+    const agentRuntime = readFileSync(join(clientSrc, "runtime/runtime.ts"), "utf8");
+    expect(agentRuntime).toContain("handlerFactories");
+    expect(agentRuntime).not.toMatch(/\bgetHandlerFactory\b/);
+    expect(agentRuntime).not.toMatch(/\bHANDLER_REGISTRY\b/);
   });
 
   it("keeps the runtime-auth driver projection in one frozen, schema-exhaustive composition root", () => {

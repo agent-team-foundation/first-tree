@@ -96,6 +96,19 @@ vi.mock("@first-tree/client", () => {
       slotInstances.push(this);
     }
   }
+  const stubFactory = vi.fn(() => ({
+    start: vi.fn(),
+    resume: vi.fn(),
+    inject: vi.fn(),
+    suspend: vi.fn(),
+    shutdown: vi.fn(),
+  }));
+  // Narrow table so unsupported-runtime characterization still exercises the
+  // fail-closed path for providers this "build" does not ship (e.g. TUI).
+  const builtinTable = Object.freeze({
+    "claude-code": stubFactory,
+    codex: stubFactory,
+  });
   return {
     AgentSlot: FakeAgentSlot,
     ClientConnection: class {
@@ -124,11 +137,8 @@ vi.mock("@first-tree/client", () => {
       child: vi.fn().mockReturnThis(),
     })),
     getChildProcessRegistry: vi.fn(() => ({ killAll: killAllMock })),
-    getHandlerFactory: vi.fn(() => vi.fn()),
-    // Mirror the real registry: only the built-in providers have a handler.
-    // The unsupported-runtime guard in addAgent keys off this.
-    hasHandler: vi.fn((type: string) => type === "claude-code" || type === "codex"),
-    registerBuiltinHandlers: vi.fn(),
+    createBuiltinHandlerRegistry: vi.fn(() => builtinTable),
+    resolveAndLogClaudeExecutable: vi.fn(() => ({ path: undefined, source: "default" })),
   };
 });
 

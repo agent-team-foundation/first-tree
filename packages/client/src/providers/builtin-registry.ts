@@ -26,10 +26,11 @@ export type BuiltinHandlerRegistryDeps = {
 export type BuiltinHandlerRegistry = Readonly<Record<RuntimeProvider, HandlerFactory>>;
 
 /**
- * Build a frozen, exhaustive built-in handler registry value.
+ * Build a frozen, exhaustive built-in handler factory table.
  *
- * Consumed once by {@link registerBuiltinHandlers}; not installed into
- * process-global state.
+ * The CLI composition root (`ClientRuntime`) creates this once and holds it as
+ * an instance value. Standalone runtimes receive an explicit map — never
+ * installed into process-global state.
  */
 export function createBuiltinHandlerRegistry(deps: BuiltinHandlerRegistryDeps = {}): BuiltinHandlerRegistry {
   const resolution = (deps.resolveExecutable ?? (() => resolveClaudeCodeExecutable({ includeLoginShell: false })))();
@@ -46,7 +47,7 @@ export function createBuiltinHandlerRegistry(deps: BuiltinHandlerRegistryDeps = 
   } satisfies Record<RuntimeProvider, HandlerFactory>);
 }
 
-/** Log Claude executable resolution (same behavior as prior registerBuiltinHandlers). */
+/** Log Claude executable resolution (cheap PATH / well-known dirs only). */
 export function logClaudeExecutableResolution(resolution: ClaudeExecutableResolution): void {
   const log = createLogger("handlers");
   if (resolution.path) {

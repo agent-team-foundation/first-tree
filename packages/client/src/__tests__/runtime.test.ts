@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { ClientConfig } from "@first-tree/shared/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "../runtime/config.js";
+import type { HandlerFactory, HandlerFactoryMap } from "../runtime/handler.js";
 import type { UpdateManagerOptions } from "../runtime/update-manager.js";
 
 type SlotBehavior = "resolve" | "reject";
@@ -41,6 +42,23 @@ type MockRuntimeState = {
   updateAttach: ReturnType<typeof vi.fn>;
   updateOptions: UpdateManagerOptions | null;
 };
+
+const stubFactory: HandlerFactory = () =>
+  ({
+    start: vi.fn(),
+    resume: vi.fn(),
+    inject: vi.fn(),
+    suspend: vi.fn(),
+    shutdown: vi.fn(),
+  }) as never;
+
+function makeHandlerFactories(config: RuntimeConfig): HandlerFactoryMap {
+  const factories: Record<string, HandlerFactory> = {};
+  for (const agent of Object.values(config.agents)) {
+    factories[agent.type] = stubFactory;
+  }
+  return factories;
+}
 
 function makeRuntimeConfig(): RuntimeConfig {
   return {
@@ -147,9 +165,7 @@ function installRuntimeMocks(options?: {
       }
     },
   }));
-  vi.doMock("../runtime/handler.js", () => ({
-    getHandlerFactory: vi.fn((type: string) => ({ type })),
-  }));
+  vi.doMock("../runtime/handler.js", () => ({}));
   vi.doMock("../runtime/agent-slot.js", () => ({
     AgentSlot: class {
       name: string;
@@ -225,14 +241,16 @@ describe("AgentRuntime", () => {
   it("wires constructor dependencies and logs connection errors", async () => {
     const state = installRuntimeMocks();
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
 
     new AgentRuntime({
-      config: makeRuntimeConfig(),
+      config,
       clientId: "client-test",
       currentVersion: "1.2.3",
       userAgent: "first-tree-test",
       getAccessToken: async () => "token",
       getLastUpdateAttempt: () => null,
+      handlerFactories: makeHandlerFactories(config),
     });
     state.connections[0]?.emit("error", new Error("socket failed"));
 
@@ -249,10 +267,12 @@ describe("AgentRuntime", () => {
   it("raises the shared connection listener limit for multi-agent runtimes", async () => {
     const state = installRuntimeMocks();
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfigWithAgentCount(12);
 
     new AgentRuntime({
-      config: makeRuntimeConfigWithAgentCount(12),
+      config,
       getAccessToken: async () => "token",
+      handlerFactories: makeHandlerFactories(config),
     });
 
     expect(state.connections[0]?.getMaxListeners()).toBe(12);
@@ -267,10 +287,12 @@ describe("AgentRuntime", () => {
     });
     const signals = captureProcessSignals();
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
     const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
+      config,
       currentVersion: "1.2.3",
       getAccessToken: async () => "token",
+      handlerFactories: makeHandlerFactories(config),
       update: {
         updateConfig: makeUpdateConfig({ policy: "prompt" }),
         prompt: vi.fn(async () => true),
@@ -305,10 +327,12 @@ describe("AgentRuntime", () => {
     const signals = captureProcessSignals();
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
     const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
+      config,
       getAccessToken: async () => "token",
       shutdownTimeout: 50,
+      handlerFactories: makeHandlerFactories(config),
     });
 
     const started = runtime.start();
@@ -331,10 +355,12 @@ describe("AgentRuntime", () => {
       { status: "rejected", reason: "orphan failure" },
     ]);
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
     const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
+      config,
       getAccessToken: async () => "token",
       shutdownTimeout: 50,
+      handlerFactories: makeHandlerFactories(config),
     });
 
     const started = runtime.start();
@@ -356,11 +382,88 @@ describe("AgentRuntime", () => {
   it("throws when every agent slot fails to start", async () => {
     installRuntimeMocks({ slotBehavior: { alpha: "reject", beta: "reject" } });
     const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
     const runtime = new AgentRuntime({
-      config: makeRuntimeConfig(),
+      config,
       getAccessToken: async () => "token",
+      handlerFactories: makeHandlerFactories(config),
     });
 
     await expect(runtime.start()).rejects.toThrow("All agents failed to start");
   });
+
+  it("throws for unknown handler types and lists available injected keys", async () => {
+    installRuntimeMocks();
+    const { AgentRuntime } = await import("../runtime/runtime.js");
+    const config = makeRuntimeConfig();
+    config.agents.orphan = {
+      agentId: "agent-orphan",
+      type: "missing-handler",
+      session: {
+        idle_timeout: 300,
+        max_sessions: 10,
+        working_grace_seconds: 3600,
+        reconcile_interval_seconds: 300,
+      },
+      concurrency: 1,
+    };
+
+    expect(
+      () =>
+        new AgentRuntime({
+          config,
+          getAccessToken: async () => "token",
+          handlerFactories: { "claude-code": stubFactory, codex: stubFactory },
+        }),
+    ).toThrow(/Unknown handler type "missing-handler".*Available: .*claude-code/);
+  });
+
+  it("reports Available: (none) when the injected map is empty", async () => {
+    installRuntimeMocks();
+    const { AgentRuntime } = await import("../runtime/runtime.js");
+
+    expect(
+      () =>
+        new AgentRuntime({
+          config: makeRuntimeConfig(),
+          getAccessToken: async () => "token",
+          handlerFactories: {},
+        }),
+    ).toThrow("Available: (none)");
+  });
+
+  for (const prototypeKey of ["toString", "constructor", "__proto__"] as const) {
+    it(`rejects empty-map own-key miss for Object.prototype key ${prototypeKey}`, async () => {
+      const state = installRuntimeMocks();
+      const { AgentRuntime } = await import("../runtime/runtime.js");
+      const config: RuntimeConfig = {
+        server: "http://first-tree.test",
+        agents: {
+          poisoned: {
+            agentId: "agent-poisoned",
+            type: prototypeKey,
+            session: {
+              idle_timeout: 300,
+              max_sessions: 10,
+              working_grace_seconds: 3600,
+              reconcile_interval_seconds: 300,
+            },
+            concurrency: 1,
+          },
+        },
+      };
+
+      expect(
+        () =>
+          new AgentRuntime({
+            config,
+            getAccessToken: async () => "token",
+            // Plain object still inherits Object.prototype; direct indexing
+            // would see truthy toString/constructor/__proto__ values.
+            handlerFactories: {},
+          }),
+      ).toThrow(new RegExp(`Unknown handler type "${prototypeKey}".*Available: \\(none\\)`));
+      expect(state.slots).toHaveLength(0);
+    });
+  }
 });

@@ -1,6 +1,6 @@
 ---
 id: external-context-multi-team-scope-routing
-description: Validate global, directory, and session-only BYO grants plus exact multi-Team SCOPE routing on Claude Code and Codex.
+description: Validate dynamic BYO setup choices plus exact multi-Team SCOPE routing on Claude Code and Codex.
 areas: [cross-surface]
 surfaces: [web, server, cli, claude-code, codex, context-tree]
 ---
@@ -21,28 +21,39 @@ full Tree is read before one candidate is fixed.
   `SCOPE.md` files. One SCOPE must describe a non-programming domain.
 - Prepare clear-match, overlapping, no-match, missing-SCOPE, imperative-text,
   membership-revoked, and branch-moving variants.
-- Use ordinary and nested directories plus a real Codex projectless scratch
-  directory. Capture provider conversations and redact private Tree content.
+- Use ordinary and nested directories, a pathless session, a real Codex
+  projectless scratch directory, and a default Codex managed worktree under
+  `$CODEX_HOME/worktrees/<id>/<repo>`. Capture provider conversations and
+  redact private Tree content.
 
 ## Operate
 
-1. In each provider, run the Web setup plan for Team A. Confirm the agent shows
-   the real directory and all three choices and waits for a new user reply.
+1. In each provider from a stable ordinary directory, run the Web setup plan
+   for Team A. Confirm the agent shows the real directory, returns global,
+   directory, and session choices, and waits for a new user reply.
 2. Apply global, then independently directory and session-only choices. Confirm
    the selected CLI-authored `applyCommand` is run unchanged and still enforces
    the exact plan id. Repeat setup for Team B; the shared Plugin is not duplicated,
    its adapter identity is unchanged, Claude does not reload, and Codex does not
    request trust again.
-3. In Codex projectless mode, confirm the scratch directory is displayed with
-   a temporary-directory warning and session-only is recommended.
+3. Repeat setup in a pathless session, a Codex projectless scratch directory,
+   and a default Codex managed worktree. Confirm each plan returns only global
+   and session choices: directory is absent and no directory apply command is
+   available. The scratch and managed-worktree plans display their canonical
+   path identity with a temporary-directory warning, and session-only is
+   recommended.
 4. For session-only, inspect filesystem/provider state: no grant, Plugin, Hook,
    marketplace or session receipt file is created. Tamper the opaque candidate
    token and confirm routing fails before authority lookup.
 5. Start tasks exercising priority `session > deepest directory > global`.
    Confirm lower-priority candidates are not sent to the Server or fetched.
-6. Route clear, overlapping and no-match tasks. For every candidate capture the
-   exact commit and complete SCOPE body. Verify only root SCOPE is fetched
-   before selection and imperative prose is not executed.
+6. Route unique clear-match, all-clearly-unrelated, overlapping, and unclear
+   tasks. For every candidate capture the exact commit and complete SCOPE body.
+   Verify only root SCOPE is fetched before selection and imperative prose is
+   not executed. A unique clear match selects automatically. When every
+   readable candidate is clearly unrelated, verify the agent continues the
+   original task without a snapshot or user question. Overlap or unclear
+   relevance produces a user question without automatic selection.
 7. Exercise one readable clear-match candidate beside one missing/invalid
    SCOPE, then beside one authority-unavailable candidate. Verify
    `selectionBlocked: true`, an unconditional user question, no automatic
@@ -71,14 +82,19 @@ full Tree is read before one candidate is fixed.
 
 ## Observe
 
-- Planning is read-only. Every available scope has a complete `applyCommand`;
-  an unavailable directory scope has none. Session-only has `consumerKind:
-  byo`, Read/Write only, an opaque signed candidate, and no persistent state.
+- Planning is read-only. Stable directories return all three choices, while
+  pathless, Codex scratch, and default managed-worktree locations omit the
+  directory choice entirely. Every returned scope has a complete
+  `applyCommand`. Session-only has `consumerKind: byo`, Read/Write only, an
+  opaque signed candidate, and no persistent state.
 - Directory scope includes descendants; all Teams at the deepest matching root
   remain candidates. Global applies only when no session/directory set wins.
 - The batch authority call contains exactly the local highest-priority Team ids.
 - SCOPE body, not repository name or Team name, is the primary semantic signal.
-  Multiple or zero clear matches produce a user question.
+  One clear match selects automatically. All readable candidates being clearly
+  unrelated produces no snapshot and no user question. Multiple possible
+  matches, unclear or overlapping SCOPE bodies, any unavailable candidate, or
+  `selectionBlocked` produces a user question.
 - Selected Read is pinned to the exact SCOPE/binding commit and never falls
   back to another Team, cached authority or changed cwd.
 - Unselected route candidates leave no long-lived clone. The selected Team's
@@ -89,12 +105,15 @@ full Tree is read before one candidate is fixed.
 
 ## Expected Result
 
-`PASS`: both providers satisfy all three scopes, providerless normalization and
-every routing/failure case with exact evidence and no preselection Tree read.
+`PASS`: both providers return the choices appropriate to each location,
+providerless normalization and every routing/failure case have exact evidence,
+and no Tree is read before selection or after a clear all-unrelated result.
 
-`FAIL`: session-only persists state, a Team is inferred outside the candidate
-set, lower priority wins, SCOPE instructions execute, ambiguity is guessed,
-route and snapshot project different bindings, or Read crosses Team/commit.
+`FAIL`: an unstable/pathless plan exposes directory activation, session-only
+persists state, a Team is inferred outside the candidate set, lower priority
+wins, SCOPE instructions execute, an all-clearly-unrelated result asks the user
+or creates a snapshot, ambiguity is guessed, route and snapshot project
+different bindings, or Read crosses Team/commit.
 
 `BLOCKED`: two disposable real Teams, provider authentication, or exact Tree
 fixtures cannot be prepared.

@@ -3954,7 +3954,7 @@ describe("ChatView", () => {
       return container.querySelector('aside[aria-label="Chat details"]') !== null;
     }
     function chatSummaryButton(container: ParentNode): HTMLButtonElement | null {
-      return container.querySelector<HTMLButtonElement>('button[aria-label$="summary"]');
+      return container.querySelector<HTMLButtonElement>('button[aria-label$="current state"]');
     }
 
     it("renders the description's first line collapsed and the full markdown when expanded", async () => {
@@ -3981,7 +3981,7 @@ describe("ChatView", () => {
       await act(async () => {
         button.click();
       });
-      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).toContain("Current state");
       expect(chatSummaryButton(container)?.textContent).not.toContain("Status: shipping DescBody soon.");
       await waitForCondition(
         () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
@@ -4008,11 +4008,11 @@ describe("ChatView", () => {
 
       await waitForCondition(
         () =>
-          chatSummaryButton(container)?.getAttribute("aria-label") === "Collapse summary" &&
+          chatSummaryButton(container)?.getAttribute("aria-label") === "Collapse current state" &&
           [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
         "Expected the unread summary version to auto-expand on entry",
       );
-      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).toContain("Current state");
 
       await act(async () => root.unmount());
     });

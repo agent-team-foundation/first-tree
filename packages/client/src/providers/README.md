@@ -12,7 +12,7 @@ ACK / Reset / auth / model / persistence protocol into shared catalog.
 | --- | --- |
 | Zod `runtimeProviderSchema` | Wire IDs → `RuntimeProvider` / `RUNTIME_PROVIDER_IDS` / generated `RUNTIME_PROVIDERS.*` |
 | Shared `RUNTIME_PROVIDER_CATALOG` | Labels, display order, creation-time preference prefix, install/login, auth-owner copy |
-| `createBuiltinHandlerRegistry` | Frozen `Record<RuntimeProvider, HandlerFactory>` (consumed once by `registerBuiltinHandlers`) |
+| `createBuiltinHandlerRegistry` | Frozen `Record<RuntimeProvider, HandlerFactory>` — CLI holds/consumes once per `ClientRuntime` |
 | `BUILTIN_PROVIDER_PROBES` | Frozen install-only capability probes |
 | `PROVIDER_SKILL_ROOTS` | Frozen native managed-skill roots |
 | `RUNTIME_AUTH_DRIVERS` | Frozen `Record<RuntimeAuthProvider, RuntimeAuthDriver>` for in-product login |

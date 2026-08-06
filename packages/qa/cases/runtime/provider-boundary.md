@@ -49,8 +49,9 @@ records the human cross-surface checks those tests cannot fully cover.
      First Tree runtime-auth target.
 
 3. **Composition wiring**
-   - Confirm daemon boot registers handlers through
-     `registerBuiltinHandlers` / `createBuiltinHandlerRegistry` (factories only).
+   - Confirm CLI boot creates and holds a frozen built-in factory table through
+     `createBuiltinHandlerRegistry` (factories only; no process-global handler
+     registry). Standalone `AgentRuntime` receives an explicit readonly map.
    - Confirm probe aggregation reads `BUILTIN_PROVIDER_PROBES` (or an explicit
      inject), not a process-global registry snapshot.
    - Confirm `first-tree daemon probe --json --no-upload` still returns entries

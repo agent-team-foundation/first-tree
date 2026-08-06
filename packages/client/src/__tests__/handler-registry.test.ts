@@ -1,61 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
-import { getHandlerFactory, hasHandler, registerHandler } from "../runtime/handler.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 
-function createMockHandler(): AgentHandler {
-  return {
-    start: vi.fn().mockResolvedValue("session-id"),
-    resume: vi.fn().mockResolvedValue("session-id"),
-    inject: vi.fn(),
-    suspend: vi.fn().mockResolvedValue(undefined),
-    shutdown: vi.fn().mockResolvedValue(undefined),
-  };
-}
+const here = dirname(fileURLToPath(import.meta.url));
 
-describe("Handler Registry", () => {
-  const echoFactory: HandlerFactory = () => createMockHandler();
-
-  it("registers and retrieves a handler factory", () => {
-    registerHandler("echo", echoFactory);
-    const factory = getHandlerFactory("echo");
-    expect(factory).toBe(echoFactory);
+describe("handler factory injection (no process-global registry)", () => {
+  it("production handler module no longer exports global registry symbols", async () => {
+    const handler = await import("../runtime/handler.js");
+    expect(handler).not.toHaveProperty("registerHandler");
+    expect(handler).not.toHaveProperty("getHandlerFactory");
+    expect(handler).not.toHaveProperty("hasHandler");
+    expect(handler).not.toHaveProperty("HANDLER_REGISTRY");
   });
 
-  it("throws for unknown handler type", () => {
-    expect(() => getHandlerFactory("nonexistent-handler-type-xyz")).toThrow(/Unknown handler type/);
-  });
-
-  it("uses the empty-registry label before any handlers are registered", async () => {
-    vi.resetModules();
-    const fresh = await import("../runtime/handler.js");
-
-    expect(() => fresh.getHandlerFactory("missing")).toThrow("Available: (none)");
-  });
-
-  it("lists registered handler types in unknown-type errors", () => {
-    registerHandler("listed-handler", echoFactory);
-
-    expect(() => getHandlerFactory("missing-handler")).toThrow(/Available: .*listed-handler/);
-  });
-
-  it("hasHandler reflects registration without throwing", () => {
-    expect(hasHandler("nonexistent-handler-abc")).toBe(false);
-    registerHandler("probe-handler", echoFactory);
-    expect(hasHandler("probe-handler")).toBe(true);
-  });
-
-  it("creates a handler with the factory", () => {
-    registerHandler("test-handler", echoFactory);
-    const factory = getHandlerFactory("test-handler");
-    const handler = factory({
-      runtimeProvider: "codex",
-      workspaceRoot: "/tmp",
-    });
-    expect(handler).toBeDefined();
-    expect(typeof handler.start).toBe("function");
-    expect(typeof handler.resume).toBe("function");
-    expect(typeof handler.inject).toBe("function");
-    expect(typeof handler.suspend).toBe("function");
-    expect(typeof handler.shutdown).toBe("function");
+  it("source search confirms global registry symbols are gone", () => {
+    const handlerSource = readFileSync(join(here, "../runtime/handler.ts"), "utf8");
+    for (const symbol of ["HANDLER_REGISTRY", "registerHandler", "getHandlerFactory", "hasHandler"] as const) {
+      expect(handlerSource).not.toMatch(new RegExp(`\\b${symbol}\\b`));
+    }
   });
 });

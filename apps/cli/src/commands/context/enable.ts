@@ -72,7 +72,10 @@ function configure(command: Command): void {
   command
     .requiredOption("--provider <provider>", "claude-code or codex")
     .requiredOption("--team <team-id>", "Team from the server-authored Setup handoff")
-    .option("--plan", "inspect the provider location and return the three activation choices without mutating state")
+    .option(
+      "--plan",
+      "inspect the provider location and return the available activation choices without mutating state",
+    )
     .option("--scope <scope>", "apply global, directory, or session activation")
     .option("--plan-id <plan-id>", "exact plan id returned by --plan")
     .option("--project-root <directory>", "explicit provider directory")
@@ -191,6 +194,7 @@ async function buildSetupPlan(
     accountClientId,
     project: location.project,
     directory: location.directory,
+    directoryAvailable: location.directoryAvailable,
     temporaryDirectory: location.temporaryDirectory,
   };
   const grantStore = inspectContextGrantStore();
@@ -199,13 +203,14 @@ async function buildSetupPlan(
     organizationId: activation.team.organizationId,
     activationScope: { kind: "global" },
   };
-  const directoryGrant: ContextIntegrationGrant | null = location.directory
-    ? {
-        provider,
-        organizationId: activation.team.organizationId,
-        activationScope: { kind: "directory", root: location.directory },
-      }
-    : null;
+  const directoryGrant: ContextIntegrationGrant | null =
+    location.directoryAvailable && location.directory
+      ? {
+          provider,
+          organizationId: activation.team.organizationId,
+          activationScope: { kind: "directory", root: location.directory },
+        }
+      : null;
   const tokenWithoutChallenge = {
     identityFingerprint: createHash("sha256").update(JSON.stringify(planIdentity)).digest("hex"),
     beforeFingerprint: grantStore.fingerprint,
