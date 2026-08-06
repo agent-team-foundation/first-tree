@@ -602,6 +602,7 @@ describe("first-tree-read metrics pass criteria", () => {
     "I ruled out the shared index because of the organization-isolation rule.",
     "Our review ruled out the shared index because of the organization-isolation rule.",
     "The organization-isolation rule led us away from the shared index.",
+    "Us reviewers ruled out the shared index because of the organization-isolation rule.",
     "The organization-isolation rule allowed me to choose the local index.",
     "The rule shows I should choose tenant-local storage.",
     "根据我们的评审，组织隔离规则排除了共享索引。",
@@ -634,6 +635,8 @@ describe("first-tree-read metrics pass criteria", () => {
   it.each([
     "The U.S. isolation rule ruled out the shared index.",
     "The U.S. Organization rule ruled out the shared index.",
+    "The US residency rule ruled out a shared index.",
+    "The us-east-1 residency rule ruled out a shared index.",
     "Phase I narrowed the acceptable rollout scope.",
   ])("does not treat abbreviations or phase labels as first person or sentence boundaries: %s", (summary) => {
     const result = impactMetrics(
