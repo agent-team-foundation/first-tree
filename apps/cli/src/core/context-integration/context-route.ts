@@ -1,7 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type ContextIntegrationProject,
@@ -19,6 +17,7 @@ import { z } from "zod";
 import { readActiveContextAccountClientId } from "./account-state-guard.js";
 import { assertContextAdapterReadyForRouting } from "./adapter-observation.js";
 import { resolveContextGrantCandidates } from "./context-binding-store.js";
+import { fetchExactScope } from "./exact-root-scope.js";
 
 const ROUTE_RECEIPT_TTL_MS = 24 * 60 * 60_000;
 const EXACT_COMMIT_RE = /^[0-9a-f]{40,64}$/u;
@@ -288,42 +287,6 @@ export function readContextRouteReceipt(
   return parsed;
 }
 
-export function fetchExactScope(binding: ContextTreeActiveBinding): {
-  commit: string;
-  scope: ContextRouteCandidate["scope"];
-} {
-  const root = mkdtempSync(join(tmpdir(), "first-tree-scope-"));
-  try {
-    git(root, ["init", "--quiet"]);
-    git(root, ["remote", "add", "origin", binding.repo]);
-    git(root, ["fetch", "--no-tags", "--depth=1", "origin", `refs/heads/${binding.branch}`]);
-    const commit = git(root, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"]).toLowerCase();
-    if (!EXACT_COMMIT_RE.test(commit)) throw new Error("Context Tree branch did not resolve to an exact commit.");
-    const entry = git(root, ["ls-tree", commit, "--", "SCOPE.md"]);
-    if (!/^(100644|100755) blob [0-9a-f]{40,64}\tSCOPE\.md$/u.test(entry)) {
-      throw new Error("Root SCOPE.md is missing or is not a regular file.");
-    }
-    const scopeBytes = gitBytes(root, ["show", `${commit}:SCOPE.md`], 16 * 1024 + 1);
-    let markdown: string;
-    try {
-      markdown = new TextDecoder("utf-8", { fatal: true }).decode(scopeBytes);
-    } catch (error) {
-      throw new Error("Root SCOPE.md is not valid UTF-8.", { cause: error });
-    }
-    const parsed = parseContextTreeScopeMarkdown(markdown);
-    return {
-      commit,
-      scope: {
-        schemaVersion: 1,
-        relatedRepositories: parsed.frontmatter.relatedRepositories ?? [],
-        body: parsed.body,
-      },
-    };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
 function writeRouteReceipt(candidate: ContextRouteCandidate): void {
   const path = routeReceiptPath(candidate.candidateId);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -353,25 +316,6 @@ function parseConnectedActivation(value: unknown): { team: { displayName: string
     throw new Error("Team activation response is incomplete.");
   }
   return { team: { displayName: String(Reflect.get(team, "displayName")), role: String(Reflect.get(team, "role")) } };
-}
-
-function git(cwd: string, args: readonly string[], maxBuffer = 1024 * 1024): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer,
-    timeout: 30_000,
-  }).trim();
-}
-
-function gitBytes(cwd: string, args: readonly string[], maxBuffer: number): Buffer {
-  return execFileSync("git", args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer,
-    timeout: 30_000,
-  });
 }
 
 function message(error: unknown): string {

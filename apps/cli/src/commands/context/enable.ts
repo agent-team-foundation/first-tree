@@ -22,6 +22,10 @@ import {
   readContextIntegrationConfig,
 } from "../../core/context-integration/context-binding-store.js";
 import {
+  ContextEnableScopePreflightError,
+  preflightContextEnableScope,
+} from "../../core/context-integration/context-enable-scope-preflight.js";
+import {
   buildCurrentSessionHandoff,
   type CurrentSessionHandoff,
 } from "../../core/context-integration/current-session-handoff.js";
@@ -179,6 +183,14 @@ async function buildSetupPlan(
   );
   if (activation.outcome !== "connected") {
     print.fail(activation.reasonCode, activation.nextAction.message, 1);
+  }
+  try {
+    await preflightContextEnableScope(sdk, activation.team.organizationId);
+  } catch (error) {
+    if (error instanceof ContextEnableScopePreflightError) {
+      print.fail(error.code, error.message, error.exitCode, { status: error.stage });
+    }
+    throw error;
   }
   // Verify the exact immutable Core root during planning. Every apply rebuilds
   // this plan, so an unusable loader is rejected before setup mutates state or

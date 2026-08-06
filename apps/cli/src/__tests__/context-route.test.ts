@@ -3,11 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchExactScope,
-  readContextRouteReceipt,
-  resolveContextRoute,
-} from "../core/context-integration/context-route.js";
+import { readContextRouteReceipt, resolveContextRoute } from "../core/context-integration/context-route.js";
 
 const SESSION_RECEIPT = "server-signed-session-candidate-receipt-value";
 const ACCOUNT_CLIENT_ID = "client_1234abcd";
@@ -156,24 +152,6 @@ describe("BYO SCOPE router", () => {
     expect(result.unavailable[0]?.reason).toContain("SCOPE.md");
     expect(result.selectionBlocked).toBe(true);
     expect(result.instruction).toContain("no remaining candidate may be selected automatically");
-  });
-
-  it("rejects an exact root SCOPE blob that is not valid UTF-8", () => {
-    const repository = tree("temporary");
-    writeFileSync(
-      join(repository, "SCOPE.md"),
-      Buffer.concat([Buffer.from("---\nschemaVersion: 1\n---\n", "utf8"), Buffer.from([0xc3, 0x28])]),
-    );
-    execFileSync("git", ["add", "SCOPE.md"], { cwd: repository });
-    execFileSync("git", ["commit", "-m", "invalid utf8 scope"], { cwd: repository });
-
-    expect(() =>
-      fetchExactScope({
-        provider: "github",
-        repo: repository,
-        branch: "main",
-      }),
-    ).toThrow("Root SCOPE.md is not valid UTF-8");
   });
 
   it("blocks automatic selection when one peer is readable and another is unavailable", async () => {

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   inspectStore: vi.fn(),
   issueSession: vi.fn(),
   planInstall: vi.fn(),
+  preflightScope: vi.fn(),
   readAccount: vi.fn(() => "client-1"),
   readConfig: vi.fn(),
   resolveRelease: vi.fn(),
@@ -75,6 +76,23 @@ vi.mock("../core/context-integration/release.js", () => ({
 vi.mock("../core/context-integration/runtime-health.js", () => ({
   inspectContextIntegrationRuntime: mocks.inspectRuntime,
 }));
+vi.mock("../core/context-integration/context-enable-scope-preflight.js", () => {
+  class ContextEnableScopePreflightError extends Error {
+    readonly stage: "authority" | "binding" | "scope" | "fetch";
+    readonly exitCode: 1 | 3 | 6;
+
+    constructor(
+      readonly code: string,
+      message: string,
+      options: { stage: "authority" | "binding" | "scope" | "fetch"; exitCode: 1 | 3 | 6 },
+    ) {
+      super(message);
+      this.stage = options.stage;
+      this.exitCode = options.exitCode;
+    }
+  }
+  return { ContextEnableScopePreflightError, preflightContextEnableScope: mocks.preflightScope };
+});
 vi.mock("../commands/_shared/member.js", () => ({
   createMemberSdk: () => ({
     validateMemberContextActivation: mocks.validateActivation,
@@ -87,6 +105,7 @@ vi.mock("../commands/context/shared.js", () => ({
 }));
 
 import { runContextEnable } from "../commands/context/enable.js";
+import { ContextEnableScopePreflightError } from "../core/context-integration/context-enable-scope-preflight.js";
 
 const team = { organizationId: "org-a", displayName: "Team A", role: "member" as const };
 const project = { kind: "path" as const, root: "/work/repo" };
@@ -113,6 +132,7 @@ beforeEach(() => {
   });
   mocks.resolveRelease.mockReturnValue({ root: "/release", manifest: { release: "manifest" } });
   mocks.validateActivation.mockResolvedValue({ schemaVersion: 2, outcome: "connected", team });
+  mocks.preflightScope.mockResolvedValue(undefined);
   mocks.issueSession.mockResolvedValue({ receipt: "signed-session" });
   mocks.buildHandoff.mockReturnValue({ schemaVersion: 3, consumerKind: "byo", provider: "codex", project });
   mocks.readConfig.mockReturnValue({
@@ -160,6 +180,44 @@ describe("context enable v3 command", () => {
     expect(mocks.enableOperation).not.toHaveBeenCalled();
     expect(mocks.issueSession).not.toHaveBeenCalled();
     expect(mocks.assertFingerprint).not.toHaveBeenCalled();
+    expect(mocks.preflightScope).toHaveBeenCalledWith(expect.anything(), "org-a");
+  });
+
+  it.each([
+    ["authentication", "CONTEXT_ENABLE_SCOPE_AUTHENTICATION_REQUIRED", "authority", 3],
+    ["binding", "CONTEXT_ENABLE_BINDING_UNREADABLE", "binding", 1],
+    ["missing", "CONTEXT_ENABLE_SCOPE_MISSING", "scope", 1],
+    ["invalid", "CONTEXT_ENABLE_SCOPE_INVALID", "scope", 1],
+    ["fetch", "CONTEXT_ENABLE_SCOPE_FETCH_FAILED", "fetch", 6],
+  ] as const)("renders a stable %s preflight failure before any setup mutation", async (_label, code, stage, exitCode) => {
+    const message = `stable ${stage} guidance`;
+    mocks.preflightScope.mockRejectedValueOnce(
+      new ContextEnableScopePreflightError(code, message, { stage, exitCode }),
+    );
+
+    await expect(runContextEnable(context({ plan: true }))).rejects.toMatchObject({ code });
+    expect(output.fail).toHaveBeenCalledWith(code, message, exitCode, { status: stage });
+    expectNoSetupMutation();
+  });
+
+  it.each([
+    "global",
+    "session",
+  ] as const)("rechecks root SCOPE on apply before %s setup can mutate state", async (scope) => {
+    const planId = await createPlanId();
+    mocks.preflightScope.mockRejectedValueOnce(
+      new ContextEnableScopePreflightError(
+        "CONTEXT_ENABLE_SCOPE_MISSING",
+        "The selected Team's binding branch must contain root SCOPE.md as a regular file before Context setup can continue.",
+        { stage: "scope", exitCode: 1 },
+      ),
+    );
+
+    await expect(runContextEnable(context({ scope, planId, yes: true }))).rejects.toMatchObject({
+      code: "CONTEXT_ENABLE_SCOPE_MISSING",
+    });
+    expect(mocks.preflightScope).toHaveBeenCalledTimes(2);
+    expectNoSetupMutation();
   });
 
   it("rejects setup before planning when the Core loader root is mutable", async () => {
@@ -517,6 +575,16 @@ async function createPlanId(): Promise<string> {
   output.result.mockClear();
   await runContextEnable(context({ plan: true }));
   return (output.result.mock.calls[0]?.[0] as { plan: { planId: string } }).plan.planId;
+}
+
+function expectNoSetupMutation(): void {
+  expect(mocks.enableOperation).not.toHaveBeenCalled();
+  expect(mocks.issueSession).not.toHaveBeenCalled();
+  expect(mocks.assertFingerprint).not.toHaveBeenCalled();
+  expect(mocks.createDriver).not.toHaveBeenCalled();
+  expect(mocks.registerPendingReload).not.toHaveBeenCalled();
+  expect(mocks.consumeReload).not.toHaveBeenCalled();
+  expect(mocks.buildHandoff).not.toHaveBeenCalled();
 }
 
 function readApplyCommand(kind: "global" | "directory" | "session"): string {

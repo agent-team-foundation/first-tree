@@ -116,6 +116,14 @@ grants. It does not preselect or inject a Team's full Context. SessionStart
 handles startup, resume, clear and compact, but session-only deliberately does
 not survive those lifecycle boundaries.
 
+`context enable --plan` is also the local BYO readiness boundary. After live
+Team activation, it reads the member-safe current binding and uses the same
+exact root `SCOPE.md` fetch and parser as task routing. The probe verifies a
+regular UTF-8 file against the current schema; it does not read or materialize
+the rest of the Tree. Failure returns before Plugin installation/update,
+persistent grant writes, or session candidate receipt issuance. Apply rebuilds
+the plan, so it repeats the same readiness check immediately before setup.
+
 ## Per-task Team routing
 
 Every new BYO task starts with the hidden `context route` boundary. Candidate

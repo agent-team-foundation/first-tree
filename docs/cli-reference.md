@@ -1242,6 +1242,15 @@ choices:
 - `directory`: make it eligible under the displayed canonical directory;
 - `session`: use it only now, without a Plugin, Hook or persistent grant.
 
+Before returning those choices, the CLI validates live Team activation, reads
+that member's current Tree binding, and fetches only the binding branch's exact
+root `SCOPE.md`. The probe requires a regular UTF-8 file that satisfies the
+current SCOPE schema. It does not read or materialize the full Context Tree.
+Missing, invalid, unreadable, authentication-blocked, or fetch-failed SCOPE
+readiness stops planning before any Plugin, persistent grant, or session-only
+candidate receipt can be created. Apply rebuilds the plan and repeats this
+probe before mutation.
+
 Every available choice includes an authoritative `applyCommand` that is ready
 to execute unchanged. It pins the channel-appropriate executable (the portable
 CLI path outside development), provider, Team, canonical `--project-root` or
