@@ -111,5 +111,7 @@ claimed to have blocked, show the disabled state, not only the later success.
 `e2e/` holds a Momentic browser suite that walks steps 1–8 unattended and is
 useful for a quick regression pass. It is optional tooling, not a replacement for
 this case: it needs an external Momentic account, resolves steps through a hosted
-model, and covers only the happy path plus the connect-computer gate. Judgement
-about whether the journey is genuinely healthy still lives here.
+model, and covers the happy path, the connect-computer gate, and the Team
+switcher's handoff to the unbound **Coding agent setup** state. Other negative
+branches and judgement about whether the journey is genuinely healthy still
+live here.
