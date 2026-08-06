@@ -18,7 +18,13 @@ export const authProviderAvailabilitySchema = z.object({
   github: z.boolean(),
   oidc: z.boolean().optional().default(false),
 });
-export type AuthProviderAvailability = z.infer<typeof authProviderAvailabilitySchema>;
+// Explicit type - Zod 4's .optional().default() should infer required, but we define it explicitly
+// to ensure TypeScript recognizes all three fields as required after parsing.
+export type AuthProviderAvailability = {
+  google: boolean;
+  github: boolean;
+  oidc: boolean;
+};
 
 export const OAUTH_INTENTS = ["sign-in", "link", "unlink"] as const;
 export const oauthIntentSchema = z.enum(OAUTH_INTENTS);

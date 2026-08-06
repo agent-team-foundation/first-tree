@@ -99,7 +99,7 @@ function readAttempt(): StoredAuthAttempt | null {
     const parsed = JSON.parse(raw) as Partial<StoredAuthAttempt>;
     if (
       typeof parsed.id !== "string" ||
-      (parsed.provider !== "google" && parsed.provider !== "github") ||
+      (parsed.provider !== "google" && parsed.provider !== "github" && parsed.provider !== "oidc") ||
       !parsed.entryPoint ||
       !["login", "deep_link", "invite", "campaign"].includes(parsed.entryPoint) ||
       (parsed.scanAttemptId !== undefined && !UUID_RE.test(parsed.scanAttemptId)) ||

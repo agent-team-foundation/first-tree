@@ -45,19 +45,43 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
     if (!res.ok) {
       throw new Error(`OIDC discovery failed with status ${res.status}`);
     }
-    const doc = (await res.json()) as OidcDiscovery;
-    if (doc.issuer !== issuer) {
-      throw new Error(`OIDC issuer mismatch: expected ${issuer}, got ${doc.issuer}`);
+    const json = (await res.json()) as Record<string, unknown>;
+
+    // Runtime validation of discovery document
+    if (typeof json !== "object" || json === null) {
+      throw new Error("OIDC discovery response is not an object");
     }
+    if (typeof json.issuer !== "string" || !json.issuer) {
+      throw new Error("OIDC discovery missing issuer");
+    }
+    if (json.issuer !== issuer) {
+      throw new Error(`OIDC issuer mismatch: expected ${issuer}, got ${json.issuer}`);
+    }
+    if (typeof json.authorization_endpoint !== "string" || !json.authorization_endpoint) {
+      throw new Error("OIDC discovery missing authorization_endpoint");
+    }
+    if (typeof json.token_endpoint !== "string" || !json.token_endpoint) {
+      throw new Error("OIDC discovery missing token_endpoint");
+    }
+    if (typeof json.jwks_uri !== "string" || !json.jwks_uri) {
+      throw new Error("OIDC discovery missing jwks_uri");
+    }
+
+    const doc: OidcDiscovery = {
+      issuer: json.issuer,
+      authorization_endpoint: json.authorization_endpoint,
+      token_endpoint: json.token_endpoint,
+      jwks_uri: json.jwks_uri,
+      userinfo_endpoint:
+        typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint ? json.userinfo_endpoint : undefined,
+    };
 
     // In production, enforce HTTPS for all endpoints
     if (process.env.NODE_ENV === "production") {
-      const endpoints = [
-        doc.authorization_endpoint,
-        doc.token_endpoint,
-        doc.jwks_uri,
-        doc.userinfo_endpoint,
-      ].filter((e): e is string => Boolean(e));
+      const endpoints = [doc.authorization_endpoint, doc.token_endpoint, doc.jwks_uri];
+      if (doc.userinfo_endpoint) {
+        endpoints.push(doc.userinfo_endpoint);
+      }
       for (const endpoint of endpoints) {
         if (!endpoint.startsWith("https://")) {
           throw new Error(`OIDC endpoint must use HTTPS in production: ${endpoint}`);
@@ -106,7 +130,7 @@ export async function exchangeOidcCode(opts: {
     if (!res.ok) {
       throw new Error(`OIDC token exchange failed with status ${res.status}`);
     }
-    const json = await res.json();
+    const json = (await res.json()) as Record<string, unknown>;
 
     // Runtime validation of token response
     if (typeof json !== "object" || json === null) {
@@ -176,8 +200,8 @@ export async function verifyIdToken(opts: {
     throw new Error("OIDC id_token iat is too old (>10 minutes)");
   }
 
-  // Validate azp when aud is an array
-  if (Array.isArray(claims.aud)) {
+  // Validate azp when aud is an array with multiple values
+  if (Array.isArray(claims.aud) && claims.aud.length > 1) {
     if (!claims.azp || typeof claims.azp !== "string") {
       throw new Error("OIDC id_token with multiple audiences must have azp claim");
     }

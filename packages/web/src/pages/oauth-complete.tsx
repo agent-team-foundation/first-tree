@@ -1,4 +1,4 @@
-import { safeRedirectPath, type SignInProvider } from "@first-tree/shared";
+import { type SignInProvider, safeRedirectPath } from "@first-tree/shared";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -82,7 +82,17 @@ export function OAuthCompletePage() {
     const errorCode = params.get("error");
     const expectedGithubLogin = params.get("expectedGithubLogin");
     // Prefer explicit provider from fragment (OIDC always sets it); fallback to pathname inference.
-    const provider = (params.get("provider") as SignInProvider | null) ?? authProviderForCallbackPath(window.location.pathname);
+    // Parse provider from fragment with runtime validation
+    const providerParam = params.get("provider");
+    let provider: SignInProvider;
+    if (providerParam === "google" || providerParam === "github" || providerParam === "oidc") {
+      provider = providerParam;
+    } else if (providerParam === null) {
+      provider = authProviderForCallbackPath(window.location.pathname);
+    } else {
+      // Invalid provider string - treat as error
+      provider = authProviderForCallbackPath(window.location.pathname);
+    }
     const accountCreatedRaw = params.get("accountCreated");
     const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
     const callbackIntent = params.get("callbackIntent");

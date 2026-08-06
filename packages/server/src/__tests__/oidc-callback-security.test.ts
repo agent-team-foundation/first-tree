@@ -45,8 +45,12 @@ describe("OIDC callback security", () => {
       const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
 
       // Both state and PKCE cookies should be cleared (Max-Age=0)
-      expect(cookies.some((c) => typeof c === "string" && c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
-      expect(cookies.some((c) => typeof c === "string" && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
+      expect(
+        cookies.some((c) => typeof c === "string" && c.includes("oauth_state_nonce") && c.includes("Max-Age=0")),
+      ).toBe(true);
+      expect(cookies.some((c) => typeof c === "string" && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(
+        true,
+      );
     } finally {
       await app.close();
     }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exchangeOidcCode, fetchDiscovery } from "../services/oidc.js";
 
 describe("OIDC validation", () => {
@@ -28,7 +28,7 @@ describe("OIDC validation", () => {
         jwks_uri: "https://idp.test/jwks",
       }),
     });
-    global.fetch = mockFetch as any;
+    global.fetch = mockFetch as unknown as typeof fetch;
 
     await expect(fetchDiscovery("https://idp.test")).rejects.toThrow(/must use HTTPS/);
   });
@@ -45,7 +45,7 @@ describe("OIDC validation", () => {
         jwks_uri: "http://localhost:8080/jwks",
       }),
     });
-    global.fetch = mockFetch as any;
+    global.fetch = mockFetch as unknown as typeof fetch;
 
     const discovery = await fetchDiscovery("http://localhost:8080");
     expect(discovery.authorization_endpoint).toBe("http://localhost:8080/authorize");
@@ -60,7 +60,7 @@ describe("OIDC validation", () => {
         // missing token_type
       }),
     });
-    global.fetch = mockFetch as any;
+    global.fetch = mockFetch as unknown as typeof fetch;
 
     await expect(
       exchangeOidcCode({
@@ -70,7 +70,7 @@ describe("OIDC validation", () => {
         clientId: "client-id",
         clientSecret: "client-secret",
         codeVerifier: "verifier",
-      })
+      }),
     ).rejects.toThrow(/missing token_type/);
   });
 
@@ -82,7 +82,7 @@ describe("OIDC validation", () => {
         // missing access_token and id_token
       }),
     });
-    global.fetch = mockFetch as any;
+    global.fetch = mockFetch as unknown as typeof fetch;
 
     await expect(
       exchangeOidcCode({
@@ -92,7 +92,7 @@ describe("OIDC validation", () => {
         clientId: "client-id",
         clientSecret: "client-secret",
         codeVerifier: "verifier",
-      })
+      }),
     ).rejects.toThrow(/missing access_token/);
   });
 });

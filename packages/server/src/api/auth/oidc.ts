@@ -107,7 +107,18 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
 
     let codeVerifier: string;
     try {
-      const pkcePayload = JSON.parse(pkceCookieValue) as { nonce: string; verifier: string };
+      const parsed = JSON.parse(pkceCookieValue);
+      // Runtime validation of PKCE payload
+      if (typeof parsed !== "object" || parsed === null) {
+        throw new Error("PKCE payload is not an object");
+      }
+      if (typeof parsed.nonce !== "string" || !parsed.nonce) {
+        throw new Error("PKCE payload missing nonce");
+      }
+      if (typeof parsed.verifier !== "string" || !parsed.verifier) {
+        throw new Error("PKCE payload missing verifier");
+      }
+      const pkcePayload = parsed as { nonce: string; verifier: string };
       if (pkcePayload.nonce !== cookieNonce) {
         app.log.warn({ event: "oidc.pkce_nonce_mismatch" }, "PKCE cookie nonce does not match state nonce");
         clearOidcCookies(reply, app.config.secrets.encryptionKey);
@@ -124,7 +135,17 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     reply.header("Set-Cookie", pkceCookie("", 0, app.config.secrets.encryptionKey));
 
-    const discovery = await fetchDiscovery(app.config.oidc.issuer);
+    let discovery: Awaited<ReturnType<typeof fetchDiscovery>>;
+    try {
+      discovery = await fetchDiscovery(app.config.oidc.issuer);
+    } catch (error) {
+      app.log.error(
+        { err: error, event: "oidc.discovery_failed", provider: "oidc" },
+        "OIDC discovery failed at callback",
+      );
+      return redirectError(reply, "provider-exchange-failed", verified.next);
+    }
+
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/oidc/callback`;
 
     let tokenSet: Awaited<ReturnType<typeof exchangeOidcCode>>;
@@ -186,8 +207,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Only use email if email_verified is explicitly true
-    const verifiedEmail =
-      claims.email && claims.email_verified === true ? claims.email : null;
+    const verifiedEmail = claims.email && claims.email_verified === true ? claims.email : null;
 
     const identifier = JSON.stringify([app.config.oidc.issuer, claims.sub]);
     const account = await findOrCreateUserFromExternalAccount(app.db, {

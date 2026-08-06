@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
-import { googleOauthRoutes } from "../api/auth/google.js";
 import { githubOauthRoutes } from "../api/auth/github.js";
+import { googleOauthRoutes } from "../api/auth/google.js";
 import { authRoutes } from "../api/auth.js";
 
 describe("OIDC mode enforcement", () => {

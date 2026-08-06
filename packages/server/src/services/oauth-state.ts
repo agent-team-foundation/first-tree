@@ -151,7 +151,12 @@ export async function verifyOAuthState(
   if (payload.intent !== undefined && !["sign-in", "link", "unlink", "install"].includes(payload.intent)) {
     throw new Error("OAuth state payload malformed");
   }
-  if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github" && payload.provider !== "oidc") {
+  if (
+    payload.provider !== undefined &&
+    payload.provider !== "google" &&
+    payload.provider !== "github" &&
+    payload.provider !== "oidc"
+  ) {
     throw new Error("OAuth state payload malformed");
   }
   for (const value of [payload.userId, payload.oidcNonce]) {
