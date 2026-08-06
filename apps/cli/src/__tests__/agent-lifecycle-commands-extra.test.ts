@@ -77,7 +77,12 @@ vi.mock("@first-tree/client", () => clientSdkMocks);
 vi.mock("@first-tree/shared/config", () => configMocks);
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
-vi.mock("../core/index.js", () => coreMocks);
+vi.mock("../core/index.js", async () => {
+  // `agent remove` imports the real name validator; the commands under test
+  // here only ever pass valid names, so wire it through unmocked.
+  const prune = await vi.importActual<typeof import("../core/agent-prune.js")>("../core/agent-prune.js");
+  return { ...coreMocks, assertRemovableAgentName: prune.assertRemovableAgentName };
+});
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
