@@ -1,4 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+const clientSrc = join(dirname(fileURLToPath(import.meta.url)), "..");
+const clientPkgRoot = join(clientSrc, "..");
 
 describe("public barrel exports", { timeout: 30_000 }, () => {
   it("loads the package entrypoint exports", async () => {
@@ -26,6 +32,17 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(publicKeys).not.toContain("SessionRegistry");
     expect(publicKeys).not.toContain("noopDeliveryToken");
     expect(publicKeys).not.toContain("requireDeliveryToken");
+
+    const pkg = JSON.parse(readFileSync(join(clientPkgRoot, "package.json"), "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+    const exportPaths = Object.keys(pkg.exports ?? {}).sort();
+    expect(exportPaths).toEqual([".", "./observability"]);
+    expect(exportPaths).not.toContain("./contracts");
+    expect(pkg.exports).not.toHaveProperty("./contracts");
+
+    const rootIndex = readFileSync(join(clientSrc, "index.ts"), "utf8");
+    expect(rootIndex).not.toMatch(/runtime\/contracts|from ["']\.\/runtime\/contracts\.js["']/);
   });
 
   it("loads runtime barrel exports", async () => {
@@ -37,8 +54,12 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(runtime).not.toHaveProperty("cleanAgentWorkspacesWithDeps");
     expect(runtime).not.toHaveProperty("SessionManager");
     expect(runtime).not.toHaveProperty("SessionRegistry");
+    expect(runtime).not.toHaveProperty("contracts");
     expect(runtime.resolveAgentContextTreeBinding).toBeDefined();
     expect(runtime.registerShutdownHook).toBeDefined();
+
+    const runtimeIndex = readFileSync(join(clientSrc, "runtime/index.ts"), "utf8");
+    expect(runtimeIndex).not.toMatch(/from ["']\.\/contracts\.js["']/);
   });
 
   it("loads observability barrel exports", async () => {

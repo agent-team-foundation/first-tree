@@ -52,6 +52,28 @@ const FORBIDDEN_CONTRACT_EXPORTS = [
   "createBuiltinHandlerRegistry",
 ] as const;
 
+/**
+ * Collect every name from `export type { ... }` blocks.
+ * Supports multiline lists and `Foo as Bar` (records the exported local name).
+ */
+function extractExportTypeNames(source: string): string[] {
+  const names: string[] = [];
+  for (const match of source.matchAll(/export\s+type\s*\{([\s\S]*?)\}/g)) {
+    const body = match[1] ?? "";
+    for (const rawPart of body.split(",")) {
+      const part = rawPart
+        .replace(/\/\/[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .trim();
+      if (!part) continue;
+      const asParts = part.split(/\bas\b/).map((s) => s.trim());
+      const exported = (asParts[1] ?? asParts[0] ?? "").replace(/^type\s+/, "").trim();
+      if (exported) names.push(exported);
+    }
+  }
+  return names.sort();
+}
+
 describe("runtime/contracts entry", () => {
   it("re-exports delivery token helpers with owner value identity", () => {
     expect(contracts.noopDeliveryToken).toBe(handler.noopDeliveryToken);
@@ -70,9 +92,12 @@ describe("runtime/contracts entry", () => {
     }
 
     const source = readFileSync(join(clientSrc, "runtime/contracts.ts"), "utf8");
-    for (const name of CONTRACT_TYPE_EXPORTS) {
-      expect(source, `contracts.ts must export type ${name}`).toMatch(new RegExp(`\\b${name}\\b`));
-    }
+    // Exact type allowlist: every `export type { ... }` name, nothing more.
+    expect(extractExportTypeNames(source)).toEqual([...CONTRACT_TYPE_EXPORTS].sort());
+    // Reject alternate type-export shapes that would bypass the brace allowlist.
+    expect(source).not.toMatch(/export\s+type\s+[A-Za-z_][\w]*\s*=/);
+    expect(source).not.toMatch(/export\s+type\s+\*/);
+
     for (const name of CONTRACT_VALUE_EXPORTS) {
       expect(source, `contracts.ts must export value ${name}`).toMatch(new RegExp(`export\\s*\\{[^}]*\\b${name}\\b`));
     }
