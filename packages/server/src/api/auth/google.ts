@@ -80,9 +80,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     }
     // Clear the single-use OAuth state cookie after validating it.
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
-    if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
-    // In oidc-required mode, reject sign-in and link/unlink intents BEFORE provider exchange
+    // In oidc-required mode, reject sign-in and link/unlink intents BEFORE nonce check and provider exchange
     // Legacy callbacks with undefined intent are treated as sign-in
     if (app.config.authMode === "oidc-required") {
       const effectiveIntent = verified.intent ?? "sign-in";
@@ -93,6 +92,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
         return redirectError(reply, "sign-in-method-disabled", ACCOUNT_RETURN_PATH);
       }
     }
+
+    if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
     let profile: ReturnType<typeof googleExternalProfile>;
     try {

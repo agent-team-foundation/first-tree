@@ -33,7 +33,17 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       oidcNonce,
     });
 
-    const discovery = await fetchDiscovery(app.config.oidc.issuer);
+    let discovery: Awaited<ReturnType<typeof fetchDiscovery>>;
+    try {
+      discovery = await fetchDiscovery(app.config.oidc.issuer);
+    } catch (error) {
+      app.log.error(
+        { err: error, event: "oauth.discovery_failed", provider: "oidc" },
+        "OIDC discovery failed at start",
+      );
+      return reply.status(503).send({ error: "OIDC provider unavailable" });
+    }
+
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/oidc/callback`;
 
     const params = new URLSearchParams({
@@ -174,6 +184,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         issuer: app.config.oidc.issuer,
         clientId: app.config.oidc.clientId,
         nonce: verified.oidcNonce!,
+        algorithms: discovery.id_token_signing_alg_values_supported,
       });
     } catch (error) {
       app.log.error(

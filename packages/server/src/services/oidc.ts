@@ -7,6 +7,7 @@ export type OidcDiscovery = {
   token_endpoint: string;
   jwks_uri: string;
   userinfo_endpoint?: string;
+  id_token_signing_alg_values_supported?: string[];
 };
 
 export type OidcTokenSet = {
@@ -67,6 +68,20 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
       throw new Error("OIDC discovery missing jwks_uri");
     }
 
+    // Parse and validate signing algorithms
+    let signingAlgs: string[] | undefined;
+    if (json.id_token_signing_alg_values_supported !== undefined) {
+      if (!Array.isArray(json.id_token_signing_alg_values_supported)) {
+        throw new Error("OIDC discovery id_token_signing_alg_values_supported must be an array");
+      }
+      signingAlgs = json.id_token_signing_alg_values_supported.filter(
+        (alg): alg is string => typeof alg === "string" && alg.length > 0,
+      );
+      if (signingAlgs.length === 0) {
+        throw new Error("OIDC discovery id_token_signing_alg_values_supported contains no valid algorithms");
+      }
+    }
+
     const doc: OidcDiscovery = {
       issuer: json.issuer,
       authorization_endpoint: json.authorization_endpoint,
@@ -74,6 +89,7 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
       jwks_uri: json.jwks_uri,
       userinfo_endpoint:
         typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint ? json.userinfo_endpoint : undefined,
+      id_token_signing_alg_values_supported: signingAlgs,
     };
 
     // In production, enforce HTTPS for all endpoints
@@ -162,12 +178,15 @@ export async function verifyIdToken(opts: {
   issuer: string;
   clientId: string;
   nonce: string;
+  algorithms?: string[];
 }): Promise<OidcIdTokenClaims> {
   const jwks = jose.createRemoteJWKSet(new URL(opts.jwksUri));
+  // Use algorithms from discovery if provided, otherwise fall back to common secure algorithms
+  const allowedAlgorithms = opts.algorithms ?? ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"];
   const { payload } = await jose.jwtVerify(opts.idToken, jwks, {
     issuer: opts.issuer,
     audience: opts.clientId,
-    algorithms: ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+    algorithms: allowedAlgorithms,
   });
 
   // Runtime validation: jose.jwtVerify checks exp/iss/aud, but we need explicit sub/iat/nonce checks
@@ -228,11 +247,40 @@ export async function fetchUserInfo(opts: {
     if (!res.ok) {
       throw new Error(`OIDC userinfo failed with status ${res.status}`);
     }
-    const info = (await res.json()) as OidcIdTokenClaims;
-    if (info.sub !== opts.expectedSub) {
+    const json = (await res.json()) as Record<string, unknown>;
+
+    // Runtime validation of UserInfo response
+    if (typeof json !== "object" || json === null) {
+      throw new Error("OIDC userinfo response is not an object");
+    }
+    if (typeof json.sub !== "string" || !json.sub) {
+      throw new Error("OIDC userinfo missing or invalid sub");
+    }
+    if (json.sub !== opts.expectedSub) {
       throw new Error("OIDC userinfo sub does not match id_token sub");
     }
-    return info;
+
+    // Validate optional profile fields by type
+    if (json.name !== undefined && typeof json.name !== "string") {
+      throw new Error("OIDC userinfo name must be a string");
+    }
+    if (json.nickname !== undefined && typeof json.nickname !== "string") {
+      throw new Error("OIDC userinfo nickname must be a string");
+    }
+    if (json.preferred_username !== undefined && typeof json.preferred_username !== "string") {
+      throw new Error("OIDC userinfo preferred_username must be a string");
+    }
+    if (json.picture !== undefined && typeof json.picture !== "string") {
+      throw new Error("OIDC userinfo picture must be a string");
+    }
+    if (json.email !== undefined && typeof json.email !== "string") {
+      throw new Error("OIDC userinfo email must be a string");
+    }
+    if (json.email_verified !== undefined && typeof json.email_verified !== "boolean") {
+      throw new Error("OIDC userinfo email_verified must be a boolean");
+    }
+
+    return json as OidcIdTokenClaims;
   } finally {
     clearTimeout(timeoutId);
   }
