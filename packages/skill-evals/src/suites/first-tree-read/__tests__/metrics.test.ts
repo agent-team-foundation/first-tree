@@ -636,6 +636,8 @@ describe("first-tree-read metrics pass criteria", () => {
   it.each([
     "The U.S. isolation rule ruled out the shared index.",
     "The U.S. Organization rule ruled out the shared index.",
+    "The I/O isolation rule ruled out shared storage.",
+    "The i-012345 storage rule ruled out shared storage.",
     "The ME residency rule ruled out a shared index.",
     "The me-central-1 residency rule ruled out a shared index.",
     "The US residency rule ruled out a shared index.",
