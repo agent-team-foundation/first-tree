@@ -76,7 +76,8 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
 
     const query = request.query as Record<string, string>;
     if (query.error) {
-      app.log.warn({ event: "oauth.callback_rejected", provider: "oidc", error: query.error }, "OIDC provider error");
+      // Do not log provider-controlled error value to prevent log injection
+      app.log.warn({ event: "oauth.callback_rejected", provider: "oidc" }, "OIDC provider error");
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
