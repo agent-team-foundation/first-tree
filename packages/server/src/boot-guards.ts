@@ -13,6 +13,7 @@ export function assertBootConfigValid(config: Config): void {
   assertProductionRequiresPublicUrl(config);
   assertGithubAppConfigComplete(config);
   assertGitlabEgressAllowlistValid(config.gitlab?.egressAllowlist ?? []);
+  assertOidcConfigValid(config);
 }
 
 function assertSecretsValid(config: Config): void {
@@ -97,5 +98,37 @@ function assertGithubAppConfigComplete(config: Config): void {
       "FIRST_TREE_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
         "If the value came from a single-line env file, replace literal `\\n` with real newlines.",
     );
+  }
+}
+
+function assertOidcConfigValid(config: Config): void {
+  const oidc = config.oidc;
+  const mode = config.authMode;
+
+  if (mode === "oidc-required" && !oidc) {
+    throw new Error(
+      "FIRST_TREE_AUTH_MODE=oidc-required requires FIRST_TREE_OIDC_ISSUER, FIRST_TREE_OIDC_CLIENT_ID, and FIRST_TREE_OIDC_CLIENT_SECRET to be set.",
+    );
+  }
+
+  if (oidc) {
+    const fields: Record<string, string | undefined> = {
+      FIRST_TREE_OIDC_ISSUER: oidc.issuer,
+      FIRST_TREE_OIDC_CLIENT_ID: oidc.clientId,
+      FIRST_TREE_OIDC_CLIENT_SECRET: oidc.clientSecret,
+    };
+    const missing = Object.entries(fields)
+      .filter(([, v]) => !v || v.trim().length === 0)
+      .map(([k]) => k);
+    if (missing.length > 0 && missing.length < Object.keys(fields).length) {
+      throw new Error(`OIDC is half-configured — missing: ${missing.join(", ")}. Set all three or none.`);
+    }
+  }
+
+  if (mode === "oidc-required" && process.env.NODE_ENV === "production" && oidc) {
+    const parsed = new URL(oidc.issuer);
+    if (parsed.protocol !== "https:") {
+      throw new Error("FIRST_TREE_OIDC_ISSUER must use HTTPS in production.");
+    }
   }
 }

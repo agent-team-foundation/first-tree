@@ -71,7 +71,7 @@ export function hasUsableAuthentication(
   return identities.some((identity) => {
     if (identity.provider === excludedProvider) return false;
     if (identity.credentialType === "password" || identity.credentialType === "webauthn") return true;
-    if (identity.provider !== "google" && identity.provider !== "github") return false;
+    if (identity.provider !== "google" && identity.provider !== "github" && identity.provider !== "oidc") return false;
     return availability[identity.provider];
   });
 }

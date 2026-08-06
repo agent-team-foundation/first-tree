@@ -1,12 +1,13 @@
 import { z } from "zod";
 
-export const AUTH_PROVIDERS = ["google", "github"] as const;
+export const AUTH_PROVIDERS = ["google", "github", "oidc"] as const;
 export const authProviderSchema = z.enum(AUTH_PROVIDERS);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
 
 export const authProviderAvailabilitySchema = z.object({
   google: z.boolean(),
   github: z.boolean(),
+  oidc: z.boolean(),
 });
 export type AuthProviderAvailability = z.infer<typeof authProviderAvailabilitySchema>;
 

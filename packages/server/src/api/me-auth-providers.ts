@@ -85,6 +85,7 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
       const { userId } = requireUser(request);
       const { provider } = authProviderParamsSchema.parse(request.params);
       const { next } = oauthStartQuerySchema.parse(request.query);
+      if (provider === "oidc") return reply.status(400).send({ error: "OIDC does not support link/unlink" });
       return startProviderAction(app, request, reply, {
         provider,
         userId,
@@ -100,6 +101,7 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
     async (request, reply) => {
       const { userId } = requireUser(request);
       const { provider } = authProviderParamsSchema.parse(request.params);
+      if (provider === "oidc") return reply.status(400).send({ error: "OIDC does not support link/unlink" });
       const availability = configuredProviders(app);
       const [identity] = await app.db
         .select({ id: authIdentities.id, provider: authIdentities.provider })
@@ -206,5 +208,6 @@ function configuredProviders(app: FastifyInstance): AuthProviderAvailability {
   return {
     google: Boolean(app.config.oauth?.google),
     github: Boolean(app.config.oauth?.githubApp),
+    oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
   };
 }

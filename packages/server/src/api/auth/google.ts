@@ -110,6 +110,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
           {
             google: Boolean(app.config.oauth?.google),
             github: Boolean(app.config.oauth?.githubApp),
+            oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
           },
           verified.targetIdentityId ?? "",
         );

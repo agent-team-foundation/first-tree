@@ -293,7 +293,7 @@ describe("auth identity extra coverage", () => {
       hasUsableAuthentication(
         [{ provider: "github", identifier: "github-disabled", credentialType: null }],
         "x",
-        { google: true, github: false },
+        { google: true, github: false, oidc: false },
         "google",
       ),
     ).toBe(false);
@@ -304,7 +304,7 @@ describe("auth identity extra coverage", () => {
         oauthOnlyUserId,
         "google",
         "google-only",
-        { google: true, github: false },
+        { google: true, github: false, oidc: false },
         googleOnlyIdentityId,
       ),
     ).rejects.toBeInstanceOf(LastIdentityError);
@@ -324,7 +324,7 @@ describe("auth identity extra coverage", () => {
         oauthOnlyUserId,
         "google",
         "google-replacement",
-        { google: true, github: true },
+        { google: true, github: true, oidc: false },
         googleOnlyIdentityId,
       ),
     ).rejects.toBeInstanceOf(IdentityMismatchError);
@@ -337,7 +337,7 @@ describe("auth identity extra coverage", () => {
         legacyUserId,
         "google",
         "google-legacy",
-        { google: true, github: false },
+        { google: true, github: false, oidc: false },
         legacyIdentityId,
       ),
     ).resolves.toBeUndefined();

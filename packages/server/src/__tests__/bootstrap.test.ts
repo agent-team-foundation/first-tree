@@ -47,6 +47,7 @@ const baseServerConfig: ServerConfig = {
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
+  authMode: "standard",
   trustProxy: false,
   connectBootstrap: {
     portableDownloadBaseUrl: "https://download.first-tree.ai/releases",

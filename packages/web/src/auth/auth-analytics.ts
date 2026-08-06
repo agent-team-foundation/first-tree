@@ -2,7 +2,7 @@ import { trackEvent } from "../analytics.js";
 
 const AUTH_ATTEMPT_KEY = "first-tree:auth-attempt";
 
-export type AuthProvider = "google" | "github";
+export type AuthProvider = "google" | "github" | "oidc";
 export type AuthEntryPoint = "login" | "deep_link" | "invite" | "campaign";
 export type AuthJoinPath = "solo" | "invite" | "returning" | "unknown";
 export type AuthFailureReason =
