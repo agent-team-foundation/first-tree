@@ -1147,8 +1147,10 @@ export {
   notificationTypeSchema,
 } from "./schemas/notification.js";
 export {
-  AUTH_PROVIDERS,
+  LINKABLE_PROVIDERS,
+  SIGN_IN_PROVIDERS,
   type AuthProvider,
+  type SignInProvider,
   type AuthProviderActionResult,
   type AuthProviderAvailability,
   type AuthProviderConnection,
@@ -1158,6 +1160,8 @@ export {
   authProviderConnectionSchema,
   authProviderConnectionsResponseSchema,
   authProviderParamsSchema,
+  authProviderSchema,
+  signInProviderSchema,
   type GithubCallbackQuery,
   type GithubDevCallbackQuery,
   type GithubStartQuery,
