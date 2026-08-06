@@ -1,15 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { authProviderParamsSchema, oauthStartQuerySchema, safeRedirectPath } from "@first-tree/shared";
+import {
+  type AuthProviderAvailability,
+  authProviderParamsSchema,
+  oauthStartQuerySchema,
+  safeRedirectPath,
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { requireUser } from "../scope/require-user.js";
-import {
-  type AuthCredentialSnapshot,
-  type AuthProviderAvailability,
-  hasUsableAuthentication,
-} from "../services/auth-identity.js";
+import { type AuthCredentialSnapshot, hasUsableAuthentication } from "../services/auth-identity.js";
 import { buildAppAuthorizeUrl } from "../services/github-app.js";
 import { buildGoogleAuthorizeUrl } from "../services/google-oauth.js";
 import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../services/oauth-state.js";
@@ -85,7 +86,6 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
       const { userId } = requireUser(request);
       const { provider } = authProviderParamsSchema.parse(request.params);
       const { next } = oauthStartQuerySchema.parse(request.query);
-      if (provider === "oidc") return reply.status(400).send({ error: "OIDC does not support link/unlink" });
       return startProviderAction(app, request, reply, {
         provider,
         userId,
@@ -101,7 +101,6 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
     async (request, reply) => {
       const { userId } = requireUser(request);
       const { provider } = authProviderParamsSchema.parse(request.params);
-      if (provider === "oidc") return reply.status(400).send({ error: "OIDC does not support link/unlink" });
       const availability = configuredProviders(app);
       const [identity] = await app.db
         .select({ id: authIdentities.id, provider: authIdentities.provider })

@@ -1,7 +1,6 @@
 import Fastify from "fastify";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { oidcRoutes } from "../api/auth/oidc.js";
-import * as jose from "jose";
 
 describe("OIDC callback security", () => {
   let originalEnv: string | undefined;
@@ -46,8 +45,8 @@ describe("OIDC callback security", () => {
       const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
 
       // Both state and PKCE cookies should be cleared (Max-Age=0)
-      expect(cookies.some((c) => c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
-      expect(cookies.some((c) => c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
+      expect(cookies.some((c) => typeof c === "string" && c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
+      expect(cookies.some((c) => typeof c === "string" && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
     } finally {
       await app.close();
     }
@@ -79,10 +78,10 @@ describe("OIDC callback security", () => {
       expect(callback.statusCode).toBe(302);
 
       const setCookieHeaders = callback.headers["set-cookie"];
-      const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+      const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : setCookieHeaders ? [setCookieHeaders] : [];
 
-      expect(cookies.some((c) => c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
-      expect(cookies.some((c) => c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
+      expect(cookies.some((c) => c && c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
+      expect(cookies.some((c) => c && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
     } finally {
       await app.close();
     }

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   type AuthProvider,
+  type AuthProviderAvailability,
   type ExternalAccountProfile,
   githubExternalProfile,
   normalizeExternalProfile,
@@ -27,8 +28,6 @@ export type GithubTokenBundle = {
   encryptedRefreshToken?: string;
   refreshTokenExpiresAt?: string;
 };
-
-export type AuthProviderAvailability = Readonly<Record<AuthProvider, boolean>>;
 
 export type AuthCredentialSnapshot = {
   provider: string;

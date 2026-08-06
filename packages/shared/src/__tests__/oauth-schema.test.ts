@@ -14,6 +14,7 @@ describe("OAuth schemas", () => {
     expect(authProviderAvailabilitySchema.parse({ google: true, github: false })).toEqual({
       google: true,
       github: false,
+      oidc: false,
     });
   });
 

@@ -488,11 +488,6 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    // In oidc-required mode, reject dev-callback sign-in
-    if (app.config.authMode === "oidc-required") {
-      return redirectCallbackError(reply, "sign-in-method-disabled", next);
-    }
-
     // Dev bypass never carries a `targetOrganizationId` — the install
     // stub binds to whatever team the dev session resolves into.
     return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null, {
@@ -523,6 +518,7 @@ type CallbackErrorCode =
   | "identity-conflict"
   | "identity-mismatch"
   | "last-provider"
+  | "sign-in-method-disabled"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
