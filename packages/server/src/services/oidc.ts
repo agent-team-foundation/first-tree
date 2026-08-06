@@ -7,7 +7,7 @@ export type OidcDiscovery = {
   token_endpoint: string;
   jwks_uri: string;
   userinfo_endpoint?: string;
-  id_token_signing_alg_values_supported?: string[];
+  id_token_signing_alg_values_supported: string[];  // Required, validated intersection with local supported algorithms
 };
 
 export type OidcTokenSet = {
@@ -24,6 +24,16 @@ export type OidcIdTokenClaims = {
   iat: number;
   azp?: string;
   nonce?: string;
+  email?: string;
+  email_verified?: boolean;
+  name?: string;
+  nickname?: string;
+  preferred_username?: string;
+  picture?: string;
+};
+
+export type OidcUserInfoProfile = {
+  sub: string;
   email?: string;
   email_verified?: boolean;
   name?: string;
@@ -68,18 +78,50 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
       throw new Error("OIDC discovery missing jwks_uri");
     }
 
-    // Parse and validate signing algorithms
-    let signingAlgs: string[] | undefined;
-    if (json.id_token_signing_alg_values_supported !== undefined) {
-      if (!Array.isArray(json.id_token_signing_alg_values_supported)) {
-        throw new Error("OIDC discovery id_token_signing_alg_values_supported must be an array");
-      }
-      signingAlgs = json.id_token_signing_alg_values_supported.filter(
-        (alg): alg is string => typeof alg === "string" && alg.length > 0,
+    // Parse and validate signing algorithms - REQUIRED
+    // Require discovery to advertise supported algorithms
+    if (!json.id_token_signing_alg_values_supported || !Array.isArray(json.id_token_signing_alg_values_supported)) {
+      throw new Error("OIDC discovery must provide id_token_signing_alg_values_supported");
+    }
+
+    // First Tree's supported secure asymmetric algorithms
+    const SUPPORTED_ALGORITHMS = ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512"];
+
+    // Find intersection: algorithms both advertised by IdP and supported by us
+    const advertisedAlgs = json.id_token_signing_alg_values_supported.filter(
+      (alg): alg is string => typeof alg === "string" && alg.length > 0,
+    );
+    const signingAlgs = advertisedAlgs.filter(alg => SUPPORTED_ALGORITHMS.includes(alg));
+
+    if (signingAlgs.length === 0) {
+      throw new Error(
+        `OIDC discovery advertises no supported algorithms. Advertised: ${advertisedAlgs.join(", ")}. Supported: ${SUPPORTED_ALGORITHMS.join(", ")}`
       );
-      if (signingAlgs.length === 0) {
-        throw new Error("OIDC discovery id_token_signing_alg_values_supported contains no valid algorithms");
+    }
+
+    // Parse and validate endpoint URLs
+    const parseAndValidateUrl = (urlString: string, name: string): URL => {
+      try {
+        const url = new URL(urlString);
+        // In production, enforce HTTPS
+        if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
+          throw new Error(`OIDC ${name} must use HTTPS in production: ${urlString}`);
+        }
+        return url;
+      } catch (err) {
+        throw new Error(`OIDC ${name} is not a valid URL: ${urlString}`);
       }
+    };
+
+    parseAndValidateUrl(json.authorization_endpoint, "authorization_endpoint");
+    parseAndValidateUrl(json.token_endpoint, "token_endpoint");
+    parseAndValidateUrl(json.jwks_uri, "jwks_uri");
+
+    const userInfoEndpoint = typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint
+      ? json.userinfo_endpoint
+      : undefined;
+    if (userInfoEndpoint) {
+      parseAndValidateUrl(userInfoEndpoint, "userinfo_endpoint");
     }
 
     const doc: OidcDiscovery = {
@@ -87,23 +129,9 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
       authorization_endpoint: json.authorization_endpoint,
       token_endpoint: json.token_endpoint,
       jwks_uri: json.jwks_uri,
-      userinfo_endpoint:
-        typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint ? json.userinfo_endpoint : undefined,
+      userinfo_endpoint: userInfoEndpoint,
       id_token_signing_alg_values_supported: signingAlgs,
     };
-
-    // In production, enforce HTTPS for all endpoints
-    if (process.env.NODE_ENV === "production") {
-      const endpoints = [doc.authorization_endpoint, doc.token_endpoint, doc.jwks_uri];
-      if (doc.userinfo_endpoint) {
-        endpoints.push(doc.userinfo_endpoint);
-      }
-      for (const endpoint of endpoints) {
-        if (!endpoint.startsWith("https://")) {
-          throw new Error(`OIDC endpoint must use HTTPS in production: ${endpoint}`);
-        }
-      }
-    }
 
     cachedDiscovery = { issuer, doc, expiresAt: Date.now() + 5 * 60 * 1000 };
     return doc;
@@ -178,15 +206,14 @@ export async function verifyIdToken(opts: {
   issuer: string;
   clientId: string;
   nonce: string;
-  algorithms?: string[];
+  algorithms: string[];  // Required, not optional - must come from validated discovery
 }): Promise<OidcIdTokenClaims> {
   const jwks = jose.createRemoteJWKSet(new URL(opts.jwksUri));
-  // Use algorithms from discovery if provided, otherwise fall back to common secure algorithms
-  const allowedAlgorithms = opts.algorithms ?? ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"];
+  // Use only the algorithms from validated discovery (no fallback)
   const { payload } = await jose.jwtVerify(opts.idToken, jwks, {
     issuer: opts.issuer,
     audience: opts.clientId,
-    algorithms: allowedAlgorithms,
+    algorithms: opts.algorithms,
   });
 
   // Runtime validation: jose.jwtVerify checks exp/iss/aud, but we need explicit sub/iat/nonce checks
@@ -203,40 +230,60 @@ export async function verifyIdToken(opts: {
     throw new Error("OIDC id_token missing exp claim");
   }
 
-  const claims = payload as OidcIdTokenClaims;
-
   // Validate nonce
-  if (claims.nonce !== opts.nonce) {
+  if (payload.nonce !== opts.nonce) {
     throw new Error("OIDC id_token nonce mismatch");
   }
 
   // Validate iat is recent (within last 10 minutes)
   const now = Math.floor(Date.now() / 1000);
-  if (claims.iat > now + 60) {
+  const iat = payload.iat as number;
+  if (iat > now + 60) {
     throw new Error("OIDC id_token iat is in the future");
   }
-  if (now - claims.iat > 600) {
+  if (now - iat > 600) {
     throw new Error("OIDC id_token iat is too old (>10 minutes)");
   }
 
   // Validate azp when aud is an array with multiple values
-  if (Array.isArray(claims.aud) && claims.aud.length > 1) {
-    if (!claims.azp || typeof claims.azp !== "string") {
+  const aud = payload.aud;
+  if (Array.isArray(aud) && aud.length > 1) {
+    if (!payload.azp || typeof payload.azp !== "string") {
       throw new Error("OIDC id_token with multiple audiences must have azp claim");
     }
-    if (claims.azp !== opts.clientId) {
+    if (payload.azp !== opts.clientId) {
       throw new Error("OIDC id_token azp does not match client_id");
     }
   }
 
-  return claims;
+  // Runtime validate optional profile claims before returning
+  if (payload.email !== undefined && typeof payload.email !== "string") {
+    throw new Error("OIDC id_token email must be a string");
+  }
+  if (payload.email_verified !== undefined && typeof payload.email_verified !== "boolean") {
+    throw new Error("OIDC id_token email_verified must be a boolean");
+  }
+  if (payload.name !== undefined && typeof payload.name !== "string") {
+    throw new Error("OIDC id_token name must be a string");
+  }
+  if (payload.nickname !== undefined && typeof payload.nickname !== "string") {
+    throw new Error("OIDC id_token nickname must be a string");
+  }
+  if (payload.preferred_username !== undefined && typeof payload.preferred_username !== "string") {
+    throw new Error("OIDC id_token preferred_username must be a string");
+  }
+  if (payload.picture !== undefined && typeof payload.picture !== "string") {
+    throw new Error("OIDC id_token picture must be a string");
+  }
+
+  return payload as OidcIdTokenClaims;
 }
 
 export async function fetchUserInfo(opts: {
   userInfoEndpoint: string;
   accessToken: string;
   expectedSub: string;
-}): Promise<OidcIdTokenClaims> {
+}): Promise<OidcUserInfoProfile> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
   try {
@@ -280,7 +327,17 @@ export async function fetchUserInfo(opts: {
       throw new Error("OIDC userinfo email_verified must be a boolean");
     }
 
-    return json as OidcIdTokenClaims;
+    // Return a narrow, explicitly constructed profile object (not the full JSON)
+    // Only whitelist intended profile fields, never security claims like iss/aud/exp/iat
+    return {
+      sub: json.sub,
+      email: json.email as string | undefined,
+      email_verified: json.email_verified as boolean | undefined,
+      name: json.name as string | undefined,
+      nickname: json.nickname as string | undefined,
+      preferred_username: json.preferred_username as string | undefined,
+      picture: json.picture as string | undefined,
+    };
   } finally {
     clearTimeout(timeoutId);
   }

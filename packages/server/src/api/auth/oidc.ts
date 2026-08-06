@@ -24,10 +24,11 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const { next } = oauthStartQuerySchema.parse(request.query);
+    const safeNext = safeRedirectPath(next ?? null);
     const oidcNonce = randomBytes(24).toString("base64url");
     const { codeVerifier, codeChallenge } = generatePkce();
 
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeRedirectPath(next ?? null), {
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, {
       provider: "oidc",
       intent: "sign-in",
       oidcNonce,
@@ -41,7 +42,8 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         { err: error, event: "oauth.discovery_failed", provider: "oidc" },
         "OIDC discovery failed at start",
       );
-      return reply.status(503).send({ error: "OIDC provider unavailable" });
+      // Redirect through /auth/complete with bounded error instead of returning raw 503 JSON
+      return redirectError(reply, "provider-unavailable", safeNext);
     }
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/oidc/callback`;
