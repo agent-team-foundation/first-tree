@@ -161,8 +161,7 @@ function parseExactCredentialFreeSourceLink(value: string): ExactSourceLink | nu
 
 function isObjectiveImpactSummary(summary: string): boolean {
   const hasEnglishFirstPerson =
-    /\b(?:we|our|my|me|ours|mine)\b/iu.test(summary) ||
-    /\b(?:us|Us)\b(?!-)/u.test(summary) ||
+    /\b(?:we|We|our|Our|my|My|me|Me|us|Us|ours|Ours|mine|Mine)\b(?!-)/u.test(summary) ||
     /(?<!\bphase )\bi\b/iu.test(summary);
   const hasFirstPerson =
     hasEnglishFirstPerson ||

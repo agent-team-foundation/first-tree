@@ -600,6 +600,7 @@ describe("first-tree-read metrics pass criteria", () => {
 
   it.each([
     "I ruled out the shared index because of the organization-isolation rule.",
+    "We ruled out the shared index because of the organization-isolation rule.",
     "Our review ruled out the shared index because of the organization-isolation rule.",
     "The organization-isolation rule led us away from the shared index.",
     "Us reviewers ruled out the shared index because of the organization-isolation rule.",
@@ -635,6 +636,8 @@ describe("first-tree-read metrics pass criteria", () => {
   it.each([
     "The U.S. isolation rule ruled out the shared index.",
     "The U.S. Organization rule ruled out the shared index.",
+    "The ME residency rule ruled out a shared index.",
+    "The me-central-1 residency rule ruled out a shared index.",
     "The US residency rule ruled out a shared index.",
     "The us-east-1 residency rule ruled out a shared index.",
     "Phase I narrowed the acceptable rollout scope.",
