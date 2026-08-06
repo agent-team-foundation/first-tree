@@ -64,17 +64,28 @@ type ParsedContractsExports = {
  * Enumerate every top-level export via the TypeScript AST.
  *
  * Allowed shapes only:
- * - `export type { A, B } from "..."`  → type allowlist
+ * - `export type { A, B } from "..."`  → type allowlist (unaliased names only)
  * - `export { a, b } from "..."` with no inline `type` modifiers → value allowlist
+ *   (unaliased names only)
  *
- * Anything else (`export { type X }`, `export interface`, `export type Alias =`,
- * `export *`, `export default`, exported classes/functions/vars, …) is a violation.
+ * Anything else (`export { type X }`, `Foo as Bar`, `export interface`,
+ * `export type Alias =`, `export *`, `export default`, exported
+ * classes/functions/vars, …) is a violation.
  */
 function parseContractsExports(source: string): ParsedContractsExports {
   const sf = ts.createSourceFile("contracts.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const typeNames: string[] = [];
   const valueNames: string[] = [];
   const violations: string[] = [];
+
+  const rejectIfAliased = (el: ts.ExportSpecifier, kind: "type" | "value"): boolean => {
+    // `export { Orig as Alias }` sets propertyName=Orig, name=Alias.
+    if (el.propertyName != null && el.propertyName.text !== el.name.text) {
+      violations.push(`aliased-${kind}-export:${el.propertyName.text}->${el.name.text}`);
+      return true;
+    }
+    return false;
+  };
 
   for (const stmt of sf.statements) {
     if (!ts.isExportDeclaration(stmt)) {
@@ -112,22 +123,24 @@ function parseContractsExports(source: string): ParsedContractsExports {
     }
 
     if (stmt.isTypeOnly) {
-      // Exact allowlisted shape: `export type { ... } from "..."`
+      // Exact allowlisted shape: `export type { Name } from "..."` (no `as` rename).
       for (const el of stmt.exportClause.elements) {
         if (el.isTypeOnly) {
           violations.push(`redundant-inline-type-in-type-only-export:${el.name.text}`);
         }
+        if (rejectIfAliased(el, "type")) continue;
         typeNames.push(el.name.text);
       }
       continue;
     }
 
-    // `export { ... } from "..."` — must be values only (no `export { type X }`).
+    // `export { ... } from "..."` — must be values only (no `export { type X }`, no aliases).
     for (const el of stmt.exportClause.elements) {
       if (el.isTypeOnly) {
         violations.push(`inline-type-named-export:${el.name.text}`);
         continue;
       }
+      if (rejectIfAliased(el, "value")) continue;
       valueNames.push(el.name.text);
     }
   }
@@ -200,6 +213,22 @@ export * from "./handler.js";
 `;
     const star = parseContractsExports(bypassStar);
     expect(star.violations).toContain("export-star");
+
+    // Aliased type re-export must not satisfy the allowlist via the exported name alone.
+    const bypassAliasedType = `
+export type { HandlerContext as AgentHandler } from "./handler.js";
+export { noopDeliveryToken, requireDeliveryToken } from "./handler.js";
+`;
+    const aliasedType = parseContractsExports(bypassAliasedType);
+    expect(aliasedType.violations).toContain("aliased-type-export:HandlerContext->AgentHandler");
+    expect(aliasedType.typeNames).not.toContain("AgentHandler");
+
+    const bypassAliasedValue = `
+export type { AgentHandler } from "./handler.js";
+export { noopDeliveryToken as requireDeliveryToken } from "./handler.js";
+`;
+    const aliasedValue = parseContractsExports(bypassAliasedValue);
+    expect(aliasedValue.violations).toContain("aliased-value-export:noopDeliveryToken->requireDeliveryToken");
   });
 
   it("compiles the allowlisted type surface for provider consumers", () => {
