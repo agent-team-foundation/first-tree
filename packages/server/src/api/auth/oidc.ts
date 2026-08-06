@@ -38,8 +38,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     try {
       discovery = await fetchDiscovery(app.config.oidc.issuer);
     } catch (error) {
+      // Do not log provider-controlled error details to prevent log injection
       app.log.error(
-        { err: error, event: "oauth.discovery_failed", provider: "oidc" },
+        { event: "oauth.discovery_failed", provider: "oidc" },
         "OIDC discovery failed at start",
       );
       // Redirect through /auth/complete with bounded error instead of returning raw 503 JSON
@@ -138,7 +139,8 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       }
       codeVerifier = pkcePayload.verifier;
     } catch (error) {
-      app.log.warn({ err: error, event: "oidc.pkce_parse_failed" }, "Failed to parse PKCE cookie");
+      // Do not log cookie parse errors to prevent exposing malformed data
+      app.log.warn({ event: "oidc.pkce_parse_failed" }, "Failed to parse PKCE cookie");
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "state-expired", verified.next);
     }
@@ -151,8 +153,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     try {
       discovery = await fetchDiscovery(app.config.oidc.issuer);
     } catch (error) {
+      // Do not log provider-controlled error details
       app.log.error(
-        { err: error, event: "oidc.discovery_failed", provider: "oidc" },
+        { event: "oidc.discovery_failed", provider: "oidc" },
         "OIDC discovery failed at callback",
       );
       return redirectError(reply, "provider-exchange-failed", verified.next);
@@ -171,8 +174,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         codeVerifier,
       });
     } catch (error) {
+      // Do not log provider-controlled token exchange errors
       app.log.error(
-        { err: error, event: "oauth.token_exchange_failed", provider: "oidc" },
+        { event: "oauth.token_exchange_failed", provider: "oidc" },
         "OIDC token exchange failed",
       );
       return redirectError(reply, "provider-exchange-failed", verified.next);
@@ -189,8 +193,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         algorithms: discovery.id_token_signing_alg_values_supported,
       });
     } catch (error) {
+      // Do not log provider-controlled ID token verification errors
       app.log.error(
-        { err: error, event: "oauth.id_token_invalid", provider: "oidc" },
+        { event: "oauth.id_token_invalid", provider: "oidc" },
         "OIDC id_token verification failed",
       );
       return redirectError(reply, "provider-exchange-failed", verified.next);

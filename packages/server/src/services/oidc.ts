@@ -48,7 +48,10 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
   if (cachedDiscovery && cachedDiscovery.issuer === issuer && Date.now() < cachedDiscovery.expiresAt) {
     return cachedDiscovery.doc;
   }
-  const url = `${issuer}/.well-known/openid-configuration`;
+  // OIDC Discovery §4.1: remove trailing slash before appending well-known suffix
+  // but preserve the exact configured issuer for identity key comparison
+  const discoveryBase = issuer.endsWith("/") ? issuer.slice(0, -1) : issuer;
+  const url = `${discoveryBase}/.well-known/openid-configuration`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
   try {
@@ -94,23 +97,25 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
     const signingAlgs = advertisedAlgs.filter(alg => SUPPORTED_ALGORITHMS.includes(alg));
 
     if (signingAlgs.length === 0) {
-      throw new Error(
-        `OIDC discovery advertises no supported algorithms. Advertised: ${advertisedAlgs.join(", ")}. Supported: ${SUPPORTED_ALGORITHMS.join(", ")}`
-      );
+      // Do not log provider-controlled algorithm list to prevent log injection
+      throw new Error("OIDC discovery advertises no supported signing algorithms");
     }
 
     // Parse and validate endpoint URLs
     const parseAndValidateUrl = (urlString: string, name: string): URL => {
+      let url: URL;
       try {
-        const url = new URL(urlString);
-        // In production, enforce HTTPS
-        if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
-          throw new Error(`OIDC ${name} must use HTTPS in production: ${urlString}`);
-        }
-        return url;
+        url = new URL(urlString);
       } catch (err) {
-        throw new Error(`OIDC ${name} is not a valid URL: ${urlString}`);
+        // Do not log the URL string to prevent log injection of malformed URLs
+        throw new Error(`OIDC ${name} is not a valid URL`);
       }
+      // In production, enforce HTTPS
+      if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
+        // Do not log the URL to prevent exposing provider-controlled data
+        throw new Error(`OIDC ${name} must use HTTPS in production`);
+      }
+      return url;
     };
 
     parseAndValidateUrl(json.authorization_endpoint, "authorization_endpoint");

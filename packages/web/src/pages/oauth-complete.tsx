@@ -22,6 +22,7 @@ const CALLBACK_ERROR_COPY: Record<string, string> = {
   "state-expired": "This authentication request took too long or was already used. Head back and start again.",
   "provider-denied": "GitHub authorization was canceled. Head back and start again when you're ready.",
   "provider-not-configured": "This sign-in provider is not configured on this First Tree deployment.",
+  "provider-unavailable": "The sign-in provider is temporarily unavailable. Please try again in a moment.",
   "provider-exchange-failed": "The sign-in provider did not accept the authentication handshake. Try again.",
   "identity-conflict": "That external account already belongs to another First Tree user.",
   "identity-mismatch": "You selected a different external account. Start again with the connected account.",

@@ -9,6 +9,7 @@ export type AuthFailureReason =
   | "state-expired"
   | "provider-denied"
   | "provider-not-configured"
+  | "provider-unavailable"
   | "provider-exchange-failed"
   | "identity-conflict"
   | "identity-mismatch"
@@ -41,6 +42,7 @@ const CALLBACK_FAILURE_REASONS = new Set<AuthFailureReason>([
   "state-expired",
   "provider-denied",
   "provider-not-configured",
+  "provider-unavailable",
   "provider-exchange-failed",
   "identity-conflict",
   "identity-mismatch",

@@ -74,6 +74,7 @@ export const authProviderParamsSchema = z.object({ provider: authProviderSchema 
 export const OAUTH_ERROR_CODES = [
   "state-expired",
   "provider-not-configured",
+  "provider-unavailable",
   "provider-exchange-failed",
   "identity-conflict",
   "identity-mismatch",
