@@ -98,11 +98,13 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // In oidc-required mode, reject sign-in and link/unlink intents
+    // Legacy callbacks with undefined intent are treated as sign-in
     if (app.config.authMode === "oidc-required") {
-      if (verified.intent === "sign-in") {
+      const effectiveIntent = verified.intent ?? "sign-in";
+      if (effectiveIntent === "sign-in") {
         return redirectError(reply, "sign-in-method-disabled", verified.next);
       }
-      if (verified.intent === "link" || verified.intent === "unlink") {
+      if (effectiveIntent === "link" || effectiveIntent === "unlink") {
         return redirectError(reply, "sign-in-method-disabled", ACCOUNT_RETURN_PATH);
       }
     }

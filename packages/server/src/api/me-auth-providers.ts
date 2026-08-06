@@ -204,12 +204,9 @@ async function startProviderAction(
 }
 
 function configuredProviders(app: FastifyInstance): AuthProviderAvailability {
-  if (app.config.authMode === "oidc-required") {
-    return { google: false, github: false, oidc: true };
-  }
   return {
-    google: Boolean(app.config.oauth?.google),
+    google: app.config.authMode === "oidc-required" ? false : Boolean(app.config.oauth?.google),
     github: Boolean(app.config.oauth?.githubApp),
-    oidc: false,
+    oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
   };
 }
