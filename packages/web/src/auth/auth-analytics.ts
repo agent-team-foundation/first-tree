@@ -13,6 +13,7 @@ export type AuthFailureReason =
   | "identity-conflict"
   | "identity-mismatch"
   | "last-provider"
+  | "sign-in-method-disabled"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
@@ -44,6 +45,7 @@ const CALLBACK_FAILURE_REASONS = new Set<AuthFailureReason>([
   "identity-conflict",
   "identity-mismatch",
   "last-provider",
+  "sign-in-method-disabled",
   "github-exchange-failed",
   "install-not-admin",
   "install-not-verified",

@@ -26,6 +26,7 @@ const CALLBACK_ERROR_COPY: Record<string, string> = {
   "identity-conflict": "That external account already belongs to another First Tree user.",
   "identity-mismatch": "You selected a different external account. Start again with the connected account.",
   "last-provider": "Connect another sign-in method before disconnecting this one.",
+  "sign-in-method-disabled": "This sign-in method is disabled on this deployment.",
   "github-exchange-failed": "GitHub didn't accept the sign-in handshake. Head back and try again in a moment.",
   "install-not-admin":
     "The GitHub App was installed, but connecting it needs an admin of the First Tree team it was started from. Ask a team admin to finish the connection from Settings → GitHub.",
@@ -80,7 +81,8 @@ export function OAuthCompletePage() {
     const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
     const expectedGithubLogin = params.get("expectedGithubLogin");
-    const provider = authProviderForCallbackPath(window.location.pathname);
+    // Prefer explicit provider from fragment (OIDC always sets it); fallback to pathname inference.
+    const provider = (params.get("provider") as AuthProvider | null) ?? authProviderForCallbackPath(window.location.pathname);
     const accountCreatedRaw = params.get("accountCreated");
     const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
     const callbackIntent = params.get("callbackIntent");

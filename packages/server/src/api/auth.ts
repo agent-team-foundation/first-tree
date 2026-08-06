@@ -5,6 +5,9 @@ import { resolvePublicUrl } from "../utils/public-url.js";
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post("/login", { config: { otelRecordBody: true } }, async (request, reply) => {
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled" });
+    }
     const body = loginSchema.parse(request.body);
     const result = await authService.login(
       app.db,

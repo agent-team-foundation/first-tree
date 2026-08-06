@@ -1,13 +1,22 @@
 import { z } from "zod";
 
-export const AUTH_PROVIDERS = ["google", "github", "oidc"] as const;
-export const authProviderSchema = z.enum(AUTH_PROVIDERS);
+// Internal sign-in identity provider type — includes oidc for server-side identity resolution.
+// Do NOT use this for Account Settings link/unlink surfaces.
+export const SIGN_IN_PROVIDERS = ["google", "github", "oidc"] as const;
+export const signInProviderSchema = z.enum(SIGN_IN_PROVIDERS);
+export type SignInProvider = z.infer<typeof signInProviderSchema>;
+
+// Linkable/unlinkable providers exposed in Account Settings — oidc is intentionally excluded.
+export const LINKABLE_PROVIDERS = ["google", "github"] as const;
+export const authProviderSchema = z.enum(LINKABLE_PROVIDERS);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
 
+// oidc is optional for rolling-deploy compatibility: older Server responses omit it,
+// and a new Web bundle must not fail parsing or hide existing providers in that case.
 export const authProviderAvailabilitySchema = z.object({
   google: z.boolean(),
   github: z.boolean(),
-  oidc: z.boolean(),
+  oidc: z.boolean().optional().default(false),
 });
 export type AuthProviderAvailability = z.infer<typeof authProviderAvailabilitySchema>;
 
@@ -67,6 +76,7 @@ export const OAUTH_ERROR_CODES = [
   "invite-invalid",
   "invite-not-allowed",
   "invite-required",
+  "sign-in-method-disabled",
 ] as const;
 export const oauthErrorCodeSchema = z.enum(OAUTH_ERROR_CODES);
 export type OAuthErrorCode = z.infer<typeof oauthErrorCodeSchema>;

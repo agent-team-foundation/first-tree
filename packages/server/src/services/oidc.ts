@@ -49,6 +49,22 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
     if (doc.issuer !== issuer) {
       throw new Error(`OIDC issuer mismatch: expected ${issuer}, got ${doc.issuer}`);
     }
+
+    // In production, enforce HTTPS for all endpoints
+    if (process.env.NODE_ENV === "production") {
+      const endpoints = [
+        doc.authorization_endpoint,
+        doc.token_endpoint,
+        doc.jwks_uri,
+        doc.userinfo_endpoint,
+      ].filter((e): e is string => Boolean(e));
+      for (const endpoint of endpoints) {
+        if (!endpoint.startsWith("https://")) {
+          throw new Error(`OIDC endpoint must use HTTPS in production: ${endpoint}`);
+        }
+      }
+    }
+
     cachedDiscovery = { issuer, doc, expiresAt: Date.now() + 5 * 60 * 1000 };
     return doc;
   } finally {
@@ -90,7 +106,27 @@ export async function exchangeOidcCode(opts: {
     if (!res.ok) {
       throw new Error(`OIDC token exchange failed with status ${res.status}`);
     }
-    return (await res.json()) as OidcTokenSet;
+    const json = await res.json();
+
+    // Runtime validation of token response
+    if (typeof json !== "object" || json === null) {
+      throw new Error("OIDC token response is not an object");
+    }
+    if (typeof json.access_token !== "string" || !json.access_token) {
+      throw new Error("OIDC token response missing access_token");
+    }
+    if (typeof json.id_token !== "string" || !json.id_token) {
+      throw new Error("OIDC token response missing id_token");
+    }
+    if (typeof json.token_type !== "string" || !json.token_type) {
+      throw new Error("OIDC token response missing token_type");
+    }
+
+    return {
+      access_token: json.access_token,
+      id_token: json.id_token,
+      token_type: json.token_type,
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -107,23 +143,31 @@ export async function verifyIdToken(opts: {
   const { payload } = await jose.jwtVerify(opts.idToken, jwks, {
     issuer: opts.issuer,
     audience: opts.clientId,
+    algorithms: ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
   });
-  const claims = payload as unknown as OidcIdTokenClaims;
+
+  // Runtime validation: jose.jwtVerify checks exp/iss/aud, but we need explicit sub/iat/nonce checks
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error("OIDC id_token payload is not an object");
+  }
+  if (!payload.sub || typeof payload.sub !== "string" || payload.sub.trim() === "") {
+    throw new Error("OIDC id_token missing or invalid sub claim");
+  }
+  if (!payload.iat || typeof payload.iat !== "number") {
+    throw new Error("OIDC id_token missing iat claim");
+  }
+  if (!payload.exp || typeof payload.exp !== "number") {
+    throw new Error("OIDC id_token missing exp claim");
+  }
+
+  const claims = payload as OidcIdTokenClaims;
 
   // Validate nonce
   if (claims.nonce !== opts.nonce) {
     throw new Error("OIDC id_token nonce mismatch");
   }
 
-  // Validate sub is non-empty
-  if (!claims.sub || typeof claims.sub !== "string" || claims.sub.trim() === "") {
-    throw new Error("OIDC id_token missing or invalid sub claim");
-  }
-
-  // Validate iat is present and recent (within last 10 minutes)
-  if (!claims.iat || typeof claims.iat !== "number") {
-    throw new Error("OIDC id_token missing iat claim");
-  }
+  // Validate iat is recent (within last 10 minutes)
   const now = Math.floor(Date.now() / 1000);
   if (claims.iat > now + 60) {
     throw new Error("OIDC id_token iat is in the future");

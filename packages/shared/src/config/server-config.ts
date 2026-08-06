@@ -114,9 +114,10 @@ const oidcIssuerSchema = z
         ctx.addIssue({ code: "custom", message: "OIDC issuer must have no userinfo, query, or fragment" });
         return z.NEVER;
       }
-      // Return full URL including path (Keycloak/Azure need it), removing trailing slash
-      const issuer = url.href.endsWith("/") ? url.href.slice(0, -1) : url.href;
-      return issuer;
+      // Return the exact configured issuer string unchanged (required by #2188).
+      // Keycloak/Azure/GitLab IdPs use paths (e.g., https://idp.example.com/realms/foo).
+      // This exact string must match discovery issuer and be stored in (issuer, sub).
+      return raw;
     } catch {
       ctx.addIssue({ code: "custom", message: "OIDC issuer must be a valid URL" });
       return z.NEVER;

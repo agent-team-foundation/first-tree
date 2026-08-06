@@ -154,8 +154,10 @@ export function InviteAcceptCard({
   onJoin,
   oauthHref,
   googleOauthHref,
+  oidcHref,
   googleAvailable = true,
   githubAvailable = true,
+  oidcAvailable = false,
   providersSettled = true,
   onAuthStart,
 }: {

@@ -64,11 +64,15 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     const query = request.query as Record<string, string>;
     if (query.error) {
       app.log.warn({ event: "oauth.callback_rejected", provider: "oidc", error: query.error }, "OIDC provider error");
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
 
     const { code, state } = query;
-    if (!code || !state) return redirectError(reply, "provider-exchange-failed");
+    if (!code || !state) {
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed");
+    }
 
     const cookieNonce = readOAuthStateNonce(
       request.headers.cookie,
@@ -81,10 +85,14 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
     } catch (error) {
       app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "oidc" }, "OAuth state rejected");
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "state-expired");
     }
 
-    if (verified.provider !== "oidc") return redirectError(reply, "state-expired");
+    if (verified.provider !== "oidc") {
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "state-expired");
+    }
 
     // Read and validate PKCE cookie (bound to state nonce)
     const pkceCookieValue = readOAuthStateNonce(
@@ -92,19 +100,24 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       PKCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
-    if (!pkceCookieValue) return redirectError(reply, "state-expired");
+    if (!pkceCookieValue) {
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "state-expired", verified.next);
+    }
 
     let codeVerifier: string;
     try {
       const pkcePayload = JSON.parse(pkceCookieValue) as { nonce: string; verifier: string };
       if (pkcePayload.nonce !== cookieNonce) {
         app.log.warn({ event: "oidc.pkce_nonce_mismatch" }, "PKCE cookie nonce does not match state nonce");
-        return redirectError(reply, "state-expired");
+        clearOidcCookies(reply, app.config.secrets.encryptionKey);
+        return redirectError(reply, "state-expired", verified.next);
       }
       codeVerifier = pkcePayload.verifier;
     } catch (error) {
       app.log.warn({ err: error, event: "oidc.pkce_parse_failed" }, "Failed to parse PKCE cookie");
-      return redirectError(reply, "state-expired");
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "state-expired", verified.next);
     }
 
     // Clear cookies
@@ -129,7 +142,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         { err: error, event: "oauth.token_exchange_failed", provider: "oidc" },
         "OIDC token exchange failed",
       );
-      return redirectError(reply, "provider-exchange-failed");
+      return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
     let claims: Awaited<ReturnType<typeof verifyIdToken>>;
@@ -146,10 +159,12 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         { err: error, event: "oauth.id_token_invalid", provider: "oidc" },
         "OIDC id_token verification failed",
       );
-      return redirectError(reply, "provider-exchange-failed");
+      return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
-    // Fetch UserInfo to supplement profile data missing from id_token
+    // Fetch UserInfo to supplement profile data missing from id_token.
+    // email/email_verified must be tracked together from the same source to
+    // avoid mixing a verified flag from id_token with an email from userInfo.
     if (discovery.userinfo_endpoint) {
       try {
         const userInfo = await fetchUserInfo({
@@ -157,11 +172,16 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
           accessToken: tokenSet.access_token,
           expectedSub: claims.sub,
         });
-        // Merge userInfo into claims (userInfo takes precedence for profile fields)
-        claims = { ...claims, ...userInfo };
+        // Only override profile fields; keep email + email_verified as a pair from one source.
+        // If userInfo provides both, use them together; otherwise keep id_token's pair.
+        const emailSource =
+          userInfo.email !== undefined
+            ? { email: userInfo.email, email_verified: userInfo.email_verified }
+            : { email: claims.email, email_verified: claims.email_verified };
+        claims = { ...claims, ...userInfo, ...emailSource };
       } catch (error) {
         app.log.error({ err: error, event: "oidc.userinfo_failed", provider: "oidc" }, "OIDC userinfo failed");
-        return redirectError(reply, "provider-exchange-failed");
+        return redirectError(reply, "provider-exchange-failed", verified.next);
       }
     }
 
@@ -195,7 +215,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         userAgent: request.headers["user-agent"] ?? "",
       });
     } catch (error) {
-      if (error instanceof OAuthBootstrapError) return redirectError(reply, error.code);
+      if (error instanceof OAuthBootstrapError) return redirectError(reply, error.code, verified.next);
       throw error;
     }
 
@@ -206,6 +226,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       next: bootstrap.next,
       accountCreated: account.created ? "1" : "0",
       callbackIntent: "sign-in",
+      provider: "oidc",
       org: bootstrap.organizationId,
       ...(bootstrap.orgPinned ? { orgPinned: "1" } : {}),
     }).toString();
@@ -240,7 +261,17 @@ function pkceCookie(value: string, maxAge: number, encryptionKey: string): strin
   });
 }
 
-function redirectError(reply: FastifyReply, code: string) {
-  const fragment = new URLSearchParams({ error: code, next: "/", callbackIntent: "sign-in" }).toString();
+function clearOidcCookies(reply: FastifyReply, encryptionKey: string): void {
+  reply.header("Set-Cookie", stateCookie("", 0, encryptionKey));
+  reply.header("Set-Cookie", pkceCookie("", 0, encryptionKey));
+}
+
+function redirectError(reply: FastifyReply, code: string, next?: string | null) {
+  const fragment = new URLSearchParams({
+    error: code,
+    next: next ?? "/",
+    callbackIntent: "sign-in",
+    provider: "oidc",
+  }).toString();
   return reply.redirect(`/auth/complete#${fragment}`, 302);
 }

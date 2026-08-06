@@ -413,6 +413,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       app.log.info({ url: request.url }, "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set");
       return reply.status(404).send({ error: "Not found" });
     }
+
+    // In oidc-required mode, reject GitHub sign-in
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled", error: "GitHub sign-in disabled in OIDC mode" });
+    }
+
     const params = githubDevCallbackQuerySchema.parse(request.query);
     const next = safeRedirectPath(params.next ?? null);
 
@@ -917,6 +923,16 @@ async function completeOauthFlow(
         accountCreated: account.created,
       });
     return reply.status(500).send({ error: "Failed to resolve membership" });
+  }
+
+  // In oidc-required mode, install callbacks must NOT mint a new GitHub session.
+  // The existing OIDC session remains active; only redirect with install metadata.
+  if (app.config.authMode === "oidc-required" && callbackIntent === "install") {
+    const fragmentParams: Record<string, string> = { next, callbackIntent };
+    if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
+    if (orgPinned) fragmentParams.orgPinned = "1";
+    const fragment = new URLSearchParams(fragmentParams).toString();
+    return reply.redirect(`/auth/complete#${fragment}`, 302);
   }
 
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);

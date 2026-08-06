@@ -39,11 +39,14 @@ export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void>
       // channel so staging/dev do not implicitly expose public campaigns.
       growthLandingPagesEnabled: app.config.growth.landingPagesEnabled,
       authMode: app.config.authMode,
-      authProviders: {
-        google: Boolean(app.config.oauth?.google),
-        github: Boolean(app.config.oauth?.githubApp),
-        oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
-      },
+      authProviders:
+        app.config.authMode === "oidc-required"
+          ? { google: false, github: false, oidc: true }
+          : {
+              google: Boolean(app.config.oauth?.google),
+              github: Boolean(app.config.oauth?.githubApp),
+              oidc: false,
+            },
     };
   });
 }
