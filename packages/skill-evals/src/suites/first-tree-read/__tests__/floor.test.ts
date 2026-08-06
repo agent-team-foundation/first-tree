@@ -154,7 +154,7 @@ describe("first-tree-read floor contract", () => {
   });
 
   it("keeps version metadata aligned", () => {
-    expect(skillVersion).toBe("0.6.1");
+    expect(skillVersion).toBe("0.6.2");
     expect(skill).toContain(`version: ${skillVersion}`);
   });
 });

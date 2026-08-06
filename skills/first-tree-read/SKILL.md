@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-version: 0.6.1
+version: 0.6.2
 description: Read the applicable Context Tree before acting. In BYO sessions, route only among locally authorized Teams by reading each exact root SCOPE.md before selecting one task snapshot; in managed workspaces, use the bound Tree. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content.
 ---
 
