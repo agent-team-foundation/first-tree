@@ -1,70 +1,59 @@
-import { createServer, type Server } from "node:http";
 import * as jose from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyIdToken } from "../services/oidc.js";
 
 /**
  * ID token security boundary tests using real signed JWTs and the actual
  * verifyIdToken() function from services/oidc.ts.
  *
- * Strategy: Create a local HTTP server serving JWKS, generate real RSA keys,
- * sign JWTs with jose, and call verifyIdToken() which will fetch the JWKS
- * and perform all First Tree's custom checks (sub, iat, nonce, azp, etc.)
+ * Strategy: Generate real RSA keys, sign JWTs, and mock global.fetch to
+ * intercept the jose.createRemoteJWKSet HTTP call. This exercises all of
+ * First Tree's custom security checks (sub, iat, nonce, azp, etc.) without
+ * relying on a real network connection — stable in both local and CI.
  */
 
 const ISSUER = "https://idp.test";
 const CLIENT_ID = "test-client-id";
+const JWKS_URI = "https://idp.test/.well-known/jwks.json";
 const NONCE = "test-nonce-12345";
 
 let privateKey: Awaited<ReturnType<typeof jose.generateKeyPair>>["privateKey"];
 let publicJWK: jose.JWK;
 let kid: string;
-let jwksServer: Server;
-let jwksUri: string;
 
 beforeAll(async () => {
-  // Generate RSA key pair for signing/verifying test tokens
   const { publicKey, privateKey: priv } = await jose.generateKeyPair("RS256");
   privateKey = priv;
   kid = "test-key-id";
-
-  // Export public key as JWK for JWKS endpoint
   publicJWK = await jose.exportJWK(publicKey);
   publicJWK.kid = kid;
   publicJWK.alg = "RS256";
   publicJWK.use = "sig";
-
-  // Create HTTP server to serve JWKS
-  jwksServer = createServer((req, res) => {
-    if (req.url === "/.well-known/jwks.json") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ keys: [publicJWK] }));
-    } else {
-      res.writeHead(404);
-      res.end();
-    }
-  });
-
-  // Start server on random port
-  await new Promise<void>((resolve) => {
-    jwksServer.listen(0, () => {
-      const addr = jwksServer.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      jwksUri = `http://localhost:${port}/.well-known/jwks.json`;
-      resolve();
-    });
-  });
 });
 
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    jwksServer.close((err) => (err ? reject(err) : resolve()));
-  });
+beforeEach(() => {
+  // Mock global.fetch so jose.createRemoteJWKSet returns our test public key
+  // without making a real HTTP request. This works in CI and locally.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async (url: string) => {
+      if (url === JWKS_URI) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ keys: [publicJWK] }),
+          headers: { get: () => "application/json" },
+        };
+      }
+      return { ok: false, status: 404 };
+    }),
+  );
 });
 
-/**
- * Sign a JWT with the test private key.
- */
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 async function signToken(claims: Record<string, unknown>): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
@@ -80,13 +69,10 @@ async function signToken(claims: Record<string, unknown>): Promise<string> {
     .sign(privateKey);
 }
 
-/**
- * Call the real verifyIdToken() from services/oidc.ts
- */
 async function callVerifyIdToken(idToken: string): Promise<ReturnType<typeof verifyIdToken>> {
   return verifyIdToken({
     idToken,
-    jwksUri,
+    jwksUri: JWKS_URI,
     issuer: ISSUER,
     clientId: CLIENT_ID,
     nonce: NONCE,
@@ -171,28 +157,19 @@ describe("verifyIdToken security boundaries", () => {
   });
 
   it("accepts multi-audience token with matching azp", async () => {
-    const token = await signToken({
-      aud: [CLIENT_ID, "other-client"],
-      azp: CLIENT_ID,
-    });
+    const token = await signToken({ aud: [CLIENT_ID, "other-client"], azp: CLIENT_ID });
     const claims = await callVerifyIdToken(token);
     expect(claims.aud).toEqual([CLIENT_ID, "other-client"]);
     expect(claims.azp).toBe(CLIENT_ID);
   });
 
   it("rejects multi-audience token with mismatched azp", async () => {
-    const token = await signToken({
-      aud: [CLIENT_ID, "other-client"],
-      azp: "wrong-client",
-    });
+    const token = await signToken({ aud: [CLIENT_ID, "other-client"], azp: "wrong-client" });
     await expect(callVerifyIdToken(token)).rejects.toThrow("azp");
   });
 
   it("rejects multi-audience token without azp", async () => {
-    const jwt = new jose.SignJWT({
-      sub: "test-subject",
-      nonce: NONCE,
-    })
+    const jwt = new jose.SignJWT({ sub: "test-subject", nonce: NONCE })
       .setProtectedHeader({ alg: "RS256", kid })
       .setIssuedAt()
       .setIssuer(ISSUER)
@@ -202,8 +179,7 @@ describe("verifyIdToken security boundaries", () => {
     await expect(callVerifyIdToken(token)).rejects.toThrow("azp");
   });
 
-  it("rejects unsigned token", async () => {
-    // Create an unsigned JWT (alg: none)
+  it("rejects unsigned token (alg: none)", async () => {
     const unsignedPayload = {
       iss: ISSUER,
       sub: "test-subject",
@@ -215,24 +191,18 @@ describe("verifyIdToken security boundaries", () => {
     const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
     const payload = Buffer.from(JSON.stringify(unsignedPayload)).toString("base64url");
     const unsignedToken = `${header}.${payload}.`;
-
     await expect(callVerifyIdToken(unsignedToken)).rejects.toThrow();
   });
 
-  it("rejects token with HS256 when only RS256 is allowed", async () => {
-    // Generate HS256 key and sign token
+  it("rejects token signed with HS256 when only RS256 is allowed", async () => {
     const hmacSecret = new Uint8Array(32);
-    const hsToken = await new jose.SignJWT({
-      sub: "test-subject",
-      nonce: NONCE,
-    })
+    const hsToken = await new jose.SignJWT({ sub: "test-subject", nonce: NONCE })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setIssuer(ISSUER)
       .setAudience(CLIENT_ID)
       .setExpirationTime("1h")
       .sign(hmacSecret);
-
     await expect(callVerifyIdToken(hsToken)).rejects.toThrow();
   });
 

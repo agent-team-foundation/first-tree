@@ -73,11 +73,21 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Runtime validation of callback query boundary.
-    // We attempt to parse the query with the bounded schema, but regardless of whether
-    // parsing succeeds or fails, we must validate the state cookie before clearing cookies.
-    // This prevents a forged/malformed request from clearing an unrelated active OIDC flow.
+    // We must validate state ownership before clearing cookies to prevent forged
+    // requests from clearing an unrelated active OIDC flow — but we also must
+    // not pass an unbounded raw string to cryptographic parsing.
+    // Solution: apply a small state-only bounded schema first, then use that
+    // validated value solely for cookie-ownership check. Full schema parsing
+    // happens afterward.
     const rawQuery = request.query as Record<string, unknown>;
-    const rawState = typeof rawQuery.state === "string" ? rawQuery.state : null;
+
+    // Bounded extraction of state only — same 4096-char limit as the full schema.
+    // This prevents an oversized state from reaching JWT parsing before the full
+    // schema rejects it.
+    const rawState =
+      typeof rawQuery.state === "string" && rawQuery.state.length <= 4096
+        ? rawQuery.state
+        : null;
 
     // Read the state nonce cookie early so we can validate ownership
     // before deciding whether to clear any cookies.
@@ -87,7 +97,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.encryptionKey,
     );
 
-    // Attempt to verify state ownership (if a state is present).
+    // Attempt to verify state ownership using the bounded state value.
     // We use this result to decide whether clearing cookies is safe.
     let verified: Awaited<ReturnType<typeof verifyOAuthState>> | null = null;
     if (rawState) {
