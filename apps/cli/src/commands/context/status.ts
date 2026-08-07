@@ -1,10 +1,9 @@
 import type { Command } from "commander";
 import { channelConfig } from "../../core/channel.js";
-import { inspectContextAdapterReloadObligation } from "../../core/context-integration/adapter-observation.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { readContextIntegrationInstallJournal } from "../../core/context-integration/installer.js";
 import { inspectContextIntegrationOperation } from "../../core/context-integration/operation.js";
 import type { ProviderHookProbe } from "../../core/context-integration/provider-driver.js";
-import { resolveContextIntegrationRelease } from "../../core/context-integration/release.js";
 import {
   type ContextIntegrationStatus,
   inspectContextIntegrationStatus,
@@ -31,17 +30,7 @@ export async function runContextStatus(context: CommandContext): Promise<void> {
   });
   const incompleteInstall = readContextIntegrationInstallJournal();
   const incompleteOperation = inspectContextIntegrationOperation();
-  let reloadObligation: ReturnType<typeof inspectContextAdapterReloadObligation> = null;
-  if (provider === "claude-code") {
-    let release: ReturnType<typeof resolveContextIntegrationRelease> | null = null;
-    try {
-      release = resolveContextIntegrationRelease();
-    } catch {
-      // Runtime health already reports an untrusted release; status remains
-      // inspectable rather than becoming another mutation.
-    }
-    if (release) reloadObligation = inspectContextAdapterReloadObligation(release.manifest);
-  }
+  const nextSessionObligation = provider === "claude-code" ? inspectContextAdapterNextSessionObligation() : null;
   const recovery = [
     ...(incompleteInstall?.provider === provider
       ? [`Incomplete ${incompleteInstall.phase}; run ${channelConfig.binName} context repair --provider ${provider}`]
@@ -51,10 +40,10 @@ export async function runContextStatus(context: CommandContext): Promise<void> {
           `Incomplete ${incompleteOperation.operation}/${incompleteOperation.phase}; run ${channelConfig.binName} context repair --provider ${provider}`,
         ]
       : []),
-    ...(reloadObligation === "standalone_repair"
-      ? ["Claude must run /reload-plugins and submit one message to adopt the repaired Context Plugin"]
-      : reloadObligation === "setup"
-        ? ["Claude setup must finish its exact reload/apply flow"]
+    ...(nextSessionObligation === "standalone_repair"
+      ? ["Start a new Claude session to adopt the repaired Context Plugin"]
+      : nextSessionObligation === "setup"
+        ? ["Start a new Claude session for persistent Context auto-activation"]
         : []),
   ];
   const result = { ...status, recovery };

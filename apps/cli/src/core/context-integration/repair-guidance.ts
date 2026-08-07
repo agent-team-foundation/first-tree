@@ -12,7 +12,9 @@ export function contextRepairAdditionalContext(provider: ContextIntegrationProvi
     "Ordinary provider work can continue without First Tree Context.",
     "Do not edit provider cache, First Tree config, manifests, receipts, or journals by hand.",
     `Explain the blocker briefly. Only after the user asks to repair this exceptional state, run \`${command}\`.`,
-    `After repair, run \`${channelConfig.binName} context status --provider ${provider}\`; manually activate First Tree Context if the current session still needs it.`,
+    provider === "claude-code"
+      ? `After repair, run \`${channelConfig.binName} context status --provider ${provider}\`, then start a new Claude session.`
+      : `After repair, run \`${channelConfig.binName} context status --provider ${provider}\`; manually activate First Tree Context if the current session still needs it.`,
   ].join("\n");
 }
 

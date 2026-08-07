@@ -82,7 +82,6 @@ export function inspectContextIntegrationRuntime(
       release,
       driver.provider,
       install?.materializedInvocation,
-      install?.adoptionGeneration,
     )) {
       if (!issues.includes(issue)) issues.push(issue);
     }

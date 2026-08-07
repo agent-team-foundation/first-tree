@@ -5,15 +5,21 @@ import type { CommandContext } from "../commands/types.js";
 const mocks = vi.hoisted(() => ({
   hook: vi.fn(),
   issueSync: vi.fn(),
+  knownCompatibleSession: vi.fn(),
   readInstall: vi.fn(),
   resolveRelease: vi.fn(),
   assertPayloadHealthy: vi.fn(),
+  consumeNextSession: vi.fn(),
+  resolveProject: vi.fn(),
+  activateExternal: vi.fn(),
+  renderResponse: vi.fn(),
 }));
 
 vi.mock("../core/output.js", () => ({ print: { hook: mocks.hook } }));
 vi.mock("../core/channel.js", () => ({ channelConfig: { channel: "dev" } }));
 vi.mock("../core/context-integration/adapter-sync.js", () => ({
   AdapterSyncRejectedError: class AdapterSyncRejectedError extends Error {},
+  hasKnownCompatibleContextAdapterSession: mocks.knownCompatibleSession,
   issueAdapterSyncAction: mocks.issueSync,
 }));
 vi.mock("../core/context-integration/manifest.js", () => ({
@@ -24,6 +30,16 @@ vi.mock("../core/context-integration/release.js", () => ({
 }));
 vi.mock("../core/context-integration/adapter-payload-health.js", () => ({
   assertContextAdapterPayloadHealthy: mocks.assertPayloadHealthy,
+}));
+vi.mock("../core/context-integration/adapter-observation.js", () => ({
+  consumeContextAdapterNextSessionObligation: mocks.consumeNextSession,
+}));
+vi.mock("../core/context-integration/client-preflight.js", () => ({
+  resolveSessionContextProject: mocks.resolveProject,
+}));
+vi.mock("../core/context-integration/activation.js", () => ({
+  activateExternalContext: mocks.activateExternal,
+  renderProviderSessionStartResponse: mocks.renderResponse,
 }));
 
 import { runContextActivate } from "../commands/context/activate.js";
@@ -40,6 +56,7 @@ describe("context activate command", () => {
     vi.clearAllMocks();
     vi.stubEnv("FIRST_TREE_AGENT_ID", "");
     vi.stubEnv("FIRST_TREE_CHAT_ID", "");
+    vi.stubEnv("FIRST_TREE_SERVER_URL", "https://first-tree.example");
     mocks.readInstall.mockReturnValue({
       accountClientId: "client_1234abcd",
       channel: "dev",
@@ -55,6 +72,10 @@ describe("context activate command", () => {
       command: "first-tree-dev --json context adapter-sync --provider codex --challenge opaque",
     });
     mocks.assertPayloadHealthy.mockReturnValue(undefined);
+    mocks.knownCompatibleSession.mockReturnValue(false);
+    mocks.resolveProject.mockReturnValue({ kind: "pathless", project: { kind: "pathless" } });
+    mocks.activateExternal.mockResolvedValue({ outcome: "connected" });
+    mocks.renderResponse.mockReturnValue({ continue: true, systemMessage: "connected" });
   });
 
   afterEach(() => {
@@ -163,5 +184,74 @@ describe("context activate command", () => {
     const response = mocks.hook.mock.calls[0]?.[0];
     expect(response.systemMessage).toContain("needs attention");
     expect(response.hookSpecificOutput.additionalContext).toContain("context repair");
+  });
+
+  it("consumes the Claude next-session marker before automatic routing", async () => {
+    mocks.readInstall.mockReturnValue({
+      accountClientId: "client_1234abcd",
+      channel: "dev",
+      loaderProtocolVersion: 1,
+      adapterVersion: "1.0.2",
+      adapterDigest: "sha256:current",
+    });
+    mocks.resolveRelease.mockReturnValue({
+      manifest: {
+        providers: { "claude-code": { adapterVersion: "1.0.2", adapterDigest: "sha256:current" } },
+      },
+    });
+
+    await runContextActivate(context({ provider: "claude-code", adapterDigest: "sha256:current" }), {
+      readHookInput: () => ({ session_id: "session-new", cwd: "/work", source: "startup" }),
+    });
+
+    expect(mocks.consumeNextSession).toHaveBeenCalledWith({
+      provider: "claude-code",
+      adapterDigest: "sha256:current",
+      sessionStartSource: "startup",
+    });
+    expect(mocks.resolveProject).toHaveBeenCalledAfter(mocks.consumeNextSession);
+    expect(mocks.activateExternal).toHaveBeenCalledOnce();
+    expect(mocks.hook).toHaveBeenCalledWith({ continue: true, systemMessage: "connected" });
+  });
+
+  it.each([
+    "resume",
+    "clear",
+    "compact",
+  ])("keeps an upgraded Claude %s lifecycle event on its session-bound compatible adapter", async (source) => {
+    mocks.readInstall.mockReturnValue({
+      accountClientId: "client_1234abcd",
+      channel: "dev",
+      loaderProtocolVersion: 1,
+      adapterVersion: "1.0.2",
+      adapterDigest: "sha256:current",
+    });
+    mocks.resolveRelease.mockReturnValue({
+      manifest: {
+        providers: { "claude-code": { adapterVersion: "1.0.2", adapterDigest: "sha256:current" } },
+      },
+    });
+    mocks.knownCompatibleSession.mockReturnValue(true);
+
+    await runContextActivate(context({ provider: "claude-code", adapterDigest: "sha256:old" }), {
+      readHookInput: () => ({ session_id: "session-existing", cwd: "/work", source }),
+    });
+
+    expect(mocks.knownCompatibleSession).toHaveBeenCalledWith(
+      {
+        provider: "claude-code",
+        sessionId: "session-existing",
+        suppliedAdapterDigest: "sha256:old",
+      },
+      expect.objectContaining({ driver: expect.anything() }),
+    );
+    expect(mocks.issueSync).not.toHaveBeenCalled();
+    expect(mocks.consumeNextSession).toHaveBeenCalledWith({
+      provider: "claude-code",
+      adapterDigest: "sha256:old",
+      sessionStartSource: source,
+    });
+    expect(mocks.activateExternal).toHaveBeenCalledOnce();
+    expect(JSON.stringify(mocks.hook.mock.calls[0]?.[0])).not.toContain("context repair");
   });
 });

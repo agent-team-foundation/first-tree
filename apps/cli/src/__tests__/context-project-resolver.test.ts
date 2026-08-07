@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   classifyCodexManagedWorktreePath,
   classifyCodexProjectlessPath,
@@ -10,6 +10,15 @@ import {
   resolveProviderProject,
   resolveSessionContextProject,
 } from "../core/context-integration/client-preflight.js";
+
+/**
+ * A recording canonicalization seam, so a test can assert exactly which paths
+ * the classifier touches. Resolving each path to itself keeps the synthetic
+ * (non-existent) roots below comparable without going near the filesystem.
+ */
+function recordingRealpath() {
+  return vi.fn((path: string) => path);
+}
 
 describe("Context project resolver", () => {
   it.each([
@@ -139,6 +148,40 @@ describe("Context project resolver", () => {
     ).toMatchObject({ kind: "pathless", source: "codex_documents_v1" });
   });
 
+  // On macOS `~/Documents` sits behind a TCC prompt, so classifying an ordinary
+  // project must not touch it. The base is only canonicalized when the caller's
+  // original cwd is already lexically inside it (a redirected base, above).
+  it("never canonicalizes the Documents base for a cwd outside it", () => {
+    const realpath = recordingRealpath();
+    const home = "/Users/alice";
+
+    expect(
+      classifyCodexProjectlessPath(
+        "/Users/alice/code/app",
+        {},
+        { platform: "darwin", home, realpath, rawCwd: "/Users/alice/code/app" },
+      ),
+    ).toBe(false);
+    expect(realpath).not.toHaveBeenCalled();
+
+    expect(
+      classifyCodexProjectlessPath(
+        "/Users/alice/Documents/Codex/2026-07-30/scratch",
+        {},
+        { platform: "darwin", home, realpath, rawCwd: "/Users/alice/Documents/Codex/2026-07-30/scratch" },
+      ),
+    ).toBe(true);
+    expect(realpath).toHaveBeenCalledWith("/Users/alice/Documents/Codex");
+  });
+
+  it("still canonicalizes the base when the original cwd is unknown", () => {
+    const realpath = recordingRealpath();
+    expect(
+      classifyCodexProjectlessPath("/Users/alice/code/app", {}, { platform: "darwin", home: "/Users/alice", realpath }),
+    ).toBe(false);
+    expect(realpath).toHaveBeenCalledWith("/Users/alice/Documents/Codex");
+  });
+
   it("accepts only readable directories as path projects", () => {
     const root = mkdtempSync(join(tmpdir(), "codex-project-directory-"));
     const directory = join(root, "empty-project");
@@ -220,6 +263,33 @@ describe("Context project resolver", () => {
         }),
       ).toMatchObject({ project: { kind: "pathless" }, directoryAvailable: false });
     });
+  });
+
+  it("routes Claude sessions without a stable project directory as pathless", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "claude-session-cwd-"));
+    expect(resolveProviderProject("claude-code", { cwd }, {})).toMatchObject({
+      kind: "pathless",
+      project: { kind: "pathless" },
+      source: "claude_project_dir_unavailable",
+    });
+    expect(resolveProviderProject("claude-code", { cwd }, { CLAUDE_PROJECT_DIR: join(cwd, "missing") })).toMatchObject({
+      kind: "pathless",
+      source: "claude_project_dir_unavailable",
+    });
+  });
+
+  it("keeps a Claude session pathless when CLAUDE_PROJECT_DIR appears after startup", () => {
+    const pluginData = mkdtempSync(join(tmpdir(), "claude-pathless-cache-"));
+    const projectRoot = mkdtempSync(join(tmpdir(), "claude-late-project-"));
+    const firstEnvironment = { PLUGIN_DATA: pluginData };
+    const laterEnvironment = { PLUGIN_DATA: pluginData, CLAUDE_PROJECT_DIR: projectRoot };
+
+    expect(
+      resolveSessionContextProject("claude-code", { sessionId: "claude-pathless-session" }, firstEnvironment),
+    ).toMatchObject({ kind: "pathless", source: "claude_project_dir_unavailable" });
+    expect(
+      resolveSessionContextProject("claude-code", { sessionId: "claude-pathless-session" }, laterEnvironment),
+    ).toMatchObject({ kind: "pathless", source: "claude_project_dir_unavailable" });
   });
 
   it("uses valid Claude project roots and preserves an explicit setup root", () => {

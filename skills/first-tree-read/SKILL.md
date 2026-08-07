@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-version: 0.6.2
+version: 0.8.0
 description: Read the applicable Context Tree before acting. In BYO sessions, route only among locally authorized Teams by reading each exact root SCOPE.md before selecting one task snapshot; in managed workspaces, use the bound Tree. Do not use for a Context Tree PR/MR review or an explicit broad audit of stored tree content.
 ---
 
@@ -240,16 +240,20 @@ or a separate receipt message.
 Use the same visible note for every consumer:
 
 - In managed First Tree Chat, append it to the body of the same final
-  `chat send` that carries the affected choice. If the Tree exposes an
-  unresolved conflict and the task correctly ends with a blocking `chat ask`,
-  append it to that question body instead. Do not pass `contextDecision`
+  `chat send` that carries the affected choice. Do not pass `contextDecision`
   metadata.
 - In BYO sessions, append it to the authoring coding agent's native final
   response.
 
+Never put the note in a blocking `chat ask`. A question's body must stay
+decision-self-sufficient: the reader is being asked to choose, and an
+attribution footnote competes with the choice instead of serving it. When the
+task correctly ends with a blocking question, state any Tree constraint that
+bears on the decision as ordinary prose inside the question and append no note.
+
 Never add the note to progress messages, status updates, or a second message.
 Keep the outcome first and place the note at the very end of the authored final
-response or blocking question.
+response.
 
 Choose exactly one effect in this precedence order, then show its human label:
 
@@ -281,20 +285,32 @@ meaning. Never expose the enum key.
 Leave one blank line between the preceding answer and the note. Write the note
 as one Markdown blockquote with exactly three **logical Markdown lines** and
 information levels: what the note explains, the effect plus one objective
-sentence naming the concrete impact, and the inspectable source. Put the fixed
-effect label at the start of the middle line and keep the colon inside the bold
-text. In English, use a half-width colon followed by one space, for example
-bold `Options narrowed:`. In Chinese, use a full-width colon with no following
-space, for example bold `收窄可选范围：`. Natural wrapping at narrow display
-widths is expected; never truncate or weaken the impact or source merely to
+sentence naming the concrete impact, and the inspectable source.
+
+Bold the effect label and nothing else. The first and third lines carry the
+same fixed wording in every note, so emphasising them spends the only weight
+Markdown reliably gives us on text that never changes, and three bold lines
+leave the reader no entry point. The effect label is the one part that differs
+per note and answers what happened, and the source line's information is the
+link, which already has its own affordance.
+
+Put the fixed effect label at the start of the middle line.
+In English, keep the colon inside the bold text and follow it with one space,
+for example bold `Options narrowed:`.
+In Chinese, put the full-width colon immediately after the bold text with no
+space before the sentence, for example `**收窄可选范围**：`. The Chinese colon
+sits outside the bold because Markdown cannot close `**` when the closing
+delimiter is preceded by punctuation and followed by a CJK character, so the
+colon-inside form renders as literal asterisks.
+Natural wrapping at narrow display widths is expected; never truncate or weaken the impact or source merely to
 keep three physical display lines. End the first two logical lines with a
 backslash so Markdown renders a portable hard line break without trailing
 whitespace; do not use HTML. For example:
 
 ```markdown
-> **How Context Tree affected this work**\
+> How Context Tree affected this work\
 > **Options narrowed:** The organization-isolation rule ruled out a global shared index.\
-> **Context Tree source:** [Organization isolation](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md)
+> Context Tree source: [Organization isolation](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md)
 ```
 
 Keep the middle sentence concrete and task-specific. Name the Tree decision or
@@ -310,16 +326,16 @@ Context Tree...". Keep it to one sentence and roughly 160 English characters or
 For an unresolved conflict in a Chinese response, the complete note looks like:
 
 ```markdown
-> **Context Tree 如何影响本次工作**\
-> **发现约束冲突：**固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\
-> **Context Tree 来源：**[发布安全门槛](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/operations/release/safety-gates.md)
+> Context Tree 如何影响本次工作\
+> **发现约束冲突**：固定发布日期与发布前必须完成安全审计的规则无法同时满足，取舍仍待决定。\
+> Context Tree 来源：[发布安全门槛](https://github.com/example/context-tree/blob/0123456789abcdef0123456789abcdef01234567/operations/release/safety-gates.md)
 ```
 
-Show one to three sources on the final line. In English, use bold
-`Context Tree source:` for one and bold `Context Tree sources:` for more than
-one. In Chinese, use bold `Context Tree 来源：` for either count, with no space
-before the first link. In English, follow the label with one space. Separate
-multiple Markdown links with ` · ` in either language.
+Show one to three sources on the final line. The source label is plain text,
+never bold. In English, use `Context Tree source:` for one and
+`Context Tree sources:` for more than one, followed by one space. In Chinese,
+use `Context Tree 来源` followed by a full-width colon and no space before the
+first link. Separate multiple Markdown links with ` · ` in either language.
 Build each readable label from the node's frontmatter title plus the relevant
 heading when that adds meaning, for example `Rollout Policy · Expansion gates`.
 For a root `NODE.md`, use the root title or the relevant heading — never display
@@ -383,7 +399,7 @@ Keep the user-facing result concise:
   helps the user verify which task snapshot governed the answer
 - when the strict decision-influence test passes, append the same compact
   visible note to the authored final response for managed and BYO consumers;
-  for an unresolved conflict, append it to the blocking question body
+  a task ending in a blocking question carries no note
 - avoid restating every node; carry forward only what changes how you act
 
 Never modify tree files with this skill.

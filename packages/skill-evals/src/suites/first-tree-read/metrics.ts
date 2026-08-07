@@ -178,11 +178,13 @@ function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservat
     const lines = text.replace(/\r/gu, "").split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const firstLine = lines[index] ?? "";
-      const titleMatch = /^> \*\*(How Context Tree affected this work|Context Tree 如何影响本次工作)\*\*\\$/u.exec(
-        firstLine,
-      );
+      // Only the effect label is bold: the first and third lines carry the same
+      // fixed wording in every note, so the single bold span stays the reader's
+      // entry point. A bolded first line is the superseded scaffold and is
+      // rejected rather than silently accepted.
+      const titleMatch = /^> (How Context Tree affected this work|Context Tree 如何影响本次工作)\\$/u.exec(firstLine);
       const currentTitleScaffoldMatch =
-        /^> \*\*(How Context Tree affected this work|Context Tree 如何影响本次工作)\*\*\\?\s*$/u.exec(firstLine);
+        /^> (How Context Tree affected this work|Context Tree 如何影响本次工作)\\?\s*$/u.exec(firstLine);
       const legacyTitleMatch = /^> \*\*(Context Tree impact|Context Tree 影响)(?: · ([^*]+))?\*\*\\?\s*$/u.exec(
         firstLine,
       );
@@ -197,17 +199,16 @@ function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservat
       const thirdLine = lines[index + 2] ?? "";
       const effectMatch =
         language === "zh"
-          ? /^> \*\*([^*]+)：\*\*([^\s].*)\\$/u.exec(secondLine)
+          ? /^> \*\*([^*]+)\*\*：([^\s].*)\\$/u.exec(secondLine)
           : /^> \*\*([^*]+):\*\* (.+)\\$/u.exec(secondLine);
-      const sourcePrefix =
-        language === "zh" ? /^> \*\*Context Tree 来源：\*\*/u : /^> \*\*Context Tree (source|sources):\*\* /u;
+      const sourcePrefix = language === "zh" ? /^> Context Tree 来源：/u : /^> Context Tree (source|sources): /u;
       const sourcePrefixMatch = sourcePrefix.exec(thirdLine);
       const markdownLinks = [...thirdLine.matchAll(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu)];
       const exactLinks = markdownLinks.filter((match) => parseExactCredentialFreeSourceLink(match[2] ?? "") !== null);
       const expectedEnglishSource = markdownLinks.length === 1 ? "source" : "sources";
-      const sourceLabel = language === "zh" ? "Context Tree 来源：" : `Context Tree ${expectedEnglishSource}:`;
-      const sourceSeparator = language === "zh" ? "" : " ";
-      const expectedSourceLine = `> **${sourceLabel}**${sourceSeparator}${markdownLinks.map((match) => match[0]).join(" · ")}`;
+      const sourceLabel = language === "zh" ? "Context Tree 来源" : `Context Tree ${expectedEnglishSource}:`;
+      const sourceSeparator = language === "zh" ? "：" : " ";
+      const expectedSourceLine = `> ${sourceLabel}${sourceSeparator}${markdownLinks.map((match) => match[0]).join(" · ")}`;
       const sourceScaffoldingOk =
         titleMatch !== null &&
         sourcePrefixMatch !== null &&
@@ -285,7 +286,11 @@ function includesAny(value: string, alternatives: readonly string[]): boolean {
 function deriveImpactNoteMetrics(
   texts: readonly string[],
   expectation: ImpactNoteExpectation,
-  options: { contextDecisionMetadataPresent: boolean; selectedExactCommit: string | null },
+  options: {
+    contextDecisionMetadataPresent: boolean;
+    selectedExactCommit: string | null;
+    visibleOutputKinds?: readonly (ManagedTransport | null)[];
+  },
 ) {
   const observations = parseImpactNotes(texts);
   const observation = observations[0] ?? null;
@@ -294,6 +299,9 @@ function deriveImpactNoteMetrics(
     !options.contextDecisionMetadataPresent &&
     !/contextDecision|["']effect["']\s*:|["']evidence["']\s*:/u.test(allText);
   const atFinalEnd = observation?.atEnd === true && observation.textIndex === texts.length - 1;
+  // A blocking question asks the reader to choose; an attribution footnote there
+  // competes with the choice instead of serving it.
+  const noteOutsideBlockingAsk = observations.every((item) => options.visibleOutputKinds?.[item.textIndex] !== "ask");
   const sourceAuthorityOk = sourceAuthorityMatches(observation, expectation, options.selectedExactCommit);
   const visibleUrlsSafe = visibleUrlsCredentialFree(texts);
   const summaryConceptsOk =
@@ -314,7 +322,7 @@ function deriveImpactNoteMetrics(
     expectation.mode === "present" ? EFFECT_LABELS[expectation.language][expectation.effect] : null;
   const behaviorOk =
     expectation.mode === "absent"
-      ? observations.length === 0 && metadataFree
+      ? observations.length === 0 && metadataFree && noteOutsideBlockingAsk
       : observations.length === 1 &&
         observation !== null &&
         atFinalEnd &&
@@ -323,6 +331,7 @@ function deriveImpactNoteMetrics(
         observation.sourceScaffoldingOk &&
         observation.summaryObjectiveOk &&
         observation.exactLinksOk &&
+        noteOutsideBlockingAsk &&
         sourceAuthorityOk &&
         observation.language === expectation.language &&
         observation.effectLabel === expectedEffectLabel &&
@@ -343,6 +352,7 @@ function deriveImpactNoteMetrics(
     impactNoteLanguage: observation?.language ?? null,
     impactNoteLogicalLinesOk: observation?.logicalLinesOk ?? false,
     impactNoteMetadataFree: metadataFree,
+    impactNoteOutsideBlockingAsk: noteOutsideBlockingAsk,
     impactNoteSourceAuthorityOk: sourceAuthorityOk,
     impactNoteSourceCount: observation?.sourceLabels.length ?? 0,
     impactNoteSourceLabels: observation?.sourceLabels ?? [],
@@ -684,6 +694,17 @@ export function deriveMetrics(
     authoringCalls.length > 0 || progressCalls.length > 0
       ? [...modelOutputTexts, ...successfulProgressCalls.map((call) => call.body), ...authoredOutputTexts]
       : modelOutputTexts;
+  // Index-aligned with `visibleOutputTexts` so the grader can tell which surface
+  // a note was found on. A blocking question must stay decision-self-sufficient,
+  // so a note delivered in a `chat ask` body fails regardless of its shape.
+  const visibleOutputKinds: readonly (ManagedTransport | null)[] =
+    authoringCalls.length > 0 || progressCalls.length > 0
+      ? [
+          ...modelOutputTexts.map(() => null),
+          ...successfulProgressCalls.map(() => null),
+          ...successfulAuthoringCalls.map((call) => chatAuthoringKind(call.argv)),
+        ]
+      : modelOutputTexts.map(() => null);
   const contextDecisionMetadataPresent = successfulAuthoringCalls.some((call) => call.contextDecisionMetadataPresent);
   const facts = uniqueStrings(expectedFacts);
   const factHits = expectedFactHits(factOutputTexts.join("\n"), facts);
@@ -730,6 +751,7 @@ export function deriveMetrics(
   const impactNoteMetrics = deriveImpactNoteMetrics(visibleOutputTexts, impactNoteExpectation, {
     contextDecisionMetadataPresent,
     selectedExactCommit,
+    visibleOutputKinds,
   });
 
   return {
@@ -751,6 +773,8 @@ export function deriveMetrics(
     legacyReadActivationCalls,
     modelFirstTreeCommandsOk,
     managedFinalTransportOk,
+    managedFinalTransportKind: finalAuthoringKind,
+    managedTransportExpected: managedTransportExpectation,
     readActivationCalls,
     readActivationSucceeded,
     readRouteCalls,

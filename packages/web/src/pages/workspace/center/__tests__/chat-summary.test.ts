@@ -172,7 +172,7 @@ describe("ChatSummary", () => {
     overlayEl.remove();
   });
 
-  it("renders a current-state headline and quieter supporting copy on a readable rail", async () => {
+  it("renders a current-state headline and quieter supporting copy across the full card width", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     const { container, overlayEl, root } = await renderSummary(scrollEl, {
@@ -195,13 +195,30 @@ describe("ChatSummary", () => {
     expect(lead?.textContent).toContain("The current result is ready for readers.");
     expect(lead?.className).toContain("text-subtitle");
     expect(lead?.style.fontSize).toBe("var(--text-subtitle)");
+    // The lead reads as the lead through size and colour only — never weight. A
+    // majority of descriptions are a single line, where a bolded lead is the
+    // whole summary and the emphasis carries no information.
+    expect(lead?.style.fontWeight).toBe("var(--text-body--font-weight)");
+    // Spacing below the lead is CSS-driven so it can collapse when the lead is
+    // the last thing in the summary; an inline margin could not.
+    expect(lead?.style.marginBottom).toBe("");
+    // Authored emphasis is untouched — only the promotion styling drops weight.
     expect(lead?.querySelector("strong")?.textContent).toBe("current result");
     expect(paragraphs?.[1]?.textContent).toContain("Supporting context is secondary.");
     expect(paragraphs?.[2]?.textContent).toContain("Next: Observe usage.");
     expect(summaryDocument?.style.color).toBe("var(--fg-2)");
-    expect(card?.getAttribute("style")).toContain("var(--chat-summary-readable-rail)");
-    expect(card?.getAttribute("style")).toContain("max-width");
-    // Card is the constrained surface — no nested full-bleed wrapper.
+    // The card spans its overlay container edge to edge, so it lines up with the
+    // chat header and the collapsed bar above it instead of carrying a measure of
+    // its own. Verified as real geometry in the browser; asserted here as the
+    // stretch that produces it.
+    // Parsed rather than compared to a literal: the design-token guard forbids
+    // raw pixel strings anywhere under `src`, tests included.
+    expect(Number.parseFloat(card?.style.left ?? "")).toBe(0);
+    expect(Number.parseFloat(card?.style.right ?? "")).toBe(0);
+    expect(card?.style.maxWidth).toBe("");
+    expect(card?.style.width).toBe("");
+    expect(card?.getAttribute("style")).not.toContain("chat-summary-readable-rail");
+    // No nested wrapper between the card and its rendered document.
     expect(card?.firstElementChild?.getAttribute("data-summary-part")).toBe("document");
 
     await act(async () => root.unmount());
@@ -263,6 +280,33 @@ describe("ChatSummary", () => {
     expect(leads[0]?.textContent).toBe("首行是唯一 headline。");
     expect(leads[0]?.textContent).not.toContain("第二行");
     expect(overlayEl.querySelector("p")?.getAttribute("data-summary-part")).toBeNull();
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
+  // Most descriptions are a single physical line. There the lead IS the whole
+  // summary, so it must not be emphasised against itself and must not reserve
+  // separation for supporting copy that does not exist.
+  it("does not emphasise or pad a single-line summary against itself", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      description: "正在核验成员规模、安装完成情况与实际使用情况，口径按 T+1 截止。",
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+
+    const summaryDocument = overlayEl.querySelector<HTMLElement>('[data-summary-part="document"]');
+    const lead = summaryDocument?.querySelector<HTMLElement>('[data-summary-part="lead"]');
+    expect(summaryDocument?.querySelectorAll("p")).toHaveLength(1);
+    expect(lead?.textContent).toBe("正在核验成员规模、安装完成情况与实际使用情况，口径按 T+1 截止。");
+    expect(lead?.style.fontWeight).toBe("var(--text-body--font-weight)");
+    // The lead is its paragraph's last child here, which is what lets the CSS
+    // `:last-child` rule collapse the separation below it.
+    expect(lead?.nextSibling).toBeNull();
+    expect(lead?.style.marginBottom).toBe("");
 
     await act(async () => root.unmount());
     container.remove();

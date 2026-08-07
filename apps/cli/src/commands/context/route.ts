@@ -63,7 +63,10 @@ export async function runContextRoute(context: CommandContext): Promise<void> {
   } catch (error) {
     if (error instanceof ContextPluginReloadRequiredError) {
       print.fail(error.code, error.message, 2, {
-        nextActions: ["Reload the First Tree Context Plugin, then retry the same route command."],
+        nextActions:
+          provider === "claude-code"
+            ? ["Start a new Claude session, then retry the same route command."]
+            : ["Repair the Codex Context Plugin, then retry the same route command."],
       });
     }
     throw error;

@@ -254,12 +254,19 @@ function joinSoftBreakSegments(segments: ReactNode[][]): ReactNode {
 const LEAD_SPAN_STYLE: CSSProperties = {
   display: "block",
   color: "var(--fg)",
-  marginBottom: "var(--sp-3)",
   // Inline measure beats parent `[&_p]:text-body` inheritance/specificity on <p>.
   fontSize: "var(--text-subtitle)",
-  fontWeight: "var(--text-subtitle--font-weight)" as CSSProperties["fontWeight"],
+  // Body weight, deliberately: the lead separates itself through size and colour,
+  // not emphasis. Most descriptions are a single physical line, where the lead is
+  // the entire summary — bolding it emphasises the text against nothing and just
+  // reads as a heavy block. Authored `**bold**` inside the description is
+  // untouched.
+  fontWeight: "var(--text-body--font-weight)" as CSSProperties["fontWeight"],
   lineHeight: "var(--text-subtitle--line-height)",
   letterSpacing: "var(--text-subtitle--letter-spacing)",
+  // Separation below the lead lives in index.css so it can collapse when the lead
+  // is the last thing in the summary; an inline margin would outrank that rule
+  // and leave dead space under a single-line brief.
 };
 
 function LeadSpan({ children }: { children: ReactNode }) {
@@ -657,11 +664,13 @@ export function ChatSummary({
                 position: "absolute",
                 top: 0,
                 left: 0,
-                // Constrain the raised card itself (not only inner copy) so the
-                // surface and text share one readable edge. `width: 100%` keeps
-                // narrow message areas responsive under the rem max.
-                width: "100%",
-                maxWidth: "var(--chat-summary-readable-rail)",
+                // Stretched edge to edge: the card takes the width of the chat
+                // header and the collapsed bar it drops from, so the expanded and
+                // collapsed forms of the same surface line up. The copy inherits
+                // that width — deliberately NO measure of its own, which would
+                // both wrap the text early and leave the card wider than its own
+                // content.
+                right: 0,
                 background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-raised)",
                 border: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border)"}`,
                 borderRadius: "var(--radius-dialog)",

@@ -6,14 +6,7 @@ import {
   readActiveContextAccountClientId,
   withAccountStateMutationLockAsync,
 } from "../../core/context-integration/account-state-guard.js";
-import {
-  ContextReloadReceiptError,
-  consumeContextAdapterReloadReceipt,
-  consumeContextAdapterReloadRequiredMarker,
-  hasContextAdapterReloadRequiredMarker,
-  hasPendingContextAdapterReload,
-  registerPendingContextAdapterReload,
-} from "../../core/context-integration/adapter-observation.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { inspectContextSetupLocation } from "../../core/context-integration/client-preflight.js";
 import {
   assertContextGrantStoreFingerprint,
@@ -44,7 +37,6 @@ type EnableOptions = {
   yes?: boolean;
   projectRoot?: string;
   pathless?: boolean;
-  reloadReceipt?: string;
 };
 
 const setupPlanAccountClientId = Symbol("setupPlanAccountClientId");
@@ -80,7 +72,6 @@ function configure(command: Command): void {
     .option("--plan-id <plan-id>", "exact plan id returned by --plan")
     .option("--project-root <directory>", "explicit provider directory")
     .option("--pathless", "provider session without a usable directory")
-    .option("--reload-receipt <receipt>", "opaque Claude session-loaded receipt")
     .option("--yes", "accept the selected activation change");
 }
 
@@ -132,17 +123,10 @@ export async function runContextEnable(context: CommandContext): Promise<void> {
   const result =
     activationScope.kind === "session"
       ? await applySessionOnly(provider, plan, activationScope, acceptedPlan.beforeFingerprint)
-      : await applyPersistent(
-          provider,
-          plan,
-          activationScope,
-          {
-            beforeFingerprint: acceptedPlan.beforeFingerprint,
-            afterFingerprint: requireAfterFingerprint(expectedAfterFingerprint),
-          },
-          acceptedPlan.planChallenge,
-          options.reloadReceipt,
-        );
+      : await applyPersistent(provider, plan, activationScope, {
+          beforeFingerprint: acceptedPlan.beforeFingerprint,
+          afterFingerprint: requireAfterFingerprint(expectedAfterFingerprint),
+        });
   if (context.options.json) {
     print.result(result);
     return;
@@ -320,8 +304,6 @@ async function applyPersistent(
   plan: SetupPlan,
   activationScope: Exclude<ContextActivationScope, { kind: "session" }>,
   expectedStore: { beforeFingerprint: string; afterFingerprint: string },
-  planChallenge: string,
-  reloadReceipt: string | undefined,
 ) {
   return withAccountStateMutationLockAsync(async () => {
     assertPlannedAccount(plan);
@@ -333,7 +315,8 @@ async function applyPersistent(
       activationScope,
     };
     enableContextIntegrationOperation(driver, installPlan, grant, expectedStore, plan[setupPlanAccountClientId], {
-      reloadObligationKind: provider === "claude-code" && installPlan.operation !== "unchanged" ? "setup" : undefined,
+      nextSessionObligationKind:
+        provider === "claude-code" && installPlan.operation !== "unchanged" ? "setup" : undefined,
     });
     const health = inspectContextIntegrationRuntime(driver);
     const grantReady = readContextIntegrationConfig().grants.some(
@@ -361,51 +344,13 @@ async function applyPersistent(
     }));
     assertPlannedAccount(plan);
     const pluginMissing = !health.healthy;
-    let claudeReloadRequired = false;
-    if (provider === "claude-code" && health.release !== null) {
-      const durableSetupMarker =
-        installPlan.operation !== "unchanged" ||
-        hasContextAdapterReloadRequiredMarker(health.release.manifest, "setup");
-      if (durableSetupMarker) {
-        registerPendingContextAdapterReload(planChallenge, health.release.manifest);
-        // Pending is durable before the setup marker is removed. A
-        // crash can therefore leave duplicate obligations, never no
-        // obligation. The next exact apply safely repeats this conversion.
-        consumeContextAdapterReloadRequiredMarker(health.release.manifest, "setup");
-        claudeReloadRequired = true;
-      } else if (hasPendingContextAdapterReload(planChallenge, health.release.manifest)) {
-        if (reloadReceipt) {
-          try {
-            consumeContextAdapterReloadReceipt({
-              planChallenge,
-              receipt: reloadReceipt,
-              release: health.release.manifest,
-            });
-          } catch (error) {
-            if (error instanceof ContextReloadReceiptError) {
-              print.fail(error.code, error.message, 2, {
-                nextActions: [
-                  "Run /reload-plugins, reply Continue in this Claude session, then retry the original exact apply.",
-                ],
-              });
-            }
-            throw error;
-          }
-        } else {
-          claudeReloadRequired = true;
-        }
-      } else if (reloadReceipt) {
-        print.fail(
-          "CONTEXT_RELOAD_RECEIPT_INVALID",
-          "This Claude reload proof does not belong to a pending exact setup plan.",
-          2,
-        );
-      }
-    }
+    const claudeNextSessionRequired =
+      provider === "claude-code" && health.release !== null
+        ? inspectContextAdapterNextSessionObligation() !== null
+        : false;
     const authorityMissing = finalActivation.outcome !== "connected";
     const missingLayers = [
       ...(pluginMissing ? health.issues.map((issue) => `Plugin: ${issue}`) : []),
-      ...(claudeReloadRequired ? ["Claude Code must reload and observe the thin Context Plugin."] : []),
       ...(grantReady ? [] : ["Activation grant was not found after apply."]),
       ...(hookInspectionUnavailable
         ? hook.issues.length > 0
@@ -419,7 +364,7 @@ async function applyPersistent(
       ...(authorityMissing ? [`Team authority: ${finalActivation.message}`] : []),
     ];
     let currentSessionHandoff: CurrentSessionHandoff | null = null;
-    if (missingLayers.length === 0 && health.probe.installedPath) {
+    if (missingLayers.length === 0 && health.probe.installedPath && !claudeNextSessionRequired) {
       currentSessionHandoff = buildCurrentSessionHandoff({
         provider,
         project: plan.location.project,
@@ -429,9 +374,13 @@ async function applyPersistent(
       });
     }
     assertPlannedAccount(plan);
-    const setupComplete = missingLayers.length === 0 && currentSessionHandoff !== null;
+    const setupComplete = missingLayers.length === 0 && (currentSessionHandoff !== null || claudeNextSessionRequired);
     const nextActions = setupComplete
-      ? ["Adopt the verified handoff in this session. Future sessions will load the neutral Team router automatically."]
+      ? [
+          claudeNextSessionRequired
+            ? "Start a new Claude session for persistent auto-activation. This setup does not activate Context in the current Claude session."
+            : "Adopt the verified handoff in this session. Future sessions will load the neutral Team router automatically.",
+        ]
       : [
           ...(pluginMissing ? ["Repair the reported Plugin payload/state, then rerun the exact apply command."] : []),
           ...(grantReady
@@ -441,11 +390,6 @@ async function applyPersistent(
               ]),
           ...(authorityMissing
             ? ["Restore the reported Team membership/binding authority, create a fresh plan, and ask the user again."]
-            : []),
-          ...(!pluginMissing && claudeReloadRequired
-            ? [
-                "Run /reload-plugins in Claude Code, reply Continue, then rerun the original exact apply with the opaque reload receipt supplied by the new Plugin.",
-              ]
             : []),
           ...(!pluginMissing && hookInspectionUnavailable
             ? ["Restore Codex Hook inspection/provider API availability, then rerun the exact apply command."]

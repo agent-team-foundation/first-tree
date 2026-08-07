@@ -18,7 +18,8 @@ substitute a `/preview/*` route or an operator's existing browser session.
 
 Switch between the chats from the conversation list and confirm that the selected topic, expanded Current state panel,
 freshness, and description all move together. The first physical line should be visibly scannable as the lead,
-supporting copy should be quieter and held to a readable card measure (~720–800px, not a full-bleed empty rail), and
+supporting copy should be quieter, the expanded card should span the same width as the chat header and the collapsed
+bar it drops from — with its copy following that width rather than wrapping at a measure of its own — and
 content from the previously selected chat must not remain. Collapse the panel and confirm its one-line result preview
 still identifies the selected chat while the supporting copy no longer covers the message stream. Include legacy
 Markdown such as a reference link or block-first content when the run is intended to assess compatibility as well as

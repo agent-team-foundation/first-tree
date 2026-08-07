@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -13,8 +12,8 @@ import { channelConfig } from "../channel.js";
 import { COMMAND_VERSION } from "../version.js";
 import { readActiveContextAccountClientId } from "./account-state-guard.js";
 import {
-  beginContextAdapterReloadObligation,
-  type ContextAdapterReloadObligationKind,
+  beginContextAdapterNextSessionObligation,
+  type ContextAdapterNextSessionObligationKind,
   clearContextAdapterObservation,
 } from "./adapter-observation.js";
 import { withContextIntegrationLock } from "./context-binding-store.js";
@@ -70,7 +69,6 @@ export function planContextIntegrationInstall(
     release,
     driver.provider,
     previous?.materializedInvocation,
-    previous?.adoptionGeneration,
   );
   const incomplete = readContextIntegrationInstallJournal();
   const operation =
@@ -92,7 +90,7 @@ export function planContextIntegrationInstall(
 export function installContextIntegration(
   driver: ContextIntegrationProviderDriver,
   plan: ContextIntegrationInstallPlan,
-  options: { reloadObligationKind?: ContextAdapterReloadObligationKind } = {},
+  options: { nextSessionObligationKind?: ContextAdapterNextSessionObligationKind } = {},
 ): {
   manifest: ContextIntegrationInstallManifest;
   probe: ProviderPluginProbe;
@@ -103,7 +101,7 @@ export function installContextIntegration(
 function installContextIntegrationLocked(
   driver: ContextIntegrationProviderDriver,
   plan: ContextIntegrationInstallPlan,
-  options: { reloadObligationKind?: ContextAdapterReloadObligationKind },
+  options: { nextSessionObligationKind?: ContextAdapterNextSessionObligationKind },
 ): {
   manifest: ContextIntegrationInstallManifest;
   probe: ProviderPluginProbe;
@@ -140,15 +138,13 @@ function installContextIntegrationLocked(
   let rollbackMarketplaceRoot: string | null = null;
   let providerMutationStarted = false;
   let marketplaceSourcePromoted = false;
-  let rollbackReloadObligation: (() => void) | null = null;
+  let rollbackNextSessionObligation: (() => void) | null = null;
   const providerReleaseRoot = join(plan.release.root, driver.provider);
-  const adoptionGeneration = driver.provider === "claude-code" ? randomBytes(24).toString("hex") : undefined;
   try {
-    if (driver.provider === "claude-code" && options.reloadObligationKind) {
-      rollbackReloadObligation = beginContextAdapterReloadObligation(
+    if (driver.provider === "claude-code" && options.nextSessionObligationKind) {
+      rollbackNextSessionObligation = beginContextAdapterNextSessionObligation(
         plan.release.manifest,
-        options.reloadObligationKind,
-        adoptionGeneration ?? "",
+        options.nextSessionObligationKind,
       );
     }
     rollbackMarketplaceRoot =
@@ -157,8 +153,6 @@ function installContextIntegrationLocked(
     const materializedInvocation = materializeContextPluginPayload(
       join(stagedMarketplaceRoot, "plugins", PLUGIN_NAME),
       plan.release.manifest.providers[driver.provider].adapterDigest,
-      undefined,
-      adoptionGeneration,
     );
     driver.validateMarketplace(stagedMarketplaceRoot);
     promoteMarketplaceSource(stagedMarketplaceRoot, stableMarketplaceRoot, previousMarketplaceSource);
@@ -175,7 +169,6 @@ function installContextIntegrationLocked(
       plan.release,
       driver.provider,
       materializedInvocation,
-      adoptionGeneration,
     );
     verifyProviderInstalledContextPlugin(probe, installedPayloadDigest);
     writeInstallJournal({ ...journal, phase: "provider_installed" });
@@ -193,14 +186,15 @@ function installContextIntegrationLocked(
       adapterDigest: plan.release.manifest.providers[driver.provider].adapterDigest,
       marketplaceName: plan.marketplaceName,
       pluginName: PLUGIN_NAME,
-      adoptionGeneration,
       materializedInvocation,
       materializedPayloadDigest: installedPayloadDigest,
       materializedMarketplaceDigest: contextPluginTreeDigest(stableMarketplaceRoot),
       installedAt: new Date().toISOString(),
     };
     writeContextIntegrationInstallManifest(manifest);
-    clearContextAdapterObservation(driver.provider);
+    clearContextAdapterObservation(driver.provider, {
+      includeNextSessionRequired: driver.provider === "claude-code" && !options.nextSessionObligationKind,
+    });
     removeInstallJournal();
     return { manifest, probe };
   } catch (error) {
@@ -246,7 +240,7 @@ function installContextIntegrationLocked(
         );
       }
     }
-    rollbackReloadObligation?.();
+    rollbackNextSessionObligation?.();
     throw error;
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -328,7 +322,10 @@ function uninstallContextIntegrationLocked(driver: ContextIntegrationProviderDri
     });
     rmSync(contextIntegrationMarketplaceSourcePath(driver.provider), { recursive: true, force: true });
     if (manifest) removeContextIntegrationInstallManifest(driver.provider);
-    clearContextAdapterObservation(driver.provider, { includeReloadRequired: true });
+    clearContextAdapterObservation(driver.provider, {
+      includeNextSessionRequired: true,
+      includeCompatibleSessions: true,
+    });
     removeInstallJournal();
   } catch (error) {
     writeInstallJournal({ ...journal, phase: "uninstall_failed" });

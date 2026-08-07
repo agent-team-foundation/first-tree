@@ -1248,8 +1248,10 @@ available for that location:
 
 `directory` is present only when setup has a stable canonical directory.
 Claude uses `CLAUDE_PROJECT_DIR` unless `--project-root` is explicit; it does
-not fall back to cwd when the variable is missing or invalid. Pathless sessions,
-Codex Documents scratch directories, and default managed worktrees under
+not fall back to cwd when the variable is missing or invalid. Missing or invalid
+Claude project directories become a pathless identity, which can match global
+activation but never directory activation. Pathless sessions, Codex Documents
+scratch directories, and default managed worktrees under
 `$CODEX_HOME/worktrees/<id>/<repo>` return only `global` and `session`. Codex
 temporary paths retain their canonical project identity in those commands.
 Custom Codex App worktree roots remain best-effort because the provider does
@@ -1270,10 +1272,14 @@ the shared Plugin and add one schema-v3 grant. Session-only verifies the
 release bundle, writes no grant, and returns only Read/Write loader entries plus a
 signed opaque candidate receipt.
 
-Successful apply returns `currentSessionHandoff` schema v3. It contains
+Successful session-only apply, and persistent apply when the adapter is already
+usable in the current provider session, returns `currentSessionHandoff` schema
+v3. It contains
 immutable provider/project identity, `consumerKind: byo`, activation scope,
 neutral standing routing context, and versioned exact-release loader commands.
-Persistent scope returns `first-tree`, `first-tree-read`, and
+Claude persistent setup that installs, migrates, or repairs the Plugin returns
+`currentSessionHandoff: null` while its next-session obligation is pending and
+instructs the user to start a new session. Other usable persistent scopes return `first-tree`, `first-tree-read`, and
 `first-tree-write`; session scope returns Read/Write only. Human mode prints
 the full usable JSON handoff.
 
@@ -1296,13 +1302,15 @@ For persistent Codex setup, Hook consent remains provider-owned: open
 `/hooks`, enable and Trust **First Tree Context → SessionStart**, return to the
 same conversation, and reply `continue`. The same agent reruns apply and
 adopts the handoff. Session-only installs no Hook, so it needs no Trust.
-Claude Code requires `/reload-plugins` after first thin-Plugin install, legacy
-full-Plugin migration, or adapter repair. Setup remains incomplete until the
-reloaded thin Plugin's `UserPromptSubmit` hook issues a session-bound opaque
-receipt and the same exact apply command consumes it. With no pending adoption
-obligation the hook is a pure no-op; it performs no provider probe, payload
-hash, receipt signing, or context injection. Later Core-only upgrades and
-additional Team grants require no reload or repeated Codex trust.
+Claude Code materializes deterministic thin-Plugin bytes for each
+`adapterVersion`. First install, legacy full-Plugin migration, and adapter repair
+leave a next-session obligation that only an exact repaired SessionStart can
+consume. Repeating repair for the same adapter version does not change the
+provider cache version or payload. The current session need not adopt the repair
+immediately; setup returns no current-session handoff, and persistent automatic
+routing starts in the next Claude session. Later
+Core-only upgrades and additional Team grants require no provider lifecycle
+action or repeated Codex trust.
 
 `context.yaml` schema v3 stores zero or more global/directory grants keyed by
 provider, Team and exact scope. A legacy v2/v1 file is atomically backed up,

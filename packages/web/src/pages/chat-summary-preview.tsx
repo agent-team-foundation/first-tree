@@ -18,9 +18,15 @@ const hoursAgo = (h: number): string => new Date(Date.now() - h * 3_600_000).toI
 
 const CURRENT_STATE = [
   "Chat Summary now leads with the **current result and user impact**.",
-  "Supporting context stays quieter inside a rem-sized card measure, so a wide Workspace does not leave empty half-width chrome.",
+  "Supporting context stays quieter and follows the card's own width, which matches the header and the collapsed bar above it.",
   "**Next:** Validate the same hierarchy in the live Workspace.",
 ].join("\n");
+
+// The most common real shape: one physical line, no supporting copy. The lead is
+// the whole summary here, so it must read as ordinary prose and must not reserve
+// separation below itself.
+const SINGLE_LINE =
+  "正在核验团队的成员规模、First Tree 安装完成情况与实际使用情况。口径按 Asia/Taipei T+1 截止，并将安装状态与使用行为分开统计。";
 
 const PLAIN = "Reviewing PR 1207 — server-side freshness fields landed; wiring the collapsed-bar first line next.";
 
@@ -30,8 +36,11 @@ const HEADING_FIRST = [
   "首个正文段落会被折叠行采用，这一句刻意写得很长，用来验证去掉 markdown 标记后仍以单行省略号截断、不撑高 chrome。",
 ].join("\n");
 
+// Stands in for a real Workspace centre column. The summary surfaces stretch to
+// this width, so the gallery shows the header, the collapsed bar, and the
+// expanded card sharing one edge.
 const PANEL: React.CSSProperties = {
-  width: "calc(var(--chat-summary-readable-rail) + var(--sp-95))",
+  width: "calc(var(--sp-95) * 3)",
   maxWidth: "100%",
   background: "var(--bg)",
   border: "var(--hairline) solid var(--border)",
@@ -134,6 +143,18 @@ export function ChatSummaryPreviewPage() {
           <Demo
             chatId="preview-unread"
             description={CURRENT_STATE}
+            descriptionUpdatedAt={hoursAgo(2)}
+            lastReadAt={null}
+          />
+        </Col>
+
+        <Col
+          label="Single-line brief (the common shape)"
+          note="lead is the whole summary — ordinary weight, no reserved gap below it"
+        >
+          <Demo
+            chatId="preview-single-line"
+            description={SINGLE_LINE}
             descriptionUpdatedAt={hoursAgo(2)}
             lastReadAt={null}
           />

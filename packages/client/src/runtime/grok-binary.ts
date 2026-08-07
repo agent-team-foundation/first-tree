@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { GROK_INSTALL_COMMAND, runtimeProviderLoginCommand } from "@first-tree/shared";
 import { wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 /**
  * Grok Build CLI binary resolution. Grok Build is EXTERNAL-ONLY: First Tree
@@ -317,6 +318,10 @@ function grokExecutableName(platform: NodeJS.Platform): string {
 }
 
 function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  // Every automatic source funnels through here, so this is the one place a
+  // candidate can be vetted before `stat` / `access` follows it into a
+  // TCC-protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);

@@ -987,10 +987,11 @@ function throwSwitchFailure(code: string, message: string): never {
 function clearAccountBoundContextReceipts(home: string): void {
   rmSync(join(home, "state", "context", "route-receipts"), { recursive: true, force: true });
   for (const provider of ["claude-code", "codex"]) {
-    for (const entry of ["adapter-sync", "reload-pending", "reload-consumed"]) {
+    for (const entry of ["adapter-sync", "compatible-sessions", "reload-pending", "reload-consumed"]) {
       rmSync(join(home, "state", "context", "providers", provider, entry), { recursive: true, force: true });
     }
     rmSync(join(home, "state", "context", "providers", provider, "reload-required.json"), { force: true });
+    rmSync(join(home, "state", "context", "providers", provider, "next-session-required.json"), { force: true });
   }
 }
 

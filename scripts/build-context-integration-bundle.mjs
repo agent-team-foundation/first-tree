@@ -15,7 +15,7 @@ if (!Number.isSafeInteger(CONTEXT_INTEGRATION_LIMITS.byoAdditionalContextLimit))
 const EXTERNAL_SKILLS = ["first-tree-read", "first-tree-write"];
 const PLUGIN_NAME = "first-tree-context";
 const PROVIDERS = ["claude-code", "codex"];
-const ADAPTER_VERSION = "1.0.1";
+const ADAPTER_VERSIONS = { "claude-code": "1.0.2", codex: "1.0.1" };
 
 function parseArgs(argv) {
   const args = new Map();
@@ -146,20 +146,6 @@ function writeSessionStartHook(pluginRoot, provider) {
   );
   chmodSync(script, 0o755);
 
-  if (provider === "claude-code") {
-    const observeScript = join(binDir, "context-observe-loaded");
-    writeFileSync(
-      observeScript,
-      [
-        "#!/bin/sh",
-        "set -eu",
-        `exec __FIRST_TREE_INVOCATION__ context observe-loaded --provider ${provider} "$@"`,
-        "",
-      ].join("\n"),
-    );
-    chmodSync(observeScript, 0o755);
-  }
-
   writeJson(join(pluginRoot, "hooks", "hooks.json"), {
     hooks: {
       SessionStart: [
@@ -179,24 +165,6 @@ function writeSessionStartHook(pluginRoot, provider) {
           ],
         },
       ],
-      ...(provider === "claude-code"
-        ? {
-            UserPromptSubmit: [
-              {
-                matcher: "*",
-                hooks: [
-                  {
-                    type: "command",
-                    command: `"\${CLAUDE_PLUGIN_ROOT}/bin/context-observe-loaded" --adapter-digest __ADAPTER_DIGEST__ --adoption-generation __ADOPTION_GENERATION__`,
-                    timeout: 2,
-                    statusMessage: "Checking First Tree Context",
-                    additionalContextLimit: CONTEXT_INTEGRATION_LIMITS.byoAdditionalContextLimit,
-                  },
-                ],
-              },
-            ],
-          }
-        : {}),
     },
   });
 }
@@ -207,7 +175,7 @@ function writeClaudeBundle(providerRoot, marketplaceName) {
   writeSessionStartHook(pluginRoot, "claude-code");
   writeJson(join(pluginRoot, ".claude-plugin", "plugin.json"), {
     name: PLUGIN_NAME,
-    version: ADAPTER_VERSION,
+    version: ADAPTER_VERSIONS["claude-code"],
     description: "Use explicit-Team First Tree Context in Claude Code without joining the First Tree Agent runtime.",
     author: { name: "First Tree" },
     homepage: "https://first-tree.ai",
@@ -223,7 +191,7 @@ function writeClaudeBundle(providerRoot, marketplaceName) {
         name: PLUGIN_NAME,
         source: "./plugins/first-tree-context",
         description: "Read and update explicit-Team First Tree Context from Claude Code.",
-        version: ADAPTER_VERSION,
+        version: ADAPTER_VERSIONS["claude-code"],
       },
     ],
   });
@@ -236,7 +204,7 @@ function writeCodexBundle(providerRoot, marketplaceName) {
   writeSessionStartHook(pluginRoot, "codex");
   writeJson(join(pluginRoot, ".codex-plugin", "plugin.json"), {
     name: PLUGIN_NAME,
-    version: ADAPTER_VERSION,
+    version: ADAPTER_VERSIONS.codex,
     description: "Use explicit-Team First Tree Context in Codex without joining the First Tree Agent runtime.",
     author: { name: "First Tree", url: "https://first-tree.ai" },
     homepage: "https://first-tree.ai",
@@ -321,7 +289,7 @@ export function buildContextIntegrationBundle(rawOptions) {
     PROVIDERS.map((provider) => [
       provider,
       {
-        adapterVersion: ADAPTER_VERSION,
+        adapterVersion: ADAPTER_VERSIONS[provider],
         adapterDigest: treeDigest(join(options.outDir, provider)),
         minimumVersion: provider === "claude-code" ? "2.1.121" : "0.144.0",
       },

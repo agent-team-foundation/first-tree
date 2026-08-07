@@ -544,12 +544,6 @@ video[data-onboarding-orientation-video]::cue {
   --sp-95: 23.75rem; /* 380px — chat-description popover card width (~60ch) */
   --mobile-tabbar-height: 3.5rem; /* 56px */
 
-  /* Readable measure for the expanded chat current-state card. Uses rem (not
-     ch) so CJK/Latin mixed copy keeps ~760px instead of shrinking with Latin
-     glyph width. The raised card itself is constrained, so the surface and
-     text share one edge rather than leaving empty half-width chrome. */
-  --chat-summary-readable-rail: 47.5rem; /* 760px */
-
   /* Agent detail shell: a compact local-navigation rail plus one readable
      configuration column. The sum stays below the Settings wrapper while the
      content column remains wide enough for two-line capability descriptions. */
@@ -915,6 +909,19 @@ video[data-onboarding-orientation-video]::cue {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* Chat summary lead line: the promoted first physical line of a current-state
+   brief. It is separated from supporting copy by a gap, but a lead with nothing
+   after it is the whole summary — the `:last-child` reset keeps that case from
+   reserving space for copy that does not exist. In the blank-line form the lead
+   is also its paragraph's last child, and the following paragraph carries its
+   own top margin, so the separation survives there. */
+[data-summary-part="lead"] {
+  margin-bottom: var(--sp-3);
+}
+[data-summary-part="lead"]:last-child {
+  margin-bottom: 0;
 }
 
 /* Chat summary floating card: drops in from the bar's lower edge. */

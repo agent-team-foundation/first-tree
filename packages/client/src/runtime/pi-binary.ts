@@ -9,6 +9,7 @@ import {
 import { prerelease, satisfies, valid } from "semver";
 import { wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 /** Lowest published compatible CLI validated by the runtime contract. */
 export const PI_MINIMUM_VERSION = "0.80.5";
@@ -161,6 +162,10 @@ function whitespaceTokens(value: string): string[] {
 }
 
 function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  // Every automatic source funnels through here, so this is the one place a
+  // candidate can be vetted before `stat` / `access` follows it into a
+  // TCC-protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);

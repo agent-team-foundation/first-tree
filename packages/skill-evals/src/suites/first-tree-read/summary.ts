@@ -104,7 +104,9 @@ export function driftNote(
   }
 
   if (expectedTrigger && readMode === "managed" && !metrics.managedFinalTransportOk) {
-    notes.push("The impact note was not delivered through the required final managed chat send or blocking chat ask.");
+    notes.push(
+      `The task's final managed delivery was ${metrics.managedFinalTransportKind ?? "none"}, but this case requires chat ${metrics.managedTransportExpected ?? "send"}.`,
+    );
   }
 
   if (expectedTrigger && !metrics.expectedFactsObserved) {
@@ -115,7 +117,7 @@ export function driftNote(
 
   if (!metrics.impactNoteBehaviorOk) {
     notes.push(
-      `Visible Context Tree impact-note behavior failed: count=${metrics.impactNoteCount}; language=${metrics.impactNoteLanguage ?? "none"}; effect=${metrics.impactNoteEffect ?? "none"}; final end=${metrics.impactNoteAtFinalEnd}; logical lines=${metrics.impactNoteLogicalLinesOk}; blank line=${metrics.impactNoteBlankLineBefore}; objective summary=${metrics.impactNoteSummaryObjectiveOk}; exact links=${metrics.impactNoteExactLinksOk}; source authority=${metrics.impactNoteSourceAuthorityOk}; source labels=${metrics.impactNoteSourceLabels.join(" | ") || "none"}; metadata free=${metrics.impactNoteMetadataFree}; visible URL credentials absent=${metrics.impactNoteVisibleUrlsCredentialFree}.`,
+      `Visible Context Tree impact-note behavior failed: count=${metrics.impactNoteCount}; language=${metrics.impactNoteLanguage ?? "none"}; effect=${metrics.impactNoteEffect ?? "none"}; final end=${metrics.impactNoteAtFinalEnd}; logical lines=${metrics.impactNoteLogicalLinesOk}; blank line=${metrics.impactNoteBlankLineBefore}; objective summary=${metrics.impactNoteSummaryObjectiveOk}; exact links=${metrics.impactNoteExactLinksOk}; source authority=${metrics.impactNoteSourceAuthorityOk}; source labels=${metrics.impactNoteSourceLabels.join(" | ") || "none"}; metadata free=${metrics.impactNoteMetadataFree}; outside blocking ask=${metrics.impactNoteOutsideBlockingAsk}; visible URL credentials absent=${metrics.impactNoteVisibleUrlsCredentialFree}.`,
     );
   }
 
@@ -182,7 +184,7 @@ export function buildGrading(
       evidence(
         "outcome_pass",
         expectedTrigger
-          ? `expected facts observed=${metrics.expectedFactsObserved}; hits=${metrics.expectedFactHits.join(" | ") || "none"}; impact-note behavior ok=${metrics.impactNoteBehaviorOk}; count=${metrics.impactNoteCount}; effect=${metrics.impactNoteEffect ?? "none"}; language=${metrics.impactNoteLanguage ?? "none"}; sources=${metrics.impactNoteSourceLabels.join(" | ") || "none"}`
+          ? `expected facts observed=${metrics.expectedFactsObserved}; hits=${metrics.expectedFactHits.join(" | ") || "none"}; impact-note behavior ok=${metrics.impactNoteBehaviorOk}; count=${metrics.impactNoteCount}; effect=${metrics.impactNoteEffect ?? "none"}; language=${metrics.impactNoteLanguage ?? "none"}; outside blocking ask=${metrics.impactNoteOutsideBlockingAsk}; sources=${metrics.impactNoteSourceLabels.join(" | ") || "none"}`
           : `off-topic expected fact hits=${metrics.expectedFactHits.join(" | ") || "none"}; impact-note behavior ok=${metrics.impactNoteBehaviorOk}; count=${metrics.impactNoteCount}`,
       ),
       evidence(
@@ -260,6 +262,7 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - impactNoteSummaryObjectiveOk: ${markdownBool(summary.metrics.impactNoteSummaryObjectiveOk)}
 - impactNoteMetadataFree: ${markdownBool(summary.metrics.impactNoteMetadataFree)}
 - impactNoteSourceAuthorityOk: ${markdownBool(summary.metrics.impactNoteSourceAuthorityOk)}
+- impactNoteOutsideBlockingAsk: ${markdownBool(summary.metrics.impactNoteOutsideBlockingAsk)}
 - impactNoteVisibleUrlsCredentialFree: ${markdownBool(summary.metrics.impactNoteVisibleUrlsCredentialFree)}
 - helpSucceeded: ${markdownBool(summary.metrics.helpSucceeded)}
 - selectionSucceeded: ${markdownBool(summary.metrics.selectionSucceeded)}

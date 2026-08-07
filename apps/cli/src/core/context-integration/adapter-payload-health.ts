@@ -15,7 +15,6 @@ export function assertContextAdapterPayloadHealthy(
     !install ||
     install.adapterVersion !== expected.adapterVersion ||
     install.adapterDigest !== expected.adapterDigest ||
-    (driver.provider === "claude-code" && !/^[0-9a-f]{48}$/u.test(install.adoptionGeneration ?? "")) ||
     !install.materializedPayloadDigest ||
     !install.materializedMarketplaceDigest
   ) {

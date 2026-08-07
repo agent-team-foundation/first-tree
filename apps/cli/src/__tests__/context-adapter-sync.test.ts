@@ -3,11 +3,22 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { issueAdapterSyncAction, synchronizeContextAdapter } from "../core/context-integration/adapter-sync.js";
+import {
+  beginContextAdapterNextSessionObligation,
+  inspectContextAdapterNextSessionObligation,
+} from "../core/context-integration/adapter-observation.js";
+import {
+  AdapterNextSessionRequiredError,
+  hasKnownCompatibleContextAdapterSession,
+  hasKnownGoodCompatibleContextAdapter,
+  issueAdapterSyncAction,
+  synchronizeContextAdapter,
+} from "../core/context-integration/adapter-sync.js";
 import {
   readContextIntegrationInstallManifest,
   writeContextIntegrationInstallManifest,
 } from "../core/context-integration/manifest.js";
+import { repairContextIntegrationOperation } from "../core/context-integration/operation.js";
 import { contextPluginTreeDigest } from "../core/context-integration/payload-integrity.js";
 import type { ContextIntegrationProviderDriver } from "../core/context-integration/provider-driver.js";
 import { resolveContextIntegrationRelease } from "../core/context-integration/release.js";
@@ -41,7 +52,13 @@ describe("lazy Context adapter sync", () => {
       { provider: "claude-code", sessionId: "session-a", suppliedAdapterDigest: fixture.previous.adapterDigest },
       { releaseRoot, driver: driver("claude-code") },
     );
-    const repair = vi.fn();
+    const repair = vi.fn(() => {
+      writeContextIntegrationInstallManifest({
+        ...fixture.previous,
+        adapterVersion: fixture.target.adapterVersion,
+        adapterDigest: fixture.target.adapterDigest,
+      });
+    });
 
     const result = synchronizeContextAdapter(driver("claude-code"), action.challenge, {
       releaseRoot,
@@ -49,15 +66,315 @@ describe("lazy Context adapter sync", () => {
       repairOperation: repair,
     });
 
-    expect(result).toMatchObject({ updated: true, currentSessionAdoption: "reload_optional" });
+    expect(result).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
     expect(repair).toHaveBeenCalledOnce();
-    expect(() =>
+    expect(
       synchronizeContextAdapter(driver("claude-code"), action.challenge, {
         releaseRoot,
         planInstall: () => fixture.plan,
         repairOperation: repair,
       }),
-    ).toThrow("missing or invalid");
+    ).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact upgraded Claude session compatible across later lifecycle events", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const action = issueAdapterSyncAction(
+      {
+        provider: "claude-code",
+        sessionId: "session-lifecycle",
+        suppliedAdapterDigest: fixture.previous.adapterDigest,
+      },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    const repair = vi.fn(() => {
+      writeContextIntegrationInstallManifest({
+        ...fixture.previous,
+        adapterVersion: fixture.target.adapterVersion,
+        adapterDigest: fixture.target.adapterDigest,
+      });
+    });
+
+    synchronizeContextAdapter(driver("claude-code"), action.challenge, {
+      releaseRoot,
+      planInstall: () => fixture.plan,
+      repairOperation: repair,
+    });
+
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-lifecycle",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(true);
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "another-session",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(false);
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-lifecycle",
+          suppliedAdapterDigest: `sha256:${"f".repeat(64)}`,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves concurrent old Claude sessions when the first sync replaces the global Plugin", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const first = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-a", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    const second = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-b", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    const repair = vi.fn(() => {
+      rmSync(join(home, "state", "context", "providers", "claude-code", "adapter-sync"), {
+        recursive: true,
+        force: true,
+      });
+      writeContextIntegrationInstallManifest({
+        ...fixture.previous,
+        adapterVersion: fixture.target.adapterVersion,
+        adapterDigest: fixture.target.adapterDigest,
+      });
+    });
+
+    synchronizeContextAdapter(driver("claude-code"), first.challenge, {
+      releaseRoot,
+      planInstall: () => fixture.plan,
+      repairOperation: repair,
+    });
+
+    for (const sessionId of ["session-a", "session-b"]) {
+      expect(
+        hasKnownCompatibleContextAdapterSession(
+          { provider: "claude-code", sessionId, suppliedAdapterDigest: fixture.previous.adapterDigest },
+          { releaseRoot, driver: driver("claude-code") },
+        ),
+      ).toBe(true);
+    }
+    expect(
+      synchronizeContextAdapter(driver("claude-code"), second.challenge, {
+        releaseRoot,
+        repairOperation: vi.fn(() => {
+          throw new Error("the second action must reuse the completed global update");
+        }),
+      }),
+    ).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a Claude action issued after receipt collection but before global Plugin mutation", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const first = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-a", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    const interleaved: { action?: ReturnType<typeof issueAdapterSyncAction> } = {};
+    const repair = vi.fn(() => {
+      rmSync(join(home, "state", "context", "providers", "claude-code", "adapter-sync"), {
+        recursive: true,
+        force: true,
+      });
+      writeContextIntegrationInstallManifest({
+        ...fixture.previous,
+        adapterVersion: fixture.target.adapterVersion,
+        adapterDigest: fixture.target.adapterDigest,
+      });
+    });
+
+    synchronizeContextAdapter(driver("claude-code"), first.challenge, {
+      releaseRoot,
+      planInstall: () => {
+        interleaved.action = issueAdapterSyncAction(
+          { provider: "claude-code", sessionId: "session-c", suppliedAdapterDigest: fixture.previous.adapterDigest },
+          { releaseRoot, driver: driver("claude-code") },
+        );
+        return fixture.plan;
+      },
+      repairOperation: repair,
+    });
+
+    const interleavedAction = interleaved.action;
+    expect(interleavedAction).toBeDefined();
+    if (!interleavedAction) throw new Error("interleaved action was not issued");
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-c",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(true);
+    expect(
+      synchronizeContextAdapter(driver("claude-code"), interleavedAction.challenge, {
+        releaseRoot,
+        repairOperation: vi.fn(() => {
+          throw new Error("interleaved action must reuse the committed target");
+        }),
+      }),
+    ).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
+  });
+
+  it("rejects an old sync action replay after another repair requires next-session adoption", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const action = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-old", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    writeContextIntegrationInstallManifest({
+      ...fixture.previous,
+      adapterVersion: fixture.target.adapterVersion,
+      adapterDigest: fixture.target.adapterDigest,
+    });
+    beginContextAdapterNextSessionObligation(fixture.release.manifest, "standalone_repair");
+
+    expect(inspectContextAdapterNextSessionObligation()).toBe("standalone_repair");
+    expect(hasKnownGoodCompatibleContextAdapter(driver("claude-code"))).toBe(false);
+    expect(() =>
+      synchronizeContextAdapter(driver("claude-code"), action.challenge, {
+        releaseRoot,
+        repairOperation: vi.fn(() => {
+          throw new Error("pending adoption must block replay before mutation");
+        }),
+      }),
+    ).toThrow(AdapterNextSessionRequiredError);
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-old",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves an action issued after the operation snapshot when the provider update rolls back", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const first = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-a", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    let concurrent: ReturnType<typeof issueAdapterSyncAction> | undefined;
+    const rollbackDriver = driver("claude-code");
+    rollbackDriver.install = () => rollbackDriver.probe("first-tree-dev", "first-tree-context");
+
+    expect(() =>
+      synchronizeContextAdapter(rollbackDriver, first.challenge, {
+        releaseRoot,
+        planInstall: () => fixture.plan,
+        repairOperation: (providerDriver, plan) =>
+          repairContextIntegrationOperation(providerDriver, plan, {
+            install: () => {
+              concurrent = issueAdapterSyncAction(
+                {
+                  provider: "claude-code",
+                  sessionId: "session-after-snapshot",
+                  suppliedAdapterDigest: fixture.previous.adapterDigest,
+                },
+                { releaseRoot, driver: rollbackDriver },
+              );
+              throw new Error("provider update failed after concurrent issuance");
+            },
+          }),
+      }),
+    ).toThrow("provider update failed after concurrent issuance");
+
+    const concurrentAction = concurrent;
+    expect(concurrentAction).toBeDefined();
+    if (!concurrentAction) throw new Error("concurrent action was not issued");
+    expect(readContextIntegrationInstallManifest("claude-code")?.adapterDigest).toBe(fixture.previous.adapterDigest);
+
+    expect(
+      synchronizeContextAdapter(driver("claude-code"), concurrentAction.challenge, {
+        releaseRoot,
+        planInstall: () => fixture.plan,
+        repairOperation: () => {
+          writeContextIntegrationInstallManifest({
+            ...fixture.previous,
+            adapterVersion: fixture.target.adapterVersion,
+            adapterDigest: fixture.target.adapterDigest,
+          });
+        },
+      }),
+    ).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-after-snapshot",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(true);
+  });
+
+  it("activates the prepared session fact if the process exits after the provider update commits", () => {
+    const fixture = prepareOldCompatibleInstall();
+    const action = issueAdapterSyncAction(
+      { provider: "claude-code", sessionId: "session-crash", suppliedAdapterDigest: fixture.previous.adapterDigest },
+      { releaseRoot, driver: driver("claude-code") },
+    );
+    const committedThenExited = vi.fn(() => {
+      rmSync(join(home, "state", "context", "providers", "claude-code", "adapter-sync"), {
+        recursive: true,
+        force: true,
+      });
+      writeContextIntegrationInstallManifest({
+        ...fixture.previous,
+        adapterVersion: fixture.target.adapterVersion,
+        adapterDigest: fixture.target.adapterDigest,
+      });
+      throw new Error("simulated process exit after provider commit");
+    });
+
+    expect(() =>
+      synchronizeContextAdapter(driver("claude-code"), action.challenge, {
+        releaseRoot,
+        planInstall: () => fixture.plan,
+        repairOperation: committedThenExited,
+      }),
+    ).toThrow("simulated process exit");
+    expect(
+      hasKnownCompatibleContextAdapterSession(
+        {
+          provider: "claude-code",
+          sessionId: "session-crash",
+          suppliedAdapterDigest: fixture.previous.adapterDigest,
+        },
+        { releaseRoot, driver: driver("claude-code") },
+      ),
+    ).toBe(true);
+    expect(
+      synchronizeContextAdapter(driver("claude-code"), action.challenge, {
+        releaseRoot,
+        repairOperation: vi.fn(() => {
+          throw new Error("recovery must use the already committed exact target");
+        }),
+      }),
+    ).toMatchObject({ updated: true, currentSessionAdoption: "next_session" });
   });
 
   it("retains the exact action after a rolled-back update so a bounded retry can succeed", () => {
@@ -213,7 +530,6 @@ function prepareOldCompatibleInstall() {
     adapterDigest: `sha256:${"1".repeat(64)}`,
     marketplaceName: "first-tree-dev",
     pluginName: "first-tree-context",
-    adoptionGeneration: "a".repeat(48),
     materializedInvocation: "first-tree-dev",
     materializedPayloadDigest: payload.pluginDigest,
     materializedMarketplaceDigest: payload.marketplaceDigest,
@@ -281,11 +597,9 @@ function prepareProviderPayload(provider: "claude-code" | "codex") {
   const providerCache = join(home, "provider-cache", provider);
   mkdirSync(join(plugin, "bin"), { recursive: true });
   writeFileSync(join(marketplace, "marketplace.json"), "{}\n");
-  for (const launcher of ["context-session-start", "context-observe-loaded"]) {
-    const path = join(plugin, "bin", launcher);
-    writeFileSync(path, "#!/bin/sh\nexit 0\n");
-    chmodSync(path, 0o700);
-  }
+  const launcher = join(plugin, "bin", "context-session-start");
+  writeFileSync(launcher, "#!/bin/sh\nexit 0\n");
+  chmodSync(launcher, 0o700);
   cpSync(plugin, providerCache, { recursive: true });
   return {
     pluginDigest: contextPluginTreeDigest(plugin),

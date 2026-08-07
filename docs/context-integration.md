@@ -34,12 +34,14 @@ identity, and returns the choices that are safe for that session:
 A directory choice is returned only when setup has a stable canonical
 directory. Claude setup uses a valid `CLAUDE_PROJECT_DIR` (or an explicit
 `--project-root`) and never borrows the shell or Hook cwd when that signal is
-missing. Codex Documents scratch directories and managed worktrees under the
-default `$CODEX_HOME/worktrees/<id>/<repo>` layout keep their canonical path
-project identity, but omit the directory choice because another session
-normally receives a different path. Truly pathless sessions also omit it.
-Custom Codex App worktree roots are not classified until the provider exposes
-a stable public setting for them.
+missing. Without a valid Claude project directory, setup and SessionStart use a
+pathless identity so global activation remains available without widening to
+the mutable cwd. Codex Documents scratch directories and managed worktrees
+under the default `$CODEX_HOME/worktrees/<id>/<repo>` layout keep their
+canonical path project identity, but omit the directory choice because another
+session normally receives a different path. Truly pathless sessions also omit
+it. Custom Codex App worktree roots are not classified until the provider
+exposes a stable public setting for them.
 
 The coding agent must show the choices and wait for a new user reply. Every
 available choice carries a complete `applyCommand` built by the same CLI that
@@ -73,10 +75,9 @@ A routine forward adapter update is discovered by the existing SessionStart
 bridge and handed to the coding agent as one exact, session-bound sync action.
 The Hook does not install anything inside its five-second deadline. The agent
 runs the transactional update during the normal turn. A verified protocol-v1
-adapter remains usable for the current task: Claude can optionally run
-`/reload-plugins` to adopt the update immediately, otherwise both providers use
-it next session. Only a missing, damaged, revoked, or incompatible adapter
-pauses First Tree operations.
+adapter remains usable for the current task. Both providers use the updated
+adapter on their next SessionStart. Only a missing, damaged, revoked, or
+incompatible adapter pauses First Tree operations.
 
 Persistent configuration is `config/context.yaml` schema v3. It stores a set
 of `provider + Team + activationScope` grants. A v2/v1 single-Team binding
@@ -86,7 +87,9 @@ pathless binding to global scope.
 
 ## Current-session handoff
 
-A successful apply returns `currentSessionHandoff` schema v3 with:
+A successful session-only apply, or a persistent apply whose adapter is already
+usable in the current provider session, returns `currentSessionHandoff` schema
+v3 with:
 
 - immutable `provider` and `project` identity;
 - `consumerKind: byo` and the exact activation scope;
@@ -94,7 +97,10 @@ A successful apply returns `currentSessionHandoff` schema v3 with:
 - stable Skill descriptions and versioned loader commands;
 - for session-only, the opaque short-lived Server-signed session candidate receipt.
 
-Persistent handoffs expose `first-tree`, `first-tree-read`, and
+Claude persistent setup that installs, migrates, or repairs the Plugin returns
+no current-session handoff while its next-session obligation is pending; setup
+is complete, but Context activation starts in a new Claude session. Persistent
+handoffs that are safe to use expose `first-tree`, `first-tree-read`, and
 `first-tree-write`; session-only exposes only Read and Write. The coding agent
 adopts the handoff immediately in the same conversation. It must not reconstruct
 a Team from cwd, Git remotes, Web state or remembered context.
@@ -210,21 +216,21 @@ writes or bypasses trust:
 5. the same coding agent reruns the exact apply command and adopts the handoff.
 
 A previously trusted Hook skips the consent turn. Session-only never installs a
-Hook and therefore never asks for Trust. Claude Code requires
-`/reload-plugins` after first install, migration from a full legacy Plugin, or
-an adapter repair. Setup remains incomplete until the reloaded thin Plugin's
-lightweight `UserPromptSubmit` Hook receives Claude's session identity and
-returns a per-install adoption generation from the loaded Hook configuration
-plus a signed opaque receipt. The same exact apply consumes that receipt once
-and binds the pending setup plan to the current session. A Hook loaded before a
-same-version repair cannot reuse the new generation. When no install, migration,
-or repair adoption is pending, this Hook is a pure no-op: it does not probe the
-provider, hash Plugin payloads, sign a receipt, or inject additional context.
-Full payload health is checked by setup/status and once at each new task route;
-the exact routed snapshot and Write authority then own the rest of that task.
-The general Skill loader is read-only and never records reload state. Later
-Core-only CLI upgrades and additional Team grants require neither another
-reload nor repeated Codex trust.
+Hook and therefore never asks for Trust. Claude first install, full-Plugin
+migration, and adapter repair materialize deterministic Plugin bytes for the
+target `adapterVersion`. Repeating repair for the same version keeps both the
+provider cache version and payload unchanged. The operation leaves a
+next-session marker; the next valid SessionStart from that exact adapter
+consumes it and enables persistent routing. The current Claude session does not
+adopt a repaired adapter immediately, and setup does not return a handoff that
+persistent routing would reject. Full payload health is checked by
+setup/status and once at each new task route; the exact routed snapshot and
+Write authority then own the rest of that task. The general Skill loader is
+read-only and never records lifecycle state. Later Core-only CLI upgrades and
+additional Team grants require neither another Claude action nor repeated Codex
+trust. An adapter 1.0.1 command that is already loaded in an old Claude session
+remains as a compatibility no-op only; it issues no receipt and changes no
+state.
 
 ## SCOPE governance and Reviewer authority
 
@@ -258,9 +264,9 @@ future BYO sessions.
 `context status` reports provider compatibility, Plugin payload, Hook state,
 the immutable project identity, every applicable highest-priority grant, and
 each grant's live Team activation separately. After a standalone Claude repair,
-it also reports the pending `/reload-plugins` adoption until the reloaded
-Plugin's `UserPromptSubmit` Hook verifies the session and consumes that repair
-obligation.
+the on-disk Plugin may be healthy while persistent routing remains paused for
+the current session. Status reports that next-session obligation separately;
+the next valid SessionStart from the repaired adapter consumes it.
 
 `context disable --provider ... --team ... --scope ...` removes exactly one
 global or directory grant. Directory removal also requires its exact canonical
@@ -274,17 +280,18 @@ machine-state lock and a durable recovery journal. Do not edit provider caches
 or Context state by hand.
 
 `data/byo` belongs to the active local Client. Account switching parks and
-restores it in the existing entry-level transaction; route, reload-observation,
-write-plan, and repository journals validate `accountClientId`. An active or
-incomplete BYO write blocks switching. `computer reset` and destructive purge
-remove BYO repositories and the new account-scoped receipts/recovery state.
+restores it in the existing entry-level transaction; route, adapter-sync,
+next-session, write-plan, and repository journals validate `accountClientId`.
+An active or incomplete BYO write blocks switching. `computer reset` and
+destructive purge remove BYO repositories and the new account-scoped
+receipts/recovery state.
 
 The Web bootstrap prompt keeps technical envelopes internal. It reports only
 checking, installing/updating, required user action, and completion. The coding
 agent may retry the same exact transient action a bounded number of times and
 may run an exact CLI-provided reversible repair, but scope selection, account
-switching, authentication/permission, Claude reload, Codex trust, destructive
-reset, and changed plans remain explicit human decisions.
+switching, authentication/permission, Codex trust, destructive reset, and
+changed plans remain explicit human decisions.
 
 Activation failure never blocks ordinary Claude/Codex work and never falls back
 to a lower-priority grant, another Team or cached authority. Authentication,
@@ -319,8 +326,9 @@ record evidence for:
 6. single- and multi-Team BYO writes with the mandatory new user confirmation;
 7. SCOPE admin approval, rejection, changed head/digest and manager demotion;
 8. v2 store backup and explicit reauthorization;
-9. legacy full Plugin migration with the Claude reload gate, followed by a
-   Core-only CLI upgrade that leaves adapter bytes and provider trust unchanged;
+9. legacy full Plugin migration with the Claude next-session adoption gate,
+   followed by a Core-only CLI upgrade that leaves adapter bytes and provider
+   trust unchanged;
 10. same-organization cross-provider repo reuse, cross-organization isolation,
     A→B→A Client switching, and active-write switch refusal;
 11. concise bootstrap progress, bounded typed-error recovery, and unchanged

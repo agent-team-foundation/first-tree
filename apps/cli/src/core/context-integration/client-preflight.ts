@@ -5,8 +5,15 @@ import type { ContextIntegrationProject, ContextIntegrationProvider } from "@fir
 import { loadCredentials } from "../bootstrap.js";
 import { channelConfig } from "../channel.js";
 
-const CODEX_PROJECTLESS_CLASSIFIER_VERSION = 1;
+const CODEX_PROJECTLESS_CLASSIFIER_VERSION = 2;
 const SESSION_CACHE_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * The one `realpathSync` form this module uses: canonicalize a single path to a
+ * string. Naming it keeps the injected test seams to that shape rather than
+ * Node's full Buffer-returning overload set.
+ */
+type RealpathFn = (path: string) => string;
 
 export type ContextProjectResolution =
   | {
@@ -17,11 +24,11 @@ export type ContextProjectResolution =
   | {
       kind: "pathless";
       project: Extract<ContextIntegrationProject, { kind: "pathless" }>;
-      source: "codex_documents_v1" | "explicit_pathless";
+      source: "claude_project_dir_unavailable" | "codex_documents_v1" | "explicit_pathless";
     }
   | {
       kind: "unknown";
-      source: "claude_project_dir_missing" | "cwd_missing" | "path_unreadable";
+      source: "cwd_missing" | "path_unreadable";
       message: string;
     };
 
@@ -80,7 +87,7 @@ export function inspectContextSetupLocation(
   }
   const temporaryDirectory =
     provider === "codex" &&
-    (classifyCodexProjectlessPath(resolved.project.root, env, input.classifierOptions) ||
+    (classifyCodexProjectlessPath(resolved.project.root, env, { ...input.classifierOptions, rawCwd: candidate }) ||
       classifyCodexManagedWorktreePath(resolved.project.root, env, input.classifierOptions));
   return {
     project: resolved.project,
@@ -175,7 +182,7 @@ export function resolveProviderProject(
   classifierOptions: {
     platform?: NodeJS.Platform;
     home?: string;
-    realpath?: typeof realpathSync;
+    realpath?: RealpathFn;
     stat?: typeof statSync;
   } = {},
 ): ContextProjectResolution {
@@ -183,12 +190,15 @@ export function resolveProviderProject(
     const projectRoot = env.CLAUDE_PROJECT_DIR;
     if (!projectRoot) {
       return {
-        kind: "unknown",
-        source: "claude_project_dir_missing",
-        message: "Claude Code did not provide CLAUDE_PROJECT_DIR for this session.",
+        kind: "pathless",
+        project: { kind: "pathless" },
+        source: "claude_project_dir_unavailable",
       };
     }
-    return resolvePathProject(projectRoot, "claude_project_dir", classifierOptions);
+    const resolution = resolvePathProject(projectRoot, "claude_project_dir", classifierOptions);
+    return resolution.kind === "unknown"
+      ? { kind: "pathless", project: { kind: "pathless" }, source: "claude_project_dir_unavailable" }
+      : resolution;
   }
   if (!input.cwd) {
     return {
@@ -199,7 +209,10 @@ export function resolveProviderProject(
   }
   const canonical = resolvePathProject(input.cwd, "codex_cwd_best_effort", classifierOptions);
   if (canonical.kind !== "path") return canonical;
-  const pathless = classifyCodexProjectlessPath(canonical.project.root, env, classifierOptions);
+  const pathless = classifyCodexProjectlessPath(canonical.project.root, env, {
+    ...classifierOptions,
+    rawCwd: input.cwd,
+  });
   if (pathless) return { kind: "pathless", project: { kind: "pathless" }, source: "codex_documents_v1" };
   return canonical;
 }
@@ -207,7 +220,17 @@ export function resolveProviderProject(
 export function classifyCodexProjectlessPath(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
-  options: { platform?: NodeJS.Platform; home?: string; realpath?: typeof realpathSync } = {},
+  options: {
+    platform?: NodeJS.Platform;
+    home?: string;
+    realpath?: RealpathFn;
+    /**
+     * The caller's ORIGINAL, pre-`realpath` form of `cwd`. Supplying it keeps this
+     * classification off the filesystem for every path that is not already
+     * lexically inside a Codex scratch base — see {@link shouldCanonicalizeBase}.
+     */
+    rawCwd?: string;
+  } = {},
 ): boolean {
   const platform = options.platform ?? process.platform;
   const pathApi = platform === "win32" ? win32 : posix;
@@ -222,6 +245,7 @@ export function classifyCodexProjectlessPath(
   const normalizedCwd = normalizeForComparison(cwd, platform);
   const comparableBases = new Set(bases);
   for (const base of bases) {
+    if (!shouldCanonicalizeBase(base, options.rawCwd, platform)) continue;
     try {
       comparableBases.add((options.realpath ?? realpathSync)(base));
     } catch {
@@ -231,25 +255,55 @@ export function classifyCodexProjectlessPath(
     }
   }
   for (const base of comparableBases) {
-    const relativePath = pathApi.relative(normalizeForComparison(base, platform), normalizedCwd);
-    if (
-      !relativePath ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${pathApi.sep}`) ||
-      pathApi.isAbsolute(relativePath)
-    ) {
-      continue;
-    }
+    const relativePath = relativeInside(base, normalizedCwd, platform);
+    if (relativePath === null) continue;
     const [date, slug] = relativePath.split(pathApi.sep);
     if (date && slug && validIsoDate(date)) return true;
   }
   return false;
 }
 
+/**
+ * Should `base` be canonicalized before comparison?
+ *
+ * Canonicalizing means touching the path, and on macOS `~/Documents` sits behind
+ * a TCC "Files & Folders" consent prompt — so an ordinary project cwd must not
+ * cause it. The canonical form only ever matters when the base itself is
+ * redirected (macOS iCloud "Desktop & Documents Folders" makes `~/Documents` a
+ * symlink), and in that case the caller's original cwd is still lexically inside
+ * the logical base. So gate on that, and fall back to canonicalizing whenever
+ * the original cwd is unknown or relative, which preserves the prior behavior
+ * for callers that cannot supply it.
+ */
+function shouldCanonicalizeBase(base: string, rawCwd: string | undefined, platform: NodeJS.Platform): boolean {
+  const pathApi = platform === "win32" ? win32 : posix;
+  if (rawCwd === undefined || !pathApi.isAbsolute(rawCwd)) return true;
+  return relativeInside(base, normalizeForComparison(rawCwd, platform), platform) !== null;
+}
+
+/**
+ * The path of `candidate` relative to `root` when it is strictly inside it,
+ * otherwise `null`. `root` is normalized here; `candidate` is expected to be
+ * normalized already.
+ */
+function relativeInside(root: string, candidate: string, platform: NodeJS.Platform): string | null {
+  const pathApi = platform === "win32" ? win32 : posix;
+  const relativePath = pathApi.relative(normalizeForComparison(root, platform), candidate);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${pathApi.sep}`) ||
+    pathApi.isAbsolute(relativePath)
+  ) {
+    return null;
+  }
+  return relativePath;
+}
+
 export function classifyCodexManagedWorktreePath(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
-  options: { platform?: NodeJS.Platform; home?: string; realpath?: typeof realpathSync } = {},
+  options: { platform?: NodeJS.Platform; home?: string; realpath?: RealpathFn } = {},
 ): boolean {
   const platform = options.platform ?? process.platform;
   const pathApi = platform === "win32" ? win32 : posix;
@@ -269,15 +323,8 @@ export function classifyCodexManagedWorktreePath(
 
   const normalizedCwd = normalizeForComparison(cwd, platform);
   for (const root of comparableRoots) {
-    const relativePath = pathApi.relative(normalizeForComparison(root, platform), normalizedCwd);
-    if (
-      !relativePath ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${pathApi.sep}`) ||
-      pathApi.isAbsolute(relativePath)
-    ) {
-      continue;
-    }
+    const relativePath = relativeInside(root, normalizedCwd, platform);
+    if (relativePath === null) continue;
     const [worktreeId, repository] = relativePath.split(pathApi.sep);
     if (worktreeId && repository) return true;
   }
@@ -312,7 +359,7 @@ function resolvePathProject(
   path: string,
   source: Extract<ContextProjectResolution, { kind: "path" }>["source"],
   dependencies: {
-    realpath?: typeof realpathSync;
+    realpath?: RealpathFn;
     stat?: typeof statSync;
   } = {},
 ): ContextProjectResolution {
@@ -411,7 +458,7 @@ function validCachedResolution(value: unknown): value is CachedSessionProject["r
       typeof project === "object" &&
       project !== null &&
       Reflect.get(project, "kind") === "pathless" &&
-      (source === "codex_documents_v1" || source === "explicit_pathless")
+      (source === "claude_project_dir_unavailable" || source === "codex_documents_v1" || source === "explicit_pathless")
     );
   }
   return (

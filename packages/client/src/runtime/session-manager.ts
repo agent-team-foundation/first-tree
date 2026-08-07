@@ -193,6 +193,13 @@ type RouteTransitionToken = RouteLeaseToken & {
   phase: "start" | "resume";
 };
 
+type QuarantinedSession = {
+  handler: AgentHandler;
+  generation: number;
+  reason: "operator_suspend_timeout";
+  routeTransitionInFlight: boolean;
+};
+
 type SessionFailureHandling =
   | { kind: "retry" }
   | { kind: "terminal"; reasonCode: string; terminalEventPersisted: boolean };
@@ -469,6 +476,34 @@ type SessionManagerConfig = {
 const MAX_EVICTED_MAPPINGS = 500;
 
 /**
+ * Provider suspend/drain callbacks can disappear across host sleep or
+ * transport loss. Bound an operator pause so later inbox work can recover.
+ */
+const OPERATOR_SUSPEND_TIMEOUT_MS = 30_000;
+
+class HandlerSuspendTimeoutError extends Error {
+  constructor(chatId: string) {
+    super(`handler suspend timed out after ${OPERATOR_SUSPEND_TIMEOUT_MS}ms for chat ${chatId}`);
+    this.name = "HandlerSuspendTimeoutError";
+  }
+}
+
+async function waitForHandlerSuspend(chatId: string, suspend: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      Promise.resolve().then(suspend),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new HandlerSuspendTimeoutError(chatId)), OPERATOR_SUSPEND_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Minimum spacing between gate-triggered replay-fence reconciliations for
  * one chat. Withheld dispatches retry the server-truth readback so a
  * transient readback/clear failure converges without a process restart,
@@ -648,6 +683,13 @@ export class SessionManager {
    * `detachHandlerWithPendingTeardown` / `registerPendingTeardown`).
    */
   private readonly pendingTeardowns = new Map<string, Set<AgentHandler>>();
+  /**
+   * Chat-level authority for provider generations whose operator suspend
+   * callback exceeded its bound. The entry lives for this manager's lifetime:
+   * ordinary routing may replace the exact handler, while Reset remains
+   * restart-required because provider teardown was never confirmed.
+   */
+  private readonly quarantinedSessions = new Map<string, QuarantinedSession>();
   /**
    * In-flight route producers (start/resume/retry provider calls), per chat.
    * Tracked from `beginRouteTransition` until the route settles: a canceled
@@ -988,6 +1030,9 @@ export class SessionManager {
    * or `session:command:aborted`) can lift the fence.
    */
   async handleCommand(chatId: string, command: SessionCommandType, options?: { resetRef?: string }): Promise<void> {
+    if (command === "session:terminate" && this.quarantinedSessions.has(chatId)) {
+      throw this.quarantineRestartRequiredError(chatId, "Reset");
+    }
     const inFlightTermination = this.terminatingChats.get(chatId);
     if (inFlightTermination) {
       // A duplicate terminate joins the in-flight cleanup instead of
@@ -1032,6 +1077,9 @@ export class SessionManager {
     if (command === "session:resume") {
       const session = this.sessions.get(chatId);
       if (session?.suspending) await session.suspending;
+      if (this.isProviderAdmissionRestartRequired(chatId)) {
+        throw this.quarantineRestartRequiredError(chatId, "provider admission");
+      }
       if (await this.recoverDebtBeforeResume(chatId, "session_resume:recovery_debt")) {
         this.drainPendingQueue();
         return;
@@ -1078,6 +1126,9 @@ export class SessionManager {
         // apply instead of acking over a possibly-live handler.
         const joinedSuspend = session?.suspending != null;
         if (session?.suspending) await session.suspending;
+        if (this.quarantinedSessions.has(chatId)) {
+          throw this.quarantineRestartRequiredError(chatId, "Reset");
+        }
         if (joinedSuspend && session?.suspendError) throw asTerminateError("suspend", session.suspendError.error);
         const activeSlotHeld = session?.activeSlotHeld === true;
         if (session) this.releaseActiveSlot(session);
@@ -1234,6 +1285,9 @@ export class SessionManager {
     for (const id of this.routeProducers.keys()) {
       if (this.shouldIncludeInRuntimeSync(id, activeChatIds)) ids.add(id);
     }
+    for (const id of this.quarantinedSessions.keys()) {
+      if (this.shouldIncludeInRuntimeSync(id, activeChatIds)) ids.add(id);
+    }
     // Unresolved Reset retirement (in-flight terminate, failed durable flush,
     // or parked Reset-fence debt awaiting an exact receipted terminal
     // disposition) force-keeps the chat: the server must retain reconcile
@@ -1345,6 +1399,7 @@ export class SessionManager {
       if (!session.activeSlotHeld && session.suspending === null && !stopUnconfirmedAfterFailedBoundary) {
         return Promise.resolve();
       }
+      if (this.isCurrentHandlerQuarantined(session)) return Promise.resolve();
       attemptedHandlers.add(session.handler);
       return this.shutdownHandler(session.handler, reason ?? "manager_shutdown", {
         ...(session.activeSlotHeld ? { settleProviderEntered: true } : {}),
@@ -1370,6 +1425,7 @@ export class SessionManager {
       }
     }
     for (const [pendingHandler, chatIds] of debtChatsByHandler) {
+      if (chatIds.some((chatId) => this.quarantinedSessions.get(chatId)?.handler === pendingHandler)) continue;
       if (attemptedHandlers.has(pendingHandler)) continue;
       attemptedHandlers.add(pendingHandler);
       shutdowns.push(
@@ -1412,6 +1468,7 @@ export class SessionManager {
     const retriedHandlers = new Set<AgentHandler>();
     for (const pending of this.pendingTeardowns.values()) {
       for (const pendingHandler of [...pending]) {
+        if ([...this.quarantinedSessions.values()].some((entry) => entry.handler === pendingHandler)) continue;
         if (retriedHandlers.has(pendingHandler)) continue;
         retriedHandlers.add(pendingHandler);
         // Each attempt joins a still in-flight shutdown when one exists; a
@@ -1548,6 +1605,7 @@ export class SessionManager {
   }
 
   private hasRuntimeSyncForceKeep(chatId: string): boolean {
+    if (this.quarantinedSessions.has(chatId)) return true;
     // Unresolved teardown debt force-keeps the chat: its handler is not
     // confirmed stopped, so dropping the chat from the held report would
     // lose the reconcile retry channel for the debt.
@@ -1578,14 +1636,17 @@ export class SessionManager {
    * last one fences the post-apply / pre-disposition window even when nothing
    * was parked at apply time. Must NOT be used for the duplicate-terminate
    * join lookup — a genuine retry terminate must still execute and clear the
-   * persistence failure.
+   * persistence failure. A quarantined generation normally still permits a
+   * fresh route, but a timeout that caught an unresolved start/resume
+   * transition stays fail closed until daemon restart.
    */
   private isProviderRouteAdmissionFenced(chatId: string): boolean {
     return (
       this.terminatingChats.has(chatId) ||
       this.terminatePersistFailures.has(chatId) ||
       this.awaitingResetFenceRelease.has(chatId) ||
-      this.hasArmedResetGeneration(chatId)
+      this.hasArmedResetGeneration(chatId) ||
+      this.isProviderAdmissionRestartRequired(chatId)
     );
   }
 
@@ -2043,11 +2104,66 @@ export class SessionManager {
     return this.config.handlerFactory(handlerCfg);
   }
 
+  private quarantineMatches(chatId: string, lease: RouteLeaseToken): boolean {
+    const quarantined = this.quarantinedSessions.get(chatId);
+    return quarantined?.handler === lease.handler && quarantined.generation === lease.generation;
+  }
+
+  private isCurrentHandlerQuarantined(entry: SessionEntry): boolean {
+    return this.quarantinedSessions.get(entry.chatId)?.handler === entry.handler;
+  }
+
+  private isProviderAdmissionRestartRequired(chatId: string): boolean {
+    return this.quarantinedSessions.get(chatId)?.routeTransitionInFlight === true;
+  }
+
+  private quarantineRestartRequiredError(chatId: string, operation: "Reset" | "provider admission"): Error {
+    const quarantined = this.quarantinedSessions.get(chatId);
+    const reason = quarantined?.reason ?? "operator_suspend_timeout";
+    return new Error(
+      `${operation} blocked: ${reason}; provider teardown was not confirmed for chat ${chatId}. Restart this agent daemon and retry.`,
+    );
+  }
+
+  private quarantineTimedOutSuspend(entry: SessionEntry, transition: RouteTransitionToken | null): void {
+    const generation = transition?.generation ?? entry.routeTransitionGeneration;
+    const handler = transition?.handler ?? entry.handler;
+    const routeTransitionInFlight = transition !== null;
+    const quarantine: QuarantinedSession = {
+      handler,
+      generation,
+      reason: "operator_suspend_timeout",
+      routeTransitionInFlight,
+    };
+    this.quarantinedSessions.set(entry.chatId, quarantine);
+    this.retiredHandlers.add(handler);
+    // The quarantine is now the sole authority for this lost generation.
+    // Remove its unresolved producer from ordinary lifecycle joins; the
+    // producer's own finally remains safe when the set is already absent.
+    if (transition) this.routeProducers.delete(entry.chatId);
+
+    const provider = this.runtimeProvider();
+    const details = {
+      provider,
+      chatId: entry.chatId,
+      generation,
+      routeTransitionInFlight,
+      routeTransitionPhase: transition?.phase ?? null,
+      reason: quarantine.reason,
+    };
+    this.config.log.error(details, "operator suspend timed out; provider session quarantined");
+    this.emitResilienceEvent(entry.chatId, "resilience.session.operator_suspend_timeout", details);
+  }
+
   private handlerForRouteTransition(entry: SessionEntry): AgentHandler {
     if (!this.retiredHandlers.has(entry.handler)) return entry.handler;
     const previous = entry.handler;
     const handler = this.createHandler();
     entry.handler = handler;
+    // The quarantined generation has no trustworthy teardown join. Keep it
+    // exclusively in quarantinedSessions: ordinary pendingTeardowns would
+    // make later routes and manager shutdown wait on the lost callback again.
+    if (this.quarantinedSessions.get(entry.chatId)?.handler === previous) return handler;
     // The retired handler's shutdown was fire-and-forget — never confirmed.
     // Record the debt so a ref'd terminate strictly confirms the stop before
     // it may ack (the join resolves immediately when the stop already
@@ -2216,6 +2332,13 @@ export class SessionManager {
    * of routing.
    */
   private async settleTeardownDebtBeforeRoute(chatId: string): Promise<boolean> {
+    if (this.isProviderAdmissionRestartRequired(chatId)) {
+      this.config.log.error(
+        { chatId, provider: this.runtimeProvider(), reason: "operator_suspend_timeout" },
+        "provider admission blocked by unresolved quarantined route transition; daemon restart required",
+      );
+      return false;
+    }
     // Quiesce in-flight route producers FIRST: a canceled start/resume can
     // still materialize late, and its discard registers teardown debt only
     // when the producer settles — debt drained before this point would be
@@ -2277,6 +2400,19 @@ export class SessionManager {
 
   private discardStaleRouteTransition(chatId: string, transition: RouteTransitionToken, reason: string): void {
     this.retiredHandlers.add(transition.handler);
+    if (this.quarantineMatches(chatId, transition)) {
+      this.config.log.warn(
+        {
+          chatId,
+          provider: this.runtimeProvider(),
+          generation: transition.generation,
+          phase: transition.phase,
+          reason,
+        },
+        "late quarantined route completion ignored",
+      );
+      return;
+    }
     // A stale route completion MATERIALIZES the handler (the canceled
     // start/resume returned late), so it needs a NEW shutdown chained after
     // any prior (a pre-materialization shutdown was a no-op). That stop's
@@ -3106,6 +3242,9 @@ export class SessionManager {
     }
     if (stopForManagerShutdown("session_resume:manager_shutdown_after_suspend")) return;
     if (this.sessions.get(entry.chatId) !== entry) return;
+    if (this.isProviderAdmissionRestartRequired(entry.chatId)) {
+      throw this.quarantineRestartRequiredError(entry.chatId, "provider admission");
+    }
     if (await this.recoverDebtBeforeResume(entry.chatId, "session_resume:recovery_debt")) return;
     if (stopForManagerShutdown("session_resume:manager_shutdown_after_recovery")) return;
     if (
@@ -3117,20 +3256,17 @@ export class SessionManager {
       return;
     }
 
-    // A failed suspend left the current handler never confirmed stopped.
-    // Stop it strictly (joining any in-flight shutdown's raw face) BEFORE
-    // the route below reuses or replaces the reference — reusing or
-    // overwriting an unconfirmed-stop handler loses the teardown authority
-    // while the old run may still be alive. A teardown failure propagates
-    // into resume's existing error semantics (routeMessage retries the
-    // delivery / operator resume logs the command error); it must not
-    // silently continue. On success the handler is retired so the route
-    // installs a fresh one, and the recorded suspend failure is cleared.
-    if (entry.suspendError && entry.handlerStoppedBySuspend !== entry.handler) {
-      await this.shutdownHandler(entry.handler, "session_resume_after_failed_suspend", { observeFailure: true });
-      entry.handlerStoppedBySuspend = entry.handler;
+    // Ordinary suspend failure still requires a confirmed strict stop before
+    // replacement. A quarantined timeout has deliberately lost that join:
+    // its exact handler/generation stays fenced by quarantinedSessions and the
+    // route below installs a fresh handler without registering ordinary debt.
+    if (entry.suspendError) {
+      if (entry.handlerStoppedBySuspend !== entry.handler && !this.isCurrentHandlerQuarantined(entry)) {
+        await this.shutdownHandler(entry.handler, "session_resume_after_failed_suspend", { observeFailure: true });
+        entry.handlerStoppedBySuspend = entry.handler;
+        this.retiredHandlers.add(entry.handler);
+      }
       entry.suspendError = null;
-      this.retiredHandlers.add(entry.handler);
     }
 
     // Route admission fence: settle this chat's teardown authority before
@@ -4133,29 +4269,33 @@ export class SessionManager {
       this.recomputeRuntimeState();
       entry.suspending = (async () => {
         let settled = false;
+        let timedOut = false;
         try {
           // settleProviderEntered keeps already-issued DeliveryTokens on the
           // settlement lease (including active/deferred inject) so they can
           // post durable notice+ACK before prepareOperatorSuspend runs.
-          await entry.handler.suspend(opts.reason, { settleProviderEntered: true });
-          // If settle captured a terminal notice but could not persist it (or
-          // could not claim token settlement), transfer the obligation onto
-          // the inbox ledger so prepareOperatorSuspend / recovery cannot ACK
-          // without durable notice evidence.
-          if (entry.pendingRuntimeFailureNotice) {
-            this.inboxDelivery.markNoticeRequiredForProcessingPrefix(entry.chatId, entry.pendingRuntimeFailureNotice);
-          }
+          await waitForHandlerSuspend(entry.chatId, () =>
+            entry.handler.suspend(opts.reason, { settleProviderEntered: true }),
+          );
           settled = true;
         } catch (err) {
-          // Settle failure leaves the handler joinable for a strict terminate /
-          // resume stop — do not start teardown here or suspend will hang on a
-          // gated shutdown the terminate owns.
           entry.suspendError = { error: err };
+          timedOut = err instanceof HandlerSuspendTimeoutError;
+          if (timedOut) this.quarantineTimedOutSuspend(entry, inFlightTransition);
           try {
             this.config.log.warn({ chatId: entry.chatId, err }, "operator suspend settlement error");
           } catch (logErr) {
             this.config.log.warn({ chatId: entry.chatId, err: logErr }, "operator suspend settlement error");
           }
+        }
+
+        // Suspend may emit a terminal provider-failure event and then either
+        // settle or lose its completion callback. Transfer that durable-notice
+        // obligation before invalidating the generation and before
+        // prepareOperatorSuspend can promote the provider-entered prefix to
+        // ACK-eligible terminal work.
+        if ((settled || timedOut) && entry.pendingRuntimeFailureNotice) {
+          this.inboxDelivery.markNoticeRequiredForProcessingPrefix(entry.chatId, entry.pendingRuntimeFailureNotice);
         }
 
         // Bump adoption generation only after settle. Kick observeFailure
@@ -4167,7 +4307,7 @@ export class SessionManager {
           this.retiredHandlers.add(inFlightTransition.handler);
         }
 
-        if (!settled) {
+        if (!settled && !timedOut) {
           entry.suspending = null;
           if (unestablishedStart) {
             if (entry.handlerStoppedBySuspend !== entry.handler) {
@@ -4182,7 +4322,7 @@ export class SessionManager {
         }
 
         const stopPromise =
-          inFlightTransition || !this.retiredHandlers.has(entry.handler)
+          settled && (inFlightTransition || !this.retiredHandlers.has(entry.handler))
             ? this.shutdownHandler(target, opts.reason, { observeFailure: true })
             : Promise.resolve();
 
@@ -4194,7 +4334,7 @@ export class SessionManager {
           await Promise.resolve();
           await this.inboxDelivery.prepareOperatorSuspend(entry.chatId);
           await stopPromise;
-          if (target === entry.handler) {
+          if (settled && target === entry.handler) {
             entry.handlerStoppedBySuspend = entry.handler;
           }
         } catch (err) {

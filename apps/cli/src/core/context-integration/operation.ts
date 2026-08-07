@@ -28,7 +28,7 @@ import {
 import { defaultHome } from "@first-tree/shared/config";
 import { channelConfig } from "../channel.js";
 import { readActiveContextAccountClientId } from "./account-state-guard.js";
-import type { ContextAdapterReloadObligationKind } from "./adapter-observation.js";
+import type { ContextAdapterNextSessionObligationKind } from "./adapter-observation.js";
 import {
   assertContextIntegrationConfig,
   prepareContextGrantStoreForApply,
@@ -98,7 +98,7 @@ export function enableContextIntegrationOperation(
   dependencies: {
     install?: typeof installContextIntegration;
     writeGrant?: typeof writeContextGrant;
-    reloadObligationKind?: ContextAdapterReloadObligationKind;
+    nextSessionObligationKind?: ContextAdapterNextSessionObligationKind;
   } = {},
 ): { pluginOperation: ContextIntegrationInstallPlan["operation"] } {
   return withContextIntegrationLock(() => {
@@ -117,7 +117,7 @@ export function enableContextIntegrationOperation(
       if (plan.operation !== "unchanged") {
         providerChanged = true;
         (dependencies.install ?? installContextIntegration)(driver, plan, {
-          reloadObligationKind: dependencies.reloadObligationKind,
+          nextSessionObligationKind: dependencies.nextSessionObligationKind,
         });
         writeOperationJournal({ ...journal, phase: "provider_changed" });
       }
@@ -159,7 +159,7 @@ export function repairContextIntegrationOperation(
   plan: ContextIntegrationInstallPlan,
   dependencies: {
     install?: typeof installContextIntegration;
-    reloadObligationKind?: ContextAdapterReloadObligationKind;
+    nextSessionObligationKind?: ContextAdapterNextSessionObligationKind;
   } = {},
 ): void {
   withContextIntegrationLock(() => {
@@ -168,7 +168,7 @@ export function repairContextIntegrationOperation(
     const journal = createOperationJournal("repair", driver, snapshot);
     try {
       (dependencies.install ?? installContextIntegration)(driver, plan, {
-        reloadObligationKind: dependencies.reloadObligationKind,
+        nextSessionObligationKind: dependencies.nextSessionObligationKind,
       });
       writeOperationJournal({ ...journal, phase: "provider_changed" });
       completeOperation(snapshot);
@@ -525,9 +525,13 @@ function validateProviderRecoveryState(
 
 const OBSERVATION_STATE_ENTRIES = [
   "adapter-sync",
+  // compatible-sessions contains exact-target-gated facts and action backups
+  // issued independently of this provider operation. Restoring an earlier
+  // operation snapshot must not erase actions issued while the operation ran.
   "reload-pending",
   "reload-consumed",
   "reload-required.json",
+  "next-session-required.json",
 ] as const;
 
 function captureObservationState(provider: ContextIntegrationProvider, recoveryRoot: string): string {
@@ -542,7 +546,7 @@ function captureObservationState(provider: ContextIntegrationProvider, recoveryR
       if (isMissing(error)) continue;
       throw error;
     }
-    const expectedFile = entry === "reload-required.json";
+    const expectedFile = entry === "reload-required.json" || entry === "next-session-required.json";
     if (stat.isSymbolicLink() || (expectedFile && !stat.isFile()) || (!expectedFile && !stat.isDirectory())) {
       throw new Error(`The Context observation state contains an invalid ${entry} entry.`);
     }

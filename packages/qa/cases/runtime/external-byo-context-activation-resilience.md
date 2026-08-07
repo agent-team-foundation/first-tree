@@ -43,23 +43,46 @@ together.
   continues on the already loaded adapter; if the provider update fails and
   rolls back, confirm `update_deferred` keeps that known-good adapter usable and
   does not surface an internal failure to the user.
-- For Claude, optionally run `/reload-plugins`, reply `continue`, and verify the
-  new `UserPromptSubmit` Hook returns one current-session opaque receipt. For
-  Codex, require `/hooks` trust only when the provider reports a changed Hook
-  identity. Without either optional current-session action, the new adapter is
-  used on the next session.
+- For Claude, verify the current task may continue on its already loaded adapter
+  after automatic sync. Trigger resume, clear, and compact on that same session;
+  each must use the session-and-old-digest compatibility record, avoid repair
+  guidance, and leave any next-session obligation untouched. A different
+  session or digest must not reuse that record. Interleave two old sessions'
+  sync actions; the first global Plugin update must preserve both sessions and
+  make the second action idempotent. Issue a third action after the first sync
+  has scanned existing receipts but before provider mutation; issuance itself
+  must have already persisted its inert fact and recoverable action. Inject an
+  exit after the provider update commits but before the sync command returns;
+  the prewritten compatibility fact must make both retry and the next lifecycle
+  event usable without repair guidance. Repeat an already successful Claude
+  challenge and confirm its TTL-bound terminal result remains idempotently
+  successful. Then issue an old-adapter action before a separate repair creates
+  a next-session obligation; replay and lock-busy fallback must require a new
+  Claude session rather than report `currentAdapterUsable=true`. Hold the
+  account-state lock before the repair has written its obligation and confirm
+  that lock acquisition failure alone remains fail closed. Issue another Claude
+  action after an operation snapshot, force the provider
+  update to roll back, and confirm snapshot restoration does not erase the
+  action's fact or TTL backup; its original challenge must still retry safely.
+  For Codex,
+  require `/hooks` trust only when the provider reports a changed Hook identity.
+  Both providers must use the updated adapter on the next session.
 - Independently tamper one stable stub, one provider-cache file, and one partial
   cache tree while leaving the embedded digest literal unchanged. SessionStart,
   status/setup and the next persistent task route must reject the unhealthy
-  payload; session-only loading remains independent. With no reload obligation,
-  `UserPromptSubmit` must remain a pure no-op with no provider probe, receipt or
-  injected context. After a route succeeds, snapshot and Write boundaries must
+  payload; session-only loading remains independent. The new Claude Plugin must
+  not contain a same-session adoption hook or receipt path. Invoke the retired
+  command shape from an already-loaded adapter 1.0.1 and confirm it is a pure
+  no-op with no receipt or state mutation. After a route succeeds, snapshot and
+  Write boundaries must
   rely on the routed candidate and their live authority checks rather than
   repeatedly hashing the provider-owned Plugin cache.
-- Run standalone Claude repair, then interrupt before reload. `context status`
-  must show the pending adoption; after `/reload-plugins` and one submitted
-  message, the new Hook consumes that obligation and persistent routing resumes
-  without another Team setup apply.
+- Run standalone Claude repair twice for the same adapter version. Confirm the
+  provider cache version and complete payload digest remain identical. `context
+  status` must report a healthy payload plus a separate next-session obligation;
+  manual persistent routing in the old session remains blocked. Start a new
+  Claude session and verify its exact SessionStart consumes the obligation and
+  persistent routing resumes without another Team setup apply.
 - Repeat in the ungranted path and confirm no Team Context is injected. Choose
   session-only in a projectless session and confirm it works now without
   Plugin/Hook/grant state but does not reactivate after clear/compact/new session.

@@ -8,17 +8,12 @@ vi.mock("../core/output.js", () => ({ print: output }));
 
 import { runContextObserveLoaded } from "../commands/context/observe-loaded.js";
 
-describe("context observe-loaded command", () => {
+describe("retired context observe-loaded command", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("is a pure no-op when the loaded adapter has no reload obligation", () => {
-    const inspectObligation = vi.fn(() => null);
-    const issueReceipt = vi.fn();
+  it("keeps an already-loaded adapter 1.0.1 hook as a pure no-op", () => {
+    runContextObserveLoaded(context());
 
-    runContextObserveLoaded(context(), { inspectObligation, issueReceipt });
-
-    expect(inspectObligation).toHaveBeenCalledOnce();
-    expect(issueReceipt).not.toHaveBeenCalled();
     expect(output.hook).toHaveBeenCalledWith({ continue: true });
   });
 });

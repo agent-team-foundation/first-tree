@@ -13,6 +13,13 @@ import { contextRepairCommand } from "./repair-guidance.js";
 
 const heldAccountLocks = new Set<string>();
 
+export class AccountStateMutationBusyError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Another First Tree account or Context state change is already running.", options);
+    this.name = "AccountStateMutationBusyError";
+  }
+}
+
 export function withAccountStateMutationLock<T>(action: () => T, home = defaultHome()): T {
   const release = acquireAccountStateMutationLock(home);
   try {
@@ -107,7 +114,8 @@ function acquireAccountStateMutationLock(home: string): () => void {
   try {
     descriptor = openSync(path, "wx", 0o600);
   } catch (error) {
-    throw new Error("Another First Tree account or Context state change is already running.", { cause: error });
+    if (errorCode(error) === "EEXIST") throw new AccountStateMutationBusyError({ cause: error });
+    throw error;
   }
   heldAccountLocks.add(path);
   writeFileSync(descriptor, `${process.pid}\n`, "utf8");
@@ -135,7 +143,11 @@ function removeStalePidLock(path: string): void {
 }
 
 function isMissing(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && Reflect.get(error, "code") === "ENOENT";
+  return errorCode(error) === "ENOENT";
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? Reflect.get(error, "code") : undefined;
 }
 
 function readBlockingJournalProvider(path: string) {

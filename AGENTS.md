@@ -89,6 +89,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 
 ## Development Workflow
 
+- Do not make or delegate any database change—including schema, migrations, constraints, indexes, defaults, backfills, data rewrites, or persistence semantics—without first obtaining the human's explicit approval for that specific change.
 - Update shared schemas/types first when a change crosses packages.
 - Server features usually flow: shared schema -> Drizzle table (if persistent) -> service -> API route -> migration -> tests.
 - Client SDK methods live in `sdk.ts`; handlers register in `handlers/`; runtime changes live under `runtime/`.

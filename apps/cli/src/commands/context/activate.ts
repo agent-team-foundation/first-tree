@@ -8,8 +8,13 @@ import {
   activateExternalContext,
   renderProviderSessionStartResponse,
 } from "../../core/context-integration/activation.js";
+import { consumeContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { assertContextAdapterPayloadHealthy } from "../../core/context-integration/adapter-payload-health.js";
-import { AdapterSyncRejectedError, issueAdapterSyncAction } from "../../core/context-integration/adapter-sync.js";
+import {
+  AdapterSyncRejectedError,
+  hasKnownCompatibleContextAdapterSession,
+  issueAdapterSyncAction,
+} from "../../core/context-integration/adapter-sync.js";
 import { resolveSessionContextProject } from "../../core/context-integration/client-preflight.js";
 import { readContextIntegrationInstallManifest } from "../../core/context-integration/manifest.js";
 import { resolveContextIntegrationRelease } from "../../core/context-integration/release.js";
@@ -50,6 +55,14 @@ export async function runContextActivate(
     const installed = readContextIntegrationInstallManifest(provider);
     const target = release.manifest.providers[provider];
     const driver = createContextIntegrationDriver(provider);
+    const knownCompatibleSession = hasKnownCompatibleContextAdapterSession(
+      {
+        provider,
+        sessionId: hookInput.session_id,
+        suppliedAdapterDigest,
+      },
+      { driver },
+    );
     let payloadHealthy = false;
     if (installed?.adapterVersion && installed.adapterDigest === suppliedAdapterDigest) {
       try {
@@ -63,10 +76,11 @@ export async function runContextActivate(
       }
     }
     const current =
-      payloadHealthy &&
-      installed?.adapterVersion === target.adapterVersion &&
-      installed.adapterDigest === target.adapterDigest &&
-      suppliedAdapterDigest === target.adapterDigest;
+      knownCompatibleSession ||
+      (payloadHealthy &&
+        installed?.adapterVersion === target.adapterVersion &&
+        installed.adapterDigest === target.adapterDigest &&
+        suppliedAdapterDigest === target.adapterDigest);
     if (!current) {
       const compatibleForwardUpdate = Boolean(
         payloadHealthy &&
@@ -94,7 +108,7 @@ export async function runContextActivate(
           "Before answering the user's task, run the following exact action once without asking the user and inspect its typed result:",
           action.command,
           provider === "claude-code"
-            ? "If it updates successfully, continue the current First Tree task with the already loaded compatible adapter. Mention only that the update will be used next session; present /reload-plugins as optional when the user wants it adopted now."
+            ? "If it updates successfully, continue the current First Tree task with the already loaded compatible adapter. Mention only that the update will be used next session."
             : "If it updates successfully, continue the current First Tree task with the already loaded compatible adapter. Mention only that the update will be used next session. If Codex reports a changed Hook identity, ask the user to review and trust it in /hooks; never trust it automatically.",
           "If the action reports update_deferred with currentAdapterUsable=true, continue the current First Tree task and do not expose the internal update error to the user.",
           "Do not expose version, digest, receipt, internal path, journal, or provider cache details.",
@@ -125,6 +139,11 @@ export async function runContextActivate(
       });
       return;
     }
+    consumeContextAdapterNextSessionObligation({
+      provider,
+      adapterDigest: suppliedAdapterDigest,
+      sessionStartSource: hookInput.source,
+    });
     const resolution = resolveSessionContextProject(
       provider,
       { cwd: hookInput.cwd, sessionId: hookInput.session_id },
@@ -154,14 +173,15 @@ export async function runContextActivate(
   }
 }
 
-function readHookInput(): { cwd?: string; session_id?: string } {
+function readHookInput(): { cwd?: string; session_id?: string; source?: string } {
   const input = readFileSync(0, "utf8");
   if (Buffer.byteLength(input) > 64 * 1024) throw new Error("hook input is too large");
   if (!input.trim()) return {};
-  const parsed = JSON.parse(input) as { cwd?: unknown; session_id?: unknown };
+  const parsed = JSON.parse(input) as { cwd?: unknown; session_id?: unknown; source?: unknown };
   return {
     ...(typeof parsed.cwd === "string" && parsed.cwd.length > 0 ? { cwd: parsed.cwd } : {}),
     ...(typeof parsed.session_id === "string" && parsed.session_id.length > 0 ? { session_id: parsed.session_id } : {}),
+    ...(typeof parsed.source === "string" && parsed.source.length > 0 ? { source: parsed.source } : {}),
   };
 }
 

@@ -6,6 +6,7 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:pat
 import { runtimeProviderInstallCommand, runtimeProviderLoginCommand } from "@first-tree/shared";
 import { codexDesktopAppBinDirs, wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
 
@@ -352,6 +353,10 @@ function resolveWindowsNativeCodexFromNpmShim(
 }
 
 function isExecutable(filePath: string): boolean {
+  // Vet the complete candidate before `access` follows it — the directory it
+  // came from having been vetted says nothing about the leaf, which can itself
+  // be a symlink into a protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
     return true;
@@ -361,6 +366,7 @@ function isExecutable(filePath: string): boolean {
 }
 
 function fileExists(filePath: string): boolean {
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     accessSync(filePath, constants.F_OK);
     return true;

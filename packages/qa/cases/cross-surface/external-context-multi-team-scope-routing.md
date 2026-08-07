@@ -36,12 +36,14 @@ full Tree is read before one candidate is fixed.
    the exact plan id. Repeat setup for Team B; the shared Plugin is not duplicated,
    its adapter identity is unchanged, Claude does not reload, and Codex does not
    request trust again.
-3. Repeat setup in a pathless session, a Codex projectless scratch directory,
-   and a default Codex managed worktree. Confirm each plan returns only global
-   and session choices: directory is absent and no directory apply command is
-   available. The scratch and managed-worktree plans display their canonical
-   path identity with a temporary-directory warning, and session-only is
-   recommended.
+3. Repeat setup in a pathless session, a Claude App session without
+   `CLAUDE_PROJECT_DIR`, a Codex projectless scratch directory, and a default
+   Codex managed worktree. Confirm each plan returns only global and session
+   choices: directory is absent and no directory apply command is available.
+   Apply global in the Claude App fixture and verify the next SessionStart uses
+   a pathless identity and routes that grant without borrowing Hook cwd. The
+   scratch and managed-worktree plans display their canonical path identity
+   with a temporary-directory warning, and session-only is recommended.
 4. For session-only, inspect filesystem/provider state: no grant, Plugin, Hook,
    marketplace or session receipt file is created. Tamper the opaque candidate
    token and confirm routing fails before authority lookup.
@@ -83,8 +85,10 @@ full Tree is read before one candidate is fixed.
 ## Observe
 
 - Planning is read-only. Stable directories return all three choices, while
-  pathless, Codex scratch, and default managed-worktree locations omit the
-  directory choice entirely. Every returned scope has a complete
+  pathless, Claude without `CLAUDE_PROJECT_DIR`, Codex scratch, and default
+  managed-worktree locations omit the directory choice entirely. Claude's
+  unavailable directory maps to pathless runtime identity for global routing,
+  never to Hook cwd. Every returned scope has a complete
   `applyCommand`. Session-only has `consumerKind: byo`, Read/Write only, an
   opaque signed candidate, and no persistent state.
 - Directory scope includes descendants; all Teams at the deepest matching root

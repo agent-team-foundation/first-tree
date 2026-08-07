@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { contextIntegrationReleaseManifestSchema } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectContextAdapterReloadObligation } from "../core/context-integration/adapter-observation.js";
+import { inspectContextAdapterNextSessionObligation } from "../core/context-integration/adapter-observation.js";
 import {
   contextIntegrationMarketplaceSourcePath,
   installContextIntegration,
@@ -15,7 +15,10 @@ import {
   readContextIntegrationInstallManifest,
   writeContextIntegrationInstallManifest,
 } from "../core/context-integration/manifest.js";
-import { materializeContextPluginPayload } from "../core/context-integration/payload-integrity.js";
+import {
+  contextPluginTreeDigest,
+  materializeContextPluginPayload,
+} from "../core/context-integration/payload-integrity.js";
 import type {
   ContextIntegrationProviderDriver,
   ProviderPluginProbe,
@@ -47,7 +50,7 @@ afterEach(() => {
 });
 
 describe("context integration bundle", () => {
-  it("persists a required Claude reload obligation before provider mutation", () => {
+  it("persists a Claude next-session obligation before provider mutation", () => {
     const home = mkdtempSync(join(tmpdir(), "first-tree-context-home-"));
     const releaseRoot = mkdtempSync(join(tmpdir(), "first-tree-context-release-"));
     roots.push(home, releaseRoot);
@@ -64,9 +67,6 @@ describe("context integration bundle", () => {
       "--channel",
       "dev",
     ]);
-    const release = contextIntegrationReleaseManifestSchema.parse(
-      JSON.parse(readFileSync(join(releaseRoot, "release-manifest.json"), "utf8")),
-    );
     const installedPath = join(home, "provider-cache", "first-tree-context");
     const initialProbe: ProviderPluginProbe = {
       provider: "claude-code",
@@ -86,7 +86,7 @@ describe("context integration bundle", () => {
       inspectHook: async () => ({ trust: "provider_managed", enabled: true, source: "provider_managed", issues: [] }),
       validateMarketplace: () => undefined,
       install: ({ marketplaceRoot }) => {
-        expect(inspectContextAdapterReloadObligation(release)).toBe("setup");
+        expect(inspectContextAdapterNextSessionObligation()).toBe("setup");
         cpSync(join(marketplaceRoot, "plugins", "first-tree-context"), installedPath, { recursive: true });
         return { ...initialProbe, installed: true, enabled: true, installedPath };
       },
@@ -94,29 +94,39 @@ describe("context integration bundle", () => {
     };
 
     const plan = planContextIntegrationInstall(driver, { releaseRoot });
-    const installed = installContextIntegration(driver, plan, { reloadObligationKind: "setup" });
+    const installed = installContextIntegration(driver, plan, { nextSessionObligationKind: "setup" });
 
-    expect(inspectContextAdapterReloadObligation(release)).toBe("setup");
+    expect(inspectContextAdapterNextSessionObligation()).toBe("setup");
     expect(installed.manifest.materializedPayloadDigest).toMatch(/^sha256:/u);
     expect(installed.manifest.materializedMarketplaceDigest).toMatch(/^sha256:/u);
-    expect(installed.manifest.adoptionGeneration).toMatch(/^[0-9a-f]{48}$/u);
-    expect(readFileSync(join(installedPath, "hooks", "hooks.json"), "utf8")).toContain(
-      `--adoption-generation ${installed.manifest.adoptionGeneration}`,
-    );
+    expect(installed.manifest.adoptionGeneration).toBeUndefined();
+    expect(readFileSync(join(installedPath, "hooks", "hooks.json"), "utf8")).not.toContain("adoption-generation");
 
+    const compatibleSession = join(
+      home,
+      "state",
+      "context",
+      "providers",
+      "claude-code",
+      "compatible-sessions",
+      "old.json",
+    );
+    mkdirSync(join(compatibleSession, ".."), { recursive: true });
+    writeFileSync(compatibleSession, "old compatible session\n");
     uninstallContextIntegration(driver);
+    expect(existsSync(compatibleSession)).toBe(false);
     const failingDriver: ContextIntegrationProviderDriver = {
       ...driver,
       install: () => {
-        expect(inspectContextAdapterReloadObligation(release)).toBe("setup");
+        expect(inspectContextAdapterNextSessionObligation()).toBe("setup");
         throw new Error("provider install failed");
       },
     };
     const failingPlan = planContextIntegrationInstall(failingDriver, { releaseRoot });
-    expect(() => installContextIntegration(failingDriver, failingPlan, { reloadObligationKind: "setup" })).toThrow(
+    expect(() => installContextIntegration(failingDriver, failingPlan, { nextSessionObligationKind: "setup" })).toThrow(
       "provider install failed",
     );
-    expect(inspectContextAdapterReloadObligation(release)).toBeNull();
+    expect(inspectContextAdapterNextSessionObligation()).toBeNull();
   });
 
   it("packages only thin provider discovery stubs and keeps canonical Core paths in the CLI release", () => {
@@ -150,17 +160,14 @@ describe("context integration bundle", () => {
       const readSkill = readFileSync(join(pluginRoot, "skills", "first-tree-read", "SKILL.md"), "utf8");
       const writeSkill = readFileSync(join(pluginRoot, "skills", "first-tree-write", "SKILL.md"), "utf8");
       const manualSkill = readFileSync(join(pluginRoot, "skills", "first-tree", "SKILL.md"), "utf8");
-      expect(manifest.providers[provider as "claude-code" | "codex"].adapterVersion).toBe("1.0.1");
+      expect(manifest.providers[provider as "claude-code" | "codex"].adapterVersion).toBe(
+        provider === "claude-code" ? "1.0.2" : "1.0.1",
+      );
       expect(hook).toContain('"timeout": 5');
       expect(hook).toContain('"matcher": "startup|resume|clear|compact"');
       expect(hook).toContain("--adapter-digest __ADAPTER_DIGEST__");
-      if (provider === "claude-code") {
-        expect(hook).toContain('"UserPromptSubmit"');
-        expect(hook).toContain("context-observe-loaded");
-        expect(hook).toContain('"timeout": 2');
-      } else {
-        expect(hook).not.toContain('"UserPromptSubmit"');
-      }
+      expect(hook).not.toContain('"UserPromptSubmit"');
+      expect(hook).not.toContain("context-observe-loaded");
       expect(hook).not.toContain("__RELEASE_DIGEST__");
       expect(readSkill).toContain(`context skill load --protocol 1 --provider ${provider} --name first-tree-read`);
       expect(writeSkill).toContain(`context skill load --protocol 1 --provider ${provider} --name first-tree-write`);
@@ -198,6 +205,35 @@ describe("context integration bundle", () => {
     expect(readdirSync(join(root, "codex", "plugins", "first-tree-context", "skills"))).not.toContain(
       "first-tree-seed",
     );
+  });
+
+  it("materializes identical Claude payload bytes for the same adapter version", () => {
+    const releaseRoot = mkdtempSync(join(tmpdir(), "first-tree-context-deterministic-release-"));
+    const firstRoot = mkdtempSync(join(tmpdir(), "first-tree-context-deterministic-first-"));
+    const secondRoot = mkdtempSync(join(tmpdir(), "first-tree-context-deterministic-second-"));
+    roots.push(releaseRoot, firstRoot, secondRoot);
+    const repoRoot = resolve(import.meta.dirname, "../../../..");
+    execFileSync(process.execPath, [
+      join(repoRoot, "scripts", "build-context-integration-bundle.mjs"),
+      "--out-dir",
+      releaseRoot,
+      "--version",
+      "1.2.3",
+      "--channel",
+      "staging",
+    ]);
+    const source = join(releaseRoot, "claude-code", "plugins", "first-tree-context");
+    cpSync(source, firstRoot, { recursive: true });
+    cpSync(source, secondRoot, { recursive: true });
+    const release = contextIntegrationReleaseManifestSchema.parse(
+      JSON.parse(readFileSync(join(releaseRoot, "release-manifest.json"), "utf8")),
+    );
+    const invocation = { kind: "bin" as const, program: "/stable/first-tree" };
+
+    materializeContextPluginPayload(firstRoot, release.providers["claude-code"].adapterDigest, invocation);
+    materializeContextPluginPayload(secondRoot, release.providers["claude-code"].adapterDigest, invocation);
+
+    expect(contextPluginTreeDigest(firstRoot)).toBe(contextPluginTreeDigest(secondRoot));
   });
 
   it("emits the flattened Core Policy path used by portable app artifacts", () => {

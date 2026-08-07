@@ -3,7 +3,7 @@ import {
   assertContextMutationCanStart,
   withAccountStateMutationLock,
 } from "../../core/context-integration/account-state-guard.js";
-import { inspectContextAdapterReloadObligation } from "../../core/context-integration/adapter-observation.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { planContextIntegrationInstall } from "../../core/context-integration/installer.js";
 import { readContextIntegrationInstallManifest } from "../../core/context-integration/manifest.js";
 import {
@@ -27,22 +27,16 @@ export function runContextRepair(context: CommandContext): void {
     const plan = planContextIntegrationInstall(driver);
     if (plan.operation !== "unchanged") {
       repairContextIntegrationOperation(driver, plan, {
-        reloadObligationKind: provider === "claude-code" ? "standalone_repair" : undefined,
+        nextSessionObligationKind: provider === "claude-code" ? "standalone_repair" : undefined,
       });
     }
-    const reloadObligation =
-      provider === "claude-code" ? inspectContextAdapterReloadObligation(plan.release.manifest) : null;
+    const nextSessionObligation = provider === "claude-code" ? inspectContextAdapterNextSessionObligation() : null;
     return {
       manifest: readContextIntegrationInstallManifest(provider),
       probe: driver.probe(plan.marketplaceName, "first-tree-context"),
       repaired: recoveredOperation || plan.operation !== "unchanged",
-      reloadPending: reloadObligation !== null,
-      nextActions:
-        reloadObligation === "standalone_repair"
-          ? ["Run /reload-plugins, then send one message so Claude can verify the repaired Plugin."]
-          : reloadObligation === "setup"
-            ? ["Rerun the original exact Team setup apply so it can bind and finish the Claude reload flow."]
-            : [],
+      nextSessionPending: nextSessionObligation !== null,
+      nextActions: nextSessionObligation ? ["Start a new Claude session to use the repaired Context Plugin."] : [],
     };
   });
   if (context.options.json) print.result(result);

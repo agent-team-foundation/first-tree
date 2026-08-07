@@ -1,5 +1,8 @@
 import type { Command } from "commander";
+import { AccountStateMutationBusyError } from "../../core/context-integration/account-state-guard.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import {
+  AdapterNextSessionRequiredError,
   AdapterSyncRejectedError,
   hasKnownGoodCompatibleContextAdapter,
   synchronizeContextAdapter,
@@ -24,10 +27,22 @@ export function runContextAdapterSync(context: CommandContext): void {
       ...result,
       message:
         provider === "claude-code"
-          ? "First Tree Context was updated. It will be used next session; /reload-plugins can adopt it now."
+          ? "First Tree Context was updated. It will be used in the next Claude session."
           : "First Tree Context was updated. Review /hooks if Codex asks you to trust the updated Hook; otherwise it is guaranteed for the next session.",
     });
   } catch (error) {
+    if (
+      error instanceof AdapterNextSessionRequiredError ||
+      (provider === "claude-code" &&
+        (error instanceof AccountStateMutationBusyError || inspectContextAdapterNextSessionObligation() !== null))
+    ) {
+      print.fail(
+        "CONTEXT_PLUGIN_RELOAD_REQUIRED",
+        "This Claude session cannot use the repaired First Tree Context Plugin. Start a new Claude session.",
+        2,
+        { nextActions: ["Start a new Claude session before using persistent First Tree Context."] },
+      );
+    }
     if (!(error instanceof AdapterSyncRejectedError) && hasKnownGoodCompatibleContextAdapter(driver)) {
       print.result({
         updated: false,
