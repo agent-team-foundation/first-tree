@@ -119,6 +119,17 @@ async function waitForSettled(h: DomHarness, assertion: () => void): Promise<voi
   throw lastErr;
 }
 
+/** Drain pending animation frames inside act (ComposeStatusBar focus RAF). */
+async function drainAnimationFrames(count = 5): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+  }
+}
+
 async function click(h: DomHarness, element: Element | null): Promise<void> {
   if (!element) throw new Error("Expected element to click");
   await act(async () => {
@@ -1111,6 +1122,10 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       );
     });
     await h.flush();
+    // Drain ComposeStatusBar's focus-restoration RAF(s). Stable Markdown
+    // default renderer identity keeps the focused link mounted so this does
+    // not steal focus onto the disclosure.
+    await drainAnimationFrames();
 
     expect(document.activeElement).toBe(link);
   });
