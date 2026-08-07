@@ -146,6 +146,16 @@ must stop immediately: the second tail must not reach the provider, the
 already-terminal prefix may ACK, and the rejected tail plus untouched suffix
 must enter chat-scoped recovery without an ACK-prefix inversion.
 
+For a Codex app-server route, hold one valid active turn and recover exactly
+eight ordered inbox entries behind it. Make `turn/steer` return the structured
+active-turn ownership mismatch for that active turn. The handler must keep all
+eight entries pending without a session failure or a new handler. Add more
+input while the mismatch is pending and verify that the handler does not send
+another steer request. Complete the valid active turn, then verify that one
+new turn receives every pending entry once and in order. Repeat the mismatch
+and settlement boundary concurrently. The handler must not start a busy loop,
+duplicate an entry, or lose an entry.
+
 Also exercise an explicit control resume with no new user message. Inject the
 same transient pre-provider failure and verify the retry calls provider resume
 without a message. It must not synthesize an empty user turn or replay the most

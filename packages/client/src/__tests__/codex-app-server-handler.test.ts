@@ -469,6 +469,13 @@ function activeTurnNotSteerableError(): CodexAppServerRpcError {
   });
 }
 
+function activeTurnOwnershipMismatchError(expectedTurnId: string, foundTurnId: string): CodexAppServerRpcError {
+  return new CodexAppServerRpcError("turn/steer", {
+    code: -32602,
+    message: `expected active turn id \`${expectedTurnId}\` but found \`${foundTurnId}\``,
+  });
+}
+
 function stubLandingTrialHostEnv(suffix: string): void {
   const hostHome = join(workspaceRoot, "..", `host-home-${suffix}`);
   const codexHome = join(hostHome, ".codex");
@@ -1560,6 +1567,153 @@ describe("codex app-server handler", () => {
     await waitFor(() => finished.length === 2);
 
     expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1"], ["m2"]]);
+
+    await handler.shutdown();
+  });
+
+  it("defers eight recovered inputs after active-turn ownership mismatch without a retry loop", async () => {
+    const fake = new FakeAppServerClient();
+    fake.deferNextSteer();
+    const finished: SessionMessage[][] = [];
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+      failSessionForRecovery,
+    });
+
+    const startPromise = handler.start(makeMessage("m0", "active"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    const recovered = Array.from({ length: 8 }, (_, index) =>
+      makeMessage(`m${index + 1}`, `recovered ${index + 1}`, 586_395 + index),
+    );
+    for (const message of recovered) handler.inject(message);
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
+
+    fake.rejectSteer(activeTurnOwnershipMismatchError("turn-1", "provider-turn"));
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    expect(failSessionForRecovery).not.toHaveBeenCalled();
+    expect(fake.isClosed).toBe(false);
+
+    completeTurn(fake, "turn-1", "active done");
+    await startPromise;
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
+
+    const recoveredStart = fake.requests.filter((request) => request.method === "turn/start")[1];
+    for (const message of recovered) {
+      expect(JSON.stringify(recoveredStart?.params)).toContain(message.content);
+    }
+
+    completeTurn(fake, "turn-2", "recovered done");
+    await waitFor(() => finished.length === 2);
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([
+      ["m0"],
+      recovered.map((message) => message.id),
+    ]);
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+
+    await handler.shutdown();
+  });
+
+  it("keeps new input behind a repeated active-turn ownership mismatch until settlement", async () => {
+    const fake = new FakeAppServerClient();
+    fake.steerError = activeTurnOwnershipMismatchError("turn-1", "provider-turn-1");
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "active"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "first pending"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
+    await flushAsync();
+
+    handler.inject(makeMessage("m3", "concurrent pending"));
+    handler.inject(makeMessage("m4", "later pending"));
+    await flushAsync();
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+
+    fake.steerError = activeTurnOwnershipMismatchError("turn-1", "provider-turn-2");
+    completeEmptyTurn(fake, "provider-turn-1");
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(2);
+
+    fake.steerError = null;
+    completeEmptyTurn(fake, "provider-turn-2");
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 3);
+
+    completeTurn(fake, "turn-1", "active done");
+    await startPromise;
+    await waitFor(() => finished.length === 1);
+
+    expect(fake.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2", "m3", "m4"]]);
+
+    await handler.shutdown();
+  });
+
+  it("retries after a concurrent active-turn settlement wins the mismatch response race", async () => {
+    const fake = new FakeAppServerClient();
+    fake.deferNextSteer();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "active"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "pending"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
+
+    completeEmptyTurn(fake, "provider-turn");
+    fake.rejectSteer(activeTurnOwnershipMismatchError("turn-1", "provider-turn"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
+
+    completeTurn(fake, "turn-1", "all done");
+    await startPromise;
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2"]]);
+
+    await handler.shutdown();
+  });
+
+  it("does not defer an active-turn mismatch that names another expected turn", async () => {
+    const fake = new FakeAppServerClient();
+    fake.steerError = activeTurnOwnershipMismatchError("another-turn", "provider-turn");
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, failSessionForRecovery });
+
+    const startPromise = handler.start(makeMessage("m1", "active"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "pending"));
+    await waitFor(() => failSessionForRecovery.mock.calls.length === 1);
+    await startPromise;
+
+    expect(retryTurn).toHaveBeenCalled();
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      "codex_app_server_steer_unknown_custody_failed",
+      "thread-app-server",
+    );
+    expect(fake.isClosed).toBe(true);
 
     await handler.shutdown();
   });
