@@ -11,8 +11,8 @@ agent-skill regression in `@first-tree/skill-evals`, and judgment / live /
 cross-surface validation in committed `@first-tree/qa` cases.
 
 The journeys these tests walk are owned by the cases
-[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md)
-and
+[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md),
+[`workspace-chat-lifecycle`](../packages/qa/cases/web/workspace-chat-lifecycle.md), and
 [`need-you-request-review-journey`](../packages/qa/cases/cross-surface/need-you-request-review-journey.md).
 Those cases remain the contracts and the place judgement lives. This directory
 is one way to execute their browser-observable happy paths unattended, in the
@@ -94,7 +94,7 @@ the local stack and the local tests do not touch staging.
 
 ### P0 local regression
 
-Run the activation checks plus the three daily-work journeys with an explicit
+Run the activation checks plus the two daily-work journeys with an explicit
 local target. `--upload-results` creates a shared Momentic run for QA handoff;
 omit it during private authoring when dashboard evidence is not needed.
 
@@ -121,8 +121,7 @@ in commands and review runner upgrades separately from product changes.
 | --- | --- | --- |
 | `registration-new-user.test.yaml` | local | A brand-new account is created and lands on onboarding step 1 |
 | `onboarding-complete-setup.test.yaml` | local | The whole first-run journey: sign up → create team → connect a computer → create the first agent → start the kickoff chat → land in the workspace |
-| `p0/workspace-start-new-chat.test.yaml` | local | Start a new workspace work stream and send its initial task to the default agent |
-| `p0/workspace-chat-triage.test.yaml` | local | Pin, archive, find and restore a conversation through the workspace rail |
+| `p0/workspace-chat-lifecycle.test.yaml` | local | Start a new workspace chat, then pin, archive, find and restore that same conversation |
 | `p0/need-you-basic-review.test.yaml` | local | Review one pending request, choose an option and submit its resolution through Need you |
 | `dev-cloud-sign-in-available.test.yaml` | first-tree-dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
 
