@@ -4,7 +4,7 @@ import type { Agent, AgentResourcesOutput, AgentRuntimeConfig } from "@first-tre
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router";
+import { MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import { ApiError } from "../../../api/client.js";
@@ -390,6 +390,20 @@ async function renderDom(
 function LocationEcho() {
   const location = useLocation();
   return <div>{location.pathname + location.search}</div>;
+}
+
+/** Tab body that reports where it is and can walk the history back. */
+function LocationEchoWithBack() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <div>
+      <div data-testid="here">{location.pathname}</div>
+      <button type="button" onClick={() => navigate(-1)}>
+        Go back
+      </button>
+    </div>
+  );
 }
 
 async function click(element: Element | null): Promise<void> {
@@ -1686,5 +1700,45 @@ describe("AgentDetailPage", () => {
     expect(profile.container.textContent).not.toContain("Reactivate");
     expect(profile.container.textContent).not.toContain("Delete");
     await act(async () => profile.root.unmount());
+  });
+  it("switches agents from the breadcrumb, keeping the section and leaving a history entry", async () => {
+    agentMocks.getAgent.mockImplementation(async (uuid: string) =>
+      uuid === "agent-2" ? agent({ uuid: "agent-2", name: "nova", displayName: "Nova" }) : agent(),
+    );
+
+    const view = await renderDom("/agents/agent-1/runtime", <LocationEchoWithBack />);
+    const breadcrumb = view.container.querySelector('nav[aria-label="Breadcrumb"]');
+    await click(breadcrumb?.querySelector('button[aria-haspopup="menu"]') ?? null);
+
+    const nova = [...document.querySelectorAll<HTMLButtonElement>('button[role="menuitemradio"]')].find(
+      (row) => row.textContent?.trim() === "Nova",
+    );
+    await click(nova ?? null);
+
+    // Same section on the new agent, not a bounce back to Profile.
+    await waitForCondition(
+      () => view.container.querySelector('[data-testid="here"]')?.textContent === "/agents/agent-2/runtime",
+      "Expected the switch to land on the same section of the target agent",
+    );
+    await waitForText(view.container, "Nova");
+
+    // Pushed, not replaced: Back returns to the agent we came from.
+    await click(exactButtonByText(view.container, "Go back"));
+    await waitForCondition(
+      () => view.container.querySelector('[data-testid="here"]')?.textContent === "/agents/agent-1/runtime",
+      "Expected Back to return to the previous agent",
+    );
+    await act(async () => view.root.unmount());
+  });
+
+  it("leaves the breadcrumb plain for a human member, who is never a switch target", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    agentMocks.getAgent.mockResolvedValueOnce(agent({ type: "human", displayName: "Gandy", name: "gandy" }));
+
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    const breadcrumb = view.container.querySelector('nav[aria-label="Breadcrumb"]');
+    expect(breadcrumb?.querySelector('button[aria-haspopup="menu"]')).toBeNull();
+    expect(breadcrumb?.querySelector('[aria-current="page"]')?.textContent).toBe("Gandy");
+    await act(async () => view.root.unmount());
   });
 });

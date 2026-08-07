@@ -37,6 +37,7 @@ import { invalidateDisplayNameQueries } from "./../lib/identity-cache.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { isBindableClient } from "./agent-detail/action-state.js";
+import { AgentSwitcher } from "./agent-detail/agent-switcher.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext, RuntimeSwitchClaimView } from "./agent-detail/layout-context.js";
 import {
@@ -453,7 +454,21 @@ function AgentDetailPageView() {
             Team
           </BreadcrumbLink>
           <BreadcrumbSep />
-          <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
+          {/* Humans have no switcher: the list is agents only, so their own
+              row would never be in it. */}
+          {isHuman ? (
+            <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
+          ) : (
+            <AgentSwitcher
+              currentAgent={agent}
+              onSelect={(nextUuid) =>
+                // Keep the section the user is reading. A pushed entry (not
+                // `replace`, unlike the section links) makes Back return to
+                // the previous agent.
+                navigateAway(`/agents/${encodeURIComponent(nextUuid)}/${currentTab?.path ?? "profile"}`)
+              }
+            />
+          )}
         </Breadcrumb>
 
         <div className={cn("flex gap-4", isNarrow ? "flex-col items-stretch" : "items-center justify-between")}>

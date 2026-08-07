@@ -67,7 +67,11 @@ export function PromptTab() {
     },
     ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: markSaved }),
   });
-  if (ctx.isHuman) return <Navigate to="../profile" replace />;
+  // Instructions is an editor-only tab (`tabKeysFor` gates it on
+  // `canEditConfig`, and the runtime config query is disabled without it).
+  // Non-editors reach this route by deep link or by switching agents while on
+  // it, and would otherwise land on a permanently empty editor.
+  if (ctx.isHuman || !ctx.canEditConfig) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
   const prompt = ctx.config?.payload.prompt.append ?? "";
   const promptSections = ctx.config?.payload.prompt.sections;

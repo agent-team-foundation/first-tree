@@ -460,6 +460,33 @@ function SearchBar({ query, onQuery }: { query: string; onQuery: (q: string) => 
   );
 }
 
+/**
+ * Order within one roster group: own agents pinned first (fast self-location),
+ * then alphabetical — stable across paginated refetches, unlike the server's
+ * `createdAt DESC`.
+ */
+export function compareRosterAgents(selfMemberId: string | null | undefined): (x: Agent, y: Agent) => number {
+  return (x, y) => {
+    const mineX = x.managerId === selfMemberId ? 0 : 1;
+    const mineY = y.managerId === selfMemberId ? 0 : 1;
+    if (mineX !== mineY) return mineX - mineY;
+    return x.displayName.localeCompare(y.displayName, undefined, { sensitivity: "base" });
+  };
+}
+
+/**
+ * The Team page's roster order as one flat list, for surfaces that show the
+ * same agents without the section headings (the Agent Detail switcher).
+ * Organization-visible agents lead, then private ones, each group ordered by
+ * {@link compareRosterAgents}.
+ */
+export function orderAgentsLikeTeam(agents: Agent[], selfMemberId: string | null | undefined): Agent[] {
+  const compare = compareRosterAgents(selfMemberId);
+  const organization = agents.filter((a) => a.visibility === "organization").sort(compare);
+  const rest = agents.filter((a) => a.visibility !== "organization").sort(compare);
+  return [...organization, ...rest];
+}
+
 export function buildTeamData(args: {
   filter: AgentFilter;
   search: string;
@@ -495,15 +522,8 @@ export function buildTeamData(args: {
     isOwnedBySelf: a.managerId === selfMemberId,
   });
 
-  // Own agents pinned first (fast self-location), then alphabetical — stable
-  // across paginated refetches.
-  const sortRows = (rows: AgentRow[]) =>
-    rows.sort((x, y) => {
-      const mineX = x.isOwnedBySelf ? 0 : 1;
-      const mineY = y.isOwnedBySelf ? 0 : 1;
-      if (mineX !== mineY) return mineX - mineY;
-      return x.agent.displayName.localeCompare(y.agent.displayName, undefined, { sensitivity: "base" });
-    });
+  const compare = compareRosterAgents(selfMemberId);
+  const sortRows = (rows: AgentRow[]) => rows.sort((x, y) => compare(x.agent, y.agent));
 
   const publicAgents = sortRows(agents.filter((a) => a.visibility === "organization" && visible(a)).map(toRow));
   const privateAgents = sortRows(agents.filter((a) => a.visibility === "private" && visible(a)).map(toRow));
