@@ -911,6 +911,19 @@ video[data-onboarding-orientation-video]::cue {
   }
 }
 
+/* Chat summary lead line: the promoted first physical line of a current-state
+   brief. It is separated from supporting copy by a gap, but a lead with nothing
+   after it is the whole summary — the `:last-child` reset keeps that case from
+   reserving space for copy that does not exist. In the blank-line form the lead
+   is also its paragraph's last child, and the following paragraph carries its
+   own top margin, so the separation survives there. */
+[data-summary-part="lead"] {
+  margin-bottom: var(--sp-3);
+}
+[data-summary-part="lead"]:last-child {
+  margin-bottom: 0;
+}
+
 /* Chat summary floating card: drops in from the bar's lower edge. */
 @keyframes chat-summary-card-in {
   from {

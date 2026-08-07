@@ -22,6 +22,12 @@ const CURRENT_STATE = [
   "**Next:** Validate the same hierarchy in the live Workspace.",
 ].join("\n");
 
+// The most common real shape: one physical line, no supporting copy. The lead is
+// the whole summary here, so it must read as ordinary prose and must not reserve
+// separation below itself.
+const SINGLE_LINE =
+  "正在核验团队的成员规模、First Tree 安装完成情况与实际使用情况。口径按 Asia/Taipei T+1 截止，并将安装状态与使用行为分开统计。";
+
 const PLAIN = "Reviewing PR 1207 — server-side freshness fields landed; wiring the collapsed-bar first line next.";
 
 const HEADING_FIRST = [
@@ -137,6 +143,18 @@ export function ChatSummaryPreviewPage() {
           <Demo
             chatId="preview-unread"
             description={CURRENT_STATE}
+            descriptionUpdatedAt={hoursAgo(2)}
+            lastReadAt={null}
+          />
+        </Col>
+
+        <Col
+          label="Single-line brief (the common shape)"
+          note="lead is the whole summary — ordinary weight, no reserved gap below it"
+        >
+          <Demo
+            chatId="preview-single-line"
+            description={SINGLE_LINE}
             descriptionUpdatedAt={hoursAgo(2)}
             lastReadAt={null}
           />
