@@ -69,8 +69,6 @@ function baseContext(overrides: Partial<AgentDetailContext> = {}): AgentDetailCo
     configError: null,
     configSave: {} as AgentDetailContext["configSave"],
     clientStatus: undefined,
-    clientStatusLoading: false,
-    clientStatusError: null,
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: null,
@@ -174,7 +172,10 @@ describe("RepositoriesTab", () => {
     const { container } = await renderTab({ context });
 
     expect(container.textContent).toContain("Profile tab");
-    expect(resourceMocks.useAgentResources).toHaveBeenCalledWith("agent-1", { enabled: false });
+    expect(resourceMocks.useAgentResources).toHaveBeenCalledWith("agent-1", {
+      enabled: false,
+      refetchOnMount: false,
+    });
   });
 
   it("renders the repository section and configured context tree row", async () => {
@@ -184,6 +185,13 @@ describe("RepositoriesTab", () => {
     expect(container.querySelector('[data-testid="resource-section"]')?.textContent).toContain("resources editable");
     await waitForText(container, "context-tree");
     expect(container.textContent).toContain("acme/context-tree");
+    const contextTreeSection = [...container.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === "Context tree",
+    );
+    expect(contextTreeSection?.querySelector<HTMLElement>(":scope > div:last-child")?.style.borderTop).toContain(
+      "var(--border)",
+    );
+    expect(contextTreeSection?.querySelector(".ad-tail-trim > [data-resource-row]")).not.toBeNull();
 
     await click(container.querySelector("button"));
     expect(navigateAway).toHaveBeenCalledWith("/settings/resources");

@@ -95,7 +95,7 @@ export function MobilePreviewPage() {
             }}
             askerName="gandy-coder"
             mobile
-            onDismiss={() => setAnswering(false)}
+            onShowEarlierChat={() => setAnswering(false)}
             onReply={() => setAnswering(false)}
             onSkip={() => setAnswering(false)}
           />

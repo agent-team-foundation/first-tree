@@ -503,6 +503,103 @@ describe("GitHub OAuth invite-only single-org entry gate", () => {
   });
 });
 
+describe("GitHub account-link return path", () => {
+  const getApp = useTestApp();
+
+  it("returns a completed capability link to its signed internal destination", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `link-return-${randomUUID().slice(0, 8)}` });
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/settings/github", {
+      intent: "link",
+      provider: "github",
+      userId: admin.userId,
+    });
+    const restore = stubGithubAppOauth({ githubId: 77_200_001, login: "linked-for-install" });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=ok-code&state=${token}`,
+        headers: { cookie: `oauth_state_nonce=${nonce}` },
+      });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("/settings/github?connection=github-linked");
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns an identity conflict to GitHub Settings without replacing the existing session", async () => {
+    const app = getApp();
+    const target = await createTestAdmin(app, { username: `link-target-${randomUUID().slice(0, 8)}` });
+    const owner = await createTestAdmin(app, { username: `link-owner-${randomUUID().slice(0, 8)}` });
+    const githubId = 77_200_002;
+    await app.db.insert(authIdentities).values({
+      id: randomUUID(),
+      userId: owner.userId,
+      provider: "github",
+      identifier: String(githubId),
+      metadata: { accountName: "already-linked" },
+    });
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/settings/github", {
+      intent: "link",
+      provider: "github",
+      userId: target.userId,
+    });
+    const restore = stubGithubAppOauth({ githubId, login: "already-linked" });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=ok-code&state=${token}`,
+        headers: { cookie: `oauth_state_nonce=${nonce}` },
+      });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("/settings/github?error=identity-conflict");
+      expect(res.headers.location).not.toContain("access=");
+      const targetIdentities = await app.db
+        .select({ provider: authIdentities.provider })
+        .from(authIdentities)
+        .where(eq(authIdentities.userId, target.userId));
+      expect(targetIdentities.some((identity) => identity.provider === "github")).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps a canceled account link side-effect free and preserves a retry route", async () => {
+    const app = getApp();
+    const target = await createTestAdmin(app, { username: `link-cancel-${randomUUID().slice(0, 8)}` });
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/settings/github", {
+      intent: "link",
+      provider: "github",
+      userId: target.userId,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/callback?error=access_denied&state=${token}`,
+      headers: { cookie: `oauth_state_nonce=${nonce}` },
+    });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = new URLSearchParams(res.headers.location?.split("#")[1] ?? "");
+    expect(fragment.get("error")).toBe("provider-denied");
+    expect(fragment.get("next")).toBe("/settings/github");
+    expect(fragment.get("callbackIntent")).toBe("link");
+    expect(fragment.get("access")).toBeNull();
+    expect(res.headers["set-cookie"]).toContain("Max-Age=0");
+    const targetIdentities = await app.db
+      .select({ provider: authIdentities.provider })
+      .from(authIdentities)
+      .where(eq(authIdentities.userId, target.userId));
+    expect(targetIdentities.some((identity) => identity.provider === "github")).toBe(false);
+  });
+});
+
 describe("OAuth callback rejects malformed state", () => {
   const getApp = useTestApp();
 

@@ -846,7 +846,7 @@ export class FirstTreeHubSDK {
     );
   }
 
-  /** Publish one server-authored App-directed GitHub task reply. */
+  /** Publish one server-authored, automatically routed GitHub task reply. */
   async submitGithubTaskReply(
     chatId: string,
     runId: string,
@@ -866,11 +866,16 @@ export class FirstTreeHubSDK {
    * (pass at least one):
    * - `topic` — the human-readable label rendered by `resolveChatTitle` and
    *   shown in the workspace chat list.
-   * - `description` — the chat's work summary + status report: task
-   *   background + plan + progress, serving both self-location (agent /
-   *   teammate) and a human-facing status report. May use Markdown. Max
-   *   1500 chars; surfaced to the agent each turn and via `chat list`.
-   *   Keep blockers / decisions out of it — those go to `chat ask`.
+   * - `description` — the chat's Summary: a current-state brief serving both
+   *   self-location (agent / teammate) and a human switching between chats.
+   *   Rewritten in place from blank on each write, leading with a standalone
+   *   line that states the current result and what it means for the reader,
+   *   then only the context needed to trust it. May use Markdown. Max 1500
+   *   chars, which is a ceiling rather than a target (2–4 short sentences is
+   *   the default shape); surfaced to the agent each turn and via `chat list`.
+   *   Keep human decisions out of it — those go to `chat ask`. The full
+   *   authoring contract lives in the generated agent briefing's "Chat Topic
+   *   & Description" section.
    * Pass either field as `null` to clear it (a cleared `topic` makes the title
    * fall back to first-message preview / participant names).
    *

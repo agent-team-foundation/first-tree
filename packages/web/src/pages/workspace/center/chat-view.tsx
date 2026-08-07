@@ -1,4 +1,5 @@
 import {
+  AGENT_TYPES,
   type AttachmentRef,
   attachmentRefsFromMetadata,
   type CapabilityEntry,
@@ -20,6 +21,7 @@ import {
   type RequestResolution,
   type RuntimeAuthProvider,
   readAskAgentMessageMetadata,
+  readContextDecisionMetadata,
   readFirstChatOrientationChatState,
   readFirstChatOrientationMessageMetadata,
   statusReasonFromProviderRetryEvent,
@@ -33,6 +35,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  ListFilter,
   Menu,
   MessageSquare,
   PanelRight,
@@ -94,6 +97,7 @@ import { sendAskAnswer } from "../../../components/chat/ask-answer-transport.js"
 import { type AskAnswer, AskTakeover, clearAskTakeoverDraft } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
+import { ContextDecisionReceipt } from "../../../components/chat/context-decision-receipt.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
   GithubEventCardMessage,
@@ -112,7 +116,13 @@ import { ImageRefGallery } from "../../../components/chat/image-ref-gallery.js";
 import {
   ONBOARDING_ORIENTATION_CONTINUE_MESSAGE,
   OnboardingOrientation,
+  onboardingOrientationComposerPlaceholder,
 } from "../../../components/chat/onboarding-orientation.js";
+import {
+  historyContainsThirdParty,
+  isPairConversationMessage,
+  listConversedAgentIds,
+} from "../../../components/chat/pair-conversation.js";
 import {
   contentStartsWithMention,
   findBlockingRequest,
@@ -147,6 +157,7 @@ import { Button } from "../../../components/ui/button.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
 import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
+import { Popover } from "../../../components/ui/popover.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -163,6 +174,7 @@ import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-u
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
+import { useChatMessageFilter } from "../../../lib/use-chat-message-filter.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
@@ -175,6 +187,7 @@ import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-con
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { MobileCurrentStateCard } from "../../mobile/current-state-card.js";
 import { applyPersistedChatRename } from "../chat-title-cache.js";
+import { needYouQueryOptions, removeResolvedNeedYouRequest } from "../need-you/query.js";
 import { GitHubSection } from "../right-sidebar/github-section.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ParticipantsSection } from "../right-sidebar/participants-section.js";
@@ -570,6 +583,8 @@ type MessageRowProps = {
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: RenderedMentionParticipant[];
+  /** See `MessageBodyProps.senderIsAgent`. */
+  senderIsAgent: boolean;
   /** Trial surface: render sender avatar/name as plain identity, without the
    *  AgentHovercard whose actions ("View profile" → /agents/:id, "New chat" →
    *  /?c=draft) would navigate out of the controlled trial conversation. */
@@ -587,10 +602,19 @@ type MessageBodyProps = {
   requestTagAgentId: string | null;
   myAgentId: string | null;
   mentionParticipants: RenderedMentionParticipant[];
-  orientationCompleted: boolean;
-  orientationHidden: boolean;
-  orientationContinuing: boolean;
-  onOrientationContinue: (bootstrap: MessageWithDelivery) => void;
+  /**
+   * True only when this row's sender is a speaker of this chat POSITIVELY typed
+   * as an agent. Gates the agent-attributed Context Tree receipt, and is
+   * deliberately a positive test rather than "not a known human": the
+   * participant list holds current speakers only and its `type` is a loose wire
+   * string, so a removed human's historical row, a row painted from cache before
+   * `chatDetail` resolves, and a legacy or unrecognised type all read as
+   * non-human under a negative test — and a receipt forged before the
+   * server-side guard would surface. Failing closed hides the receipt on every
+   * unresolved sender instead: a departed agent's receipt is lost, a forged one
+   * never renders.
+   */
+  senderIsAgent: boolean;
 };
 
 type MessageMarkdownProps = {
@@ -657,10 +681,7 @@ const MessageBody = memo(function MessageBody({
   requestTagAgentId,
   myAgentId,
   mentionParticipants,
-  orientationCompleted,
-  orientationHidden,
-  orientationContinuing,
-  onOrientationContinue,
+  senderIsAgent,
 }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -704,6 +725,13 @@ const MessageBody = memo(function MessageBody({
     );
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
+  // The agent's own record of how team context shaped THIS reply. Strictly
+  // parsed (unknown version / malformed payload -> null -> nothing renders),
+  // and shown only for a positively identified agent sender.
+  const contextDecision = useMemo(
+    () => (senderIsAgent ? readContextDecisionMetadata(msg.metadata) : null),
+    [msg.metadata, senderIsAgent],
+  );
   // Resolve a visible label only when this token's persisted mention ID still
   // identifies the current owner of the canonical handle. System-level
   // addressedAgentIds can include recipients unrelated to a particular token
@@ -927,13 +955,6 @@ const MessageBody = memo(function MessageBody({
           {JSON.stringify(msg.content, null, 2)}
         </pre>
       )}
-      {!orientationHidden && isFirstChatOrientationMessage(msg, myAgentId) ? (
-        <OnboardingOrientation
-          completed={orientationCompleted}
-          continuing={orientationContinuing}
-          onContinue={() => onOrientationContinue(msg)}
-        />
-      ) : null}
       <ImageRefGallery
         images={metadataImages}
         hasLeadingContent={typeof msg.content === "string" && msg.content.trim().length > 0}
@@ -955,6 +976,9 @@ const MessageBody = memo(function MessageBody({
           ))}
         </div>
       )}
+      {contextDecision ? (
+        <ContextDecisionReceipt receipt={contextDecision} gitlabInstanceOrigin={gitlabInstanceOrigin} />
+      ) : null}
     </div>
   );
 }, areMessageBodyPropsEqual);
@@ -967,6 +991,7 @@ const MessageRow = memo(function MessageRow({
   agentAvatarFn,
   agentColorTokenFn,
   mentionParticipants,
+  senderIsAgent,
   isTrial,
   orientationCompleted,
   orientationHidden,
@@ -991,6 +1016,33 @@ const MessageRow = memo(function MessageRow({
       ? GITLAB_SYSTEM_SENDER_NAME
       : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
+  const orientationTargetAgentId = firstChatOrientationTargetAgentId(msg);
+  const orientationTargetName = orientationTargetAgentId ? agentNameFn(orientationTargetAgentId) : null;
+  const isOrientationPresentation = !orientationHidden && isFirstChatOrientationMessage(msg);
+  const ownsOrientation = myAgentId !== null && msg.senderId === myAgentId;
+
+  if (isOrientationPresentation) {
+    return (
+      <div
+        className="[&>section]:mt-0"
+        data-message-id={msg.id}
+        data-onboarding-orientation-row
+        style={{ padding: "var(--sp-1_5) 0" }}
+      >
+        <OnboardingOrientation
+          // The member who started onboarding owns the pending handoff. Other
+          // members may encounter the trusted bootstrap later in shared
+          // history; keep its body/sender hidden for them too, but present it
+          // as a passive replay entry so they cannot consume someone else's
+          // first-chat transition.
+          completed={orientationCompleted || !ownsOrientation}
+          continuing={orientationContinuing}
+          targetAgentName={orientationTargetName}
+          onContinue={() => onOrientationContinue(msg)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1068,10 +1120,7 @@ const MessageRow = memo(function MessageRow({
           requestTagAgentId={requestTagAgentId}
           myAgentId={myAgentId}
           mentionParticipants={mentionParticipants}
-          orientationCompleted={orientationCompleted}
-          orientationHidden={orientationHidden}
-          orientationContinuing={orientationContinuing}
-          onOrientationContinue={onOrientationContinue}
+          senderIsAgent={senderIsAgent}
         />
       </div>
     </div>
@@ -1086,6 +1135,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.agentNameFn === next.agentNameFn &&
     prev.agentAvatarFn === next.agentAvatarFn &&
     prev.agentColorTokenFn === next.agentColorTokenFn &&
+    prev.senderIsAgent === next.senderIsAgent &&
     prev.isTrial === next.isTrial &&
     prev.orientationCompleted === next.orientationCompleted &&
     prev.orientationHidden === next.orientationHidden &&
@@ -1100,22 +1150,46 @@ function areMessageBodyPropsEqual(prev: MessageBodyProps, next: MessageBodyProps
     messageBodyFieldsEqual(prev.msg, next.msg) &&
     prev.requestTagAgentId === next.requestTagAgentId &&
     prev.myAgentId === next.myAgentId &&
-    prev.orientationCompleted === next.orientationCompleted &&
-    prev.orientationHidden === next.orientationHidden &&
-    prev.orientationContinuing === next.orientationContinuing &&
-    prev.onOrientationContinue === next.onOrientationContinue &&
+    prev.senderIsAgent === next.senderIsAgent &&
     mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
   );
 }
 
-function isFirstChatOrientationMessage(msg: MessageWithDelivery, myAgentId: string | null): boolean {
+function isFirstChatOrientationMessage(msg: MessageWithDelivery): boolean {
   return (
-    myAgentId !== null &&
-    msg.senderId === myAgentId &&
-    msg.source === "api" &&
-    msg.format === "text" &&
-    readFirstChatOrientationMessageMetadata(msg.metadata) !== null
+    msg.source === "api" && msg.format === "text" && readFirstChatOrientationMessageMetadata(msg.metadata) !== null
   );
+}
+
+function isOwnedFirstChatOrientationMessage(msg: MessageWithDelivery, myAgentId: string | null): boolean {
+  return myAgentId !== null && msg.senderId === myAgentId && isFirstChatOrientationMessage(msg);
+}
+
+function completedFirstChatOrientationMessageIds(
+  messages: readonly MessageWithDelivery[],
+  lifecycleCompleted: boolean,
+): Set<string> {
+  const completed = new Set<string>();
+  if (lifecycleCompleted) {
+    for (const message of messages) {
+      if (isFirstChatOrientationMessage(message)) completed.add(message.id);
+    }
+    return completed;
+  }
+  for (let bootstrapIndex = 0; bootstrapIndex < messages.length; bootstrapIndex += 1) {
+    const bootstrap = messages[bootstrapIndex];
+    if (!bootstrap || !isFirstChatOrientationMessage(bootstrap)) continue;
+    const targetAgentId = firstChatOrientationTargetAgentId(bootstrap);
+    if (!targetAgentId) continue;
+    for (let messageIndex = bootstrapIndex + 1; messageIndex < messages.length; messageIndex += 1) {
+      const candidate = messages[messageIndex];
+      if (candidate?.senderId === bootstrap.senderId && messageRoutesToAgent(candidate, targetAgentId)) {
+        completed.add(bootstrap.id);
+        break;
+      }
+    }
+  }
+  return completed;
 }
 
 function firstChatOrientationTargetAgentId(msg: MessageWithDelivery): string | null {
@@ -1403,6 +1477,8 @@ type ChatTimelineProps = {
   /** Non-human agent participants — drives the inline offline notice. */
   agents: ChatParticipantDetail[];
   mentionParticipants: RenderedMentionParticipant[];
+  /** Non-human speakers in this chat — see `MessageBodyProps.senderIsAgent`. */
+  agentParticipantIds: ReadonlySet<string>;
   dockRequestId: string | undefined;
   gapAfterMessageId: string | null;
   firstNewItemIdx: number;
@@ -1436,6 +1512,7 @@ const ChatTimeline = memo(function ChatTimeline({
   chatId,
   agents,
   mentionParticipants,
+  agentParticipantIds,
   dockRequestId,
   gapAfterMessageId,
   firstNewItemIdx,
@@ -1455,32 +1532,14 @@ const ChatTimeline = memo(function ChatTimeline({
     return map;
   }, [visibleItems]);
   const completedOrientationMessageIds = useMemo(() => {
-    const completed = new Set<string>();
-    if (!myAgentId) return completed;
     const messageItems = visibleItems.filter(
       (item): item is Extract<TimelineItem, { kind: "message" }> => item.kind === "message",
     );
-    if (orientationLifecycleCompleted) {
-      for (const item of messageItems) {
-        if (isFirstChatOrientationMessage(item.data, myAgentId)) completed.add(item.data.id);
-      }
-      return completed;
-    }
-    for (let bootstrapIndex = 0; bootstrapIndex < messageItems.length; bootstrapIndex += 1) {
-      const bootstrap = messageItems[bootstrapIndex]?.data;
-      if (!bootstrap || !isFirstChatOrientationMessage(bootstrap, myAgentId)) continue;
-      const targetAgentId = firstChatOrientationTargetAgentId(bootstrap);
-      if (!targetAgentId) continue;
-      for (let messageIndex = bootstrapIndex + 1; messageIndex < messageItems.length; messageIndex += 1) {
-        const candidate = messageItems[messageIndex]?.data;
-        if (candidate?.senderId === myAgentId && messageRoutesToAgent(candidate, targetAgentId)) {
-          completed.add(bootstrap.id);
-          break;
-        }
-      }
-    }
-    return completed;
-  }, [myAgentId, orientationLifecycleCompleted, visibleItems]);
+    return completedFirstChatOrientationMessageIds(
+      messageItems.map((item) => item.data),
+      orientationLifecycleCompleted,
+    );
+  }, [orientationLifecycleCompleted, visibleItems]);
   // Which non-human agents this turn awaits a reply from — routing-derived from
   // the latest message's persisted recipients (metadata.addressedAgentIds, which
   // includes the system addressedToAgentIds routing the onboarding bootstrap uses
@@ -1560,6 +1619,7 @@ const ChatTimeline = memo(function ChatTimeline({
                     agentAvatarFn={agentAvatarFn}
                     agentColorTokenFn={agentColorTokenFn}
                     mentionParticipants={mentionParticipants}
+                    senderIsAgent={agentParticipantIds.has(msg.senderId)}
                     isTrial={isTrial}
                     orientationCompleted={completedOrientationMessageIds.has(msg.id)}
                     orientationHidden={orientationHidden}
@@ -1726,11 +1786,17 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
   // Unsent draft text, cached per user + chat in browser-local storage so it
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
   const [draft, setDraft] = useChatDraftText(user?.id ?? null, chatId);
+  // Viewer-chosen timeline filter ("show only my conversation with agent X"),
+  // cached per user + chat in browser-local storage. Distinct from the
+  // `?focus=` URL param below: the param is a TRANSIENT view a navigation
+  // (e.g. "Show earlier chat" on an ask review) applies for this visit only,
+  // while this stored value is an explicit user choice that survives reloads.
+  const [storedFilterAgentId, setStoredFilterAgentId] = useChatMessageFilter(user?.id ?? null, chatId);
   // Always-current chat id for async send rollbacks: a send that FAILS after
   // the user switched chats must restore its rejected text into the originating
   // chat, never the one now in view (the draft state is shared and ChatView
@@ -1744,6 +1810,15 @@ export function ChatView({
   useLayoutEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
+  // Always-current committed search params, for async callbacks that must
+  // not act on the snapshot captured when their operation STARTED (e.g. the
+  // need-you queue advance: a manual chat switch mid-send deletes `nq`, and
+  // the stale closure must not resurrect it). Same commit discipline as
+  // `chatIdRef` above.
+  const latestSearchParamsRef = useRef(searchParams);
+  useLayoutEffect(() => {
+    latestSearchParamsRef.current = searchParams;
+  }, [searchParams]);
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -2204,6 +2279,19 @@ export function ChatView({
     null,
   );
 
+  // True while the pair filter is hiding at least one loaded message. Every
+  // watermark-advancing path — the read tracker's DOM tip, the own-send
+  // durable read-state write, and the own-send session pre-advance — must
+  // check it: an own send is chronologically newer than a hidden arrival, so
+  // advancing any watermark to it would mark the hidden message as seen
+  // (and the IDB write never self-heals). Held in a ref, assigned each
+  // render right after the filtered projection is computed, so async send
+  // callbacks read the CURRENT narrowing (a hidden message may arrive while
+  // a send is in flight — a closure-captured boolean would be stale).
+  // Own sends stay pill-invisible without any advance: the pill and divider
+  // both skip viewer-authored messages outright.
+  const readWatermarkFrozenRef = useRef(false);
+
   // Bundles the optimistic-insert + watermark pre-advance pair into
   // one call so every own-send entry point (text, image, text-after-
   // image, and any future variant like resend or forward) keeps the
@@ -2213,7 +2301,7 @@ export function ChatView({
   const insertOwnOptimisticMessage = useCallback(
     (msg: MessageWithDelivery) => {
       insertOptimisticMessage(msg);
-      setPendingHighWaterAdvance({ chatId, messageId: msg.id });
+      if (!readWatermarkFrozenRef.current) setPendingHighWaterAdvance({ chatId, messageId: msg.id });
     },
     [insertOptimisticMessage, chatId],
   );
@@ -2267,20 +2355,27 @@ export function ChatView({
       // settles. The just-sent message is also the chat tip — so
       // `latestKnownMessageId = saved.id` is both the visual anchor
       // and the freshness marker.
-      const ownSendReadState: ReadState = {
-        chatId,
-        bottomVisibleMessageId: saved.id,
-        latestKnownMessageId: saved.id,
-        updatedAt: Date.now(),
-      };
-      queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
-      void setReadState(chatId, saved.id, saved.id);
-      // Pre-advance the in-memory high water to the new message id
-      // BEFORE initiating the smooth scroll. By the time the new
-      // message commits to `mergedMessages`, `sessionHighestIdx`
-      // already resolves to the new last index → `pillCount = 0` →
-      // pill never flashes for the user's own send.
-      setPendingHighWaterAdvance({ chatId, messageId: saved.id });
+      // While the pair filter hides messages, the own send is NOT the
+      // chat tip the user has seen — a hidden arrival may sit between the
+      // watermark and this send, and advancing past it would swallow its
+      // unread state durably. The pill/divider skip own messages, so no
+      // advance is needed for the no-own-pill behavior.
+      if (!readWatermarkFrozenRef.current) {
+        const ownSendReadState: ReadState = {
+          chatId,
+          bottomVisibleMessageId: saved.id,
+          latestKnownMessageId: saved.id,
+          updatedAt: Date.now(),
+        };
+        queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+        void setReadState(chatId, saved.id, saved.id);
+        // Pre-advance the in-memory high water to the new message id
+        // BEFORE initiating the smooth scroll. By the time the new
+        // message commits to `mergedMessages`, `sessionHighestIdx`
+        // already resolves to the new last index → `pillCount = 0` →
+        // pill never flashes for the user's own send.
+        setPendingHighWaterAdvance({ chatId, messageId: saved.id });
+      }
       // When the user sends a message, scroll all the way to the
       // bottom so they see their own send. ResizeObserver-debounced
       // (non-immediate) variant so the scroll lands after the
@@ -2317,21 +2412,38 @@ export function ChatView({
     },
   });
   const sendChatMutation = sendMut.mutate;
+  const orientationContinueInFlightRef = useRef({ chatId, pending: false });
 
   const continueOnboardingOrientation = useCallback(
     (bootstrap: MessageWithDelivery) => {
+      if (orientationContinueInFlightRef.current.chatId !== chatId) {
+        orientationContinueInFlightRef.current = { chatId, pending: false };
+      }
+      if (bootstrap.senderId !== myAgentId || orientationContinueInFlightRef.current.pending) return;
       const mentions = readMentions(bootstrap.metadata).filter((id) => id !== myAgentId);
       if (mentions.length === 0) {
         setUploadError("This introduction can no longer reach its agent. Send a message from the composer instead.");
         return;
       }
-      sendChatMutation({
-        content: ONBOARDING_ORIENTATION_CONTINUE_MESSAGE,
-        mentions,
-        preserveDraft: true,
-      });
+      orientationContinueInFlightRef.current = { chatId, pending: true };
+      sendChatMutation(
+        {
+          content: ONBOARDING_ORIENTATION_CONTINUE_MESSAGE,
+          mentions,
+          preserveDraft: true,
+        },
+        {
+          onError: () => {
+            // A failed send did not consume the handoff, so let the member
+            // retry either action after the shared mutation error is shown.
+            if (orientationContinueInFlightRef.current.chatId === chatId) {
+              orientationContinueInFlightRef.current.pending = false;
+            }
+          },
+        },
+      );
     },
-    [myAgentId, sendChatMutation],
+    [chatId, myAgentId, sendChatMutation],
   );
 
   const handleSend = async () => {
@@ -2546,8 +2658,9 @@ export function ChatView({
         // the same reason as in sendMut.onSuccess — pill never
         // flashes for the user's own send. Also persist directly to
         // queryClient cache + IDB so the chat-switch-mid-send case
-        // is durable (see sendMut.onSuccess for rationale).
-        if (lastSentMessageId) {
+        // is durable (see sendMut.onSuccess for rationale; the
+        // narrowed-projection freeze applies identically here).
+        if (lastSentMessageId && !readWatermarkFrozenRef.current) {
           const ownSendReadState: ReadState = {
             chatId,
             bottomVisibleMessageId: lastSentMessageId,
@@ -2616,7 +2729,71 @@ export function ChatView({
       queryClient.invalidateQueries({ queryKey: ["need-you"] });
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
-      scrollToBottom("smooth");
+      // Answering ends the transient "show earlier chat" view: the original
+      // complaint behind this feature was a chat that still looked filtered
+      // after the question was resolved, so the resolution itself restores
+      // the full timeline. The stored (explicitly chosen) filter is not
+      // touched — only the navigation-applied params clear.
+      //
+      // Every read below is LIVE, never the snapshot captured when the send
+      // started: the rail stays usable while a resolve is in flight, and a
+      // manual chat switch both changes the chat and deletes `nq` — a stale
+      // continuation must neither hijack that navigation nor resurrect the
+      // session. Three layers: bail when the committed chat moved on, decide
+      // from the committed params, and re-validate inside the functional
+      // updater (the final word at write time).
+      if (chatIdRef.current !== chatId) return;
+      // Need-you queue session (`?nq=1`, set by the Need you entry): each
+      // resolution advances to the NEXT chat holding an open question. A
+      // next question in THIS chat needs no navigation — the FIFO takeover
+      // advances in place, and the session flag survives for the question
+      // after it. An empty queue (or an unavailable one — never strand a
+      // stale flag) ends the session.
+      let queueDecision: { kind: "advance"; chatId: string } | { kind: "end" } | null = null;
+      if (latestSearchParamsRef.current.get("nq") === "1") {
+        if (organizationId === null) {
+          queueDecision = { kind: "end" };
+        } else {
+          removeResolvedNeedYouRequest(queryClient, organizationId, request.id);
+          try {
+            const queue = await queryClient.fetchQuery(needYouQueryOptions(organizationId));
+            const nextItem = queue.items.find((item) => item.request.id !== request.id) ?? null;
+            if (!nextItem) queueDecision = { kind: "end" };
+            else if (nextItem.chat.id !== chatId) queueDecision = { kind: "advance", chatId: nextItem.chat.id };
+          } catch {
+            queueDecision = { kind: "end" };
+          }
+        }
+      }
+      if (chatIdRef.current !== chatId) return;
+      // Build the write from the LIVE committed params, re-read AFTER the
+      // queue await. The functional setSearchParams form is deliberately not
+      // used here: in the pinned react-router, that setter closes over the
+      // params of the render that created it and hands the updater a copy of
+      // that snapshot — so it cannot see a same-chat exit that only deleted
+      // `nq` while the queue fetch was pending. `latestSearchParamsRef` is
+      // commit-synced (layout effect), which makes it the live authority.
+      const live = latestSearchParamsRef.current;
+      if ((live.get("c") ?? chatId) !== chatId) return;
+      const sessionStillLive = live.get("nq") === "1";
+      const advancing = sessionStillLive && queueDecision?.kind === "advance";
+      const next = new URLSearchParams(live);
+      next.delete("focus");
+      next.delete("focusMsg");
+      if (queueDecision && sessionStillLive) {
+        if (queueDecision.kind === "end") {
+          next.delete("nq");
+        } else {
+          next.set("c", queueDecision.chatId);
+          next.delete("showAsk");
+        }
+      }
+      if (next.toString() !== live.toString()) {
+        // Advancing is a navigation (push — Back walks the queue hops);
+        // param cleanup in place is not (replace).
+        setSearchParams(next, { replace: !advancing });
+      }
+      if (!advancing) scrollToBottom("smooth");
       // Leave `askBusy` true: the overlay disables itself until the resolved
       // request unmounts it, so a slow refetch can't invite a second submit.
     } catch (err) {
@@ -2683,19 +2860,129 @@ export function ChatView({
   // Merge cached + server messages, dedup by id (server wins so updated
   // delivery status / metadata overrides any older cached copy), and
   // sort by createdAt. This is the union the timeline renders from.
+  // `?focus=<agentId>` — a TRANSIENT pair-filter view applied by navigation
+  // (the ask review's "Show earlier chat"). URL-only, never persisted;
+  // re-opening the chat through any ordinary route drops the param, so the
+  // next visit shows all messages again. Declared before the merge below
+  // because the handoff also DEEPENS the loaded window.
+  const focusParam = searchParams.get("focus");
+  const focusAgentId = focusParam && focusParam !== myAgentId ? focusParam : null;
+  // The request the focus handoff was opened for (`?focusMsg=`). Used only to
+  // report honestly when that request is older than the loaded history —
+  // the retired inline preview had the same bounded window and said so.
+  const focusMessageId = searchParams.get("focusMsg");
+  // Supplemental window for the focus handoff: the ordinary timeline loads
+  // only the latest 50 messages, but Need you reviews the OLDEST open
+  // request, whose surrounding conversation may have scrolled past that
+  // window. Match the retired inline preview's reach (the API's 100-row cap)
+  // so the handoff never shows LESS context than the preview it replaced.
+  const focusWindowQuery = useQuery({
+    queryKey: ["chat-messages-focus", chatId],
+    queryFn: () => listChatMessages(chatId, { limit: 100 }),
+    enabled: focusAgentId !== null,
+    staleTime: 30_000,
+  });
+  const { data: focusWindowData } = focusWindowQuery;
+
   const mergedMessages = useMemo<MessageWithDelivery[]>(() => {
     const fromCache = cachedMessages ?? [];
+    const fromFocusWindow = focusWindowData?.items ?? [];
     const fromServer = messagesData?.items ?? [];
     const byId = new Map<string, MessageWithDelivery>();
     for (const m of fromCache) byId.set(m.id, m);
+    for (const m of fromFocusWindow) byId.set(m.id, m);
     for (const m of fromServer) byId.set(m.id, m);
     const sorted = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return sorted;
-  }, [cachedMessages, messagesData]);
+  }, [cachedMessages, focusWindowData, messagesData]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
     [cachedMessages, messagesData],
+  );
+
+  // ── Timeline message filter: "show only my conversation with agent X".
+  // Two sources, one effect: the transient `?focus=` view above, and the
+  // stored per-user/per-chat choice from the header filter control — an
+  // explicit user preference that survives reloads (localStorage). The
+  // transient view wins while present; an explicit selection clears it.
+  // Filtering affects DISPLAY only: blocking-request derivation, open-request
+  // gating, and the ask takeover all keep reading the unfiltered sets, so a
+  // question from a filtered-out agent still blocks and stays answerable.
+  // Offering only agents the viewer actually exchanged messages with keeps the
+  // option list meaningful; humans are excluded — the filter is about "the
+  // agent I am talking to", and the viewer is the human side of the pair.
+  const humanParticipantIds = useMemo(
+    () => new Set((chatDetail?.participants ?? []).filter((p) => p.type === "human").map((p) => p.agentId)),
+    [chatDetail?.participants],
+  );
+  // Speakers of THIS chat that are POSITIVELY typed as agents. The wire schema
+  // keeps `type` a loose string so legacy and unrecognised DB values flow
+  // through, so `!== "human"` would quietly admit a missing, legacy, or
+  // future-unknown type — and under version skew a cached human row could pass
+  // the receipt gate again. Matching the known agent value instead keeps every
+  // unresolved type out, and the set is empty while `chatDetail` loads, which is
+  // the same fail-closed direction (see `MessageBodyProps.senderIsAgent`).
+  const agentParticipantIds = useMemo(
+    () => new Set((chatDetail?.participants ?? []).filter((p) => p.type === AGENT_TYPES.AGENT).map((p) => p.agentId)),
+    [chatDetail?.participants],
+  );
+  // The exact condition under which filtering on `agentId` keeps EVERY
+  // loaded message (the "no third party" shortcut): the chat's current
+  // speakers are exactly {viewer, agentId} AND the loaded window carries no
+  // third-party trace. One predicate, two consumers — the projection uses it
+  // to decide the direct-vs-group rule, and the control suppression below
+  // uses it to decide whether the filter would be a no-op. Sharing it is
+  // what keeps them consistent: membership alone says nothing about a
+  // departed speaker's history (see `historyContainsThirdParty`).
+  const pairFilterKeepsEverything = useCallback(
+    (agentId: string, windowMessages: readonly MessageWithDelivery[]) => {
+      if (!myAgentId) return false;
+      const speakerIds = (chatDetail?.participants ?? []).map((p) => p.agentId);
+      return (
+        speakerIds.length === 2 &&
+        speakerIds.includes(myAgentId) &&
+        speakerIds.includes(agentId) &&
+        !historyContainsThirdParty({ messages: windowMessages, humanAgentId: myAgentId, otherAgentId: agentId })
+      );
+    },
+    [chatDetail?.participants, myAgentId],
+  );
+  const filterCandidateIds = useMemo(() => {
+    if (!myAgentId) return [];
+    const candidates = listConversedAgentIds({ messages: mergedMessages, humanAgentId: myAgentId }).filter(
+      (id) => !humanParticipantIds.has(id),
+    );
+    // Offering a filter that would keep everything is a dead control, so the
+    // sole-peer candidate is suppressed ONLY when the projection would be a
+    // genuine no-op under the shared predicate. A departed third party in
+    // history (even one who never addressed the viewer) keeps the control:
+    // filtering on the current peer then meaningfully hides that side
+    // conversation.
+    const sole = candidates.length === 1 ? candidates[0] : undefined;
+    if (sole !== undefined && pairFilterKeepsEverything(sole, mergedMessages)) {
+      return [];
+    }
+    return candidates;
+  }, [mergedMessages, myAgentId, humanParticipantIds, pairFilterKeepsEverything]);
+  // A stored choice only applies while it still names someone the viewer has
+  // conversed with in the loaded window — a stale entry (agent left, history
+  // rotated out) silently falls back to the full view instead of blanking the
+  // timeline.
+  const chosenFilterAgentId =
+    storedFilterAgentId && filterCandidateIds.includes(storedFilterAgentId) ? storedFilterAgentId : null;
+  const filterAgentId = focusAgentId ?? chosenFilterAgentId;
+  const setMessageFilter = useCallback(
+    (agentId: string | null) => {
+      setStoredFilterAgentId(agentId);
+      if (searchParams.has("focus") || searchParams.has("focusMsg")) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("focus");
+        next.delete("focusMsg");
+        setSearchParams(next, { replace: true });
+      }
+    },
+    [setStoredFilterAgentId, searchParams, setSearchParams],
   );
 
   // ── Blocking request: the OLDEST (FIFO) live open question directed at me.
@@ -2793,11 +3080,19 @@ export function ChatView({
     humanAgentId: myAgentId,
     askerAgentId: dockRequest?.senderId ?? null,
   });
-  const enterAskInspectMode = useCallback(() => {
+  // "Show earlier chat" from the blocking ask: inspect mode + the transient
+  // pair filter on the asker, so the takeover gives way to exactly the
+  // conversation the question grew out of. URL-only — leaving the chat drops
+  // both params (see the timeline-filter block above).
+  const showEarlierChatFromAsk = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.set("showAsk", "false");
+    if (dockRequest) {
+      next.set("focus", dockRequest.senderId);
+      next.set("focusMsg", dockRequest.id);
+    }
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, dockRequest]);
   const reopenAskTakeover = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete("showAsk");
@@ -2836,7 +3131,66 @@ export function ChatView({
   // Answer state lives in the AskTakeover overlay (remounted per request via
   // `key`), so chat-view no longer resets per-question selections here.
 
-  const timelineMessages = inspectAskMode ? blockingMessages : mergedMessages;
+  const timelineSource = inspectAskMode ? blockingMessages : mergedMessages;
+  // Display-only pair filter over the timeline source. Group-shaped chats use
+  // the same pair-conversation membership rule as the retired earlier-chat
+  // preview (sender in the pair AND addressing/replying to the other member),
+  // so "my conversation with X" never leaks X's side conversations.
+  //
+  // The "no third party" shortcut (keep every pair-authored message, even
+  // mention-less ones — a DM's plain exchange must not vanish under the
+  // group addressing rule) requires BOTH:
+  //   1. the chat's CURRENT speakers are exactly the selected pair — neither
+  //      speaker count nor the retired `type="direct"` flag is sufficient
+  //      (a departed agent can still be a filter target through loaded
+  //      history or an old open request); and
+  //   2. the loaded history itself shows no third-party trace — participant
+  //      removal deletes the speaker row, so a chat that evolved
+  //      {viewer, A, B} → {viewer, A} looks pair-only by membership while
+  //      its history still holds messages to/from the departed B.
+  // Either failing keeps the group addressing rule, at the accepted cost of
+  // hiding mention-less pair messages in such chats. Legacy `direct` rows
+  // pass both checks whenever the shortcut is actually safe, so they need
+  // no separate branch.
+  const timelineMessages = useMemo<MessageWithDelivery[]>(() => {
+    if (!filterAgentId || !myAgentId) return timelineSource;
+    const senderById = new Map(timelineSource.map((m) => [m.id, m.senderId]));
+    const directChat = pairFilterKeepsEverything(filterAgentId, timelineSource);
+    return timelineSource.filter((message) =>
+      isPairConversationMessage({
+        message,
+        humanAgentId: myAgentId,
+        otherAgentId: filterAgentId,
+        directChat,
+        senderById,
+      }),
+    );
+  }, [timelineSource, filterAgentId, myAgentId, pairFilterKeepsEverything]);
+  const hiddenByFilter = timelineSource.length - timelineMessages.length;
+  // Own-send watermark gate (see the ref's declaration): assigned every
+  // render, immediately after the narrowed projection is known.
+  readWatermarkFrozenRef.current = filterAgentId !== null && hiddenByFilter > 0;
+  // Honest reporting for the focus handoff: when the reviewed request is
+  // older than even the deepened window (`focusMsg` absent from the loaded
+  // HISTORY — `blockingMessages` would mask this by unioning the synthetic
+  // open-request row), the conversation that led to the question is not
+  // shown, and the banner must say so instead of presenting the recent
+  // window as if it were complete. The retired inline preview reported the
+  // same condition as "unavailable".
+  //
+  // The age inference is gated on the supplemental window having loaded
+  // SUCCESSFULLY (`isSuccess`, never `isFetched` — that flips true on a
+  // terminal error too, which would misreport a fetch failure as "the
+  // question is old"). A failed window gets its own retryable error line
+  // below instead, mirroring the retired preview's "could not be loaded"
+  // state; without it the failure would be invisible whenever the request
+  // happens to sit inside the ordinary latest-50 window.
+  const focusContextMissing =
+    focusAgentId !== null &&
+    focusMessageId !== null &&
+    focusWindowQuery.isSuccess &&
+    !mergedMessages.some((m) => m.id === focusMessageId);
+  const focusWindowFailed = focusAgentId !== null && focusWindowQuery.isError;
   const items: TimelineItem[] = useMemo(() => {
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
@@ -2866,6 +3220,13 @@ export function ChatView({
     }
 
     for (const [eventAgentId, eventsById] of rawEventsByAgent) {
+      // The pair view is messages-only. A `SessionEventRow` carries no
+      // counterpart or triggering-message relationship, so even the selected
+      // agent's workgroups/errors may belong to work another participant
+      // asked for — un-attributable rows would silently break the
+      // no-side-conversation guarantee, so they are all hidden while the
+      // pair filter is active.
+      if (filterAgentId) continue;
       const rawEvents = [...eventsById.values()];
       const visibleEvents = filterEventsForTimeline(rawEvents);
       let lastTurnEndSeq = -1;
@@ -2899,7 +3260,7 @@ export function ChatView({
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [timelineMessages, eventFeedsData]);
+  }, [timelineMessages, eventFeedsData, filterAgentId]);
 
   const itemCount = items.length;
 
@@ -2929,6 +3290,79 @@ export function ChatView({
     refetchOnWindowFocus: false,
   });
   const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
+
+  // The highest read anchor that is SAFE while the pair filter is active:
+  // the message just before the OLDEST hidden one in the loaded order.
+  // Everything older than every hidden message can be marked known without
+  // swallowing anything, so a persistently-filtered chat still digests its
+  // read pair messages instead of re-flagging them as new on every visit (a
+  // plain freeze had exactly that noise). When the filter hides nothing, the
+  // ceiling IS the true tip — full normal persistence, including a transient
+  // exact-pair focus visit. `null` when even the first loaded message is
+  // hidden (nothing is safe); `undefined` when no filter is active. The
+  // persisted watermark never regresses: a ceiling below what the stored row
+  // already carries yields the stored value (that message was in the DOM,
+  // unfiltered, when it was persisted — so it is genuinely known).
+  //
+  // The bound applies to EVERY read/attention anchor, not just the durable
+  // `latestKnownMessageId`: the tracker clamps the persisted scroll anchor
+  // to it, and the live session-watermark advance below clamps to it too.
+  // A filtered DOM bottom can sit chronologically AFTER an interleaved
+  // hidden message (visible-A1, hidden-B2, visible-A3), and any anchor that
+  // crosses B2 — restored scroll, session high-water, or durable watermark —
+  // would eventually swallow B2's unread state.
+  //
+  // "Hidden" means NOT ACTUALLY RENDERED, so the visible set is taken from
+  // `visibleItems` — the post-truncation render list — not from the filter
+  // projection alone. Rendering stacks further cuts on top of the pair
+  // filter (the blocking-question truncation hides everything after an
+  // unanswered ask), and a message the user never saw must stay unknown no
+  // matter WHICH layer hid it. The unfiltered DOM path gets this for free
+  // (it reads rendered rows); the override must uphold the same invariant,
+  // including for any truncation layer added later.
+  const latestKnownCeiling = useMemo<string | null | undefined>(() => {
+    if (!filterAgentId) return undefined;
+    const renderedIds = new Set<string>();
+    for (const item of visibleItems) {
+      if (item.kind === "message") renderedIds.add(item.data.id);
+    }
+    let beforeOldestHidden: string | null = null;
+    for (const m of mergedMessages) {
+      if (!renderedIds.has(m.id)) break;
+      beforeOldestHidden = m.id;
+    }
+    const stored = readState?.latestKnownMessageId ?? null;
+    if (stored && stored !== beforeOldestHidden) {
+      const storedIdx = mergedMessages.findIndex((m) => m.id === stored);
+      const ceilingIdx = beforeOldestHidden ? mergedMessages.findIndex((m) => m.id === beforeOldestHidden) : -1;
+      if (storedIdx > ceilingIdx) return stored;
+    }
+    return beforeOldestHidden;
+  }, [filterAgentId, visibleItems, mergedMessages, readState?.latestKnownMessageId]);
+  // ONE clamp for every session-scoped attention anchor — the live session
+  // high-water advance and the divider-anchor advance both go through here
+  // (the tracker's persisted pair applies the same bound internally via
+  // `latestKnownOverride`). Centralizing it makes "is there a fourth
+  // unclamped anchor?" a one-glance question in review: every consumer that
+  // moves an anchor forward must call this first. Returns the id unchanged
+  // when no filter is active, the ceiling when the id sits past it, and
+  // `null` when no anchor is safe (callers must then not advance at all).
+  const clampToCeiling = useCallback(
+    (id: string): string | null => {
+      if (latestKnownCeiling === undefined) return id;
+      if (latestKnownCeiling === null) return null;
+      if (id === latestKnownCeiling) return id;
+      const idIdx = mergedMessages.findIndex((m) => m.id === id);
+      const ceilingIdx = mergedMessages.findIndex((m) => m.id === latestKnownCeiling);
+      if (idIdx < 0 || ceilingIdx < 0) return null;
+      return idIdx > ceilingIdx ? latestKnownCeiling : id;
+    },
+    [latestKnownCeiling, mergedMessages],
+  );
+  // Ref mirror for long-lived observer callbacks (the divider's
+  // IntersectionObserver deliberately avoids rebuilding per render).
+  const clampToCeilingRef = useRef(clampToCeiling);
+  clampToCeilingRef.current = clampToCeiling;
 
   // Resolve the stored bottom-visible id against the rendered set
   // so we can decide where to scroll on chat open. If the stored
@@ -3004,10 +3438,33 @@ export function ChatView({
     return mergedMessages.findIndex((m) => m.id === dividerAnchorMessageId);
   }, [dividerAnchorMessageId, mergedMessages]);
 
-  // Live bottom-visible id during the current session. Driven by
-  // useReadTracker's `onBottomVisibleChange` callback. Used as the
-  // signal that advances the session high watermark below.
-  const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
+  // Live bottom-visible observation during the current session. Driven by
+  // useReadTracker's `onBottomVisibleChange` callback. Used as the signal
+  // that advances the session high watermark below.
+  //
+  // Each observation carries the PROJECTION it was measured under (the
+  // active `filterAgentId`, `null` for the full view). A bottom id from one
+  // projection must never advance the watermark once the projection has
+  // changed: clearing the filter releases the ceiling on the same render,
+  // and the stale filtered bottom — chronologically after an interleaved
+  // hidden message — would otherwise promote the high-water past it before
+  // any real unfiltered viewport observation exists. The tracker only
+  // re-publishes when the new DOM's bottom actually DIFFERS from the last
+  // observed id, so an identical post-transition bottom stays un-trusted
+  // until the user scrolls or the layout genuinely moves.
+  const [liveBottomVisible, setLiveBottomVisible] = useState<{
+    id: string | null;
+    projection: string | null;
+  }>({ id: null, projection: null });
+  const liveBottomVisibleId = liveBottomVisible.id;
+  // Render-assigned mirror so the tracker's publication callback (fired
+  // from scroll/mutation listeners) tags observations with the projection
+  // of the COMMITTED render they were measured against.
+  const filterAgentIdRef = useRef<string | null>(null);
+  filterAgentIdRef.current = filterAgentId;
+  const publishBottomVisible = useCallback((id: string | null) => {
+    setLiveBottomVisible({ id, projection: filterAgentIdRef.current });
+  }, []);
 
   // Session high watermark — id of the latest message the user has
   // reached (had at viewport bottom) at any point during the
@@ -3051,7 +3508,7 @@ export function ChatView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
   useLayoutEffect(() => {
     setSessionHighestId(null);
-    setLiveBottomVisibleId(null);
+    setLiveBottomVisible({ id: null, projection: null });
     // Drop any pending own-send pre-advance from the previous
     // chat — the new chat's watermark should not inherit the
     // outgoing chat's last sent message.
@@ -3097,15 +3554,31 @@ export function ChatView({
   //      until the next forward advance instead.
   useEffect(() => {
     if (!liveBottomVisibleId) return;
-    const newIdx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
+    // Provenance gate: only an observation measured under the CURRENT
+    // projection may advance the watermark. A projection transition (filter
+    // applied, cleared, or retargeted) releases/changes the ceiling on the
+    // same render while the last observation still describes the OLD DOM —
+    // trusting it would promote the high-water past messages the old
+    // projection hid. A successor observation arrives only when the new
+    // DOM's bottom genuinely differs (scroll or layout movement).
+    if (liveBottomVisible.projection !== filterAgentId) return;
+    // While the pair filter hides messages, the DOM bottom is a FILTERED
+    // anchor that can sit chronologically after a hidden arrival (an own
+    // send, or the pair's next visible message). Advancing the session
+    // high-water past the safe bound would leave the hidden message
+    // pill-invisible even after the filter lifts, so the advance goes
+    // through the shared ceiling clamp.
+    const nextId = clampToCeiling(liveBottomVisibleId);
+    if (!nextId) return;
+    const newIdx = mergedMessages.findIndex((m) => m.id === nextId);
     if (newIdx < 0) return;
     if (sessionHighestId !== null) {
       const curIdx = mergedMessages.findIndex((m) => m.id === sessionHighestId);
       if (curIdx < 0) return;
       if (newIdx <= curIdx) return;
     }
-    setSessionHighestId(liveBottomVisibleId);
-  }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
+    setSessionHighestId(nextId);
+  }, [liveBottomVisible, liveBottomVisibleId, filterAgentId, mergedMessages, sessionHighestId, clampToCeiling]);
   // Effective high water index, resolved from `sessionHighestId`
   // against the live `mergedMessages`. Max with the frozen-at-open
   // anchor index covers the re-visit-without-scroll path (no
@@ -3127,18 +3600,32 @@ export function ChatView({
   // briefly invalidates `sessionHighestId` between renders) — the
   // pill is semantically "remote arrivals you haven't seen", not
   // "anything past the watermark".
+  //
+  // Counted over the VISIBLE projection (`timelineMessages`), not
+  // `mergedMessages`: while the pair filter is active, an arrival
+  // from a filtered-out agent has no row in the DOM, so scrolling
+  // to the bottom could never advance the watermark past it and the
+  // pill would be uncleareable. A hidden arrival surfaces (and then
+  // counts, if still unseen) the moment the filter lifts. Watermark
+  // ordering stays indexed against `mergedMessages` — the watermark
+  // id itself may be a filtered-out row.
   const pillCount = useMemo<number>(() => {
-    if (mergedMessages.length === 0) return 0;
+    if (timelineMessages.length === 0) return 0;
     if (sessionHighestIdx < 0) return 0;
-    let count = 0;
-    for (let i = sessionHighestIdx + 1; i < mergedMessages.length; i++) {
+    const idxById = new Map<string, number>();
+    for (let i = 0; i < mergedMessages.length; i++) {
       const msg = mergedMessages[i];
-      if (!msg) continue;
+      if (msg) idxById.set(msg.id, i);
+    }
+    let count = 0;
+    for (const msg of timelineMessages) {
+      const idx = idxById.get(msg.id);
+      if (idx === undefined || idx <= sessionHighestIdx) continue;
       if (myAgentId && msg.senderId === myAgentId) continue;
       count++;
     }
     return count;
-  }, [mergedMessages, sessionHighestIdx, myAgentId]);
+  }, [timelineMessages, mergedMessages, sessionHighestIdx, myAgentId]);
 
   // Index of the first NON-SELF message strictly newer than the
   // snapshotted anchor — i.e., where the "New Messages" line slots
@@ -3194,11 +3681,11 @@ export function ChatView({
   // would disconnect + recreate the IntersectionObserver. Reviewer
   // R3 on PR 652.
   const dividerRef = useRef<HTMLDivElement | null>(null);
-  const liveBottomVisibleIdRef = useRef<string | null>(liveBottomVisibleId);
+  const liveBottomVisibleRef = useRef<{ id: string | null; projection: string | null }>(liveBottomVisible);
   const mergedMessagesRef = useRef<readonly MessageWithDelivery[]>(mergedMessages);
   useEffect(() => {
-    liveBottomVisibleIdRef.current = liveBottomVisibleId;
-  }, [liveBottomVisibleId]);
+    liveBottomVisibleRef.current = liveBottomVisible;
+  }, [liveBottomVisible]);
   useEffect(() => {
     mergedMessagesRef.current = mergedMessages;
   }, [mergedMessages]);
@@ -3240,9 +3727,22 @@ export function ChatView({
             // emitted a bottom-visible). `firstNewItemIdx`
             // transiently stays -1 until the tracker catches up; no
             // harmful flash.
-            const live = liveBottomVisibleIdRef.current;
+            const live = liveBottomVisibleRef.current;
             const msgs = mergedMessagesRef.current;
-            let reached: string | null = live && !live.startsWith("optimistic-") ? live : null;
+            // Provenance gate, same rule as the session high-water: only an
+            // observation measured under the CURRENT projection may drive
+            // the advance. A callback firing around a projection transition
+            // ("Show all messages" re-rendering the timeline can trigger
+            // the observer) would otherwise pair a STALE filtered bottom
+            // with the NEW projection's clamp — no ceiling — and promote
+            // the anchor past a message the old projection hid. While no
+            // current-projection observation exists, do not advance at all:
+            // the chat-tip fallback must not cross a transition boundary
+            // either (it exists only for the pre-tracker first paint, where
+            // the observation is still {null, null} and matches an
+            // unfiltered mount).
+            if (live.projection !== filterAgentIdRef.current) return;
+            let reached: string | null = live.id && !live.id.startsWith("optimistic-") ? live.id : null;
             if (!reached) {
               for (let i = msgs.length - 1; i >= 0; i--) {
                 const m = msgs[i];
@@ -3251,6 +3751,16 @@ export function ChatView({
                   break;
                 }
               }
+            }
+            // The divider anchor is a session attention anchor like the
+            // high-water: while the pair filter is active, both the live
+            // bottom and the tip fallback can sit past a hidden message, so
+            // the advance goes through the same ceiling clamp. When no
+            // anchor is safe, keep the current one — never advance blind.
+            if (reached) {
+              const safeReached = clampToCeilingRef.current(reached);
+              if (safeReached) setDividerAnchorMessageId(safeReached);
+              return;
             }
             setDividerAnchorMessageId(reached);
             return;
@@ -3370,6 +3880,11 @@ export function ChatView({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
+    // While the pair filter is active, the tracker's DOM tip is only the
+    // FILTERED tip; persisting it would permanently mark hidden-but-older
+    // messages as known (the IDB row never self-heals). Supply the highest
+    // SAFE watermark instead — see `latestKnownCeiling`.
+    latestKnownOverride: latestKnownCeiling,
     onWrite: (cid, bottomVisibleMessageId, latestKnownMessageId) => {
       queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
         chatId: cid,
@@ -3378,7 +3893,7 @@ export function ChatView({
         updatedAt: Date.now(),
       });
     },
-    onBottomVisibleChange: setLiveBottomVisibleId,
+    onBottomVisibleChange: publishBottomVisible,
   });
 
   // Pill click: jump to the bottom. As the scroll lands, the
@@ -3545,6 +4060,18 @@ export function ChatView({
   );
 
   const displayName = chatScopedAgentName(agentId);
+  const orientationChatState = readFirstChatOrientationChatState(chatDetail?.metadata);
+  const orientationLifecycleCompleted = orientationChatState === FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED;
+  const orientationHidden = orientationChatState === FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED;
+  const pendingOrientationTargetAgentId = useMemo(() => {
+    if (orientationHidden) return null;
+    const completedIds = completedFirstChatOrientationMessageIds(mergedMessages, orientationLifecycleCompleted);
+    for (const message of mergedMessages) {
+      if (!isOwnedFirstChatOrientationMessage(message, myAgentId) || completedIds.has(message.id)) continue;
+      return firstChatOrientationTargetAgentId(message);
+    }
+    return null;
+  }, [mergedMessages, myAgentId, orientationHidden, orientationLifecycleCompleted]);
 
   // `managedByMe` is `managerId === myMemberId`, derived client-side
   // from the `listAgents` response (the row carries `managerId`). Drives
@@ -3746,6 +4273,10 @@ export function ChatView({
     }
     return null;
   }, [chatDetail, myAgentId]);
+  const orientationComposerTargetName =
+    pendingOrientationTargetAgentId && pendingOrientationTargetAgentId === peerAgentId
+      ? chatScopedAgentName(pendingOrientationTargetAgentId)
+      : null;
   const effectiveSendMentions = useMemo(
     () => (peerAgentId ? [...new Set([...draftMentions, peerAgentId])] : draftMentions),
     [draftMentions, peerAgentId],
@@ -3928,6 +4459,12 @@ export function ChatView({
                   imageId: ref.attachmentId,
                   filename: ref.filename,
                 }))}
+                contextDecision={
+                  agentParticipantIds.has(dockRequest.senderId)
+                    ? readContextDecisionMetadata(dockRequest.metadata)
+                    : null
+                }
+                gitlabInstanceOrigin={gitlabInstanceOrigin}
                 payload={dockPayload}
                 askerName={chatScopedAgentName(dockRequest.senderId)}
                 sending={askBusy}
@@ -3943,7 +4480,7 @@ export function ChatView({
                   error: askAgent.error,
                   onAsk: askAgent.ask,
                 }}
-                onDismiss={enterAskInspectMode}
+                onShowEarlierChat={showEarlierChatFromAsk}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
@@ -4189,42 +4726,50 @@ export function ChatView({
                   the trial is a pure conversation with no side rail. */}
               {!isTrial &&
                 (narrow ? (
-                  <button
-                    type="button"
-                    onClick={toggleSidebar}
-                    aria-label={
-                      detailsOpen
-                        ? useMobileDetailsSheet
-                          ? "Hide chat details"
-                          : "Hide chat options"
-                        : useMobileDetailsSheet
-                          ? "Show chat details"
-                          : "Show chat options"
-                    }
-                    aria-expanded={detailsOpen}
-                    aria-pressed={detailsOpen}
-                    title={
-                      detailsOpen
-                        ? useMobileDetailsSheet
-                          ? "Hide chat details"
-                          : "Hide chat options"
-                        : useMobileDetailsSheet
-                          ? "Show chat details"
-                          : "Show chat options"
-                    }
-                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                    style={{
-                      width: 32,
-                      height: 32,
-                      border: 0,
-                      background: detailsOpen ? "var(--bg-sunken)" : "transparent",
-                      borderRadius: "var(--radius-input)",
-                      color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <PanelRight size={17} strokeWidth={2.25} />
-                  </button>
+                  <>
+                    <MessageFilterControl
+                      candidateIds={filterCandidateIds}
+                      activeAgentId={filterAgentId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onSelect={setMessageFilter}
+                    />
+                    <button
+                      type="button"
+                      onClick={toggleSidebar}
+                      aria-label={
+                        detailsOpen
+                          ? useMobileDetailsSheet
+                            ? "Hide chat details"
+                            : "Hide chat options"
+                          : useMobileDetailsSheet
+                            ? "Show chat details"
+                            : "Show chat options"
+                      }
+                      aria-expanded={detailsOpen}
+                      aria-pressed={detailsOpen}
+                      title={
+                        detailsOpen
+                          ? useMobileDetailsSheet
+                            ? "Hide chat details"
+                            : "Hide chat options"
+                          : useMobileDetailsSheet
+                            ? "Show chat details"
+                            : "Show chat options"
+                      }
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        border: 0,
+                        background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <PanelRight size={17} strokeWidth={2.25} />
+                    </button>
+                  </>
                 ) : (
                   <>
                     {/* Audience — compact stats icon + quick-add icon. Replaces
@@ -4261,6 +4806,12 @@ export function ChatView({
                         onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                       />
                     )}
+                    <MessageFilterControl
+                      candidateIds={filterCandidateIds}
+                      activeAgentId={filterAgentId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onSelect={setMessageFilter}
+                    />
                     {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
@@ -4340,6 +4891,79 @@ export function ChatView({
             </div>
           )}
 
+          {/* Pair-filter notice: whenever the timeline is narrowed to one
+          conversation the banner says so and offers the way back, so a
+          filtered view can never be mistaken for the full history. The
+          transient (`?focus=`) variant additionally says the view resets on
+          the next visit — it wasn't an explicit choice. */}
+          {filterAgentId ? (
+            <div
+              data-message-filter-banner
+              className="shrink-0 flex items-center"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-1_5) var(--sp-6)",
+                background: "var(--bg-sunken)",
+                borderBottom: "var(--hairline) solid var(--border-faint)",
+                color: "var(--fg-2)",
+              }}
+            >
+              <ListFilter aria-hidden size={14} strokeWidth={2.25} style={{ flexShrink: 0, color: "var(--fg-3)" }} />
+              <span className="text-body" style={{ flex: 1 }}>
+                {/* An unresolvable id (hand-edited URL, identity map gap) falls
+                    back to neutral copy rather than leaking a raw UUID. */}
+                Showing your conversation with{" "}
+                {chatScopedAgentName(filterAgentId) === filterAgentId
+                  ? "this agent"
+                  : chatScopedAgentName(filterAgentId)}
+                {hiddenByFilter > 0
+                  ? ` · ${hiddenByFilter} ${hiddenByFilter === 1 ? "message" : "messages"} hidden`
+                  : ""}
+                {focusAgentId ? " · temporary view" : ""}
+                {focusContextMissing ? (
+                  <span style={{ display: "block", color: "var(--fg-3)" }}>
+                    This question is older than the loaded history — the conversation before it isn’t shown.
+                  </span>
+                ) : null}
+                {focusWindowFailed ? (
+                  <span data-focus-window-error style={{ display: "block", color: "var(--state-error)" }}>
+                    Earlier chat could not be loaded.{" "}
+                    <button
+                      type="button"
+                      onClick={() => void focusWindowQuery.refetch()}
+                      className="text-body"
+                      style={{
+                        padding: 0,
+                        border: 0,
+                        background: "transparent",
+                        color: "inherit",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                onClick={() => setMessageFilter(null)}
+                className="text-body"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-2)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  background: "var(--bg-raised)",
+                  color: "var(--fg)",
+                  cursor: "pointer",
+                }}
+              >
+                Show all messages
+              </button>
+            </div>
+          ) : null}
+
           {/* Timeline region. Outer `relative flex-col` wrapper exists solely
           as the containing block for the floating pill — putting `position:
           relative` on the scroll container itself let the pill drift mid-list
@@ -4382,6 +5006,7 @@ export function ChatView({
             chatId={chatId}
             agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
             mentionParticipants={renderMentionParticipants}
+            agentParticipantIds={agentParticipantIds}
             dockRequestId={dockRequestId}
             gapAfterMessageId={gapAfterMessageId}
             firstNewItemIdx={firstNewItemIdx}
@@ -4389,13 +5014,8 @@ export function ChatView({
             pillCount={pillCount}
             onPillClick={onPillClick}
             orientationContinuing={sendMut.isPending}
-            orientationLifecycleCompleted={
-              readFirstChatOrientationChatState(chatDetail?.metadata) === FIRST_CHAT_ORIENTATION_CHAT_STATES.CONTINUED
-            }
-            orientationHidden={
-              readFirstChatOrientationChatState(chatDetail?.metadata) ===
-              FIRST_CHAT_ORIENTATION_CHAT_STATES.LEGACY_STARTED
-            }
+            orientationLifecycleCompleted={orientationLifecycleCompleted}
+            orientationHidden={orientationHidden}
             onOrientationContinue={continueOnboardingOrientation}
           />
 
@@ -4536,7 +5156,7 @@ export function ChatView({
                       ?
                     </span>
                     <span className="text-body flex-1">
-                      {openRequestCount === 1 ? "有 1 条待处理的问题" : `有 ${openRequestCount} 条待处理的问题`}
+                      {openRequestCount === 1 ? "1 pending question" : `${openRequestCount} pending questions`}
                     </span>
                     <span className="text-label" style={{ color: "var(--fg-4)" }}>
                       Open
@@ -4835,19 +5455,21 @@ export function ChatView({
                                   // slash commands or @mention (one agent), so the
                                   // placeholder is just the plain message prompt.
                                   `Message @${displayName}`
-                                : requiresMention
-                                  ? // Group chat: the placeholder carries the rule (this
-                                    // is the calm, always-there teaching surface). It
-                                    // shows only while empty; once the user types it's
-                                    // gone, and the tip bubble covers a blocked send.
-                                    "In a group, @mention who this is for"
-                                  : composerMobile
-                                    ? // Mobile: drop the desktop keyboard-shortcut
-                                      // teaching text — `/` and `@` live in the
-                                      // toolbar and there's no keyboard hint to give
-                                      // on a touch surface. Keep it to the bare prompt.
-                                      `Message @${displayName}`
-                                    : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                                : orientationComposerTargetName && !requiresMention
+                                  ? onboardingOrientationComposerPlaceholder(orientationComposerTargetName)
+                                  : requiresMention
+                                    ? // Group chat: the placeholder carries the rule (this
+                                      // is the calm, always-there teaching surface). It
+                                      // shows only while empty; once the user types it's
+                                      // gone, and the tip bubble covers a blocked send.
+                                      "In a group, @mention who this is for"
+                                    : composerMobile
+                                      ? // Mobile: drop the desktop keyboard-shortcut
+                                        // teaching text — `/` and `@` live in the
+                                        // toolbar and there's no keyboard hint to give
+                                        // on a touch surface. Keep it to the bare prompt.
+                                        `Message @${displayName}`
+                                      : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           // The auto-resize hook measures `scrollHeight` after
                           // `height:auto`, which reverts the box to this `rows` count —
@@ -5356,6 +5978,139 @@ function MobileChatDetailsSheet({
  * agent-only concept here.
  */
 const MAX_VISIBLE_AVATARS = 4;
+
+/**
+ * Header entry for the timeline pair filter. Renders nothing until the viewer
+ * has at least one conversed-with agent to offer — an empty menu would be a
+ * dead control. The trigger mirrors the details-toggle icon-button styling;
+ * an active filter keeps the trigger visually pressed so the narrowed state
+ * stays discoverable even when the banner has scrolled out of mind.
+ */
+function MessageFilterControl({
+  candidateIds,
+  activeAgentId,
+  agentIdentity,
+  onSelect,
+}: {
+  candidateIds: readonly string[];
+  activeAgentId: string | null;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
+  onSelect: (agentId: string | null) => void;
+}) {
+  if (candidateIds.length === 0) return null;
+  const filterActive = activeAgentId !== null;
+
+  const optionRow = (label: ReactNode, selected: boolean, onClick: () => void, key: string) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      onClick={onClick}
+      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-1_5) var(--sp-2_5)",
+        border: 0,
+        borderRadius: "var(--radius-input)",
+        background: "transparent",
+        color: "var(--fg)",
+        cursor: "pointer",
+      }}
+    >
+      <span className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-2)" }}>
+        {label}
+      </span>
+      {selected ? <Check aria-hidden className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--fg-2)" }} /> : null}
+    </button>
+  );
+
+  return (
+    <Popover
+      align="end"
+      panelAriaLabel="Filter messages"
+      panelStyle={{
+        minWidth: 220,
+        padding: "var(--sp-1)",
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-input)",
+        background: "var(--bg-raised)",
+        boxShadow: "var(--shadow-md)",
+      }}
+      trigger={({ toggle, open }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={filterActive ? "Filter messages (filtered)" : "Filter messages"}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-pressed={filterActive}
+          title="Filter messages"
+          data-message-filter-trigger
+          className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            width: 28,
+            height: 28,
+            border: 0,
+            background: filterActive || open ? "var(--bg-sunken)" : "transparent",
+            borderRadius: "var(--radius-input)",
+            color: filterActive ? "var(--fg)" : "var(--fg-3)",
+            cursor: "pointer",
+          }}
+        >
+          <ListFilter size={16} strokeWidth={2.25} />
+        </button>
+      )}
+    >
+      {({ close }) => (
+        <div role="menu" aria-label="Filter messages" className="flex flex-col">
+          {optionRow(
+            <span className="truncate">All messages</span>,
+            !filterActive,
+            () => {
+              onSelect(null);
+              close();
+            },
+            "all",
+          )}
+          {candidateIds.map((id) => {
+            const ident = agentIdentity(id);
+            const label = ident?.displayName ?? id.slice(0, 8);
+            return optionRow(
+              <>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0"
+                  style={{ display: "inline-flex", width: 18, height: 18, borderRadius: 999, overflow: "hidden" }}
+                >
+                  <RealAvatar
+                    src={ident?.avatarImageUrl ?? null}
+                    name={label}
+                    seed={id}
+                    colorToken={ident?.avatarColorToken ?? null}
+                    size={18}
+                  />
+                </span>
+                <span className="truncate">{label}</span>
+              </>,
+              activeAgentId === id,
+              () => {
+                onSelect(id);
+                close();
+              },
+              id,
+            );
+          })}
+        </div>
+      )}
+    </Popover>
+  );
+}
 
 function ParticipantsStats({
   participants,

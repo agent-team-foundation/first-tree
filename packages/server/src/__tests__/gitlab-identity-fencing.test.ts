@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
-import type { Database } from "../db/connection.js";
+import { connectDatabase, type Database, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
@@ -29,6 +30,7 @@ import {
   resolveGitlabAudience,
 } from "../services/gitlab-webhook.js";
 import { deactivateMembership, MEMBER_STATUSES } from "../services/membership.js";
+import { lockAndResolveAgentScmBindingPair } from "../services/scm-attention-line.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -59,6 +61,46 @@ function deferredSignal() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(observer: ReturnType<typeof postgres>, applicationName: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ wait_event_type: string | null }[]>`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock: ${applicationName}`);
+}
+
+async function waitForPostgresBlocker(
+  observer: ReturnType<typeof postgres>,
+  applicationName: string,
+  blockerPid: number,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ blocked: boolean }[]>`
+      SELECT ${blockerPid} = ANY(pg_blocking_pids(pid)) AS blocked
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = ${applicationName}
+    `;
+    if (rows.some((row) => row.blocked)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${applicationName} to be blocked by backend ${blockerPid}`);
 }
 
 async function setup(app: App) {
@@ -252,6 +294,134 @@ describe("GitLab identity authority fencing", () => {
         .from(messages)
         .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
     ).toHaveLength(2);
+  }, 20_000);
+
+  it("keeps GitLab audience identity locks behind the membership fence used by GitHub-side follow resolution", async () => {
+    const app = getApp();
+    const fixture = await setup(app);
+    const follower = await createAgent(app.db, {
+      name: `cross-provider-follow-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Cross-provider follower",
+      managerId: fixture.admin.memberId,
+      organizationId: fixture.admin.organizationId,
+    });
+    const iid = 91;
+    const chat = await createChat(app.db, fixture.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [fixture.delegate.uuid, follower.uuid],
+      topic: "Cross-provider authority lock",
+      metadata: {},
+    });
+    await declareGitlabEntityFollow(app.db, {
+      organizationId: fixture.admin.organizationId,
+      connectionId: fixture.connection.connectionId,
+      chatId: chat.id,
+      declaredByAgentId: follower.uuid,
+      humanAgentId: fixture.admin.humanAgentUuid,
+      delegateAgentId: follower.uuid,
+      boundVia: "agent_declared",
+      entityUrl: `https://gitlab.internal/Acme/Fenced/-/merge_requests/${iid}`,
+    });
+    const endpoint = await findActiveGitlabEndpoint(app.db, fixture.connection.bearer);
+    if (!endpoint) throw new Error("GitLab endpoint missing");
+    const normalized = normalizeGitlabWebhook({
+      organizationId: fixture.admin.organizationId,
+      connectionId: fixture.connection.connectionId,
+      instanceOrigin: "https://gitlab.internal",
+      stableDeliveryId: null,
+      eventHeader: "System Hook",
+      body: mrPayload([{ username: "Reviewer.One" }], "author", iid),
+    });
+    const applied = applyGitlabPersonnelEvidence(normalized, "reviewers");
+    const identity = normalized.entityIdentity;
+    const event = applied.event;
+    if (!identity || !event) throw new Error("normalized cross-provider MR missing");
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const suffix = randomUUID().slice(0, 8);
+    const githubApplicationName = `github_follow_lock_${suffix}`;
+    const gitlabApplicationName = `gitlab_audience_lock_${suffix}`;
+    const githubDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, githubApplicationName));
+    const gitlabDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, gitlabApplicationName));
+    const membershipHolder = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const agentHolder = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let membershipHolderCommitted = false;
+    let agentHolderCommitted = false;
+    try {
+      await agentHolder`BEGIN`;
+      const [agentHolderBackend] = await agentHolder<{ pid: number }[]>`
+        SELECT pg_backend_pid()::int AS pid
+      `;
+      if (!agentHolderBackend) throw new Error("agent holder backend missing");
+      await agentHolder`
+        SELECT uuid
+        FROM agents
+        WHERE uuid = ${fixture.admin.humanAgentUuid}
+        FOR UPDATE
+      `;
+
+      await membershipHolder`BEGIN`;
+      await membershipHolder`
+        SELECT pg_advisory_xact_lock(
+          hashtext('chat_speaker_membership'),
+          hashtext(${chat.id})
+        )
+      `;
+
+      const githubFollowResolution = githubDb.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as Database;
+        return lockAndResolveAgentScmBindingPair(tx, chat.id, follower.uuid);
+      });
+      await waitForPostgresLockWait(observer, githubApplicationName);
+
+      const gitlabDelivery = withGitlabIngressFence(
+        gitlabDb,
+        fixture.connection.connectionId,
+        endpoint.connection.tokenHash,
+        async (tx) => {
+          const audience = await resolveGitlabAudience(tx, {
+            organizationId: fixture.admin.organizationId,
+            connectionId: fixture.connection.connectionId,
+            event,
+            entityIdentity: identity,
+          });
+          return deliverGitlabCards(app, {
+            event,
+            identity,
+            audience,
+            organizationId: fixture.admin.organizationId,
+            connectionId: fixture.connection.connectionId,
+            database: tx,
+          });
+        },
+      );
+      await waitForPostgresLockWait(observer, gitlabApplicationName);
+
+      await membershipHolder`COMMIT`;
+      membershipHolderCommitted = true;
+      await waitForPostgresBlocker(observer, githubApplicationName, agentHolderBackend.pid);
+      await agentHolder`COMMIT`;
+      agentHolderCommitted = true;
+
+      const [pair, delivery] = await Promise.all([githubFollowResolution, gitlabDelivery]);
+      expect(pair).toEqual({
+        organizationId: fixture.admin.organizationId,
+        humanAgentId: fixture.admin.humanAgentUuid,
+        wakeAgentId: follower.uuid,
+      });
+      expect(delivery).toMatchObject({ delivered: 1, failed: 0 });
+    } finally {
+      if (!membershipHolderCommitted) await membershipHolder`ROLLBACK`;
+      if (!agentHolderCommitted) await agentHolder`ROLLBACK`;
+      await githubDb.end();
+      await gitlabDb.end();
+      await membershipHolder.end();
+      await agentHolder.end();
+      await observer.end();
+    }
   }, 20_000);
 
   it.each([

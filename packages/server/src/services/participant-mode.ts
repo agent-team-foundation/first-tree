@@ -54,6 +54,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { lockChatMembershipMutation } from "./chat-membership-lock.js";
 import { backfillSilentContextForNewParticipants } from "./inbox.js";
 
 /**
@@ -131,6 +132,8 @@ export async function addChatParticipants(
   options: AddChatParticipantsOptions = {},
 ): Promise<void> {
   if (participants.length === 0) return;
+
+  await lockChatMembershipMutation(tx, [chatId]);
 
   // Confirm the chat exists AND lock the chats row for the duration of the
   // tx. We no longer SELECT `chats.type` — it's locked to 'group' and never
@@ -321,9 +324,11 @@ export async function recomputeChatWatchers(db: DbLike, chatId: string): Promise
  * bundle here makes the tx-boundary discipline a single decision instead
  * of N repeated decisions at each service entrypoint.
  *
- * Use this from service entrypoints (`inviteParticipantsToChat`,
- * `ensureParticipant`, the rebuild path of `joinAsParticipant`) rather
- * than spelling the three steps out yourself.
+ * Use this from service entrypoints that do not need to compose membership
+ * with another write (`ensureParticipant`, the rebuild path of
+ * `joinAsParticipant`). `inviteParticipantsToChat` owns an equivalent
+ * transaction-aware bundle so SCM routing can atomically add membership and
+ * persist its attention line.
  */
 export async function applyMembershipWrite(
   db: Database,

@@ -16,6 +16,9 @@
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --passWithNoTests",
     "video:preview": "vite --host 127.0.0.1 --port 4178",
+    "video:voiceover": "node scripts/build-orientation-voiceovers.mjs",
+    "video:voiceover:check": "node scripts/build-orientation-voiceovers.mjs --check",
+    "video:voiceover:write-text": "node scripts/build-orientation-voiceovers.mjs --write-text",
     "video:render": "node scripts/render-orientation-videos.mjs"
   },
   "dependencies": {

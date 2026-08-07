@@ -17,7 +17,7 @@ function workspaceAgentsMarkdown(skillDescription: string, evalCase: FirstTreeWe
       return "A selected readable source repo fixture is available at `./source-repo`.";
     }
     if (evalCase.fixture.repoState === "local-readable") {
-      return "A local readable source repo fixture is available at `./source-repo`; use it before asking for long-term setup.";
+      return "A local readable source repo fixture is available at `./source-repo`; use it for the bounded first-project read.";
     }
     if (evalCase.fixture.repoState === "selected-auth-fails") {
       return "A selected repository exists, but reading it fails with an authorization error. No repo evidence is readable; ask for a local project folder path or accessible URL.";
@@ -61,8 +61,12 @@ skill workflow exactly.
 ${sourceLine}
 ${treeLine}
 
-If you need a tracked request, use
-\`first-tree chat ask baixiaohang "<question>" --options '<json options>'\`.
+For any multi-line or Markdown chat body, write it to a workspace file and use
+\`first-tree chat ask baixiaohang -F <body-file>\` or
+\`first-tree chat send baixiaohang -F <body-file>\`. Add \`--options\` only for
+the two-option first microtask choice, using a JSON array of objects such as
+\`[{"label":"Trace flow","description":"Read-only result with evidence."},{"label":"Verify behavior","description":"Read-only focused check."}]\`.
+Never inline a rich body through the shell or search the project for CLI syntax.
 The eval shim records chat commands only; it never sends a real message.
 
 Do not use real GitHub, install GitHub Apps, create repositories, push, open
@@ -107,16 +111,36 @@ Useful first-pass evidence:
 }
 
 function sessionSource(): string {
-  return `export function describeSessionExpiry(): string {
+  return `import { refreshToken } from "./token.js";
+
+export function loadSession(cartId: string): string {
   // TODO: expired session handling should return a clear re-auth prompt.
-  return "expired";
+  return refreshToken(cartId);
 }
 `;
 }
 
 function checkoutSource(): string {
-  return `export function recoverCheckout(cartId: string): string {
-  return "recover:" + cartId;
+  return `import { loadSession } from "../auth/session.js";
+import { buildRetryResponse } from "./retry.js";
+
+export function recoverCheckout(cartId: string): string {
+  const session = loadSession(cartId);
+  return buildRetryResponse(session);
+}
+`;
+}
+
+function tokenSource(): string {
+  return `export function refreshToken(cartId: string): string {
+  return "session:" + cartId;
+}
+`;
+}
+
+function retrySource(): string {
+  return `export function buildRetryResponse(session: string): string {
+  return "recover:" + session;
 }
 `;
 }
@@ -126,7 +150,9 @@ function writeSourceRepoFixture(paths: RunPaths): string {
   mkdirSync(sourceRepoPath, { recursive: true });
   writeText(join(sourceRepoPath, "README.md"), sourceReadmeMarkdown());
   writeText(join(sourceRepoPath, "src", "auth", "session.ts"), sessionSource());
+  writeText(join(sourceRepoPath, "src", "auth", "token.ts"), tokenSource());
   writeText(join(sourceRepoPath, "src", "checkout", "recovery.ts"), checkoutSource());
+  writeText(join(sourceRepoPath, "src", "checkout", "retry.ts"), retrySource());
   writeText(
     join(sourceRepoPath, "package.json"),
     `${JSON.stringify({ name: "acme-support-dashboard", scripts: { test: "vitest run" } }, null, 2)}\n`,

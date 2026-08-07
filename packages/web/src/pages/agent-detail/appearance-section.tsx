@@ -104,7 +104,7 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
   }
 
   return (
-    <Section title="Appearance" action={action}>
+    <Section headingLevel={3} title="Appearance" action={action}>
       {content}
     </Section>
   );

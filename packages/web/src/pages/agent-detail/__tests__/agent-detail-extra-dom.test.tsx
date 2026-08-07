@@ -13,6 +13,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../../api/client.js";
 import type { AgentDetailContext } from "../layout-context.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -142,8 +143,6 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
       savedField: null,
     },
     clientStatus: undefined,
-    clientStatusLoading: false,
-    clientStatusError: null,
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: "gandy-macbook",
@@ -833,19 +832,60 @@ describe("Resources and runtime extra sections", () => {
     if (loadErrorRoot) await act(async () => loadErrorRoot.unmount());
     document.body.innerHTML = "";
 
-    agentResourceMocks.getAgentResources.mockResolvedValue(
-      agentResources({
-        effective: { version: 9, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
-        availableTeamResources: [availableSkill()],
-      }),
-    );
-    agentResourceMocks.updateAgentResources.mockRejectedValue(new Error("resource save failed"));
+    const initialResources = agentResources({
+      effective: { version: 9, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      availableTeamResources: [availableSkill()],
+    });
+    const concurrentBinding: AgentResourcesOutput["bindings"][number] = {
+      id: "concurrent-prompt",
+      type: "prompt",
+      mode: "include",
+      resourceId: null,
+      replacesResourceId: null,
+      inlinePromptBody: "Concurrent instruction",
+      order: 1,
+    };
+    const latestResources = agentResources({
+      version: 10,
+      effective: { version: 10, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      bindings: [concurrentBinding],
+      availableTeamResources: [availableSkill()],
+    });
+    agentResourceMocks.getAgentResources.mockResolvedValueOnce(initialResources).mockResolvedValue(latestResources);
+    agentResourceMocks.updateAgentResources
+      .mockRejectedValueOnce(new ApiError(409, "resource save conflict"))
+      .mockImplementation(async (_uuid: string, input: { bindings: AgentResourceBindingInput[] }) =>
+        agentResources({
+          version: 11,
+          effective: { version: 11, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+          bindings: input.bindings,
+          availableTeamResources: [availableSkill()],
+        }),
+      );
 
     const saveError = await renderWithProviders(<ResourcesTab />, "/agents/agent-1/capabilities");
     await waitForText(saveError, "Skills");
-    await click(saveError.querySelector('button[aria-label="Add Skill"]'));
+    await click(saveError.querySelector('button[aria-label="Add skill"]'));
     await click(buttonByText(document.body, "Optional skill"));
-    await waitForText(saveError, "resource save failed");
+    await waitForText(saveError, "resource save conflict");
+    await waitForText(saveError, "Reload latest");
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledTimes(1);
+    await click(buttonByText(saveError, "Reload latest"));
+    await waitForText(saveError, "Latest settings loaded. Repeat your change.");
+    // PATCH replaces the complete binding set. Recovery must reload current
+    // data and let the user repeat the narrow action, never replay the stale
+    // rejected array under the newly fetched version.
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledTimes(1);
+    await click(saveError.querySelector('button[aria-label="Add skill"]'));
+    await click(buttonByText(document.body, "Optional skill"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length === 2,
+      "Expected the repeated narrow action to save",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenNthCalledWith(2, "agent-1", {
+      expectedVersion: 10,
+      bindings: [concurrentBinding, { type: "skill", mode: "include", resourceId: "skill-available", order: 2 }],
+    });
   });
 
   it("renders runtime binding, switch, and recovery edge states", async () => {
@@ -863,8 +903,8 @@ describe("Resources and runtime extra sections", () => {
         onBindComputer={onBind}
       />,
     );
-    expect(binding.textContent).toContain("No computer bound");
-    const bindingButton = buttonByText(binding, "Binding");
+    expect(binding.textContent).toContain("No computer assigned");
+    const bindingButton = buttonByText(binding, "Assigning");
     expect(bindingButton?.disabled).toBe(true);
 
     const error = await renderPlain(
@@ -882,7 +922,7 @@ describe("Resources and runtime extra sections", () => {
     expect(error.textContent).toContain("Could not verify computer binding: lookup failed");
     // Catalog label for claude-code-tui — not the collapsed "Claude Code" alias.
     expect(error.textContent).toContain("Claude Code CLI");
-    expect(buttonByText(error, "Bind computer")).toBeNull();
+    expect(buttonByText(error, "Choose computer")).toBeNull();
     expect(buttonByText(error, "Switching")?.disabled).toBe(true);
 
     const recovery = await renderPlain(
@@ -896,6 +936,14 @@ describe("Resources and runtime extra sections", () => {
     expect(recovery.textContent).toContain("Claim unknown is in phase unknown");
     expect(recovery.textContent).toContain("recovery failed");
     expect(buttonByText(recovery, "Recovering")?.disabled).toBe(true);
+    const recoverySection = [...recovery.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === "Runtime switch recovery",
+    );
+    const recoveryContent = recoverySection?.children.item(1) as HTMLElement | null;
+    const recoveryRow = recoveryContent?.firstElementChild as HTMLElement | null;
+    expect(recoveryContent?.style.cssText).toContain("border-top");
+    expect(recoveryRow?.style.border).toBe("");
+    expect(recoveryRow?.style.borderRadius).toBe("");
   });
 });
 
@@ -918,30 +966,22 @@ describe("UsageTab extra DOM states", () => {
 });
 
 describe("agent detail pure helpers", () => {
-  it("covers access, tab resolution, and bindability edge cases", async () => {
+  it("covers access, tab visibility, and bindability edge cases", async () => {
     const { canManageAgentDetail } = await import("../access.js");
-    const { buildTabs, canEditConfigFor, resolveTabPath } = await import("../tabs.js");
+    const { buildTabs } = await import("../tabs.js");
     const { isBindableClient } = await import("../action-state.js");
 
     expect(canManageAgentDetail(undefined, "member-self", "admin")).toBe(false);
     expect(canManageAgentDetail({ managerId: "member-self" }, null, "member")).toBe(false);
     expect(canManageAgentDetail({ managerId: "member-other" }, null, "admin")).toBe(true);
 
-    expect(canEditConfigFor(agent(), "member-self", "member")).toBe(true);
-    expect(canEditConfigFor(agent({ type: "human", clientId: null }), "member-self", "admin")).toBe(false);
-    expect(resolveTabPath(agent({ type: "human", clientId: null }), "member-self", "admin", "usage")).toBe("profile");
-    expect(resolveTabPath(agent({ type: "human", clientId: null }), "member-self", "admin", "responsibilities")).toBe(
-      "profile",
-    );
-    expect(resolveTabPath(agent(), "member-other", "member", "usage")).toBe("usage");
-    expect(resolveTabPath(agent(), "member-other", "member", "responsibilities")).toBe("responsibilities");
-    expect(resolveTabPath(agent(), "member-other", "member", "runtime")).toBe("profile");
     expect(buildTabs(false, false).map((tab) => tab.path)).toEqual([
       "profile",
       "responsibilities",
       "capabilities",
       "usage",
     ]);
+    expect(buildTabs(false, false, false).map((tab) => tab.path)).toEqual(["profile", "capabilities", "usage"]);
 
     expect(isBindableClient({ status: "connected" })).toBe(true);
     expect(isBindableClient({ status: "retired" })).toBe(false);

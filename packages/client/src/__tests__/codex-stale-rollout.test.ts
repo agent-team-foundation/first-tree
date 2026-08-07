@@ -157,7 +157,10 @@ describe("codex stale rollout recovery", () => {
 
   it("fresh-starts the same resume turn and returns the replacement thread id", async () => {
     const replaceSessionId = vi.fn<NonNullable<SessionContext["replaceSessionId"]>>();
-    const handler = createCodexSdkHandler({ workspaceRoot });
+    const handler = createCodexSdkHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext({ replaceSessionId });
     const token = makeToken();
 

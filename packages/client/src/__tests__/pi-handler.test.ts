@@ -17,6 +17,7 @@ import {
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 import * as managedSkills from "../runtime/managed-skills.js";
 import type { ProviderProcessSpec, ProviderProcessSupervisor } from "../runtime/provider-process-supervisor.js";
 import { readSessionBriefingFingerprint } from "../runtime/session-briefing-fingerprint.js";
@@ -647,6 +648,15 @@ describe("sanitizePiProviderDetail", () => {
     expect(sanitizePiProviderDetail("resource has been exhausted")).toBe("pi_capacity_limited");
     expect(sanitizePiProviderDetail("Please ignore prior text: PRIVATE_USER_PROMPT_XYZ")).toBe("pi_provider_error");
     expect(sanitizePiProviderDetail("Please ignore prior text: PRIVATE_USER_PROMPT_XYZ")).not.toContain("PRIVATE");
+  });
+
+  it("delegates binary-missing recognition to the provider-support seam", () => {
+    // Pi-scoped sanitizer keeps the historical broad mapping.
+    expect(sanitizePiProviderDetail("Pi CLI is missing on this machine")).toBe("pi_binary_missing");
+    expect(sanitizePiProviderDetail("no pi binary resolved")).toBe("pi_binary_missing");
+    expect(sanitizePiProviderDetail("pi: command not found")).toBe("pi_binary_missing");
+    expect(sanitizePiProviderDetail("file not found")).toBe("pi_binary_missing");
+    expect(sanitizePiProviderDetail("package not installed")).toBe("pi_binary_missing");
   });
 });
 
@@ -1383,7 +1393,12 @@ describe("Pi handler", () => {
       providerProcessSupervisor: createSyntheticSupervisor(specs),
     });
     const sessionCtx = makeContext([]);
-    await handler.resume(undefined, freshStartPiSessionId("agent-pi", "chat-pi", "m1"), sessionCtx);
+    await handler.resume(
+      undefined,
+      freshStartPiSessionId("agent-pi", "chat-pi", "m1"),
+      sessionCtx,
+      noopDeliveryToken(),
+    );
     const receipt = handler.inject(message("m-queue", "queued"), makeToken());
     expect(receipt).toEqual({ kind: "owned", mode: "queued" });
     await vi.waitFor(() => expect(specs.some((spec) => spec.args.includes("--mode"))).toBe(true));

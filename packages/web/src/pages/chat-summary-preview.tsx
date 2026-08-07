@@ -16,17 +16,17 @@ import { ChatSummary } from "./workspace/center/chat-summary.js";
 
 const hoursAgo = (h: number): string => new Date(Date.now() - h * 3_600_000).toISOString();
 
-const RICH = [
-  "## 任务",
-  "把右侧 summary 从「侧栏一段文字」改为**置顶可折叠摘要**。",
-  "",
-  "## 进展",
-  "- 后端：`description_updated_at` 已落库",
-  "- 前端：摘要组件接入 chat-view，右栏只留成员",
-  "",
-  "## 下一步",
-  "- gate 全绿后开 PR，详见 [关联 PR](#)。",
+const CURRENT_STATE = [
+  "Chat Summary now leads with the **current result and user impact**.",
+  "Supporting context stays quieter and follows the card's own width, which matches the header and the collapsed bar above it.",
+  "**Next:** Validate the same hierarchy in the live Workspace.",
 ].join("\n");
+
+// The most common real shape: one physical line, no supporting copy. The lead is
+// the whole summary here, so it must read as ordinary prose and must not reserve
+// separation below itself.
+const SINGLE_LINE =
+  "正在核验团队的成员规模、First Tree 安装完成情况与实际使用情况。口径按 Asia/Taipei T+1 截止，并将安装状态与使用行为分开统计。";
 
 const PLAIN = "Reviewing PR 1207 — server-side freshness fields landed; wiring the collapsed-bar first line next.";
 
@@ -36,8 +36,11 @@ const HEADING_FIRST = [
   "首个正文段落会被折叠行采用，这一句刻意写得很长，用来验证去掉 markdown 标记后仍以单行省略号截断、不撑高 chrome。",
 ].join("\n");
 
+// Stands in for a real Workspace centre column. The summary surfaces stretch to
+// this width, so the gallery shows the header, the collapsed bar, and the
+// expanded card sharing one edge.
 const PANEL: React.CSSProperties = {
-  width: 720,
+  width: "calc(var(--sp-95) * 3)",
   maxWidth: "100%",
   background: "var(--bg)",
   border: "var(--hairline) solid var(--border)",
@@ -137,7 +140,24 @@ export function ChatSummaryPreviewPage() {
 
       <section style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
         <Col label="Unread new summary version" note="auto-expands once + amber highlight · freshness on the bar">
-          <Demo chatId="preview-unread" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
+          <Demo
+            chatId="preview-unread"
+            description={CURRENT_STATE}
+            descriptionUpdatedAt={hoursAgo(2)}
+            lastReadAt={null}
+          />
+        </Col>
+
+        <Col
+          label="Single-line brief (the common shape)"
+          note="lead is the whole summary — ordinary weight, no reserved gap below it"
+        >
+          <Demo
+            chatId="preview-single-line"
+            description={SINGLE_LINE}
+            descriptionUpdatedAt={hoursAgo(2)}
+            lastReadAt={null}
+          />
         </Col>
 
         <Col label="Recently updated, already seen" note="collapsed · freshness on the bar · vertical chevron">
@@ -178,7 +198,12 @@ export function ChatSummaryPreviewPage() {
           note="same as the first, wrapped in .dark (how it renders in the live workspace)"
         >
           <div className="dark" style={{ borderRadius: "var(--radius-panel)" }}>
-            <Demo chatId="preview-dark" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
+            <Demo
+              chatId="preview-dark"
+              description={CURRENT_STATE}
+              descriptionUpdatedAt={hoursAgo(2)}
+              lastReadAt={null}
+            />
           </div>
         </Col>
       </section>

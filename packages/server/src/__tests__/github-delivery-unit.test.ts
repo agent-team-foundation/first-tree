@@ -7,8 +7,8 @@ import type { ScmAudienceTarget } from "../services/scm-audience-composition.js"
 type MockFn = ReturnType<typeof vi.fn>;
 
 type MockBag = {
-  decideGithubPersonnelTargetChat: MockFn;
   refreshGithubChatTopic: MockFn;
+  resolveGithubExistingLineChat: MockFn;
   resolveTargetChat: MockFn;
   applyMembershipWrite: MockFn;
   setEntityTitle: MockFn;
@@ -76,7 +76,13 @@ function existingTarget(overrides: Partial<TargetOverrides> = {}): ScmAudienceTa
       },
     },
     ...(involveReason && involveLogin
-      ? { directedContext: { reason: involveReason, externalUsername: involveLogin } }
+      ? {
+          directedContext: {
+            reason: involveReason,
+            requiresPersistentLine: involveReason === "mentioned" || involveReason === "assigned",
+            externalUsername: involveLogin,
+          },
+        }
       : {}),
   };
 }
@@ -88,6 +94,10 @@ function newTarget(overrides: Partial<TargetOverrides> = {}): ScmAudienceTarget<
       humanAgentId: overrides.humanAgentId ?? "human-1",
       wakeAgentId: overrides.delegateAgentId ?? "delegate-1",
       reason: overrides.involveReason ?? "mentioned",
+      requiresPersistentLine:
+        overrides.involveReason === undefined ||
+        overrides.involveReason === "mentioned" ||
+        overrides.involveReason === "assigned",
       externalUsername: overrides.involveLogin ?? "alice",
     },
   };
@@ -99,8 +109,6 @@ function providerTaskTarget(): ScmAudienceTarget<GithubProviderTaskContext> {
       kind: "provider_task_target",
       humanAgentId: "human-task",
       wakeAgentId: "delegate-task",
-      reason: "mentioned",
-      externalUsername: "test-app-slug",
       providerContext: { kind: "github_app_task", agentUuid: "delegate-task" },
     },
   };
@@ -113,8 +121,8 @@ async function loadDelivery(overrides: Partial<MockBag> = {}): Promise<{
   vi.resetModules();
 
   const mocks: MockBag = {
-    decideGithubPersonnelTargetChat: vi.fn(async () => ({ kind: "strict_new_line" })),
     refreshGithubChatTopic: vi.fn(async () => undefined),
+    resolveGithubExistingLineChat: vi.fn(async () => ({ chatId: "chat-existing", created: false })),
     resolveTargetChat: vi.fn(async () => ({ chatId: "chat-created", created: true, boundVia: "direct" })),
     applyMembershipWrite: vi.fn(async () => undefined),
     setEntityTitle: vi.fn(async () => undefined),
@@ -124,8 +132,9 @@ async function loadDelivery(overrides: Partial<MockBag> = {}): Promise<{
   };
 
   vi.doMock("../services/github-entity-chat.js", () => ({
-    decideGithubPersonnelTargetChat: mocks.decideGithubPersonnelTargetChat,
     refreshGithubChatTopic: mocks.refreshGithubChatTopic,
+    resolveGithubExistingLineChat: mocks.resolveGithubExistingLineChat,
+    resolveGithubPersonnelTargetChat: mocks.resolveTargetChat,
     resolveTargetChat: mocks.resolveTargetChat,
   }));
   vi.doMock("../services/github-entity-state.js", () => ({
@@ -180,7 +189,13 @@ describe("deliverGithubEvent dependency edge paths", () => {
       throw new Error("title store down");
     });
     const resolveTargetChat = vi.fn(async () => ({ chatId: "chat-shared", created: true, boundVia: "direct" }));
-    const { deliverGithubEvent, mocks } = await loadDelivery({ resolveTargetChat, sendMessage, setEntityTitle });
+    const resolveGithubExistingLineChat = vi.fn(async () => ({ chatId: "chat-shared", created: false }));
+    const { deliverGithubEvent, mocks } = await loadDelivery({
+      resolveTargetChat,
+      resolveGithubExistingLineChat,
+      sendMessage,
+      setEntityTitle,
+    });
 
     const stats = await deliverGithubEvent(makeApp(), makeEvent(), [
       existingTarget({
@@ -259,7 +274,11 @@ describe("deliverGithubEvent dependency edge paths", () => {
       .fn()
       .mockRejectedValueOnce("send failed")
       .mockResolvedValueOnce({ message: { id: "message-ok" }, recipients: ["recipient-ok"] });
-    const { deliverGithubEvent, mocks } = await loadDelivery({ sendMessage });
+    const resolveGithubExistingLineChat = vi.fn(async (_db: unknown, input: { humanAgentId: string }) => ({
+      chatId: input.humanAgentId === "human-a" ? "chat-a" : "chat-b",
+      created: false,
+    }));
+    const { deliverGithubEvent, mocks } = await loadDelivery({ sendMessage, resolveGithubExistingLineChat });
 
     const stats = await deliverGithubEvent(makeApp(), makeEvent({ action: "synchronize" }), [
       existingTarget({ humanAgentId: "human-a", delegateAgentId: "delegate-a", chatId: "chat-a" }),

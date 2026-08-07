@@ -60,6 +60,7 @@ import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import { IDENTITY_JSON_REL } from "../runtime/bootstrap.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -158,11 +159,16 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
 
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     try {
       await handler.start(
         makeMessage("chat-legacy-marker", "msg-legacy-marker"),
         buildSessionCtx("chat-legacy-marker"),
+        noopDeliveryToken(),
       );
 
       expect(lstatSync(join(workspaceRoot, ".first-tree-workspace")).isDirectory()).toBe(true);
@@ -182,8 +188,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([{ url: fixtureBareRepo, localPath: "first-tree" }]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await handler.start(makeMessage("chat-e2", "msg-1"), buildSessionCtx("chat-e2"));
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await handler.start(makeMessage("chat-e2", "msg-1"), buildSessionCtx("chat-e2"), noopDeliveryToken());
 
     // `worktrees/` subdir is reserved for agent's on-demand worktrees only;
     // runtime must never pre-create it. Use both negation forms (the subdir
@@ -204,8 +214,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     await cache.refresh(AGENT_ID);
 
     // First chat — full bootstrap path.
-    const h1 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await h1.start(makeMessage("chat-A", "msg-A1"), buildSessionCtx("chat-A"));
+    const h1 = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await h1.start(makeMessage("chat-A", "msg-A1"), buildSessionCtx("chat-A"), noopDeliveryToken());
 
     const sourceRepoPath = join(workspaceRoot, "repo-a");
     const sentinelPath = join(workspaceRoot, INIT_COMPLETE_SENTINEL_REL);
@@ -221,8 +235,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     await h1.shutdown();
 
     // Second chat — different chatId, same workspaceRoot.
-    const h2 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await h2.start(makeMessage("chat-B", "msg-B1"), buildSessionCtx("chat-B"));
+    const h2 = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await h2.start(makeMessage("chat-B", "msg-B1"), buildSessionCtx("chat-B"), noopDeliveryToken());
 
     // The marker must survive, the repo must still not be materialised.
     expect(existsSync(reuseMarker)).toBe(true);
@@ -244,8 +262,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([{ url: fixtureBareRepo, localPath: "lib" }]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await handler.start(makeMessage("chat-e4", "msg-e4"), buildSessionCtx("chat-e4"));
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await handler.start(makeMessage("chat-e4", "msg-e4"), buildSessionCtx("chat-e4"), noopDeliveryToken());
 
     // Stable agent identity / working-dir convention / source repos flow
     // through AGENTS.md (with CLAUDE.md symlinked to it). Per-chat context
@@ -303,8 +325,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await handler.start(makeMessage("chat-e6", "msg-e6"), buildSessionCtx("chat-e6"));
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await handler.start(makeMessage("chat-e6", "msg-e6"), buildSessionCtx("chat-e6"), noopDeliveryToken());
 
     const identityPath = join(workspaceRoot, IDENTITY_JSON_REL);
     expect(existsSync(identityPath)).toBe(true);
@@ -336,8 +362,12 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
-    await handler.start(makeMessage("chat-e7", "msg-e7"), buildSessionCtx("chat-e7"));
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
+    await handler.start(makeMessage("chat-e7", "msg-e7"), buildSessionCtx("chat-e7"), noopDeliveryToken());
 
     // Fresh session creates agent home + new layout.
     expect(existsSync(join(workspaceRoot, IDENTITY_JSON_REL))).toBe(true);
@@ -366,25 +396,30 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     // No transcript exists anywhere under `~/.claude/projects/<encoded-cwd>/`.
     const staleSessionId = "72a19485-ca9e-4bc3-9add-a57e8314e5c3";
     const returnedSessionId = await handler.resume(
       makeMessage("chat-e8", "msg-e8"),
       staleSessionId,
       buildSessionCtx("chat-e8"),
+      noopDeliveryToken(),
     );
 
     // Returned sessionId MUST differ from the stale input — that's how
     // SessionManager learns to update its registry.
-    expect(returnedSessionId).not.toBe(staleSessionId);
-    expect(returnedSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(returnedSessionId.sessionId).not.toBe(staleSessionId);
+    expect(returnedSessionId.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
     // The SDK was invoked WITHOUT a resume argument (fresh start semantics).
     expect(capturedSdkOptions.length).toBeGreaterThan(0);
     const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
     expect(lastOptions?.resume).toBeUndefined();
-    expect(lastOptions?.sessionId).toBe(returnedSessionId);
+    expect(lastOptions?.sessionId).toBe(returnedSessionId.sessionId);
 
     await handler.shutdown();
     rmSync(dataDir, { recursive: true, force: true });
@@ -421,15 +456,20 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
       const cache = buildCache([]);
       await cache.refresh(AGENT_ID);
 
-      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+      const handler = createClaudeCodeHandler({
+        runtimeProvider: "claude-code",
+        workspaceRoot,
+        agentConfigCache: cache,
+      });
       const returnedSessionId = await handler.resume(
         makeMessage(chatId, "msg-e9"),
         legacySessionId,
         buildSessionCtx(chatId),
+        noopDeliveryToken(),
       );
 
       // The legacy sessionId MUST be preserved — no fresh-id rotation here.
-      expect(returnedSessionId).toBe(legacySessionId);
+      expect(returnedSessionId.sessionId).toBe(legacySessionId);
 
       // SDK was invoked with the legacy sessionId on the `resume` channel.
       expect(capturedSdkOptions.length).toBeGreaterThan(0);

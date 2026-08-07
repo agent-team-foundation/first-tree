@@ -1,0 +1,43 @@
+fileType: momentic/test/v2
+id: github-install-identity-gate
+description: A Google-authenticated Team admin links GitHub before starting a GitHub App install
+defaultEnv: local
+steps:
+  # Establish a real signed-in Team. The fixture below changes only the
+  # provider rows; the First Tree user, Team, membership, and browser session
+  # remain the ones created by the product onboarding flow.
+  - module:
+      path: ./modules/complete-first-run-onboarding.module.yaml
+  - javascript:
+      code: return "google-only";
+      environment: node
+      saveAs: PROVIDER_MODE
+  - javascript:
+      code: ./scripts/set-test-user-provider-mode.js
+      environment: node
+      saveAs: GOOGLE_ONLY_FIXTURE
+
+  - navigate: /settings/integrations/github
+  - waitForUrl: /settings/integrations/github
+  - assert: the GitHub Connection section says this Team is not connected and offers one Connect GitHub action
+  - click: Connect GitHub button in the Connection section
+  - assert: the existing Connection panel shows Connect your GitHub account,
+      explains that it is required before installing the First Tree GitHub App,
+      and offers one Continue with GitHub action; no Install on GitHub action is present
+
+  # A real provider callback is outside the disposable local environment. Add
+  # the same user's GitHub identity, then exercise the exact post-link return
+  # URL and visible state produced by that callback.
+  - javascript:
+      code: return "github-linked";
+      environment: node
+      saveAs: PROVIDER_MODE
+  - javascript:
+      code: ./scripts/set-test-user-provider-mode.js
+      environment: node
+      saveAs: GITHUB_LINKED_FIXTURE
+  - navigate: /settings/github?connection=github-linked
+  - waitForUrl: /settings/integrations/github?connection=github-linked
+  - assert: the browser returned to the same Team's GitHub Connection panel,
+      shows GitHub connected as @{{env.GH_LOGIN}}, and offers Install on GitHub
+      as a separate explicit action; Continue with GitHub is no longer present

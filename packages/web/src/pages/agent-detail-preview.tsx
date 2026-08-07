@@ -8,7 +8,6 @@ import type {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router";
-import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { ResourceTypeSection } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { PromptTab } from "./agent-detail/prompt-tab.js";
@@ -17,14 +16,14 @@ import { RuntimeSection } from "./agent-detail/runtime-section.js";
 import { UsageTab } from "./agent-detail/usage-tab.js";
 
 /**
- * DEV-only visual preview of the redesigned agent-detail **Capabilities** and
- * **Prompt** tabs, mounted at `/preview/agent-detail` (gated by
+ * DEV-only visual preview of seeded Agent Detail section states, mounted at
+ * `/preview/agent-detail` (gated by
  * `import.meta.env.DEV` in app.tsx).
  *
  * It renders the REAL `ResourcesTab` / `PromptTab` components, fed by a seeded
  * QueryClient + a mock outlet context — no backend, no auth. The sample data is
  * crafted so every label / marker / control is visible at once:
- *   - source labels: `From your team` vs `Added by you`
+ *   - source labels: `Team default` vs `Added to this agent`
  *   - status markers: `Overridden`, `Can't load` (plain disabled is conveyed by
  *     the Switch in its off position + a greyed row, not a badge)
  *   - controls: the on/off Switch (team-recommended only) + the ⋯ overflow menu
@@ -468,15 +467,6 @@ function buildClient(): QueryClient {
   client.setQueryData(["agent-resources", UUID], RESOURCES);
   client.setQueryData(["usage-summary", UUID, "30d"], USAGE_SUMMARY);
   client.setQueryData(["usage-turns", UUID, "30d", 10], USAGE_TURNS);
-  // Seed the agent switcher list (both admin/member keys, since preview auth is
-  // ambient). fetchAllAgents flattens to Agent[].
-  const switcherAgents: Agent[] = [
-    AGENT,
-    { ...AGENT, uuid: "agent-preview-2", name: "nova", displayName: "Nova", runtimeState: "working" },
-    { ...AGENT, uuid: "agent-preview-3", name: "atlas", displayName: "Atlas Researcher", runtimeState: null },
-  ];
-  client.setQueryData(["agents", "team-page", "admin"], switcherAgents);
-  client.setQueryData(["agents", "team-page", "member"], switcherAgents);
   return client;
 }
 
@@ -500,30 +490,27 @@ export function AgentDetailPreviewPage() {
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div className="mx-auto" style={{ maxWidth: 720, padding: "var(--sp-6) var(--sp-4)" }}>
           <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Agent switcher (vertical B)
+            Agent Detail section states
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Replaces the breadcrumb: ‹ Team + avatar-over-name items, current agent selected (brand ring), presence
-            dots. Switching is leave-guarded.
+            Seeded resource and runtime content for visual QA. Validate the shared shell, responsive navigation, and
+            keyboard behavior on the real Agent Detail route rather than duplicating them here.
           </p>
-          <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
-            <AgentSwitcherStrip currentAgent={AGENT} currentTabPath="profile" onNavigate={() => {}} />
-          </div>
 
-          <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Environment tab — Repositories
-          </h1>
+          <h2 className="text-title m-0" style={{ color: "var(--fg)", marginTop: "var(--sp-8)" }}>
+            Repositories section
+          </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Code repositories live on the Environment tab now (they're part of the workspace the agent runs in). Saved
-            immediately.
+            Repositories stay separate from Tools &amp; skills and describe the code and team context available in this
+            agent's workspace. Changes save immediately.
           </p>
           <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
             <ResourceTypeSection type="repo" data={RESOURCES} canEdit pending={false} onMutate={() => {}} />
           </div>
 
-          <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Tools &amp; skills tab
-          </h1>
+          <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
+            Tools &amp; skills section
+          </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
             Skills / MCP — team-recommended rows carry an on/off Switch (off = greyed, stays in the list); opt-in /
             added rows have no Switch, just ⋯ Remove. Can't load flags a broken reference.
@@ -532,9 +519,9 @@ export function AgentDetailPreviewPage() {
             <TabHost element={<ResourcesTab />} />
           </div>
 
-          <h1 className="text-title m-0" style={{ color: "var(--fg)" }}>
-            Instructions tab
-          </h1>
+          <h2 className="text-title m-0" style={{ color: "var(--fg)" }}>
+            Instructions section
+          </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
             Result-first: the top block shows the merged runtime instructions (clamp + Show all), without extra label
             copy. Source rows are de-crowded — Switch + ⋯ only, click a row to read its full body.
@@ -543,9 +530,9 @@ export function AgentDetailPreviewPage() {
             <TabHost element={<PromptTab />} />
           </div>
 
-          <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
-            Usage tab — Recent turns
-          </h1>
+          <h2 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
+            Usage section — Recent turns
+          </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
             Slimmed: model name only (provider on hover), Chat truncates with a tooltip, token columns compact with the
             exact value on hover, window in the title.
@@ -554,9 +541,9 @@ export function AgentDetailPreviewPage() {
             <TabHost element={<UsageTab fetchEnabled={false} refetchInterval={false} />} />
           </div>
 
-          <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
-            Execution
-          </h1>
+          <h2 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
+            Runtime section
+          </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
             Runtime row is label:value; the bound Computer row shows the computer name only — live presence lives in the
             page header, so it is not repeated here.

@@ -34,14 +34,12 @@ export function ProfileTab() {
         <DangerZone
           agent={ctx.agent}
           suspendPending={ctx.suspendPending}
-          reactivatePending={ctx.reactivatePending}
           deletePending={ctx.deletePending}
           runtimeSwitchClaim={ctx.runtimeSwitchClaim}
           runtimeSwitchRecoveryPending={ctx.runtimeSwitchRecoveryPending}
           runtimeSwitchRecoveryError={ctx.runtimeSwitchRecoveryError}
           errorMessage={ctx.dangerError}
           onSuspend={ctx.onSuspend}
-          onReactivate={ctx.onReactivate}
           onDelete={ctx.onDelete}
           onRecoverRuntimeSwitch={ctx.onRecoverRuntimeSwitch}
         />

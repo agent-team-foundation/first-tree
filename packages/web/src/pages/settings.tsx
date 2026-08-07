@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { getTeamSetupCapabilitiesAt, setupCapabilitiesQueryKey } from "../api/setup-capabilities.js";
 import { useAuth } from "../auth/auth-context.js";
+import { LocalNavLink } from "../components/ui/local-nav-link.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 import {
@@ -42,7 +43,7 @@ const ACCOUNT_ITEM: Item = {
   label: "Account",
   description: "Manage your profile and ways to sign in. These settings follow you across all your teams.",
 };
-const SETUP_ITEM: Item = { to: "/settings/setup", label: "Setup" };
+const SETUP_ITEM: Item = { to: "/settings/setup", label: "Getting Started" };
 const COMPUTERS_ITEM: Item = { to: "/settings/computers", label: "Computers" };
 const REPOSITORIES_ITEM: Item = {
   to: "/settings/repositories",
@@ -52,7 +53,7 @@ const REPOSITORIES_ITEM: Item = {
 const CONTEXT_TREE_ITEM: Item = {
   to: "/settings/context",
   label: "Context Tree",
-  description: "Manage shared context, automatic review, and coding-agent access for this Team.",
+  description: "Manage shared context, automatic review, and coding agent setup for this Team.",
 };
 const RESOURCES_ITEM: Item = {
   to: "/settings/resources",
@@ -62,7 +63,8 @@ const RESOURCES_ITEM: Item = {
 const INTEGRATIONS_ITEM: Item = {
   to: "/settings/integrations",
   label: "GitHub & GitLab",
-  description: "Connect GitHub and GitLab for repository events and identity. GitHub also supports task routing.",
+  description:
+    "Connect GitHub and GitLab for repository events and identity. GitHub can automatically assign Issue and pull request activity to an Agent.",
 };
 const ITEMS: Item[] = [
   ACCOUNT_ITEM,
@@ -270,46 +272,31 @@ function SidebarLink({
   attention?: boolean;
   activeOverride?: boolean;
 }) {
+  const { pathname } = useLocation();
+  const active = activeOverride ?? pathname.startsWith(to);
   return (
-    <NavLink
+    <LocalNavLink
       to={to}
-      aria-label={attention ? `${label} — Needs you` : undefined}
-      className={cn(
-        "block text-body transition-colors",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-      )}
-    >
-      {({ isActive }) => {
-        const active = activeOverride ?? isActive;
-        return (
+      label={label}
+      active={active}
+      ariaLabel={attention ? `${label} — Needs you` : undefined}
+      trailing={
+        attention ? (
           <span
-            className={cn("flex items-center justify-between", active && "font-medium")}
+            aria-hidden
+            data-setup-attention
+            title="Needs you"
             style={{
-              padding: "var(--sp-2) var(--sp-3)",
-              borderRadius: "var(--radius-input)",
-              color: active ? "var(--fg)" : "var(--fg-3)",
-              background: active ? "var(--bg-hover)" : "transparent",
+              width: "var(--sp-2)",
+              height: "var(--sp-2)",
+              flexShrink: 0,
+              borderRadius: "var(--radius-full)",
+              background: "var(--state-needs-you)",
             }}
-          >
-            <span>{label}</span>
-            {attention ? (
-              <span
-                aria-hidden
-                data-setup-attention
-                title="Needs you"
-                style={{
-                  width: "var(--sp-2)",
-                  height: "var(--sp-2)",
-                  flexShrink: 0,
-                  borderRadius: "var(--radius-full)",
-                  background: "var(--state-needs-you)",
-                }}
-              />
-            ) : null}
-          </span>
-        );
-      }}
-    </NavLink>
+          />
+        ) : null
+      }
+    />
   );
 }
 

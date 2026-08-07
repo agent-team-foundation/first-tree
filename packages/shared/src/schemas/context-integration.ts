@@ -194,16 +194,25 @@ export type LegacyContextIntegrationConfig = z.infer<typeof legacyContextIntegra
 export const contextIntegrationInstallManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
+    accountClientId: z.string().min(1).optional(),
     channel: z.enum(["prod", "staging", "dev"]),
     provider: contextIntegrationProviderSchema,
     firstTreeVersion: z.string().min(1),
     bundleVersion: z.string().min(1),
+    adapterVersion: z.string().min(1).optional(),
+    loaderProtocolVersion: z.literal(1).optional(),
     bundleDigest: sha256DigestSchema,
     policyDigest: sha256DigestSchema,
     adapterDigest: sha256DigestSchema,
     marketplaceName: z.string().min(1),
     pluginName: z.string().min(1),
+    adoptionGeneration: z
+      .string()
+      .regex(/^[0-9a-f]{48}$/u)
+      .optional(),
     materializedInvocation: z.string().min(1).optional(),
+    materializedPayloadDigest: sha256DigestSchema.optional(),
+    materializedMarketplaceDigest: sha256DigestSchema.optional(),
     installedAt: z.string().datetime(),
   })
   .strict();
@@ -236,10 +245,31 @@ export const contextIntegrationReleaseManifestSchema = z
     channel: z.enum(["prod", "staging", "dev"]),
     bundleDigest: sha256DigestSchema,
     policyDigest: sha256DigestSchema,
+    core: z
+      .object({
+        digest: sha256DigestSchema,
+        policy: z
+          .object({
+            path: z.string().min(1),
+            digest: sha256DigestSchema,
+          })
+          .strict(),
+        skills: z.record(
+          z.enum(["first-tree-read", "first-tree-write"]),
+          z
+            .object({
+              path: z.string().min(1),
+              digest: sha256DigestSchema,
+            })
+            .strict(),
+        ),
+      })
+      .strict(),
     providers: z.record(
       contextIntegrationProviderSchema,
       z
         .object({
+          adapterVersion: z.string().min(1),
           adapterDigest: sha256DigestSchema,
           minimumVersion: z.string().min(1),
         })
@@ -248,3 +278,35 @@ export const contextIntegrationReleaseManifestSchema = z
   })
   .strict();
 export type ContextIntegrationReleaseManifest = z.infer<typeof contextIntegrationReleaseManifestSchema>;
+
+export const CONTEXT_SKILL_LOADER_NAMES = ["first-tree-read", "first-tree-write"] as const;
+export const contextSkillLoaderNameSchema = z.enum(CONTEXT_SKILL_LOADER_NAMES);
+export type ContextSkillLoaderName = z.infer<typeof contextSkillLoaderNameSchema>;
+
+export const contextSkillLoadRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    loaderProtocolVersion: z.literal(1),
+    consumerKind: z.literal("byo"),
+    provider: contextIntegrationProviderSchema,
+    name: contextSkillLoaderNameSchema,
+  })
+  .strict();
+export type ContextSkillLoadRequest = z.infer<typeof contextSkillLoadRequestSchema>;
+
+export const contextSkillLoadResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    loaderProtocolVersion: z.literal(1),
+    consumerKind: z.literal("byo"),
+    provider: contextIntegrationProviderSchema,
+    releaseVersion: z.string().min(1),
+    adapterVersion: z.string().min(1),
+    name: contextSkillLoaderNameSchema,
+    skillPath: z.string().min(1),
+    skillDigest: sha256DigestSchema,
+    policyPath: z.string().min(1),
+    policyDigest: sha256DigestSchema,
+  })
+  .strict();
+export type ContextSkillLoadResponse = z.infer<typeof contextSkillLoadResponseSchema>;

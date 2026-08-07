@@ -434,6 +434,8 @@ describe("logout and upgrade commands", () => {
     const agentsDir = join(tempDir, "agents");
     const sessionsDir = join(tempDir, "data", "sessions");
     const workspacesDir = join(tempDir, "data", "workspaces");
+    const byoDir = join(tempDir, "data", "byo", "org-acme", "context-tree.git");
+    const byoState = join(tempDir, "state", "context", "byo", "org-acme");
     const parkedClientsDir = join(tempDir, "parked-clients");
     const switchLock = join(tempDir, "state", "client-switch.lock");
     const switchJournal = join(tempDir, "state", "client-switch-journal.json");
@@ -441,6 +443,8 @@ describe("logout and upgrade commands", () => {
     mkdirSync(agentsDir, { recursive: true });
     mkdirSync(sessionsDir, { recursive: true });
     mkdirSync(workspacesDir, { recursive: true });
+    mkdirSync(byoDir, { recursive: true });
+    mkdirSync(byoState, { recursive: true });
     mkdirSync(join(parkedClientsDir, "client_old", "data", "workspaces"), { recursive: true });
     mkdirSync(join(tempDir, "state"), { recursive: true });
     writeFileSync(credentials, "{}");
@@ -448,6 +452,8 @@ describe("logout and upgrade commands", () => {
     writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
     writeFileSync(join(sessionsDir, "session.json"), "{}");
     writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    writeFileSync(join(byoDir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(byoState, "rebind-journal.json"), "{}");
     writeFileSync(join(parkedClientsDir, "index.json"), "{}");
     writeFileSync(join(parkedClientsDir, "client_old", "data", "workspaces", "marker.txt"), "old");
     writeFileSync(switchLock, "locked");
@@ -479,6 +485,8 @@ describe("logout and upgrade commands", () => {
     expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
     expect(() => readFileSync(join(sessionsDir, "session.json"), "utf8")).toThrow();
     expect(() => readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toThrow();
+    expect(existsSync(join(tempDir, "data", "byo"))).toBe(false);
+    expect(existsSync(join(tempDir, "state", "context", "byo"))).toBe(false);
     expect(existsSync(parkedClientsDir)).toBe(false);
     expect(existsSync(switchLock)).toBe(false);
     expect(existsSync(switchJournal)).toBe(false);

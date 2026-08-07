@@ -172,9 +172,9 @@ export const githubEventCardSchema = z.object({
   }),
   mentionedUser: z.string().optional(),
   /**
-   * Server-authored signal that this directed card exists because the
-   * configured GitHub App itself was mentioned or assigned. The selected
-   * GitHub Task Agent treats it as work to complete and answer on GitHub.
+   * Server-authored, recipient-scoped capability for an automatically routed
+   * GitHub Issue or pull-request event. Only the named repository-role Agent
+   * may execute it and publish the terminal result through the GitHub App.
    */
   teamAgentTask: githubAgentTaskSchema.optional(),
 });

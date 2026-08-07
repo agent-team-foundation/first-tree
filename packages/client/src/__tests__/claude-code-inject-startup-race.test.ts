@@ -112,6 +112,7 @@ vi.mock("../runtime/source-repos.js", () => ({
 }));
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 
 const AGENT_ID = "019e71d2-c9ec-7f11-86bf-5dfc9e873338";
 
@@ -206,7 +207,10 @@ afterEach(() => {
 describe("claude-code handler startup inject queue", () => {
   it("materializes legacy inline images and describes unavailable image batches", async () => {
     const completedCounts: Array<number | undefined> = [];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -234,6 +238,7 @@ describe("claude-code handler startup inject queue", () => {
         "../unsafe/chat",
       ),
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
 
     const batchMessage = makeFileMessage("batch-images", {
@@ -274,7 +279,7 @@ describe("claude-code handler startup inject queue", () => {
         createdAt: "2026-07-24T00:00:00.000Z",
       },
     ];
-    handler.inject(batchMessage);
+    handler.inject(batchMessage, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => state.observedInputs.length === 2);
     expect(state.observedInputs[0]).toContain("Filename: legacy.png");
@@ -294,17 +299,20 @@ describe("claude-code handler startup inject queue", () => {
 
   it("queues injects received before the InputController exists so their inbox entries stay aligned with acks", async () => {
     const completedCounts: Array<number | undefined> = [];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => {
       completedCounts.push(count);
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await Promise.resolve();
 
     // The handler has a session id, but startup is still waiting on chat
     // context; `spawnQuery` has not created the InputController yet.
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
 
     state.resolveChatContext?.({
       chatId: "chat-claude-startup-race",
@@ -331,7 +339,10 @@ describe("claude-code handler startup inject queue", () => {
     const secondGate = new Promise<void>((resolve) => {
       releaseSecond.current = resolve;
     });
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -345,9 +356,9 @@ describe("claude-code handler startup inject queue", () => {
       },
     );
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await Promise.resolve();
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
 
     state.resolveChatContext?.({
       chatId: "chat-claude-startup-race",
@@ -358,7 +369,7 @@ describe("claude-code handler startup inject queue", () => {
     });
 
     await startPromise;
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
     await new Promise((resolve) => setImmediate(resolve));
     releaseSecond.current?.();
 
@@ -377,7 +388,10 @@ describe("claude-code handler startup inject queue", () => {
     state.coalesceFirstResultAfterInputs = 2;
     const finishedBatches: string[][] = [];
     const processingStarted: string[] = [];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.markMessagesConsumed = (messages) => {
       const batch = Array.isArray(messages) ? messages : [messages];
@@ -396,8 +410,8 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
-    handler.inject(makeMessage("m2", "second"));
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => state.observedInputs.length === 2);
     await waitFor(() => finishedBatches.length === 1);
@@ -413,7 +427,10 @@ describe("claude-code handler startup inject queue", () => {
   it("retries active injects whose SDK message conversion fails before provider custody", async () => {
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn();
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -436,8 +453,8 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
-    handler.inject(makeMessage("m2", "bad"));
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
+    handler.inject(makeMessage("m2", "bad"), deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => retryTurn.mock.calls.length === 1);
 
@@ -473,7 +490,10 @@ describe("claude-code handler startup inject queue", () => {
         },
       },
     ];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.log = (message) => {
       logs.push(message);
@@ -493,7 +513,7 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "usage"), ctx);
+    await handler.start(makeMessage("m1", "usage"), ctx, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => events.some((event) => event.kind === "turn_end"));
     expect(events.find((event) => event.kind === "token_usage")).toMatchObject({
@@ -556,7 +576,10 @@ describe("claude-code handler startup inject queue", () => {
               },
       },
     ];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.emitEvent = (event) => {
       events.push(event);
@@ -569,9 +592,9 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first usage turn"), ctx);
+    await handler.start(makeMessage("m1", "first usage turn"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 1);
-    handler.inject(makeMessage("m2", "second usage turn"));
+    handler.inject(makeMessage("m2", "second usage turn"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 2);
 
     expect(events.filter((event) => event.kind === "token_usage")).toEqual([
@@ -627,7 +650,10 @@ describe("claude-code handler startup inject queue", () => {
         },
       },
     ];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.emitEvent = (event) => {
       events.push(event);
@@ -640,9 +666,9 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "before counter rollback"), ctx);
+    await handler.start(makeMessage("m1", "before counter rollback"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 1);
-    handler.inject(makeMessage("m2", "after counter rollback"));
+    handler.inject(makeMessage("m2", "after counter rollback"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 2);
 
     expect(
@@ -671,7 +697,10 @@ describe("claude-code handler startup inject queue", () => {
         },
       },
     ];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.emitEvent = (event) => {
       events.push(event);
@@ -684,11 +713,11 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    const started = await handler.start(makeMessage("m1", "first Query"), ctx);
+    const started = await handler.start(makeMessage("m1", "first Query"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 1);
     await handler.suspend();
     const sessionId = typeof started === "string" ? started : started.sessionId;
-    await handler.resume(makeMessage("m2", "replacement Query"), sessionId, ctx);
+    await handler.resume(makeMessage("m2", "replacement Query"), sessionId, ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => events.filter((event) => event.kind === "turn_end").length === 2);
 
     expect(
@@ -704,7 +733,10 @@ describe("claude-code handler startup inject queue", () => {
     const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
     const logs: string[] = [];
     const outcomes: unknown[] = [];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.forwardResult = vi.fn(async () => {
       throw new Error("completion sink down");
@@ -726,7 +758,7 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "forward"), ctx);
+    await handler.start(makeMessage("m1", "forward"), ctx, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => events.some((event) => event.kind === "turn_end"));
     expect(ctx.forwardResult).toHaveBeenCalledWith("reply 1");
@@ -755,7 +787,10 @@ describe("claude-code handler startup inject queue", () => {
     const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
     const outcomes: unknown[] = [];
     state.resultMessagesForInput = () => [{ type: "result", subtype: "success" }];
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.forwardResult = vi.fn(async () => {});
     ctx.emitEvent = (event) => {
@@ -772,7 +807,7 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "empty result"), ctx);
+    await handler.start(makeMessage("m1", "empty result"), ctx, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => events.some((event) => event.kind === "turn_end"));
     expect(ctx.forwardResult).not.toHaveBeenCalled();
@@ -786,7 +821,10 @@ describe("claude-code handler startup inject queue", () => {
     const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
     state.resultMessagesForInput = () => [{ type: "auth_status", error: "authentication_failed" }];
     state.closeAfterInput = true;
-    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {});
     ctx.emitEvent = (event) => {
       events.push(event);
@@ -799,7 +837,7 @@ describe("claude-code handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "auth"), ctx);
+    await handler.start(makeMessage("m1", "auth"), ctx, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => events.some((event) => event.kind === "error"));
     const errorEvent = events.find((event) => event.kind === "error");

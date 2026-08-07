@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -17,9 +17,23 @@ const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPOSITORY_ROOT = resolve(WEB_ROOT, "../..");
 const PUBLIC_OUTPUT = join(WEB_ROOT, "public", "onboarding", "orientation");
 const REVIEW_OUTPUT = join(WEB_ROOT, "orientation-videos", "review");
+const VOICEOVER_INPUT = join(WEB_ROOT, "orientation-videos", "voiceover");
 
 const CHAPTERS = {
-  "multi-agent": { keyframes: [0, 18, 32], poster: 18 },
+  "multi-agent": { keyframes: [0, 18, 32], poster: 18, voiceover: "multi-agent.m4a" },
+  "context-tree": {
+    keyframes: [0, 6, 10, 14, 18, 22, 25, 29, 32, 36, 39, 43, 47, 50, 53, 56, 58],
+    poster: 53,
+    captureScale: "device",
+    crf: "16",
+    videoFilter: "scale=1280:720:flags=lanczos",
+    voiceover: "context-tree.m4a",
+  },
+  github: {
+    keyframes: [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 21, 24, 27, 29, 30],
+    poster: 16,
+    voiceover: "github.m4a",
+  },
 };
 
 function selectedChapters() {
@@ -78,6 +92,8 @@ async function writeToStream(stream, buffer) {
 
 async function renderChapter(page, id, config) {
   const outputPath = join(PUBLIC_OUTPUT, `${id}.mp4`);
+  const voiceoverPath = join(VOICEOVER_INPUT, config.voiceover);
+  await access(voiceoverPath);
   await page.goto(`${BASE_URL}/preview/onboarding-orientation-video?chapter=${id}&frame=0`, {
     waitUntil: "networkidle",
   });
@@ -107,7 +123,13 @@ async function renderChapter(page, id, config) {
       "png",
       "-i",
       "pipe:0",
-      "-an",
+      "-i",
+      voiceoverPath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      ...(config.videoFilter ? ["-vf", config.videoFilter] : []),
       "-c:v",
       "libx264",
       "-preset",
@@ -115,11 +137,21 @@ async function renderChapter(page, id, config) {
       "-tune",
       "animation",
       "-crf",
-      "18",
+      config.crf ?? "18",
       "-profile:v",
       "high",
       "-pix_fmt",
       "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "96k",
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      "-t",
+      String(frameCount / fps),
       "-movflags",
       "+faststart",
       outputPath,
@@ -145,7 +177,11 @@ async function renderChapter(page, id, config) {
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (ffmpegInputError) throw ffmpegInputError;
       await page.evaluate((nextFrame) => window.orientationVideoController?.setFrame(nextFrame), frame);
-      const image = await page.screenshot({ type: "png", animations: "disabled" });
+      const image = await page.screenshot({
+        type: "png",
+        animations: "disabled",
+        scale: config.captureScale ?? "device",
+      });
       await writeToStream(ffmpeg.stdin, image);
 
       const stillSecond = stillFrames.get(frame);

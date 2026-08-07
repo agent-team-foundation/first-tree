@@ -9,6 +9,7 @@ import { LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED } from "../handlers/codex/
 import { writeAgentBriefing } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 vi.mock("../runtime/agent-briefing.js", async (importOriginal) => {
@@ -274,6 +275,7 @@ function makeContext(
 
 function makeHandler(fake: FakeAppServerClient, extraConfig: Record<string, unknown> = {}) {
   return createCodexAppServerHandler({
+    runtimeProvider: "codex",
     workspaceRoot,
     codexRuntimeBinaryResolver: async () => ({
       ok: true,
@@ -541,7 +543,7 @@ describe("codex app-server handler", () => {
       agentMetadata: trialAgentMetadata,
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     expect(capturedSpawnProcess).toBeUndefined();
@@ -623,7 +625,7 @@ describe("codex app-server handler", () => {
     });
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     expect(capturedSpawnProcess).toBeUndefined();
@@ -643,7 +645,7 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake, { agentConfigCache: mutable.cache });
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
@@ -675,7 +677,7 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake, { agentConfigCache: cache });
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
@@ -694,7 +696,7 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake, { agentConfigCache: mutable.cache });
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
@@ -769,10 +771,10 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
     const steer = fake.requests.find((request) => request.method === "turn/steer");
@@ -893,7 +895,7 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ emitEvent });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     emitTokenUsage(fake, "turn-1", {
@@ -953,7 +955,12 @@ describe("codex app-server handler", () => {
       });
     };
 
-    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "first"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     emitTokenUsage(
@@ -1017,7 +1024,12 @@ describe("codex app-server handler", () => {
       });
     };
 
-    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "first"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     emitTokenUsage(
@@ -1102,7 +1114,12 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ emitEvent });
 
-    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "first"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
     await flushAsync();
 
@@ -1191,7 +1208,12 @@ describe("codex app-server handler", () => {
       });
     };
 
-    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "first"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     emitTokenUsage(
@@ -1247,7 +1269,7 @@ describe("codex app-server handler", () => {
       },
     );
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
 
     emitTokenUsage(
@@ -1316,7 +1338,12 @@ describe("codex app-server handler", () => {
       });
     };
 
-    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "first"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     emitTokenUsage(
@@ -1348,7 +1375,7 @@ describe("codex app-server handler", () => {
     });
     await resumePromise;
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
     await flushAsync();
 
@@ -1418,7 +1445,7 @@ describe("codex app-server handler", () => {
       },
     );
 
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 3);
 
     emitTokenUsage(
@@ -1484,10 +1511,10 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "thread/start"));
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await flushAsync();
 
     expect(retryTurn).not.toHaveBeenCalled();
@@ -1518,9 +1545,9 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
     await flushAsync();
 
@@ -1548,13 +1575,13 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
     await flushAsync();
 
     expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
@@ -1587,15 +1614,15 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
     await flushAsync();
 
     fake.steerError = null;
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
 
     const retriedSteer = fake.requests.filter((request) => request.method === "turn/steer")[1];
@@ -1621,12 +1648,12 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 1);
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/steer").length === 2);
 
     completeTurn(fake, "turn-1", "first done");
@@ -1656,9 +1683,9 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
     completeTurn(fake, "turn-1", "final answer");
@@ -1685,9 +1712,9 @@ describe("codex app-server handler", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
     completeTurn(fake, "turn-1", "first done");
@@ -1724,9 +1751,9 @@ describe("codex app-server handler", () => {
       failSessionForRecovery,
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
     failTurn(fake, "turn-1", { message: "provider failed" });
@@ -2358,9 +2385,9 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ retryTurn, finishTurn });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
     fake.close();
@@ -2387,7 +2414,7 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ retryTurn, finishTurn, failSessionForRecovery, sendMessage });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(fake.isClosed).toBe(true);
     expect(retryTurn).toHaveBeenCalledWith(
@@ -2421,9 +2448,9 @@ describe("codex app-server handler", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ retryTurn, finishTurn, failSessionForRecovery, sendMessage });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
     await startPromise;
 
@@ -2454,7 +2481,12 @@ describe("codex app-server briefing-update notice", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ finishTurn: async () => {} });
 
-    const resumePromise = handler.resume(makeMessage("m1", "hello"), "thread-app-server", ctx);
+    const resumePromise = handler.resume(
+      makeMessage("m1", "hello"),
+      "thread-app-server",
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     const start = fake.requests.find((request) => request.method === "turn/start");
@@ -2477,7 +2509,11 @@ describe("codex app-server briefing-update notice", () => {
     const handler = makeHandler(fake);
     const ctx = makeContext({ finishTurn: async () => {} });
 
-    const startPromise = handler.start(makeMessage("m1", "先讨论下，不动手"), ctx);
+    const startPromise = handler.start(
+      makeMessage("m1", "先讨论下，不动手"),
+      ctx,
+      deliveryTokenFromSessionContext(ctx),
+    );
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     const start = fake.requests.find((request) => request.method === "turn/start");
@@ -2496,7 +2532,11 @@ describe("codex app-server briefing-update notice", () => {
     const startFake = new FakeAppServerClient();
     const startHandler = makeHandler(startFake);
     const startCtx = makeContext({ finishTurn: async () => {} });
-    const startPromise = startHandler.start(makeMessage("m1", "first"), startCtx);
+    const startPromise = startHandler.start(
+      makeMessage("m1", "first"),
+      startCtx,
+      deliveryTokenFromSessionContext(startCtx),
+    );
     await waitFor(() => startFake.requests.some((request) => request.method === "turn/start"));
     completeTurn(startFake, "turn-1", "first answer");
     await startPromise;
@@ -2507,7 +2547,12 @@ describe("codex app-server briefing-update notice", () => {
     const resumeFake = new FakeAppServerClient();
     const resumeHandler = makeHandler(resumeFake);
     const resumeCtx = makeContext({ finishTurn: async () => {} });
-    const resumePromise = resumeHandler.resume(makeMessage("m2", "again"), "thread-app-server", resumeCtx);
+    const resumePromise = resumeHandler.resume(
+      makeMessage("m2", "again"),
+      "thread-app-server",
+      resumeCtx,
+      deliveryTokenFromSessionContext(resumeCtx),
+    );
     await waitFor(() => resumeFake.requests.some((request) => request.method === "turn/start"));
 
     const start = resumeFake.requests.find((request) => request.method === "turn/start");
@@ -2526,7 +2571,12 @@ describe("codex app-server briefing-update notice", () => {
     failFake.turnStartError = new CodexAppServerTransportError("codex app-server request timed out: turn/start");
     const failHandler = makeHandler(failFake);
     const failCtx = makeContext({ failSessionForRecovery: vi.fn(), finishTurn: async () => {} });
-    await failHandler.resume(makeMessage("m1", "hello"), "thread-app-server", failCtx);
+    await failHandler.resume(
+      makeMessage("m1", "hello"),
+      "thread-app-server",
+      failCtx,
+      deliveryTokenFromSessionContext(failCtx),
+    );
     expect(failFake.requests.some((request) => request.method === "turn/start")).toBe(true);
     await failHandler.shutdown();
 
@@ -2535,7 +2585,12 @@ describe("codex app-server briefing-update notice", () => {
     const okFake = new FakeAppServerClient();
     const okHandler = makeHandler(okFake);
     const okCtx = makeContext({ finishTurn: async () => {} });
-    const resumePromise = okHandler.resume(makeMessage("m2", "again"), "thread-app-server", okCtx);
+    const resumePromise = okHandler.resume(
+      makeMessage("m2", "again"),
+      "thread-app-server",
+      okCtx,
+      deliveryTokenFromSessionContext(okCtx),
+    );
     await waitFor(() => okFake.requests.some((request) => request.method === "turn/start"));
     const start = okFake.requests.find((request) => request.method === "turn/start");
     expect(JSON.stringify(start?.params ?? {})).toContain("<system-reminder>");
@@ -2553,7 +2608,7 @@ describe("codex app-server briefing-update notice", () => {
 
     // Start the session and finish its first turn (seeds the briefing baseline
     // for the BEFORE prompt). Session is now idle/active.
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
     completeTurn(fake, "turn-1", "first answer");
     await startPromise;
@@ -2563,7 +2618,7 @@ describe("codex app-server briefing-update notice", () => {
     // suspend/resume. The injected turn must pick up the new briefing and carry
     // the re-read notice.
     setAppend("AFTER_MARKER");
-    handler.inject(makeMessage("m2", "again"));
+    handler.inject(makeMessage("m2", "again"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
 
     const injectedStart = fake.requests.filter((request) => request.method === "turn/start")[startTurns];
@@ -2579,7 +2634,7 @@ describe("codex app-server briefing-update notice", () => {
     const handler = makeHandler(fake, { agentConfigCache: cache });
     const ctx = makeContext({ finishTurn: async () => {} });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
     completeTurn(fake, "turn-1", "first answer");
     await startPromise;
@@ -2592,7 +2647,7 @@ describe("codex app-server briefing-update notice", () => {
     vi.mocked(writeAgentBriefing).mockImplementationOnce(() => {
       throw new Error("simulated disk failure");
     });
-    handler.inject(makeMessage("m2", "again"));
+    handler.inject(makeMessage("m2", "again"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
 
     completeTurn(fake, "turn-2", "second answer");

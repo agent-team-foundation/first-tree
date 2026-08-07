@@ -11,6 +11,9 @@ import { PREVIEW_CAPABILITIES } from "./setup-preview.js";
 type PreviewRole = "admin" | "member";
 
 const ORGANIZATION_ID = "org-preview";
+const PREVIEW_SETUP_PROMPT = `Connect this coding agent to Gandy's team Context Tree.
+
+Use First Tree to read the applicable Team context before acting, then continue the current task.`;
 
 export function SettingsContextTreePreviewPage() {
   const [searchParams] = useSearchParams();
@@ -33,7 +36,7 @@ export function SettingsContextTreePreviewPage() {
       <AuthContext.Provider value={auth}>
         <div data-settings-context-tree-preview={role} style={{ minHeight: "100vh", background: "var(--bg)" }}>
           <SettingsLayout activePathname="/settings/context">
-            <SettingsContextTreePage />
+            <SettingsContextTreePage preparePrompt={async () => PREVIEW_SETUP_PROMPT} />
           </SettingsLayout>
           <nav
             aria-label="Context Tree settings preview controls"

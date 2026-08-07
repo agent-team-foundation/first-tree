@@ -89,8 +89,6 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
       savedField: null,
     },
     clientStatus: undefined,
-    clientStatusLoading: false,
-    clientStatusError: null,
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: "gandy-macbook",

@@ -1,15 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import type {
-  EffortLevel,
-  McpServerConfig,
-  PermissionMode,
-  Query,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import { join } from "node:path";
+import type { PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentRuntimeConfigPayload,
@@ -17,7 +11,6 @@ import type {
   RuntimeProvider,
   SessionEvent,
   SupportedImageMime,
-  ToolFileRef,
 } from "@first-tree/shared";
 import {
   encodeProviderRetryEventMessage,
@@ -32,24 +25,16 @@ import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { renderDocumentAttachmentsForLLM } from "../runtime/agent-io.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../runtime/chat-context-section.js";
-import {
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-  withContextTreeRepoHeadCommit,
-} from "../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../runtime/context-tree-git-status.js";
-import {
-  type AgentHandler,
-  type DeliveryToken,
-  deliveryTokenFromSessionContext,
-  type HandlerFactory,
-  type SessionContext,
-  type SessionMessage,
-} from "../runtime/handler.js";
+import { createContextTreeGitWriteTracker } from "../runtime/context-tree-git-status.js";
+import type {
+  AgentHandler,
+  DeliveryToken,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
+
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../runtime/managed-skills.js";
@@ -72,8 +57,19 @@ import {
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { teamSkillBundleResolverFromSdk } from "../runtime/team-skill-bundle-resolver.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
+import { mapMcpServers } from "./claude/mcp-config.js";
+import {
+  buildClaudeQueryOptions,
+  type ClaudeQueryConfigOptions,
+  isSameModelFamily,
+} from "./claude/sdk-query-options.js";
+import {
+  type ContextTreeBinding,
+  createToolCallProcessor,
+  type ToolCallProcessor,
+  treeNodePathOf,
+} from "./claude/tool-call-processor.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 import {
   type ClaudeProviderFailure,
@@ -83,6 +79,21 @@ import {
   mergeClaudeProviderFailures,
 } from "./claude-provider-error.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
+
+// Re-exported so `./claude/*` stays the source of truth for these
+// provider-family helpers while every existing import of them from this
+// SDK handler entry point (internal call sites, tests, the Claude TUI
+// handler pre-decoupling) keeps working unchanged.
+export {
+  buildClaudeQueryOptions,
+  type ClaudeQueryConfigOptions,
+  type ContextTreeBinding,
+  createToolCallProcessor,
+  isSameModelFamily,
+  mapMcpServers,
+  type ToolCallProcessor,
+  treeNodePathOf,
+};
 
 type PendingAckMessage = {
   message: SessionMessage;
@@ -188,13 +199,6 @@ export function detectClaudeSessionLimitResult(text: string): { message: string 
   return CLAUDE_SESSION_LIMIT_RESULT_RE.test(firstLine) ? { message: firstLine } : null;
 }
 
-const TOOL_RESULT_PREVIEW_LIMIT = 400;
-
-type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
-type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
-type TextBlock = { type: "text"; text: string };
-type ThinkingBlock = { type: "thinking"; thinking?: string };
-
 const SUPPORTED_IMAGE_MIMES: ReadonlySet<SupportedImageMime> = new Set<SupportedImageMime>(
   SHARED_SUPPORTED_IMAGE_MIMES,
 );
@@ -246,38 +250,6 @@ async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatI
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
   await writeFile(path, Buffer.from(content.data, "base64"));
   return path;
-}
-
-function extractContentBlocks(message: unknown): unknown[] {
-  if (!message || typeof message !== "object") return [];
-  const inner = (message as { message?: unknown }).message;
-  if (!inner || typeof inner !== "object") return [];
-  const content = (inner as { content?: unknown }).content;
-  return Array.isArray(content) ? content : [];
-}
-
-function isToolUseBlock(block: unknown): block is ToolUseBlock {
-  if (!block || typeof block !== "object") return false;
-  const b = block as Record<string, unknown>;
-  return b.type === "tool_use" && typeof b.id === "string" && typeof b.name === "string";
-}
-
-function isToolResultBlock(block: unknown): block is ToolResultBlock {
-  if (!block || typeof block !== "object") return false;
-  const b = block as Record<string, unknown>;
-  return b.type === "tool_result" && typeof b.tool_use_id === "string";
-}
-
-function isTextBlock(block: unknown): block is TextBlock {
-  if (!block || typeof block !== "object") return false;
-  const b = block as Record<string, unknown>;
-  return b.type === "text" && typeof b.text === "string";
-}
-
-function isThinkingBlock(block: unknown): block is ThinkingBlock {
-  if (!block || typeof block !== "object") return false;
-  const b = block as Record<string, unknown>;
-  return b.type === "thinking";
 }
 
 function eventMakesReplayUnsafe(event: SessionEvent): boolean {
@@ -414,392 +386,6 @@ function emitTokenUsageFromResult(
   }
 }
 
-function extractToolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    const p = part as Record<string, unknown>;
-    if (p.type === "text" && typeof p.text === "string") parts.push(p.text);
-  }
-  return parts.join("\n");
-}
-
-/** Tools whose `file_path` / `notebook_path` argument names a single file. */
-const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
-const TREE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-/**
- * Search/discovery tools scan a search root rather than open one file. They
- * carry directory-level evidence (the explicit `path` argument), deliberately
- * NOT one ref per matched file — a recursive search "touching" every node
- * would drown the Context tab feed in noise.
- */
-const TREE_SEARCH_TOOL_NAMES: ReadonlySet<string> = new Set(["Grep", "Glob"]);
-
-/**
- * Extract a string `file_path` argument from a tool_use input, if present.
- * Notebook tools (NotebookRead / NotebookEdit) spell the same argument
- * `notebook_path`; accept either so notebook IO carries refs too.
- */
-function readFilePathArg(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const record = input as { file_path?: unknown; notebook_path?: unknown };
-  const fp = record.file_path ?? record.notebook_path;
-  return typeof fp === "string" ? fp : null;
-}
-
-/**
- * If `filePath` lives under `contextTreePath`, return its tree-root-relative
- * path (e.g. `members/Gandy2025/NODE.md`); otherwise null. The agent reads
- * tree files by absolute path (CLAUDE.md points it at the full tree at
- * `contextTreePath`), so a prefix match on the normalised root is the filter.
- * The trailing-slash trim keeps `/a/tree` from matching `/a/tree-other/x`.
- *
- * Invariant: both `filePath` and `contextTreePath` are expected to be
- * absolute. A relative `filePath` will not match the absolute root and returns
- * null — i.e. it silently under-counts (fails safe) rather than mis-attributing.
- *
- * Callers that may receive symlink aliases of the tree (the W1 cloud layout
- * exposes the shared clone as a `<workspace>/context-tree` link) must pass
- * both arguments through `canonicalizeFsPath` first — this function compares
- * strings only.
- */
-export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
-  if (!filePath || !contextTreePath) return null;
-  const root = contextTreePath.endsWith("/") ? contextTreePath.slice(0, -1) : contextTreePath;
-  if (!filePath.startsWith(`${root}/`)) return null;
-  const rel = filePath.slice(root.length + 1);
-  return rel.length > 0 ? rel : null;
-}
-
-/** Local Context Tree repo mapping available to the tool-call processor. */
-export type ContextTreeBinding = { path: string | null; repoUrl: string | null; branch?: string | null };
-
-function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTreeBinding): ToolFileRef | null {
-  if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
-  const filePath = readFilePathArg(input);
-  if (filePath === null) return null;
-  // Containment (canonical, symlink-safe) or repo identity (tree PR
-  // worktrees — any checkout whose origin remote IS the Context Tree repo).
-  // Relative paths keep the fail-safe null mapping — canonicalizing them
-  // would resolve against the daemon's cwd and risk mis-attribution.
-  const repoRelativePath =
-    contextTree && isAbsolute(filePath)
-      ? resolveContextTreeRelativePath(filePath, {
-          contextTreePath: contextTree.path,
-          contextTreeRepoUrl: contextTree.repoUrl,
-        })
-      : null;
-  const ref: ToolFileRef = {
-    origin: "tool_arg",
-    localPath: filePath,
-    pathKind: "file",
-    ...(contextTree?.repoUrl && repoRelativePath !== null
-      ? {
-          repoUrl: contextTree.repoUrl,
-          ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
-          repoRelativePath,
-        }
-      : {}),
-  };
-  return TREE_READ_TOOL_NAMES.has(toolName) && isAbsolute(filePath)
-    ? withContextTreeRepoHeadCommit(ref, filePath)
-    : ref;
-}
-
-function statIsFile(absolutePath: string): boolean {
-  try {
-    return statSync(absolutePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-/** Extract a string `path` argument from a search tool_use input, if present. */
-function searchPathArg(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const p = (input as { path?: unknown }).path;
-  return typeof p === "string" ? p : null;
-}
-
-/**
- * Directory-level ref for a Grep/Glob call whose explicit `path` argument
- * targets the Context Tree. Calls without a `path` argument default to the
- * session cwd (the workspace root, not the tree) and carry no ref — fail-safe
- * under-counting over mis-attribution, same stance as `toolFileRef`.
- */
-function searchToolFileRef(
-  toolName: string,
-  input: unknown,
-  contextTree: ContextTreeBinding | undefined,
-  cwd: string | null | undefined,
-): ToolFileRef | null {
-  if (!TREE_SEARCH_TOOL_NAMES.has(toolName)) return null;
-  const rawPath = searchPathArg(input);
-  if (rawPath === null) return null;
-  if (!isAbsolute(rawPath) && !cwd) return null;
-  const absolutePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? "", rawPath);
-  const repoRelativePath = contextTree
-    ? resolveContextTreeRelativePath(absolutePath, {
-        contextTreePath: contextTree.path,
-        contextTreeRepoUrl: contextTree.repoUrl,
-      })
-    : null;
-  return withContextTreeRepoHeadCommit(
-    {
-      origin: "tool_arg",
-      localPath: absolutePath,
-      // Grep accepts a file as its search root; everything else is a directory.
-      pathKind: repoRelativePath === "/" ? "repo" : statIsFile(absolutePath) ? "file" : "directory",
-      ...(contextTree?.repoUrl && repoRelativePath !== null
-        ? {
-            repoUrl: contextTree.repoUrl,
-            ...(contextTree.branch ? { repoBranch: contextTree.branch } : {}),
-            repoRelativePath,
-          }
-        : {}),
-    },
-    absolutePath,
-  );
-}
-
-function readCommandArg(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const command = (input as { command?: unknown }).command;
-  return typeof command === "string" ? command : null;
-}
-
-function toolFileRefs(
-  toolName: string,
-  input: unknown,
-  contextTree: ContextTreeBinding | undefined,
-  cwd: string | null | undefined,
-): ToolFileRef[] {
-  const directRef = toolFileRef(toolName, input, contextTree);
-  if (directRef) return [directRef];
-  const searchRef = searchToolFileRef(toolName, input, contextTree, cwd);
-  if (searchRef) return [searchRef];
-  if (toolName !== "Bash" || !cwd) return [];
-  const command = readCommandArg(input);
-  if (command === null) return [];
-  return toolFileRefsFromShellCommand({
-    command,
-    cwd,
-    contextTreePath: contextTree?.path ?? null,
-    contextTreeRepoUrl: contextTree?.repoUrl ?? null,
-    contextTreeBranch: contextTree?.branch ?? null,
-  });
-}
-
-/**
- * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
- * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
- *
- * Successful single-file read/write tools carry generic `toolFileRefs`
- * evidence. When the local path can be mapped to a known repo checkout, the ref
- * includes repo evidence. The server derives Context Tree IO from that evidence
- * and the actual runtime/tool.
- */
-export type ToolCallProcessor = {
-  onMessage(message: unknown): void;
-  flush(): void;
-};
-
-export function createToolCallProcessor(
-  emit: (event: SessionEvent) => void,
-  contextTree?: ContextTreeBinding,
-  options: { cwd?: string | null; gitWriteTracker?: ContextTreeGitWriteTracker } = {},
-): ToolCallProcessor {
-  type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
-  const pending = new Map<string, Pending>();
-
-  function pairResult(block: ToolResultBlock): void {
-    const entry = pending.get(block.tool_use_id);
-    if (!entry) return;
-    const status: "ok" | "error" = block.is_error === true ? "error" : "ok";
-    const durationMs = Date.now() - entry.startedAt;
-    const previewRaw = extractToolResultText(block.content);
-    const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
-    if (status === "error") options.gitWriteTracker?.captureBaseline();
-    const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
-    const gitStatusRefs =
-      status === "ok"
-        ? (options.gitWriteTracker?.refsForSuccessfulToolCall({
-            toolName: entry.name,
-            toolUseId: entry.toolUseId,
-            existingRefs: refs,
-          }) ?? [])
-        : [];
-    const allRefs = [...refs, ...gitStatusRefs];
-
-    emit({
-      kind: "tool_call",
-      payload: {
-        toolUseId: entry.toolUseId,
-        name: entry.name,
-        args: entry.args,
-        status,
-        durationMs,
-        ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(allRefs.length > 0 ? { toolFileRefs: allRefs } : {}),
-      },
-    });
-
-    pending.delete(block.tool_use_id);
-  }
-
-  return {
-    onMessage(message: unknown): void {
-      if (!message || typeof message !== "object") return;
-      const type = (message as { type?: unknown }).type;
-      if (type === "assistant") {
-        for (const block of extractContentBlocks(message)) {
-          if (isToolUseBlock(block)) {
-            options.gitWriteTracker?.captureBaseline();
-            pending.set(block.id, {
-              toolUseId: block.id,
-              name: block.name,
-              args: block.input,
-              startedAt: Date.now(),
-            });
-            // Emit a pending row the moment the tool_use appears — otherwise
-            // long-running tools (Bash sleep, network fetches) show nothing
-            // live and the chat jumps straight from silence to `used <tool>`
-            // after completion. Frontend dedupes by toolUseId against the
-            // final ok/error emit (see filterEventsForTimeline).
-            emit({
-              kind: "tool_call",
-              payload: {
-                toolUseId: block.id,
-                name: block.name,
-                args: block.input,
-                status: "pending",
-              },
-            });
-          } else if (isTextBlock(block)) {
-            const text = block.text.trim();
-            if (text.length === 0) continue;
-            // Chunk so the FULL assistant text is preserved across one or more
-            // events — the durable troubleshooting record now that the
-            // per-turn final-text chat mirror is retired.
-            for (const chunk of chunkAssistantText(text)) {
-              emit({ kind: "assistant_text", payload: { text: chunk } });
-            }
-          } else if (isThinkingBlock(block)) {
-            emit({ kind: "thinking", payload: {} });
-          }
-        }
-      } else if (type === "user") {
-        for (const block of extractContentBlocks(message)) {
-          if (isToolResultBlock(block)) pairResult(block);
-        }
-      }
-    },
-    flush(): void {
-      // `pending` rows were already emitted up-front when each tool_use
-      // arrived, so flush is now just a bookkeeping reset — no second emit.
-      // Unpaired entries stay visible as "pending" in the UI until the next
-      // turn_end collapses them with the rest of the abandoned turn.
-      pending.clear();
-    },
-  };
-}
-
-/**
- * Map a payload's MCP server list to the SDK's record type. Handles all three
- * transports (stdio/http/sse) defined in the M1 schema.
- */
-export function mapMcpServers(payload: AgentRuntimeConfigPayload): Record<string, McpServerConfig> {
-  const out: Record<string, McpServerConfig> = {};
-  for (const s of payload.mcpServers) {
-    if (s.transport === "stdio") {
-      out[s.name] = { type: "stdio", command: s.command, args: s.args };
-    } else if (s.transport === "http") {
-      out[s.name] = { type: "http", url: s.url, headers: s.headers };
-    } else {
-      out[s.name] = { type: "sse", url: s.url, headers: s.headers };
-    }
-  }
-  return out;
-}
-
-/** Payload-derived slice of the Claude Code SDK query options. */
-export type ClaudeQueryConfigOptions = {
-  model?: string;
-  mcpServers?: Record<string, McpServerConfig>;
-  effort?: EffortLevel;
-  systemPrompt?: {
-    type: "preset";
-    preset: "claude_code";
-    append?: string;
-  };
-};
-
-/**
- * Build the config-derived slice of the SDK query options (model, MCP
- * servers, reasoning effort). Kept pure and exported so these mappings are
- * unit-testable; the session-bound options (env, canUseTool, abortController,
- * sessionId/resume) stay inline in `buildQuery`.
- *
- * Per-agent prompt instructions, working-directory convention, and source-repo
- * list land in `<cwd>/AGENTS.md` (which `CLAUDE.md` symlinks to). Per-chat
- * Current Chat Context is appended through the SDK `systemPrompt` channel so
- * concurrent chats sharing one agent home cannot overwrite each other's
- * context in the shared briefing file.
- *
- * Reasoning effort: the claude variant's `""` is an inherit sentinel — when
- * set we omit the `effort` option so the SDK falls back to the operator's local
- * `~/.claude/settings.json` effortLevel (preserving pre-feature behavior). A
- * non-empty value is passed explicitly and overrides that local setting.
- */
-export function buildClaudeQueryOptions(
-  payload: AgentRuntimeConfigPayload | undefined,
-  chatContext?: ChatContext,
-): ClaudeQueryConfigOptions {
-  const options: ClaudeQueryConfigOptions = {};
-  if (payload?.model) options.model = payload.model;
-  if (payload?.mcpServers.length) options.mcpServers = mapMcpServers(payload);
-  if (payload?.kind === "claude-code" && payload.reasoningEffort) {
-    options.effort = payload.reasoningEffort;
-  }
-  // The runtime output contract always rides along (it does not depend on
-  // chatContext); the per-chat context block is appended after it when present.
-  // Both live in `systemPrompt.append`, which the SDK places after the
-  // `claude_code` base preset but at higher salience than the project CLAUDE.md.
-  const append = [renderRuntimeOutputContract(), renderChatContextPrompt(chatContext)]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-  if (append) {
-    options.systemPrompt = {
-      type: "preset",
-      preset: "claude_code",
-      append,
-    };
-  }
-  return options;
-}
-
-/**
- * Decide whether a model swap can use `query.setModel()` (in-flight, ~0ms)
- * vs needing a `resume` restart (~5–10s cold start).
- *
- * "Same family" = model id share the `claude-<family>-<series>` prefix
- * (e.g. `claude-opus-4-5` ↔ `claude-opus-4-6` are same family; `claude-opus-*`
- * ↔ `claude-haiku-*` are not). The SDK's `setModel` handles within-family
- * swaps cleanly; cross-family ones should restart to avoid context-window
- * mismatches.
- */
-export function isSameModelFamily(a: string, b: string): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  const segA = a.split("-");
-  const segB = b.split("-");
-  // claude-<family>-<series>-<rev>
-  if (segA.length < 3 || segB.length < 3) return false;
-  return segA[0] === segB[0] && segA[1] === segB[1] && segA[2] === segB[2];
-}
-
 /**
  * Claude Code Handler — session-oriented handler using the Agent SDK.
  *
@@ -809,12 +395,11 @@ export function isSameModelFamily(a: string, b: string): boolean {
  */
 export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
-  const runtimeProvider: RuntimeProvider = runtimeProviderSchema.safeParse(config.runtimeProvider).success
-    ? runtimeProviderSchema.parse(config.runtimeProvider)
-    : "claude-code";
+  const runtimeProvider: RuntimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
+  // Pre-resolved by the CLI composition root when building the frozen
+  // handler factory table (cheap PATH / well-known dirs only). Undefined =
   // defer to the SDK's bundled native binary (see claude-executable.ts for
   // why we can't always rely on it).
   const claudeCodeExecutable =
@@ -2170,8 +1755,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   const handler: AgentHandler = {
     async start(message, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
       // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
@@ -2228,14 +1812,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
-      return hasExplicitDeliveryToken
-        ? { sessionId: claudeSessionId, route: { kind: "owned", mode: "processing" } }
-        : claudeSessionId;
+      return { sessionId: claudeSessionId, route: { kind: "owned", mode: "processing" } };
     },
 
     async resume(message, sessionId, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
@@ -2306,9 +1887,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
-        return hasExplicitDeliveryToken
-          ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-          : sessionId;
+        return { sessionId, route: message ? { kind: "owned", mode: "processing" } : null };
       }
 
       // Normal new-design resume path: cwd is the agent home.
@@ -2366,9 +1945,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
-        return hasExplicitDeliveryToken
-          ? { sessionId: freshSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-          : freshSessionId;
+        return { sessionId: freshSessionId, route: message ? { kind: "owned", mode: "processing" } : null };
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
@@ -2394,9 +1971,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
       sessionCtx.log(`Session resumed (${sessionId})`);
-      return hasExplicitDeliveryToken
-        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : sessionId;
+      return { sessionId, route: message ? { kind: "owned", mode: "processing" } : null };
     },
 
     inject(message, token) {
@@ -2405,7 +1980,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         return { kind: "rejected", reason: "no_active_session", retryable: true };
       }
       const sessionCtx = ctx;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       const sid = claudeSessionId;
       queuedInjectedMessages.push({ message, token: deliveryToken });
       scheduleInjectedMessagesDrain(sessionCtx, sid);

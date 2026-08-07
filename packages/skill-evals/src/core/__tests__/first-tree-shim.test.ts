@@ -153,6 +153,69 @@ describe("first-tree eval shim", () => {
     }
   });
 
+  it("records the exact chat body supplied through the safe file transport", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-chat-body-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "first-tree-shim-chat-body",
+        packageRoot,
+        startedAt: "2026-08-04T00:00:00.000Z",
+      });
+      const bodyPath = join(paths.workspacePath, "question.md");
+      writeFileSync(bodyPath, "I read `src/auth/session.ts`.\n\nChoose one task.\n", "utf8");
+      createFirstTreeShim(paths);
+
+      const result = spawnSync(join(paths.binDir, "first-tree"), ["chat", "ask", "baixiaohang", "-F", bodyPath], {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: ["chat", "ask", "baixiaohang", "-F", bodyPath],
+            body: "I read `src/auth/session.ts`.\n\nChoose one task.\n",
+            type: "first_tree_call",
+          }),
+        ]),
+      );
+
+      const currentState = "Current state remains visible while work continues.";
+      const updateArgv = ["chat", "update", "--description", "-"];
+      const update = spawnSync(join(paths.binDir, "first-tree"), updateArgv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
+        input: currentState,
+      });
+
+      expect(update.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: updateArgv,
+            body: currentState,
+            type: "first_tree_call",
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("allows governance seed cases to simulate tree init success", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-governance-"));
     try {

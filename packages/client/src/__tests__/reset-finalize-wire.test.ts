@@ -421,14 +421,14 @@ describe("Reset finalize handshake — wire level", () => {
         token?.processingStarted(message);
         await token?.complete(message, { status: "success", terminal: true });
         await ctx.finishTurn(message, { status: "success", terminal: true });
-        return `session-${message.id}`;
+        return { sessionId: `session-${message.id}`, route: { kind: "owned" as const, mode: "queued" as const } };
       },
       resume: async (message: SessionMessage | undefined, sessionId: string, ctx: SessionContext, token) => {
-        if (!message) return sessionId;
+        if (!message) return { sessionId: sessionId, route: { kind: "owned" as const, mode: "queued" as const } };
         token?.processingStarted(message);
         await token?.complete(message, { status: "success", terminal: true });
         await ctx.finishTurn(message, { status: "success", terminal: true });
-        return sessionId;
+        return { sessionId: sessionId, route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: (messages) => {
         for (const message of Array.isArray(messages) ? messages : [messages]) injects.push(message.id);

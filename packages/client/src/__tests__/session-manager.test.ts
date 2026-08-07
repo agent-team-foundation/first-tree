@@ -75,8 +75,12 @@ function deferred<T>() {
 /** Create a mock handler conforming to the new session-oriented interface. */
 function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
   return {
-    start: vi.fn().mockResolvedValue("session-id-mock"),
-    resume: vi.fn().mockResolvedValue("session-id-mock"),
+    start: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
+    resume: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
     inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -252,7 +256,7 @@ function createSessionManager(opts: {
     concurrency: opts.concurrency ?? 5,
     subprocessProbe: opts.subprocessProbe,
     handlerFactory: factory,
-    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     // Tests never want the live git-backed resolver — default to a no-op so a
     // tree-less handlerConfig stays tree-less unless a test opts in.
     resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
@@ -317,7 +321,7 @@ describe("SessionManager", () => {
     const handler = createMockHandler({
       async start(_msg, ctx) {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sm = createSessionManager({ ackEntry, handler });
@@ -389,7 +393,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -466,7 +470,10 @@ describe("SessionManager", () => {
     };
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     const injectSpy = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
-    const startSpy = vi.fn(async () => "session-id-mock");
+    const startSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({
       start: startSpy,
       inject: injectSpy,
@@ -544,7 +551,7 @@ describe("SessionManager", () => {
       const h = createMockHandler({
         start: vi.fn(async (message, ctx) => {
           ctx.markMessagesConsumed(message);
-          return `session-${message.chatId}`;
+          return { sessionId: `session-${message.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       handlers.push(h);
@@ -583,7 +590,7 @@ describe("SessionManager", () => {
           messages.set(message.chatId, message);
           started.push(message.chatId);
           ctx.markMessagesConsumed(message);
-          return `session-${message.chatId}`;
+          return { sessionId: `session-${message.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
     const sm = createSessionManager({
@@ -612,7 +619,7 @@ describe("SessionManager", () => {
     let capturedCtx: SessionContext | undefined;
     const startSpy = vi.fn(async (_msg: unknown, ctx: SessionContext) => {
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const injectSpy = vi.fn();
     const handler = createMockHandler({ start: startSpy, inject: injectSpy });
@@ -801,7 +808,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -841,7 +848,7 @@ describe("SessionManager", () => {
     const handler = createMockHandler({
       async start(_msg, ctx) {
         capturedCtx = ctx;
-        return "session-id";
+        return { sessionId: "session-id", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
 
@@ -885,7 +892,7 @@ describe("SessionManager", () => {
         async start(msg, ctx) {
           contexts.set(msg.chatId, ctx);
           messages.set(msg.chatId, msg);
-          return `session-${msg.chatId}`;
+          return { sessionId: `session-${msg.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
       handlers.push(h);
@@ -897,7 +904,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -938,7 +945,7 @@ describe("SessionManager", () => {
           contexts.set(msg.chatId, ctx);
           messages.set(msg.chatId, msg);
           lifecycleCalls.push({ type: "start", chatId: msg.chatId });
-          return sid;
+          return { sessionId: sid, route: { kind: "owned" as const, mode: "queued" as const } };
         },
         async resume(msg, sessionId, ctx) {
           if (msg) {
@@ -946,7 +953,7 @@ describe("SessionManager", () => {
             messages.set(msg.chatId, msg);
           }
           lifecycleCalls.push({ type: "resume", chatId: msg?.chatId ?? "", sessionId });
-          return sessionId;
+          return { sessionId: sessionId, route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
 
@@ -955,7 +962,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1024,7 +1031,7 @@ describe("SessionManager", () => {
       createMockHandler({
         async start(msg) {
           startCalls.push(msg.chatId);
-          return `session-${msg.chatId}`;
+          return { sessionId: `session-${msg.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
 
@@ -1033,7 +1040,7 @@ describe("SessionManager", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 2,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1085,7 +1092,7 @@ describe("SessionManager dispatch integration", () => {
     const startSpy = handler.start as ReturnType<typeof vi.fn>;
     startSpy.mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const ackEntry = mockAckEntry();
     const sm = createSessionManager({ handler, ackEntry });
@@ -1129,7 +1136,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: () => h,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1157,7 +1164,10 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
   it("starts a fresh chat without same-socket recovery even when recoverChat is configured", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
-    const startSpy = vi.fn(async () => "session-id-mock");
+    const startSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({ start: startSpy });
     const { sm } = buildSm(ackEntry, handler, recoverChat);
 
@@ -1177,7 +1187,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const start = vi.fn(async (message: SessionMessage, ctx: SessionContext) => {
       capturedMessage = message;
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const handler = createMockHandler({
       start,
@@ -1210,7 +1220,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const start = vi.fn(async (message: SessionMessage, ctx: SessionContext) => {
       capturedMessage = message;
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const handler = createMockHandler({
       start,
@@ -1238,7 +1248,10 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
   it("requests chat recovery when concurrency preemption interrupts owed work", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
-    const startSpy = vi.fn(async () => "session-id-mock");
+    const startSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({ start: startSpy });
     const sm = createSessionManager({
       ackEntry,
@@ -1274,7 +1287,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
           contexts.set(message.chatId, ctx);
           messages.set(message.chatId, message);
           ctx.markMessagesConsumed(message);
-          return `session-${message.chatId}`;
+          return { sessionId: `session-${message.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
       return current;
@@ -1320,7 +1333,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const handler = createMockHandler({
       async start(_m, ctx) {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const { sm } = buildSm(ackEntry, handler);
@@ -1344,7 +1357,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: vi.fn((m) => {
         injected.push(m);
@@ -1380,7 +1393,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: vi.fn((m) => {
         injected.push(m);
@@ -1415,7 +1428,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         capturedMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const { sm } = buildSm(ackEntry, handler);
@@ -1456,7 +1469,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
         routed.push(`start:${m.id}`);
         capturedCtx = ctx;
         startedMessage = m;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: vi.fn((m) => {
         routed.push(`inject:${m.id}`);
@@ -1495,7 +1508,10 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
   it("requests chat recovery when routeMessage fails and lets later redelivery route", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
-    const recoveryStart = vi.fn(async () => "session-id-recovery");
+    const recoveryStart = vi.fn(async () => ({
+      sessionId: "session-id-recovery",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     let factoryCalls = 0;
     const factory = vi.fn<HandlerFactory>(() => {
       factoryCalls++;
@@ -1506,7 +1522,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -1541,11 +1557,14 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
-    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const resumeSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const startSpy = vi.fn(async (m: Parameters<AgentHandler["start"]>[0], ctx: SessionContext) => {
       firstMessage = m;
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const handler = createMockHandler({
       start: startSpy,
@@ -1578,12 +1597,15 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
-    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const resumeSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       resume: resumeSpy,
     });
@@ -1615,12 +1637,15 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
     const injected: Parameters<AgentHandler["inject"]>[0][] = [];
-    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const resumeSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       resume: resumeSpy,
       inject: vi.fn((m) => {
@@ -1659,12 +1684,15 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
-    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const resumeSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       resume: resumeSpy,
       inject: vi.fn(() => ({ kind: "owned", mode: "queued" }) as const),
@@ -1695,12 +1723,15 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
-    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const resumeSpy = vi.fn(async () => ({
+      sessionId: "session-id-mock",
+      route: { kind: "owned" as const, mode: "queued" as const },
+    }));
     const handler = createMockHandler({
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       resume: resumeSpy,
       inject: vi.fn(() => ({ kind: "owned", mode: "queued" }) as const),
@@ -1739,7 +1770,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: vi.fn((m) => {
         injected.push(m);
@@ -1770,7 +1801,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const startSpy = vi.fn(async (m: Parameters<AgentHandler["start"]>[0], ctx: SessionContext) => {
       firstMessage = m;
       capturedCtx = ctx;
-      return "session-id-mock";
+      return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const handler = createMockHandler({
       start: startSpy,
@@ -1810,7 +1841,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: injectSpy,
     });
@@ -1840,7 +1871,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       inject: injectSpy,
     });
@@ -1865,11 +1896,11 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const handler = createMockHandler({
       async start(_m, ctx) {
         capturedCtxs.push(ctx);
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
       async resume(_m, _sid, ctx) {
         capturedCtxs.push(ctx);
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sdk = mockSdk();
@@ -1877,7 +1908,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => handler,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
@@ -2650,7 +2681,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       start: vi.fn(async (message, ctx) => {
         capturedMessage = message;
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
     });
     const { sm } = buildSm(ackEntry, handler, recoverChat);
@@ -2742,7 +2773,7 @@ describe("SessionManager lazy Context Tree binding", () => {
   };
 
   it("upgrades a tree-less handler config to tree-bound on a new session", async () => {
-    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
+    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test", runtimeProvider: "codex" };
     let builtWith: HandlerConfig | undefined;
     const sm = createSessionManager({
       handlerConfig,
@@ -2767,7 +2798,11 @@ describe("SessionManager lazy Context Tree binding", () => {
 
   it("does not re-resolve when already bound (steady state pays nothing)", async () => {
     const resolve = vi.fn(async () => BINDING);
-    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test", contextTreePath: "/already/bound" };
+    const handlerConfig: HandlerConfig = {
+      workspaceRoot: "/tmp/test",
+      runtimeProvider: "codex",
+      contextTreePath: "/already/bound",
+    };
     const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "c-bound", messageId: "m1" }));
@@ -2780,7 +2815,7 @@ describe("SessionManager lazy Context Tree binding", () => {
 
   it("re-resolves once for the new session, not again for a same-chat inject", async () => {
     const resolve = vi.fn(async () => null);
-    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test" };
+    const handlerConfig: HandlerConfig = { workspaceRoot: "/tmp/test", runtimeProvider: "codex" };
     const sm = createSessionManager({ handlerConfig, resolveContextTreeBinding: resolve });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "c-once", messageId: "m1" }));
@@ -2800,7 +2835,7 @@ describe("SessionManager subprocess-aware suspend/eviction", () => {
       const handler = createMockHandler({
         async start(_msg, c) {
           ctx = c;
-          return "sid";
+          return { sessionId: "sid", route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
       const hasLive = vi.fn().mockReturnValue(true);
@@ -2837,7 +2872,7 @@ describe("SessionManager subprocess-aware suspend/eviction", () => {
       const handler = createMockHandler({
         async start(_msg, c) {
           ctx = c;
-          return "sid";
+          return { sessionId: "sid", route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
       const probe: SubprocessProbe = { hasLiveSubprocess: vi.fn().mockReturnValue(true), stop: vi.fn() };
@@ -2867,7 +2902,10 @@ describe("SessionManager subprocess-aware suspend/eviction", () => {
       const h = createMockHandler({
         async start(msg, c) {
           ctxs[(msg as { chatId: string }).chatId] = c;
-          return `sid-${(msg as { chatId: string }).chatId}`;
+          return {
+            sessionId: `sid-${(msg as { chatId: string }).chatId}`,
+            route: { kind: "owned" as const, mode: "queued" as const },
+          };
         },
       });
       handlers.push(h);
@@ -3081,7 +3119,7 @@ describe("SessionManager completion disposition", () => {
     const handler = createMockHandler({
       async start(_msg, ctx) {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sm = createSessionManager({ handler, ackEntry, recoverChat: async () => {} });
@@ -3105,7 +3143,7 @@ describe("SessionManager completion disposition", () => {
     const handler = createMockHandler({
       async start(_msg, ctx) {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sm = createSessionManager({ handler, ackEntry, recoverChat });
@@ -3144,7 +3182,7 @@ describe("SessionManager completion disposition", () => {
     const handler = createMockHandler({
       async start(_msg, ctx) {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sm = createSessionManager({ handler, ackEntry });
@@ -3178,7 +3216,7 @@ describe("SessionManager replay fence reconcile", () => {
       const handler = createMockHandler({
         start: vi.fn().mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
           capturedCtx = ctx;
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({
@@ -3444,7 +3482,7 @@ describe("SessionManager replay fence startup reconciliation", () => {
       const handler = createMockHandler({
         start: vi.fn().mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
           capturedCtx = ctx;
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({
@@ -3624,7 +3662,7 @@ describe("SessionManager replay fence convergence matrix", () => {
     const handler = createMockHandler({
       start: vi.fn().mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
         capturedCtx = ctx;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
     });
     const sm = createSessionManager({ handler, ackEntry, recoverChat });
@@ -3912,7 +3950,7 @@ describe("SessionManager confirmed-ACK fence settlement suppression", () => {
       const handler = createMockHandler({
         start: vi.fn().mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
           capturedCtx = ctx;
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({

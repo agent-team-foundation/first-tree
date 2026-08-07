@@ -128,9 +128,17 @@ describe("context integration contracts", () => {
         channel: "prod",
         bundleDigest: DIGEST,
         policyDigest: DIGEST,
+        core: {
+          digest: DIGEST,
+          policy: { path: "policy/context-tree-policy.md", digest: DIGEST },
+          skills: {
+            "first-tree-read": { path: "skills/first-tree-read/SKILL.md", digest: DIGEST },
+            "first-tree-write": { path: "skills/first-tree-write/SKILL.md", digest: DIGEST },
+          },
+        },
         providers: {
-          codex: { adapterDigest: DIGEST, minimumVersion: "1.0.0" },
-          "claude-code": { adapterDigest: DIGEST, minimumVersion: "1.0.0" },
+          codex: { adapterVersion: "1.0.0", adapterDigest: DIGEST, minimumVersion: "1.0.0" },
+          "claude-code": { adapterVersion: "1.0.0", adapterDigest: DIGEST, minimumVersion: "1.0.0" },
         },
       }).policyDigest,
     ).toBe(DIGEST);

@@ -14,7 +14,8 @@ import type { RuntimeSwitchClaimView } from "./layout-context.js";
  *
  * The section uses the same left label column as Identity so the page reads as
  * one settings surface. Red is reserved for the enabled destructive Delete
- * action; suspend/reactivate are reversible lifecycle actions and stay neutral.
+ * action; suspend is reversible and stays neutral. Reactivation lives in the
+ * identity header so recovery is available before the user reaches this section.
  *
  * Confirmation uses real Dialogs (no native window.confirm) so both Suspend
  * and Delete can render typed-name confirmation copy and a labelled button.
@@ -23,14 +24,12 @@ import type { RuntimeSwitchClaimView } from "./layout-context.js";
 export type DangerZoneProps = {
   agent: Agent;
   suspendPending: boolean;
-  reactivatePending: boolean;
   deletePending: boolean;
   runtimeSwitchClaim?: RuntimeSwitchClaimView | null;
   runtimeSwitchRecoveryPending?: boolean;
   runtimeSwitchRecoveryError?: string | null;
   errorMessage?: string | null;
   onSuspend: () => void;
-  onReactivate: () => void;
   onDelete: () => void;
   onRecoverRuntimeSwitch?: () => void;
 };
@@ -42,12 +41,11 @@ export function DangerZone(props: DangerZoneProps) {
 
   const displayLabel = agent.displayName || agent.name || agent.uuid;
   const canDelete = agent.status === "suspended";
-  const canReactivate = agent.status === "suspended" && agent.clientId !== null;
   const claim = props.runtimeSwitchClaim ?? null;
 
   return (
     <div id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
-      <Section title="Agent lifecycle">
+      <Section headingLevel={3} title="Agent lifecycle">
         {claim ? (
           <DangerActionRow
             label="Recovery"
@@ -75,7 +73,7 @@ export function DangerZone(props: DangerZoneProps) {
         ) : agent.status === "active" ? (
           <DangerActionRow
             label="Availability"
-            description="Active agents can bind to a runtime and receive routed messages."
+            description="Suspend this agent to stop new routed work and most configuration changes."
             action={
               <Button
                 variant="outline"
@@ -88,26 +86,10 @@ export function DangerZone(props: DangerZoneProps) {
               </Button>
             }
           />
-        ) : canReactivate ? (
-          <DangerActionRow
-            label="Availability"
-            description="Suspended agents cannot bind or receive routed messages."
-            action={
-              <Button
-                variant="outline"
-                size="sm"
-                style={{ minWidth: "var(--sp-20)" }}
-                onClick={props.onReactivate}
-                disabled={props.reactivatePending}
-              >
-                {props.reactivatePending ? "Reactivating…" : "Reactivate"}
-              </Button>
-            }
-          />
         ) : (
           <DangerActionRow
             label="Availability"
-            description="Suspended agents cannot bind or receive routed messages."
+            description="Suspended agents cannot receive new routed work or change most settings."
             action={null}
           />
         )}

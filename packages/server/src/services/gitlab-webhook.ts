@@ -19,6 +19,7 @@ import { BadRequestError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
+import { lockChatMembershipMutation, lockChatSpeakerAndAgentSnapshot } from "./chat-membership-lock.js";
 import { buildClaimReadyGitlabDeliveryId } from "./gitlab-connections.js";
 import { buildGitlabCrossHookFingerprint, type GitlabHookSource } from "./gitlab-cross-hook-dedup.js";
 import {
@@ -31,6 +32,7 @@ import {
   normalizeGitlabUsername,
   resolveActiveGitlabIdentity,
 } from "./gitlab-identities.js";
+import { inviteParticipantsToChatInTransaction } from "./participant-invite.js";
 import { composeScmAudience, type ScmAudienceTarget, type ScmPersonnelTarget } from "./scm-audience-composition.js";
 import { type DeferredScmCardPostCommitEffects, sendScmSystemCard } from "./scm-card-delivery.js";
 import {
@@ -42,9 +44,10 @@ import {
   selectScmCardContext,
   selectScmSenderId,
 } from "./scm-chat-delivery-plan.js";
+import { lockGitlabEntityAttention } from "./scm-entity-attention-lock.js";
 import { formatGitlabEntityTopic } from "./scm-entity-chat-topic.js";
 import { parseSameProjectClosingIssueRefs } from "./scm-related-refs.js";
-import { decideScmPersonnelTargetChat } from "./scm-target-chat-policy.js";
+import { decideScmPersonnelTargetChat, lockAndValidateScmPersonnelPlacement } from "./scm-target-chat-policy.js";
 
 const log = createLogger("GitlabWebhook");
 
@@ -664,6 +667,36 @@ export type GitlabAudienceResolution = {
   actorHumanId: string | null;
 };
 
+type GitlabIdentityPairSnapshot = {
+  linkId: string;
+  humanAgentId: string;
+  delegateAgentId: string;
+};
+
+async function revalidateGitlabIdentityPair(
+  db: Database,
+  input: {
+    organizationId: string;
+    connectionId: string;
+    normalizedUsername: string;
+    expected: GitlabIdentityPairSnapshot;
+  },
+): Promise<boolean> {
+  const current = await resolveActiveGitlabIdentity(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    normalizedUsername: input.normalizedUsername,
+    lockForUpdate: true,
+    lockAgentRowsForUpdate: false,
+  });
+  return Boolean(
+    current.outcome === "ok" &&
+      current.identity.linkId === input.expected.linkId &&
+      current.identity.humanAgentId === input.expected.humanAgentId &&
+      current.identity.delegateAgentId === input.expected.delegateAgentId,
+  );
+}
+
 export async function resolveGitlabAudience(
   db: Database,
   input: {
@@ -675,38 +708,17 @@ export async function resolveGitlabAudience(
   },
 ): Promise<GitlabAudienceResolution> {
   const actorNormalizedUsername = normalizeGitlabUsername(input.event.actor.externalUsername).normalized;
-  let actorHumanId: string | null = null;
-  const identityRows = await db
-    .select({ identityLinkId: gitlabEntityChatMappings.identityLinkId })
-    .from(gitlabEntityChatMappings)
-    .where(
-      and(
-        eq(gitlabEntityChatMappings.connectionId, input.connectionId),
-        eq(gitlabEntityChatMappings.projectId, input.entityIdentity.projectId),
-        eq(gitlabEntityChatMappings.entityType, input.entityIdentity.entityType),
-        eq(gitlabEntityChatMappings.entityIid, input.entityIdentity.entityIid),
-        eq(gitlabEntityChatMappings.boundVia, "identity_target"),
-        eq(gitlabEntityChatMappings.active, true),
-      ),
-    );
-  await lockGitlabIdentityAuthoritySet(db, {
-    organizationId: input.organizationId,
-    connectionId: input.connectionId,
-    normalizedUsernames: input.event.targets
-      .map((target) => normalizeGitlabUsername(target.externalUsername).normalized)
-      .concat(actorNormalizedUsername),
-    identityLinkIds: identityRows.flatMap((row) => (row.identityLinkId ? [row.identityLinkId] : [])),
-  });
+  const rows =
+    input.followers ?? (await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity));
   const actor = await resolveActiveGitlabIdentity(db, {
     organizationId: input.organizationId,
     connectionId: input.connectionId,
     normalizedUsername: actorNormalizedUsername,
-    lockForUpdate: true,
   });
-  actorHumanId = actor.outcome === "ok" ? actor.identity.humanAgentId : null;
-  const rows =
-    input.followers ?? (await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity));
-  const existingEntries: Array<Exclude<ScmAudienceEntry, { kind: "personnel_target" }>> = [];
+  const provisionalExisting: Array<{
+    entry: Exclude<ScmAudienceEntry, { kind: "personnel_target" }>;
+    identity?: { normalizedUsername: string; expected: GitlabIdentityPairSnapshot };
+  }> = [];
   for (const row of rows) {
     if (row.boundVia === "identity_target") {
       if (!row.identityLinkId || !row.humanAgentId || !row.delegateAgentId) continue;
@@ -726,7 +738,6 @@ export async function resolveGitlabAudience(
         organizationId: input.organizationId,
         connectionId: input.connectionId,
         normalizedUsername: link.normalizedUsername,
-        lockForUpdate: true,
       });
       if (
         resolved.outcome !== "ok" ||
@@ -736,53 +747,70 @@ export async function resolveGitlabAudience(
       ) {
         continue;
       }
-      existingEntries.push({
-        kind: "existing_line",
-        line: {
-          kind: "attention_line",
-          humanAgentId: row.humanAgentId,
-          wakeAgentId: row.delegateAgentId,
-          chatId: row.chatId,
-          provenance: "identity_target",
+      provisionalExisting.push({
+        entry: {
+          kind: "existing_line",
+          line: {
+            kind: "attention_line",
+            humanAgentId: row.humanAgentId,
+            wakeAgentId: row.delegateAgentId,
+            chatId: row.chatId,
+            provenance: "identity_target",
+          },
+        },
+        identity: {
+          normalizedUsername: link.normalizedUsername,
+          expected: {
+            linkId: resolved.identity.linkId,
+            humanAgentId: resolved.identity.humanAgentId,
+            delegateAgentId: resolved.identity.delegateAgentId,
+          },
         },
       });
     } else {
       const humanAgentId = row.humanAgentId;
       const wakeAgentId = row.delegateAgentId;
       if (humanAgentId !== null && wakeAgentId !== null) {
-        existingEntries.push({
-          kind: "existing_line",
-          line: {
-            kind: "attention_line",
-            humanAgentId,
-            wakeAgentId,
-            chatId: row.chatId,
-            provenance: "explicit",
+        provisionalExisting.push({
+          entry: {
+            kind: "existing_line",
+            line: {
+              kind: "attention_line",
+              humanAgentId,
+              wakeAgentId,
+              chatId: row.chatId,
+              provenance: "explicit",
+            },
           },
         });
       } else {
-        existingEntries.push({
-          kind: "legacy_route",
-          route: {
-            kind: "legacy_route_only",
-            chatId: row.chatId,
-            senderAgentId: row.declaredByAgentId,
-            wakeAgentId: null,
-            provenance: "legacy_explicit",
+        provisionalExisting.push({
+          entry: {
+            kind: "legacy_route",
+            route: {
+              kind: "legacy_route_only",
+              chatId: row.chatId,
+              senderAgentId: row.declaredByAgentId,
+              wakeAgentId: null,
+              provenance: "legacy_explicit",
+            },
           },
         });
       }
     }
   }
 
-  const personnelTargets: ScmPersonnelTarget[] = [];
+  const provisionalPersonnel: Array<{
+    target: ScmPersonnelTarget;
+    normalizedUsername: string;
+    expected: GitlabIdentityPairSnapshot;
+  }> = [];
   for (const target of input.event.targets) {
     const normalizedUsername = normalizeGitlabUsername(target.externalUsername).normalized;
     const resolved = await resolveActiveGitlabIdentity(db, {
       organizationId: input.organizationId,
       connectionId: input.connectionId,
       normalizedUsername,
-      lockForUpdate: true,
     });
     if (resolved.outcome !== "ok") {
       logSkippedGitlabTarget({
@@ -795,13 +823,85 @@ export async function resolveGitlabAudience(
       });
       continue;
     }
-    personnelTargets.push({
-      kind: "personnel_target",
-      reason: target.reason,
-      humanAgentId: resolved.identity.humanAgentId,
-      wakeAgentId: resolved.identity.delegateAgentId,
-      externalUsername: normalizedUsername,
+    provisionalPersonnel.push({
+      target: {
+        kind: "personnel_target",
+        reason: target.reason,
+        requiresPersistentLine: target.reason === "assigned" || target.reason === "mentioned",
+        humanAgentId: resolved.identity.humanAgentId,
+        wakeAgentId: resolved.identity.delegateAgentId,
+        externalUsername: normalizedUsername,
+      },
+      normalizedUsername,
+      expected: {
+        linkId: resolved.identity.linkId,
+        humanAgentId: resolved.identity.humanAgentId,
+        delegateAgentId: resolved.identity.delegateAgentId,
+      },
     });
+  }
+
+  const candidateChatIds = [...new Set(rows.map((row) => row.chatId))].sort();
+  await lockChatMembershipMutation(db, candidateChatIds);
+  await lockGitlabIdentityAuthoritySet(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    normalizedUsernames: input.event.targets
+      .map((target) => normalizeGitlabUsername(target.externalUsername).normalized)
+      .concat(actorNormalizedUsername),
+    identityLinkIds: rows.flatMap((row) => (row.identityLinkId ? [row.identityLinkId] : [])),
+    humanAgentIds: rows.flatMap((row) => (row.humanAgentId ? [row.humanAgentId] : [])),
+  });
+  const authorityAgentIds = [
+    ...(actor.outcome === "ok" ? [actor.identity.humanAgentId, actor.identity.delegateAgentId] : []),
+    ...provisionalExisting.flatMap(({ entry }) =>
+      entry.kind === "existing_line" ? [entry.line.humanAgentId, entry.line.wakeAgentId] : [entry.route.senderAgentId],
+    ),
+    ...provisionalPersonnel.flatMap(({ target }) => [target.humanAgentId, target.wakeAgentId]),
+  ];
+  await lockChatSpeakerAndAgentSnapshot(db, candidateChatIds, authorityAgentIds);
+
+  let actorHumanId: string | null = null;
+  if (
+    actor.outcome === "ok" &&
+    (await revalidateGitlabIdentityPair(db, {
+      organizationId: input.organizationId,
+      connectionId: input.connectionId,
+      normalizedUsername: actorNormalizedUsername,
+      expected: actor.identity,
+    }))
+  ) {
+    actorHumanId = actor.identity.humanAgentId;
+  }
+
+  const existingEntries: Array<Exclude<ScmAudienceEntry, { kind: "personnel_target" }>> = [];
+  for (const provisional of provisionalExisting) {
+    if (
+      provisional.identity &&
+      !(await revalidateGitlabIdentityPair(db, {
+        organizationId: input.organizationId,
+        connectionId: input.connectionId,
+        normalizedUsername: provisional.identity.normalizedUsername,
+        expected: provisional.identity.expected,
+      }))
+    ) {
+      continue;
+    }
+    existingEntries.push(provisional.entry);
+  }
+
+  const personnelTargets: ScmPersonnelTarget[] = [];
+  for (const provisional of provisionalPersonnel) {
+    if (
+      await revalidateGitlabIdentityPair(db, {
+        organizationId: input.organizationId,
+        connectionId: input.connectionId,
+        normalizedUsername: provisional.normalizedUsername,
+        expected: provisional.expected,
+      })
+    ) {
+      personnelTargets.push(provisional.target);
+    }
   }
 
   return { targets: composeScmAudience({ existingEntries, personnelTargets }), actorHumanId };
@@ -816,6 +916,7 @@ async function resolveGitlabTargetChat(
     entity: GitlabEntityIdentity;
     target: ScmAudienceTarget;
   },
+  onMembershipChanged: (chatId: string) => void,
 ): Promise<{ chatId: string; created: boolean } | null> {
   if (input.target.entry.kind === "existing_line") {
     return { chatId: input.target.entry.line.chatId, created: false };
@@ -823,17 +924,35 @@ async function resolveGitlabTargetChat(
   if (input.target.entry.kind === "legacy_route") {
     return { chatId: input.target.entry.route.chatId, created: false };
   }
+  const result = await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    await lockGitlabEntityAttention(tx, {
+      connectionId: input.connectionId,
+      projectPathNormalized: normalizeGitlabProjectPath(input.entity.projectPath),
+      projectIds: [input.entity.projectId],
+      entityType: input.entity.entityType,
+      entityIid: input.entity.entityIid,
+    });
+    return resolveGitlabPersonnelTargetInTransaction(tx, input);
+  });
+  if (result?.membershipChanged) onMembershipChanged(result.chatId);
+  return result ? { chatId: result.chatId, created: result.created } : null;
+}
+
+async function resolveGitlabPersonnelTargetInTransaction(
+  db: Database,
+  input: {
+    organizationId: string;
+    connectionId: string;
+    event: NormalizedScmEvent;
+    entity: GitlabEntityIdentity;
+    target: ScmAudienceTarget;
+  },
+): Promise<{ chatId: string; created: boolean; membershipChanged: boolean } | null> {
+  if (input.target.entry.kind !== "personnel_target") return null;
   const humanAgentId = input.target.entry.humanAgentId;
   const wakeAgentId = input.target.entry.wakeAgentId;
   const involveLogin = input.target.entry.externalUsername;
-  const resolvedIdentity = await resolveActiveGitlabIdentity(db, {
-    organizationId: input.organizationId,
-    connectionId: input.connectionId,
-    normalizedUsername: involveLogin,
-    lockForUpdate: true,
-  });
-  if (resolvedIdentity.outcome !== "ok") return null;
-
   const existingRows = await db
     .select()
     .from(gitlabEntityChatMappings)
@@ -845,6 +964,24 @@ async function resolveGitlabTargetChat(
         eq(gitlabEntityChatMappings.entityIid, input.entity.entityIid),
       ),
     );
+  await lockChatMembershipMutation(
+    db,
+    existingRows.filter((row) => row.active).map((row) => row.chatId),
+  );
+  const resolvedIdentity = await resolveActiveGitlabIdentity(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    normalizedUsername: involveLogin,
+    lockForUpdate: true,
+    lockAgentRowsForUpdate: false,
+  });
+  if (resolvedIdentity.outcome !== "ok") return null;
+  if (
+    resolvedIdentity.identity.humanAgentId !== humanAgentId ||
+    resolvedIdentity.identity.delegateAgentId !== wakeAgentId
+  ) {
+    return null;
+  }
   const activeOwn = existingRows.find(
     (row) =>
       row.active &&
@@ -852,40 +989,60 @@ async function resolveGitlabTargetChat(
       row.humanAgentId === humanAgentId &&
       row.delegateAgentId === wakeAgentId,
   );
-  if (activeOwn) return { chatId: activeOwn.chatId, created: false };
-
   const staleActiveOwnIds = existingRows
     .filter((row) => row.active && row.identityLinkId === resolvedIdentity.identity.linkId)
     .map((row) => row.id);
+  const staleActiveOwnIdSet = new Set(staleActiveOwnIds);
+  const activeChatIds = [
+    ...new Set(
+      existingRows
+        .filter((row) => row.active && (activeOwn || !staleActiveOwnIdSet.has(row.id)))
+        .map((row) => row.chatId),
+    ),
+  ];
+  const placement = await lockAndValidateScmPersonnelPlacement(db, {
+    humanAgentId,
+    wakeAgentId,
+    candidateChatIds: activeChatIds,
+  });
+  if (!placement) return null;
+  if (activeOwn) return { chatId: activeOwn.chatId, created: false, membershipChanged: false };
+
   if (staleActiveOwnIds.length > 0) {
     await db
       .update(gitlabEntityChatMappings)
       .set({ active: false, updatedAt: new Date() })
       .where(inArray(gitlabEntityChatMappings.id, staleActiveOwnIds));
   }
-  const activeChatIds = [...new Set(existingRows.filter((row) => row.active).map((row) => row.chatId))];
   const targetDecision = await decideScmPersonnelTargetChat(db, {
-    reason: input.target.entry.reason,
+    requiresPersistentLine: input.target.entry.requiresPersistentLine,
     candidateChatIds: activeChatIds,
     humanAgentId,
     wakeAgentId,
+    authority: placement.authority,
+    speakerSnapshot: placement.speakerSnapshot,
   });
-  if (targetDecision.kind === "reuse") {
-    return { chatId: targetDecision.chatId, created: false };
+  if (targetDecision.kind === "reuse_membership") {
+    return { chatId: targetDecision.chatId, created: false, membershipChanged: false };
   }
 
   let chatId: string;
   let created = false;
-  const relatedChatId = await findGitlabRelatedEntityChat(db, {
-    organizationId: input.organizationId,
-    connectionId: input.connectionId,
-    relatedRefs: input.event.relatedRefs,
-    humanAgentId,
-    wakeAgentId,
-  });
-  if (relatedChatId) {
-    chatId = relatedChatId;
+  let membershipChanged = false;
+  if (targetDecision.kind === "reuse_with_line") {
+    chatId = targetDecision.chatId;
+    if (targetDecision.admitWakeAgent) {
+      membershipChanged = await inviteParticipantsToChatInTransaction(db, {
+        chatId,
+        callerAgentId: humanAgentId,
+        targetAgentIds: [wakeAgentId],
+        errorOnAlreadySpeaker: false,
+      });
+    }
   } else {
+    // `strict_new_line` means no locked current-entity candidate was safe.
+    // Related-entity mappings are outside that speaker snapshot, so they may
+    // not be used as an unchecked shortcut for a fresh personnel line.
     const metadata = chatMetadataSchema.parse({
       source: "gitlab",
       entityType: input.entity.entityType,
@@ -927,48 +1084,7 @@ async function resolveGitlabTargetChat(
     createdAt: new Date(),
     updatedAt: new Date(),
   });
-  return { chatId, created };
-}
-
-async function findGitlabRelatedEntityChat(
-  db: Database,
-  input: {
-    organizationId: string;
-    connectionId: string;
-    relatedRefs: NormalizedScmEvent["relatedRefs"];
-    humanAgentId: string;
-    wakeAgentId: string;
-  },
-): Promise<string | null> {
-  const issueRefs = input.relatedRefs.flatMap((ref) => {
-    if (ref.type !== "issue") return [];
-    const match = /^(\d+):issue:(\d+)$/.exec(ref.key);
-    if (!match?.[1] || !match[2]) return [];
-    return [{ projectId: Number(match[1]), issueIid: Number(match[2]) }];
-  });
-  if (issueRefs.length === 0) return null;
-
-  const candidateChatIds = new Set<string>();
-  for (const ref of issueRefs) {
-    const rows = await db
-      .select({ chatId: gitlabEntityChatMappings.chatId })
-      .from(gitlabEntityChatMappings)
-      .where(
-        and(
-          eq(gitlabEntityChatMappings.organizationId, input.organizationId),
-          eq(gitlabEntityChatMappings.connectionId, input.connectionId),
-          eq(gitlabEntityChatMappings.projectId, ref.projectId),
-          eq(gitlabEntityChatMappings.entityType, "issue"),
-          eq(gitlabEntityChatMappings.entityIid, ref.issueIid),
-          eq(gitlabEntityChatMappings.humanAgentId, input.humanAgentId),
-          eq(gitlabEntityChatMappings.delegateAgentId, input.wakeAgentId),
-          eq(gitlabEntityChatMappings.active, true),
-        ),
-      );
-    for (const row of rows) candidateChatIds.add(row.chatId);
-    if (candidateChatIds.size > 1) return null;
-  }
-  return candidateChatIds.size === 1 ? ([...candidateChatIds][0] ?? null) : null;
+  return { chatId, created, membershipChanged };
 }
 
 export async function deliverGitlabCards(
@@ -987,18 +1103,24 @@ export async function deliverGitlabCards(
     newChats: number;
     failed: number;
     postCommitEffects: DeferredScmCardPostCommitEffects[];
-  } = { delivered: 0, newChats: 0, failed: 0, postCommitEffects: [] };
+    audienceCacheInvalidationChatIds: string[];
+  } = { delivered: 0, newChats: 0, failed: 0, postCommitEffects: [], audienceCacheInvalidationChatIds: [] };
+  const membershipChangedChatIds = new Set<string>();
   const planned = await planScmChatDeliveries({
     targets: input.audience.targets,
     actorHumanId: input.audience.actorHumanId,
     resolveChat: (target) =>
-      resolveGitlabTargetChat(input.database, {
-        organizationId: input.organizationId,
-        connectionId: input.connectionId,
-        event: input.event,
-        entity: input.identity,
-        target,
-      }),
+      resolveGitlabTargetChat(
+        input.database,
+        {
+          organizationId: input.organizationId,
+          connectionId: input.connectionId,
+          event: input.event,
+          entity: input.identity,
+          target,
+        },
+        (chatId) => membershipChangedChatIds.add(chatId),
+      ),
     onTargetError: (target, err) => {
       log.error(
         {
@@ -1072,5 +1194,6 @@ export async function deliverGitlabCards(
       );
     }
   }
+  stats.audienceCacheInvalidationChatIds = [...membershipChangedChatIds].sort();
   return stats;
 }

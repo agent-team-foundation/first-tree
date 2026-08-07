@@ -20,7 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog.js";
-import { Section } from "../../components/ui/section.js";
 import { agentResourcesMutationHandlers } from "./capability-section.js";
 
 /**
@@ -57,28 +56,40 @@ export function ResponsibilitiesSection({
   const ordered = templateIds.map((id) => byId.get(id) ?? missingSummary(id));
 
   return (
-    <Section
-      title="Responsibilities"
-      action={
-        <>
-          {savedFlash && <DenseBadge>Saved. It will apply before this agent&apos;s next action.</DenseBadge>}
+    <div className="space-y-3">
+      {(savedFlash || canEdit) && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {savedFlash && (
+            <span role="status" aria-live="polite">
+              <DenseBadge>Saved. It will apply before this agent&apos;s next action.</DenseBadge>
+            </span>
+          )}
           {canEdit && (
             <Button type="button" variant="outline" size="sm" onClick={() => setEditorOpen(true)}>
-              Edit responsibilities
+              {ordered.length === 0 ? "Add responsibility" : "Edit responsibilities"}
             </Button>
           )}
-        </>
-      }
-    >
-      {ordered.length === 0 ? (
-        <p className="text-caption text-muted-foreground">No template responsibilities are assigned to this agent.</p>
-      ) : (
-        <div className="space-y-3">
-          {ordered.map((summary) => (
-            <TemplateResponsibilityLabel key={summary.id} template={summary} />
-          ))}
         </div>
       )}
+
+      <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>
+        {ordered.length === 0 ? (
+          <p className="text-caption text-muted-foreground py-4">No starting responsibilities yet.</p>
+        ) : (
+          <ul className="m-0 list-none p-0">
+            {ordered.map((summary) => (
+              <li
+                key={summary.id}
+                className="py-3"
+                style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}
+              >
+                <TemplateResponsibilityLabel template={summary} variant="assigned" />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       {canEdit && (
         <ResponsibilitiesEditor
           open={editorOpen}
@@ -93,7 +104,7 @@ export function ResponsibilitiesSection({
           }}
         />
       )}
-    </Section>
+    </div>
   );
 }
 
@@ -214,7 +225,10 @@ function ResponsibilitiesEditor({
       <DialogContent className="max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit responsibilities</DialogTitle>
-          <DialogDescription>Choose up to 3 official templates for this agent.</DialogDescription>
+          <DialogDescription>
+            Choose up to 3 Agent Templates. Changes update the template-created instructions and capabilities for this
+            agent.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
@@ -262,7 +276,11 @@ function ResponsibilitiesEditor({
               </Button>
             </div>
           )}
-          {feedback && <p className="text-caption text-destructive">{feedback}</p>}
+          {feedback && (
+            <p className="text-caption text-destructive" role="alert">
+              {feedback}
+            </p>
+          )}
         </div>
         <DialogFooter>
           <Button

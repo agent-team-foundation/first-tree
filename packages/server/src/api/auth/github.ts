@@ -5,7 +5,9 @@ import {
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { authIdentities } from "../../db/schema/auth-identities.js";
 import { signTokensForUser } from "../../services/auth.js";
 import {
   findOrCreateGithubAccount,
@@ -15,10 +17,11 @@ import {
   IdentityMismatchError,
   LastIdentityError,
   linkExternalIdentity,
+  refreshGithubInstallIdentity,
   unlinkExternalIdentity,
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
-import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
+import { buildAppAuthorizeUrl, buildAppInstallUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveMembership } from "../../services/membership.js";
 import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
@@ -48,10 +51,12 @@ const ACCOUNT_RETURN_PATH = "/user-settings";
  * installed it the authorize URL never surfaces the install dialog and
  * never returns an `installation_id` (codex P1-1; see
  * `services/github-app.ts`). So sign-in must not be relied on to install
- * the App. The reliable install entry is `installations/new`, exposed at
- * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
- * in onboarding's "Connect your code" step and Settings → GitHub. After
- * that dialog GitHub redirects back here with `code + state +
+ * the App. `GET /orgs/:orgId/github-app-installation/install-url`, surfaced
+ * in onboarding and Settings → GitHub, starts a two-phase install: first this
+ * authorize endpoint proves the active github.com user matches the kickoff
+ * admin's linked numeric identity; only a successful callback receives fresh
+ * state and continues to `installations/new`. After that dialog GitHub
+ * redirects back here with `code + state +
  * installation_id` (or without `code` when the install is parked for
  * owner approval, and without `state` when GitHub's own settings UI is
  * the origin). The callback does NOT bind the installation: the trusted,
@@ -80,7 +85,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     );
   }
 
-  app.get("/start", async (request, reply) => {
+  app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { next } = githubStartQuerySchema.parse(request.query);
     const safeNext = safeRedirectPath(next ?? null);
     if (!appCfg) {
@@ -111,7 +116,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     return reply.redirect(buildAppAuthorizeUrl({ clientId: appCfg.clientId, redirectUri, state: token }), 302);
   });
 
-  app.get("/callback", async (request, reply) => {
+  app.get("/callback", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     if (!appCfg) {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
@@ -145,6 +150,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     let next: string;
     let targetOrganizationId: string | null = null;
     let kickoffUserId: string | null = null;
+    let installPhase: "identity" | "installation" | null = null;
     let intent: CallbackIntent = "sign-in";
     let stateUserId: string | null = null;
     let targetIdentityId: string | null = null;
@@ -154,6 +160,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       next = verified.next;
       targetOrganizationId = verified.targetOrganizationId ?? null;
       kickoffUserId = verified.kickoffUserId ?? null;
+      installPhase = verified.installPhase ?? null;
       intent = verified.intent ?? (targetOrganizationId ? "install" : "sign-in");
       stateUserId = verified.userId ?? null;
       targetIdentityId = verified.targetIdentityId ?? null;
@@ -188,22 +195,70 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectCallbackError(reply, "state-expired", next, { callbackIntent: intent });
     }
 
+    // App-install callbacks are allowed to mutate only the kickoff user's
+    // already-linked GitHub identity. States minted before the complete
+    // two-phase contract cannot prove that user, so fail before exchanging a
+    // code or entering the generic account bootstrap. Users can recover by
+    // starting Install again from the Team's GitHub Settings panel.
+    if (
+      intent === "install" &&
+      (verified.intent !== "install" ||
+        verified.provider !== "github" ||
+        !targetOrganizationId ||
+        !kickoffUserId ||
+        !installPhase)
+    ) {
+      app.log.warn(
+        { event: "github_app.install_callback_incomplete_state", installPhase },
+        "install callback state lacks the verified kickoff authority tuple",
+      );
+      return redirectCallbackError(reply, "state-expired", "/settings/github", { callbackIntent: "install" });
+    }
+
     if (providerError) {
       app.log.info(
         { event: "oauth.provider_denied", provider: "github", intent },
         "GitHub authorization was denied or canceled",
       );
-      return redirectCallbackError(reply, "provider-denied", next, { callbackIntent: intent });
+      return redirectCallbackError(reply, "provider-denied", installErrorReturnPath(intent, next), {
+        callbackIntent: intent,
+      });
     }
 
     if (!code) {
+      if (intent === "install" && installPhase === "identity") {
+        app.log.warn(
+          { event: "github_app.install_identity_preflight_no_code", setupAction: parsed.setup_action ?? null },
+          "install identity preflight returned without an OAuth code",
+        );
+        return redirectCallbackError(reply, "install-not-verified", "/settings/github", {
+          callbackIntent: intent,
+          expectedGithubLogin: kickoffUserId ? (await findGithubIdentityForUser(app, kickoffUserId))?.login : null,
+        });
+      }
+      if (intent === "install") {
+        const landingAuthority = await inspectInstallLandingAuthority(app, {
+          targetOrganizationId,
+          kickoffUserId,
+        });
+        if (!landingAuthority.ok) {
+          return redirectCallbackError(reply, landingAuthority.code, "/settings/github", {
+            callbackIntent: "install",
+            expectedGithubLogin: landingAuthority.expectedGithubLogin,
+          });
+        }
+      }
       // Kickoff round-trip that produced no OAuth code — the
       // `setup_action=request` shape: the user asked to install on an org
       // they don't own and GitHub parked the install pending owner approval
-      // (observed on staging: no `code`, no `installation_id`). Their First
-      // Tree session is untouched; send them back to the surface they
-      // started from (`next` from the signed state), where the connect
-      // panel's poll picks the installation up once an owner approves.
+      // (observed on staging: no `code`, no `installation_id`). With no code,
+      // GitHub gives First Tree no way to prove the current github.com session
+      // still matches the preflight identity. The live Team-admin membership
+      // and continued presence of the linked GitHub identity are re-checked
+      // above, but a deliberate account switch after the picker opened can
+      // still produce an unbound webhook row. It cannot bind or cross Team
+      // boundaries. Send the browser back to the kickoff surface, where the
+      // panel remains in its explicit waiting/recovery state until approval.
       app.log.info(
         { event: "github_oauth.setup_landing_no_code", setupAction: parsed.setup_action ?? null },
         "github callback without code — landing back on the kickoff surface",
@@ -235,7 +290,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       };
     } catch (err) {
       app.log.warn({ err, event: "oauth.exchange_failed", provider: "github" }, "GitHub OAuth exchange failed");
-      return redirectCallbackError(reply, "github-exchange-failed", next, { callbackIntent: intent });
+      return redirectCallbackError(reply, "github-exchange-failed", installErrorReturnPath(intent, next), {
+        callbackIntent: intent,
+      });
     }
 
     // Pass the URL `installation_id` (validated to a finite number, else null)
@@ -244,6 +301,32 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // (`devBindInstallation`); it rides along here purely for log context.
     const callbackInstallationId =
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
+
+    if (intent === "install" && installPhase === "identity") {
+      return continueInstallAfterIdentityPreflight(app, reply, profile, tokens, next, {
+        targetOrganizationId,
+        kickoffUserId,
+      });
+    }
+
+    // Re-check the same identity boundary after code-bearing picker callbacks.
+    // A user can pass the preflight, then switch github.com accounts in another
+    // tab before completing a direct install. Reject that race before
+    // findOrCreate can persist the foreign identity or replace the First Tree
+    // browser session. The no-code owner-approval limitation is documented in
+    // the branch above.
+    if (intent === "install" && targetOrganizationId && kickoffUserId) {
+      const installAuthority = await inspectInstallCallbackAuthority(app, profile, {
+        targetOrganizationId,
+        kickoffUserId,
+      });
+      if (!installAuthority.ok) {
+        return redirectCallbackError(reply, installAuthority.code, "/settings/github", {
+          callbackIntent: "install",
+          expectedGithubLogin: installAuthority.expectedGithubLogin,
+        });
+      }
+    }
 
     if (intent === "link" || intent === "unlink") {
       if (!stateUserId)
@@ -265,7 +348,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         if (intent === "link") {
           await linkExternalIdentity(app.db, stateUserId, external);
           app.log.info({ event: "identity.linked", provider: "github", userId: stateUserId }, "Identity linked");
-          return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=github-linked`, 302);
+          return reply.redirect(withQueryParam(next, "connection", "github-linked"), 302);
         }
         await unlinkExternalIdentity(
           app.db,
@@ -282,9 +365,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=github-unlinked`, 302);
       } catch (error) {
         if (error instanceof IdentityConflictError)
-          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-conflict`, 302);
+          return reply.redirect(withQueryParam(next, "error", "identity-conflict"), 302);
         if (error instanceof IdentityMismatchError)
-          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-mismatch`, 302);
+          return reply.redirect(withQueryParam(next, "error", "identity-mismatch"), 302);
         if (error instanceof LastIdentityError)
           return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=last-provider`, 302);
         throw error;
@@ -401,6 +484,16 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+function withQueryParam(path: string, key: string, value: string): string {
+  const url = new URL(path, "https://first-tree.invalid");
+  url.searchParams.set(key, value);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function installErrorReturnPath(intent: CallbackIntent, next: string): string {
+  return intent === "install" ? "/settings/github" : next;
+}
+
 /**
  * Error codes the SPA's `/auth/github/complete` page renders friendly copy
  * for. Keep in sync with `packages/web/src/pages/oauth-complete.tsx`.
@@ -441,7 +534,7 @@ function redirectCallbackError(
   reply: FastifyReply,
   code: CallbackErrorCode,
   next?: string,
-  metadata: { callbackIntent?: CallbackIntent; accountCreated?: boolean } = {},
+  metadata: { callbackIntent?: CallbackIntent; accountCreated?: boolean; expectedGithubLogin?: string | null } = {},
 ) {
   const recoveryNext = next === "/onboarding/connected" ? "/onboarding" : next;
   const fragment = new URLSearchParams({
@@ -449,8 +542,158 @@ function redirectCallbackError(
     ...(recoveryNext ? { next: recoveryNext } : {}),
     ...(metadata.callbackIntent ? { callbackIntent: metadata.callbackIntent } : {}),
     ...(metadata.accountCreated !== undefined ? { accountCreated: metadata.accountCreated ? "1" : "0" } : {}),
+    ...(metadata.expectedGithubLogin ? { expectedGithubLogin: metadata.expectedGithubLogin } : {}),
   }).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
+}
+
+async function findGithubIdentityForUser(
+  app: FastifyInstance,
+  userId: string,
+): Promise<{ githubId: string; login: string | null } | null> {
+  const [identity] = await app.db
+    .select({ identifier: authIdentities.identifier, metadata: authIdentities.metadata })
+    .from(authIdentities)
+    .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
+    .limit(1);
+  if (!identity) return null;
+  const login = identity?.metadata.accountName ?? identity?.metadata.login;
+  return {
+    githubId: identity.identifier,
+    login: typeof login === "string" && login.length > 0 ? login.slice(0, 100) : null,
+  };
+}
+
+async function inspectInstallLandingAuthority(
+  app: FastifyInstance,
+  opts: { targetOrganizationId: string | null; kickoffUserId: string | null },
+): Promise<
+  { ok: true } | { ok: false; code: "install-not-admin" | "install-not-verified"; expectedGithubLogin: string | null }
+> {
+  const { targetOrganizationId, kickoffUserId } = opts;
+  if (!targetOrganizationId || !kickoffUserId) {
+    return { ok: false, code: "install-not-verified", expectedGithubLogin: null };
+  }
+  const [linkedIdentity, authority] = await Promise.all([
+    findGithubIdentityForUser(app, kickoffUserId),
+    findActiveMembership(app.db, kickoffUserId, targetOrganizationId),
+  ]);
+  if (!authority || authority.role !== "admin") {
+    app.log.warn(
+      { event: "github_app.install_request_landing_admin_check_failed", targetOrganizationId, kickoffUserId },
+      "install request landing: kickoff user is no longer an active team admin",
+    );
+    return { ok: false, code: "install-not-admin", expectedGithubLogin: linkedIdentity?.login ?? null };
+  }
+  if (!linkedIdentity) {
+    app.log.warn(
+      { event: "github_app.install_request_landing_identity_missing", targetOrganizationId, kickoffUserId },
+      "install request landing: kickoff user no longer has a linked GitHub identity",
+    );
+    return { ok: false, code: "install-not-verified", expectedGithubLogin: null };
+  }
+  return { ok: true };
+}
+
+async function continueInstallAfterIdentityPreflight(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  profile: GithubProfile,
+  oauthTokens: GithubTokenBundle,
+  next: string,
+  opts: { targetOrganizationId: string | null; kickoffUserId: string | null },
+) {
+  const { targetOrganizationId, kickoffUserId } = opts;
+  if (!targetOrganizationId || !kickoffUserId) {
+    return redirectCallbackError(reply, "state-expired", "/settings/github", { callbackIntent: "install" });
+  }
+
+  const installAuthority = await refreshGithubInstallIdentity(app.db, {
+    userId: kickoffUserId,
+    organizationId: targetOrganizationId,
+    profile,
+    tokens: oauthTokens,
+  });
+  if (!installAuthority.ok) {
+    return redirectCallbackError(
+      reply,
+      installAuthority.reason === "not-admin" ? "install-not-admin" : "install-not-verified",
+      "/settings/github",
+      {
+        callbackIntent: "install",
+        expectedGithubLogin: installAuthority.expectedGithubLogin,
+      },
+    );
+  }
+
+  const appCfg = app.config.oauth?.githubApp;
+  if (!appCfg?.slug) {
+    return redirectCallbackError(reply, "provider-not-configured", "/settings/github", {
+      callbackIntent: "install",
+      expectedGithubLogin: installAuthority.githubLogin,
+    });
+  }
+
+  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, next, {
+    intent: "install",
+    installPhase: "installation",
+    provider: "github",
+    targetOrganizationId,
+    kickoffUserId,
+  });
+  // The callback consumed and expired the identity-phase nonce above. Replace
+  // that deletion header with the new installation-phase nonce so browsers
+  // receive exactly one authoritative cookie value for the next callback.
+  reply.removeHeader("Set-Cookie");
+  reply.header(
+    "Set-Cookie",
+    buildCookie({
+      name: STATE_NONCE_COOKIE_NAME,
+      value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
+      maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
+      secure: process.env.NODE_ENV === "production",
+    }),
+  );
+  app.log.info(
+    { event: "github_app.install_identity_preflight_succeeded", targetOrganizationId, kickoffUserId },
+    "install identity preflight succeeded — continuing to GitHub App picker",
+  );
+  return reply.redirect(buildAppInstallUrl({ appSlug: appCfg.slug, state: token }), 302);
+}
+
+async function inspectInstallCallbackAuthority(
+  app: FastifyInstance,
+  profile: GithubProfile,
+  opts: { targetOrganizationId: string; kickoffUserId: string },
+): Promise<
+  | { ok: true; linkedIdentity: { githubId: string; login: string | null } }
+  | { ok: false; code: "install-not-admin" | "install-not-verified"; expectedGithubLogin: string | null }
+> {
+  const { targetOrganizationId, kickoffUserId } = opts;
+  const [linkedIdentity, authority] = await Promise.all([
+    findGithubIdentityForUser(app, kickoffUserId),
+    findActiveMembership(app.db, kickoffUserId, targetOrganizationId),
+  ]);
+  if (!authority || authority.role !== "admin") {
+    app.log.warn(
+      { event: "github_app.install_callback_admin_check_failed", targetOrganizationId, kickoffUserId },
+      "install callback: kickoff user is no longer an active team admin",
+    );
+    return { ok: false, code: "install-not-admin", expectedGithubLogin: linkedIdentity?.login ?? null };
+  }
+  if (!linkedIdentity || linkedIdentity.githubId !== String(profile.githubId)) {
+    app.log.warn(
+      {
+        event: "github_app.install_callback_identity_mismatch",
+        targetOrganizationId,
+        kickoffUserId,
+        actualGithubId: profile.githubId,
+      },
+      "install callback: github.com account does not match the linked GitHub identity",
+    );
+    return { ok: false, code: "install-not-verified", expectedGithubLogin: linkedIdentity?.login ?? null };
+  }
+  return { ok: true, linkedIdentity };
 }
 
 async function completeOauthFlow(
@@ -510,7 +753,50 @@ async function completeOauthFlow(
   } = {},
 ) {
   const { kickoffUserId = null, browserFacing = false, callbackIntent = "sign-in", devBindInstallation = false } = opts;
-  const account = await findOrCreateGithubAccount(app.db, profile, oauthTokens);
+  let account: Awaited<ReturnType<typeof findOrCreateGithubAccount>>;
+  if (callbackIntent === "install") {
+    if (!targetOrganizationId || !kickoffUserId) {
+      if (browserFacing) {
+        return redirectCallbackError(reply, "state-expired", "/settings/github", { callbackIntent });
+      }
+      return reply.status(409).send({ error: "GitHub App install authority is missing or expired" });
+    }
+    const installIdentity = await refreshGithubInstallIdentity(app.db, {
+      userId: kickoffUserId,
+      organizationId: targetOrganizationId,
+      profile,
+      tokens: oauthTokens,
+    });
+    if (!installIdentity.ok) {
+      const code = installIdentity.reason === "not-admin" ? "install-not-admin" : "install-not-verified";
+      app.log.warn(
+        {
+          event: "github_app.install_callback_atomic_authority_failed",
+          targetOrganizationId,
+          kickoffUserId,
+          githubId: profile.githubId,
+          githubLogin: profile.login,
+          reason: installIdentity.reason,
+        },
+        "install callback: live Team authority or exact GitHub identity changed before completion",
+      );
+      if (browserFacing) {
+        return redirectCallbackError(reply, code, "/settings/github", {
+          callbackIntent,
+          expectedGithubLogin: installIdentity.expectedGithubLogin,
+        });
+      }
+      return reply.status(code === "install-not-admin" ? 403 : 409).send({
+        error:
+          code === "install-not-admin"
+            ? "Not an admin of the First Tree organization this installation targets"
+            : "GitHub identity no longer matches the account that started this installation",
+      });
+    }
+    account = installIdentity.account;
+  } else {
+    account = await findOrCreateGithubAccount(app.db, profile, oauthTokens);
+  }
   const { userId } = account;
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
@@ -568,64 +854,10 @@ async function completeOauthFlow(
       );
     }
   } else {
-    // App-install flow: the org rode in the signed state minted by the
-    // admin-gated `/install-url` (codex P1-3). The bind rests on the
-    // KICKOFF user's authority — re-checked live against `members`,
-    // because the state JWT outlives a membership revoke — and NOT on the
-    // identity the OAuth code resolved to: the browser's github.com
-    // session is independent of the First Tree session, and a mismatch
-    // (second GitHub account, deleted-and-recreated account, someone
-    // else's First Tree session in the same browser) must not strand a
-    // completed install unbound. States minted before `kickoffUserId`
-    // existed (≤10min old at deploy time) fall back to the OAuth identity.
-    const bindAuthorityUserId = kickoffUserId ?? userId;
-    const authority = await findActiveMembership(app.db, bindAuthorityUserId, targetOrganizationId);
-    if (!authority || authority.role !== "admin") {
-      app.log.warn(
-        {
-          event: "github_app.install_callback_admin_check_failed",
-          targetOrganizationId,
-          kickoffUserId,
-          oauthUserId: userId,
-          githubId: profile.githubId,
-          githubLogin: profile.login,
-          installationId,
-        },
-        "install callback: bind authority is not an active admin of the target org — refusing to bind",
-      );
-      if (browserFacing)
-        return redirectCallbackError(reply, "install-not-admin", next, {
-          callbackIntent,
-          accountCreated: account.created,
-        });
-      return reply.status(403).send({ error: "Not an admin of the First Tree organization this installation targets" });
-    }
-    if (bindAuthorityUserId !== userId) {
-      // The install was completed under a DIFFERENT GitHub identity than the
-      // admin who kicked it off — the browser's github.com session differs
-      // from the First Tree kickoff admin (a second GitHub account, someone
-      // else's github.com session in the same browser, …). No bind side
-      // effect exists to worry about here (binding is a panel action), but
-      // completing the flow would sign the browser in as the foreign
-      // identity — replacing the kickoff admin's session in every tab.
-      // Surface it as an error instead: install must use the same GitHub
-      // account you signed in / started the install with.
-      app.log.warn(
-        {
-          event: "github_app.install_callback_identity_mismatch",
-          targetOrganizationId,
-          kickoffUserId: bindAuthorityUserId,
-          oauthUserId: userId,
-          githubId: profile.githubId,
-          githubLogin: profile.login,
-        },
-        "install callback: OAuth identity differs from the kickoff admin — refusing (install must use the same GitHub account)",
-      );
-      return redirectCallbackError(reply, "install-not-verified", next, {
-        callbackIntent,
-        accountCreated: account.created,
-      });
-    }
+    // The modern App-install state carries `kickoffUserId`; its exact GitHub
+    // subject, live active-admin authority, and token/snapshot refresh were
+    // already locked and committed atomically above. Incomplete legacy states
+    // fail before code exchange and never reach this branch.
     // No bind happens here: the `installation.created` webhook records the
     // installation (with its requester/installer anchors) and the admin
     // connects it from the panel `next` points back to. This branch only

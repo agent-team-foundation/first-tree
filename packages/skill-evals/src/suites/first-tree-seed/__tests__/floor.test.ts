@@ -140,13 +140,14 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/collect any uncovered\s+tree-repo recovery returned/u);
   });
 
-  it("hands off Review Agent configuration to Setup without blocking ordinary Seed", () => {
+  it("hands off Review Agent configuration to Getting Started without blocking ordinary Seed", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open, check Review Agent configuration once");
     expect(skillMarkdown).toContain('first-tree org context-tree review-config --as-member --org "<team-id>" --json');
     expect(skillMarkdown).toContain("Use only the JSON `enabled` and `agentUuid` fields");
     expect(skillMarkdown).toMatch(/selecting an eligible managed Review Agent and\s+enabling Automatic Review/u);
     expect(skillMarkdown).toContain("the selection is retained");
-    expect(skillMarkdown).toMatch(/Setup owns\s+provider prerequisites and the Team mutation/u);
+    expect(skillMarkdown).toMatch(/The owning Settings surfaces hold provider prerequisites and the\s+Team mutation/u);
+    expect(skillMarkdown).toContain("Getting Started only summarizes readiness and links there");
     expect(skillMarkdown).toContain("This is not a health or readiness check");
     expect(skillMarkdown).toContain("first perform the Review Agent read");
     expect(skillMarkdown).toContain("send at most one combined setup handoff");
@@ -159,14 +160,14 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/Do not repeat the Review Agent\s+handoff from Phase 1/u);
 
     const handoffRows = [
-      "| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Setup |",
-      "| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Setup |",
+      "| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Getting Started |",
+      "| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Getting Started |",
       "| GitHub coverage missing | Enabled or read failed/ambiguous | Coverage recovery only; infer no Review debt |",
-      "| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Setup only |",
-      "| GitHub covered | Selected but off | Enable Automatic Review in Settings → Setup only |",
+      "| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only |",
+      "| GitHub covered | Selected but off | Enable Automatic Review in Settings → Getting Started only |",
       "| GitHub covered | Enabled or read failed/ambiguous | No setup handoff |",
-      "| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
-      "| GitLab | Selected but off | Enable Automatic Review in Settings → Setup only; no GitHub App guidance |",
+      "| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |",
+      "| GitLab | Selected but off | Enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |",
       "| GitLab | Enabled or read failed/ambiguous | No setup handoff |",
     ];
     for (const row of handoffRows) {
@@ -183,7 +184,7 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("failure does not invalidate the MR");
     expect(skillMarkdown).toContain("no GitHub App coverage guidance applies");
     expect(skillMarkdown).toContain("Never substitute a GitHub App URL");
-    expect(skillMarkdown).toContain("Use **Settings → Setup** only for an actual Team capability");
+    expect(skillMarkdown).toContain("Use **Settings → Getting Started** only for an actual Team capability");
   });
 
   it("gates only Welcome-launched Content PRs on a selected enabled Reviewer", () => {

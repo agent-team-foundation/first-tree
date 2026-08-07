@@ -11,22 +11,36 @@ agent-skill regression in `@first-tree/skill-evals`, and judgment / live /
 cross-surface validation in committed `@first-tree/qa` cases.
 
 The journeys these tests walk are owned by the cases
-[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md),
-[`workspace-chat-lifecycle`](../packages/qa/cases/web/workspace-chat-lifecycle.md), and
+[`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md)
+and
+[`external-context-current-session-handoff`](../packages/qa/cases/cross-surface/external-context-current-session-handoff.md).
+The P0 workspace and request journeys are owned by
+[`workspace-chat-lifecycle`](../packages/qa/cases/web/workspace-chat-lifecycle.md)
+and
 [`need-you-request-review-journey`](../packages/qa/cases/cross-surface/need-you-request-review-journey.md).
+The Agent Detail journey is owned by
+[`agent-detail-availability-and-capabilities`](../packages/qa/cases/cross-surface/agent-detail-availability-and-capabilities.md).
+The Chat Summary switching journey is owned by
+[`chat-summary-chat-switch-reentry`](../packages/qa/cases/web/chat-summary-chat-switch-reentry.md).
+The GitHub install identity-gate journey is owned by
+[`github-settings-connection-panel`](../packages/qa/cases/cross-surface/github-settings-connection-panel.md).
 Those cases remain the contracts and the place judgement lives. This directory
-is one way to execute their browser-observable happy paths unattended, in the
-same spirit as the fixtures and environment recipes under `packages/qa` — useful
-for a quick regression pass, not a substitute for the cases and not a new
-authority over what "validated" means.
+is one way to execute parts of them unattended, in the same spirit as the
+fixtures and environment recipes under `packages/qa` — useful for a quick
+regression pass, not a substitute for the cases and not a new authority over
+what "validated" means.
 
 Two limits follow from that and are deliberate:
 
 - It is **not a CI gate** and is not wired into any workflow. Steps resolve from
   natural-language descriptions through a hosted model and some assertions are
   model-evaluated, so a red run is a signal to investigate, not a merge blocker.
-- It covers the happy path plus the connect-computer gate — not the negative
-  branches, degraded states and evidence judgement the case asks for.
+- It covers selected visible journeys: registration, the connect-computer gate,
+  the Web setup-prompt dialog, the GitHub install identity gate, a fresh-account
+  workspace chat lifecycle, and basic Need you resolution. It does not drive
+  real provider OAuth, GitHub App installation or owner approval, agent-runtime
+  delivery, cross-device synchronization, degraded states, or the full evidence
+  judgement the cases ask for.
 
 A stable invariant that Vitest could assert still belongs in Vitest. Do not move
 a check here to escape a flaky product test.
@@ -120,23 +134,27 @@ in commands and review runner upgrades separately from product changes.
 | Test | Env | Covers |
 | --- | --- | --- |
 | `registration-new-user.test.yaml` | local | A brand-new account is created and lands on onboarding step 1 |
-| `onboarding-complete-setup.test.yaml` | local | The whole first-run journey: sign up → create team → connect a computer → create the first agent → start the kickoff chat → land in the workspace |
+| `onboarding-complete-setup.test.yaml` | local | The whole first-run journey: sign up → create team → connect a computer → create the first agent → start the kickoff chat → land in the workspace → open the Team-scoped own-agent setup path |
+| `settings-coding-agent-prompt-dialog.test.yaml` | local | A signed-in Team with a bound Context Tree opens the real setup prompt, reviews the provider-neutral handoff, and copies it from the dialog |
+| `agent-detail-configuration.test.yaml` | local | A Team admin follows one agent from the directory through its availability and effective tools into shared resource Settings |
+| `chat-summary-current-state.test.yaml` | local | Two real Workspace chats switch their readable current-state hierarchy and collapse back to a one-line preview |
+| `github-install-identity-gate.test.yaml` | local | A Google/OIDC-style admin is gated from install until GitHub is linked, then returns to the same Team with Install as a separate action |
 | `p0/workspace-chat-lifecycle.test.yaml` | local | Start a new workspace chat, then pin, archive, find and restore that same conversation |
 | `p0/need-you-basic-review.test.yaml` | local | Review one pending request, choose an option and submit its resolution through Need you |
 | `dev-cloud-sign-in-available.test.yaml` | first-tree-dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
 
 `modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow, and
-`modules/complete-first-run.module.yaml` extends it through onboarding to a
-ready workspace. Each test registers a **new** user (`e2e-user-<ms>`); reusing an
-identity would sign in as the previous run's user instead of registering, so the
-tests are repeatable but not cleanup-idempotent — they accumulate rows in the
-local dev database.
+`modules/complete-first-run-onboarding.module.yaml` extends it through onboarding
+to a ready workspace. Each test registers a **new** user (`e2e-user-<ms>`);
+reusing an identity would sign in as the previous run's user instead of
+registering, so the tests are repeatable but not cleanup-idempotent — they
+accumulate rows in the local dev database.
 
 ## Which environment runs what
 
 | Environment | Target | Runs |
 | --- | --- | --- |
-| `local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
+| `local` | `http://127.0.0.1:5173` | Local browser journeys that use the dev sign-in stub and documented fixtures |
 | `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke check only |
 
 The registration and onboarding tests **cannot** run against a deployed
@@ -169,7 +187,10 @@ the github.com round trip removed, and it 404s unless explicitly opted in
 Two steps of onboarding wait on a *second machine* that a browser test does not
 have: the First Tree client daemon, plus an installed coding-agent runtime.
 `scripts/seed-connected-computer.js` and `scripts/seed-agent-online.js` seed the
-rows that daemon would otherwise write.
+rows that daemon would otherwise write. The setup-prompt test also uses
+`scripts/seed-context-tree-binding.js` to supply the bound-tree prerequisite;
+provider repository creation and authorization are separate from the prompt
+dialog journey under test.
 
 The fixtures replace the machine, not the behaviour under test — every screen,
 transition, API call and assertion around them is exercised for real. What they
@@ -198,6 +219,15 @@ persists the resolving message, and Need you refreshes to the caught-up state.
 It does **not** validate agent request authoring, daemon delivery, attachments,
 Ask agent clarification, version skew, or failure recovery; those branches stay
 in the full `need-you-request-review-journey` case.
+
+`set-test-user-provider-mode.js` substitutes only the external provider callback
+for the GitHub install identity-gate journey. It keeps the existing First Tree
+user, Team, membership, and browser tokens intact while changing that user's
+provider rows from Google-only to Google+GitHub. The visible Settings flow and
+all capability queries still run through the real web and server. It does not
+claim to validate github.com's login, consent, installation picker, or owner
+approval UI; deterministic server integration tests own those state and
+authorization boundaries.
 
 If onboarding ever stops depending on a connected daemon, delete the fixtures
 rather than working around them.

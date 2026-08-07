@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createDriver: vi.fn(),
   enableOperation: vi.fn(),
   fingerprintAfter: vi.fn(() => "b".repeat(64)),
+  inspectNextSession: vi.fn<() => "setup" | "standalone_repair" | null>(() => null),
   inspectHook: vi.fn(),
   inspectLocation: vi.fn(),
   inspectRuntime: vi.fn(),
@@ -37,6 +38,9 @@ vi.mock("../core/context-integration/account-state-guard.js", () => ({
 }));
 vi.mock("../core/context-integration/client-preflight.js", () => ({
   inspectContextSetupLocation: mocks.inspectLocation,
+}));
+vi.mock("../core/context-integration/adapter-observation.js", () => ({
+  inspectContextAdapterNextSessionObligation: mocks.inspectNextSession,
 }));
 vi.mock("../core/context-integration/context-binding-store.js", () => ({
   assertContextGrantStoreFingerprint: mocks.assertFingerprint,
@@ -81,6 +85,7 @@ beforeEach(() => {
   mocks.channelConfig.channel = "dev";
   mocks.channelConfig.binName = "first-tree-dev";
   mocks.readAccount.mockReturnValue("client-1");
+  mocks.inspectNextSession.mockReturnValue(null);
   mocks.inspectLocation.mockReturnValue({
     project,
     directory: "/work/repo",
@@ -93,10 +98,10 @@ beforeEach(() => {
     config: { schemaVersion: 3, grants: [] },
     fingerprint: "a".repeat(64),
   });
-  mocks.resolveRelease.mockReturnValue({ root: "/release" });
+  mocks.resolveRelease.mockReturnValue({ root: "/release", manifest: { release: "manifest" } });
   mocks.validateActivation.mockResolvedValue({ schemaVersion: 2, outcome: "connected", team });
   mocks.issueSession.mockResolvedValue({ receipt: "signed-session" });
-  mocks.buildHandoff.mockReturnValue({ schemaVersion: 2, consumerKind: "byo", provider: "codex", project });
+  mocks.buildHandoff.mockReturnValue({ schemaVersion: 3, consumerKind: "byo", provider: "codex", project });
   mocks.readConfig.mockReturnValue({
     schemaVersion: 3,
     grants: [{ provider: "codex", organizationId: "org-a", activationScope: { kind: "global" } }],
@@ -109,13 +114,14 @@ beforeEach(() => {
     issues: [],
     probe: { installed: true, enabled: true, installedPath: "/plugin" },
     install: { marketplaceName: "first-tree", pluginName: "first-tree-context" },
+    release: { manifest: { release: "manifest" } },
   });
 });
 
 describe("context enable v3 command", () => {
   it("keeps plan read-only and fixes the grant-store fingerprint", async () => {
     await runContextEnable(context({ plan: true }));
-    const planIdPattern = `v1\\.[0-9a-f]{64}\\.${"a".repeat(64)}\\.[0-9a-f]{64}\\.[0-9a-f]{64}`;
+    const planIdPattern = `v2\\.[0-9a-f]{64}\\.${"a".repeat(64)}\\.[0-9a-f]{64}\\.[0-9a-f]{64}\\.[0-9a-f]{64}`;
     expect(output.result).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "choice_required",
@@ -143,7 +149,29 @@ describe("context enable v3 command", () => {
     expect(mocks.assertFingerprint).not.toHaveBeenCalled();
   });
 
-  it("omits an apply command for an unavailable directory choice", async () => {
+  it("rejects setup before planning when the Core loader root is mutable", async () => {
+    mocks.resolveRelease.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Use a version-pinned portable First Tree release."), {
+        code: "CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED",
+      });
+    });
+
+    await expect(runContextEnable(context({ plan: true }))).rejects.toMatchObject({
+      code: "CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED",
+    });
+    expect(output.fail).toHaveBeenCalledWith(
+      "CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED",
+      "Use a version-pinned portable First Tree release.",
+      2,
+      {
+        nextActions: ["Install or use a version-pinned First Tree CLI release, then retry Context setup."],
+      },
+    );
+    expect(mocks.enableOperation).not.toHaveBeenCalled();
+    expect(mocks.buildHandoff).not.toHaveBeenCalled();
+  });
+
+  it("omits an unavailable directory choice and its after-fingerprint", async () => {
     mocks.inspectLocation.mockReturnValue({
       project: { kind: "pathless" },
       directory: null,
@@ -155,14 +183,72 @@ describe("context enable v3 command", () => {
     expect(output.result).toHaveBeenCalledWith(
       expect.objectContaining({
         plan: expect.objectContaining({
-          choices: expect.arrayContaining([
-            expect.objectContaining({ kind: "directory", available: false, applyCommand: null }),
+          planId: expect.stringMatching(
+            new RegExp(`^v2\\.[0-9a-f]{64}\\.${"a".repeat(64)}\\.[0-9a-f]{64}\\.-\\.[0-9a-f]{64}$`, "u"),
+          ),
+          choices: [
             expect.objectContaining({ kind: "global", applyCommand: expect.stringContaining(" --pathless ") }),
             expect.objectContaining({ kind: "session", applyCommand: expect.stringContaining(" --pathless ") }),
-          ]),
+          ],
         }),
       }),
     );
+    expect(mocks.fingerprintAfter).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps canonical project identity in managed-worktree global and session commands", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: "This looks like a Codex temporary directory.",
+    });
+    await runContextEnable(context({ plan: true }));
+    const result = output.result.mock.calls[0]?.[0] as {
+      plan: { choices: Array<{ kind: string; applyCommand: string }> };
+    };
+    expect(result.plan.choices.map((choice) => choice.kind)).toEqual(["global", "session"]);
+    expect(result.plan.choices.every((choice) => choice.applyCommand.includes(" --project-root '/work/repo' "))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a manually constructed directory apply when the choice is hidden", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: null,
+    });
+    const planId = await createPlanId();
+    await expect(runContextEnable(context({ scope: "directory", planId, yes: true }))).rejects.toMatchObject({
+      code: "CONTEXT_DIRECTORY_UNAVAILABLE",
+    });
+    expect(mocks.enableOperation).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the plan when directory availability changes", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: null,
+    });
+    const planId = await createPlanId();
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: true,
+      temporaryDirectory: false,
+      warning: null,
+    });
+    await expect(runContextEnable(context({ scope: "global", planId, yes: true }))).rejects.toMatchObject({
+      code: "CONTEXT_ENABLE_PLAN_CHANGED",
+    });
+    expect(mocks.enableOperation).not.toHaveBeenCalled();
   });
 
   it("renders exact apply commands in the human-readable plan", async () => {
@@ -172,6 +258,20 @@ describe("context enable v3 command", () => {
       `Apply command: 'first-tree-dev' --json context enable --provider 'codex' --team 'org-a' --project-root '/work/repo' --scope 'global'`,
     );
     expect(statusRows).toContain("Next: Choose one scope, then run its exact apply command unchanged.");
+  });
+
+  it("does not render a hidden directory choice in the human-readable plan", async () => {
+    mocks.inspectLocation.mockReturnValue({
+      project,
+      directory: project.root,
+      directoryAvailable: false,
+      temporaryDirectory: true,
+      warning: "This looks like a Codex temporary directory.",
+    });
+    await runContextEnable({ ...context({ plan: true }), options: { json: false, debug: false, quiet: false } });
+    const statusRows = output.status.mock.calls.map(([label, value]) => `${label}: ${value}`).join("\n");
+    expect(statusRows).not.toContain("This directory:");
+    expect(statusRows.match(/Apply command:/gu)).toHaveLength(2);
   });
 
   it("pins non-dev apply commands to the portable executable without quoting away tilde expansion", async () => {
@@ -284,6 +384,33 @@ describe("context enable v3 command", () => {
     expect(mocks.buildHandoff).not.toHaveBeenCalled();
   });
 
+  it("completes first-time Claude setup without promising a blocked current-session handoff", async () => {
+    mocks.createDriver.mockReturnValue({ provider: "claude-code", inspectHook: mocks.inspectHook });
+    mocks.planInstall.mockReturnValue({ operation: "install" });
+    mocks.inspectNextSession.mockReturnValue("setup");
+    mocks.readConfig.mockReturnValue({
+      schemaVersion: 3,
+      grants: [{ provider: "claude-code", organizationId: "org-a", activationScope: { kind: "global" } }],
+    });
+    await runContextEnable(context({ provider: "claude-code", plan: true }));
+    const planId = (output.result.mock.calls[0]?.[0] as { plan: { planId: string } }).plan.planId;
+    output.result.mockClear();
+
+    await runContextEnable(context({ provider: "claude-code", scope: "global", planId, yes: true }));
+
+    const result = output.result.mock.calls[0]?.[0] as {
+      setup: { complete: boolean; missingLayers: string[] };
+      currentSessionHandoff: unknown;
+      nextActions: string[];
+    };
+    expect(result.setup).toEqual({ complete: true, missingLayers: [] });
+    expect(result.currentSessionHandoff).toBeNull();
+    expect(result.nextActions).toEqual([
+      expect.stringContaining("does not activate Context in the current Claude session"),
+    ]);
+    expect(mocks.buildHandoff).not.toHaveBeenCalled();
+  });
+
   it("does not send a Plugin failure into the Codex Hook recovery loop", async () => {
     const planId = await createPlanId();
     output.result.mockClear();
@@ -364,6 +491,7 @@ describe("context enable v3 command", () => {
       expect.objectContaining({ organizationId: "org-a", activationScope: { kind: "global" } }),
       { beforeFingerprint: "a".repeat(64), afterFingerprint: "b".repeat(64) },
       "client-1",
+      { nextSessionObligationKind: undefined },
     );
     expect(output.result.mock.calls[0]?.[0]).toMatchObject({
       setup: { complete: true },

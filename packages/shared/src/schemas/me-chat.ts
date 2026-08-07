@@ -255,11 +255,12 @@ export const meChatRowSchema = z.object({
   title: z.string(),
   topic: z.string().nullable(),
   /**
-   * Chat-level work summary + status report (the chat's `description`
-   * column). It serves two readers at once: the agent / a teammate
-   * reconstructing what the task is and where it stands, and the human
-   * reading the current task status. Holds task background + plan +
-   * progress and may use Markdown. Rendered as the conversation row's
+   * Chat-level Summary (the chat's `description` column): a current-state
+   * brief serving two readers at once — the agent / a teammate reconstructing
+   * where the task stands, and the human switching between chats. Its first
+   * line stands alone as the current result plus what it means for the
+   * reader, and it is rewritten from blank on each write rather than appended
+   * to. May use Markdown. Rendered as the conversation row's
    * second line so a glance tells you what each thread is and where it
    * stands; `null` when the owner hasn't set one (the row shows a skeleton
    * placeholder to keep cards equal height). `.default(null)` for version

@@ -34,6 +34,7 @@ export const scmAudienceEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("personnel_target"),
     reason: involveReasonSchema,
+    requiresPersistentLine: z.boolean(),
     humanAgentId: z.string().min(1),
     wakeAgentId: z.string().min(1),
     externalUsername: z.string().min(1),

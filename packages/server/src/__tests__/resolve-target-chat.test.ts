@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { resolveTargetChat as resolveTargetChatRaw } from "../services/github-entity-chat.js";
+import {
+  resolveGithubPersonnelTargetChat,
+  resolveTargetChat as resolveTargetChatRaw,
+} from "../services/github-entity-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
@@ -159,6 +163,7 @@ describe("resolveTargetChat", () => {
       eventType: "pull_request",
       action: "opened",
       entityStateSeed: { entityType: "issue", entityKey: "owner/repo#42", state: "closed" },
+      intent: { kind: "provider_task_target" },
     });
 
     expect(prResolved.chatId).toBe(issueResolved.chatId);
@@ -258,6 +263,7 @@ describe("resolveTargetChat", () => {
       relatedEntities: [issue42],
       eventType: "pull_request",
       action: "opened",
+      intent: { kind: "provider_task_target" },
     });
 
     expect(prResolved.chatId).toBe(issueResolved.chatId);
@@ -269,6 +275,47 @@ describe("resolveTargetChat", () => {
       .where(eq(githubEntityChatMappings.entityKey, "owner/repo#50"));
     expect(prMapping).toHaveLength(1);
     expect(prMapping[0]?.boundVia).toBe("fixes_link");
+  });
+
+  it("does not reuse a related exact-pair chat after the wake agent leaves", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+    await app.db.update(agents).set({ delegateMention: delegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+
+    const issueResolved = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: issue42,
+      relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
+    });
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, issueResolved.chatId), eq(chatMembership.agentId, delegate)));
+
+    const prResolved = await resolveGithubPersonnelTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [issue42],
+      eventType: "pull_request",
+      action: "opened",
+      isMentionMatched: true,
+      requiresPersistentLine: true,
+    });
+
+    expect(prResolved).toMatchObject({ created: true, boundVia: "direct", lineExisted: false });
+    expect(prResolved?.chatId).not.toBe(issueResolved.chatId);
+    expect(
+      await app.db
+        .select()
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, prResolved?.chatId ?? ""), eq(chatMembership.agentId, delegate))),
+    ).toMatchObject([{ accessMode: "speaker" }]);
   });
 
   it("does not link when no related entity has an existing mapping", async () => {
@@ -326,6 +373,7 @@ describe("resolveTargetChat", () => {
       relatedEntities: [issue42, issue43],
       eventType: "pull_request",
       action: "opened",
+      intent: { kind: "provider_task_target" },
     });
 
     expect(prResolved.chatId).toBe(issue42Resolved.chatId);

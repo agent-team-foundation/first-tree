@@ -77,6 +77,10 @@ export function Layout() {
   // ~1160 wrapper instead of the default 960 canvas — let it manage its
   // own width.
   const isSettings = location.pathname.startsWith("/settings");
+  // Agent Detail owns a compact local-navigation rail plus a readable content
+  // column, so it needs the wider shell token rather than the default 960
+  // single-column canvas. The global top bar remains unchanged.
+  const isAgentDetail = location.pathname.startsWith("/agents/");
 
   // Top-bar progressive collapse, tuned so the user menu (sign-out, org-switch)
   // is reachable at EVERY width — dropping it below `xl` previously stranded
@@ -446,7 +450,10 @@ export function Layout() {
               standard "wide table → local horizontal scroll" pattern
               (GitHub, Stripe both do this), and the page chrome never
               scrolls horizontally. */}
-          <div className="p-4 lg:p-6 mx-auto" style={{ maxWidth: 960 }}>
+          <div
+            className="p-4 lg:p-6 mx-auto"
+            style={{ maxWidth: isAgentDetail ? "var(--agent-detail-shell)" : 960, width: "100%" }}
+          >
             <Outlet />
           </div>
         </main>

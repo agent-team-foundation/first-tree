@@ -98,9 +98,16 @@ For each provider:
   worktree, changed Tree file, branch, commit, push, or PR/MR. This gate applies
   to single-Team and multi-Team BYO sessions alike.
 - After confirmation, the durable path creates exactly one Tree branch and one cross-linked draft
-  Tree PR/MR from the smallest correct diff. It runs live preflight before
+  Tree PR/MR from the smallest correct diff in the CLI-returned exclusive BYO
+  worktree. The provider does not construct a HOME path or run `git worktree add`
+  itself. It runs live preflight before
   authoring and again before every push and PR/MR creation; SessionStart alone
   is never treated as mutation authority.
+- Interrupt or hide the first `write-worktree` result after the durable journal
+  becomes active. Repeating the same exact confirmed command and querying
+  `write-status` must return the same operation id/path without creating a
+  second worktree. Repeating `write-finish` after a lost success response must
+  remain a safe no-op.
 - Publishing the source PR/MR is not described as automatically transferring
   permission to another repository. The observed Write intent is the standing
   classification of that concrete durable artifact.
@@ -113,6 +120,9 @@ For each provider:
   snapshot, and live authority failures remain fail-closed; no alternate Team
   or cached authority is used. Source-repository registration is not an
   authority input.
+- An unfinished write journal/worktree blocks local Client switching. Finishing
+  the operation removes/prunes the worktree under the same organization
+  mutation lock without deleting the shared bare repository.
 
 ## Expected Result
 

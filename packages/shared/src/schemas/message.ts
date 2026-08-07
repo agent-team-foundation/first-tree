@@ -71,11 +71,12 @@ export function readAskAgentMessageMetadata(
 }
 
 /**
- * Server-owned marker on the visible bootstrap message of an ordinary first
- * chat. Web uses it to mount the optional Orientation surface in that message
- * row. It is presentation metadata only and never becomes agent prompt text;
- * the visible bootstrap and the user's next visible turn remain the complete
- * conversational context.
+ * Server-owned marker on the stored bootstrap message of an ordinary first
+ * chat. Web uses it to replace that row with the senderless Orientation
+ * surface: the member does not see the bootstrap body or its persisted human
+ * sender attribution. It is presentation metadata only and never becomes
+ * agent prompt text; the stored bootstrap and the user's next visible turn
+ * remain the complete conversational context replayed to the original target.
  */
 export const FIRST_CHAT_ORIENTATION_METADATA_KEY = "firstChatOrientation";
 export const firstChatOrientationMessageMetadataSchema = z.object({

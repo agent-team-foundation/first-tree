@@ -132,6 +132,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019dd905-1234-7777-8888-bef95070f001";
@@ -172,7 +173,11 @@ describe("claude-code handler — transient stream-error retry replays user mess
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -205,6 +210,7 @@ describe("claude-code handler — transient stream-error retry replays user mess
           metadata: null,
         },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForCondition(
         () => logs.filter((line) => line.includes("Attempting auto-resume")).length === 1,
@@ -283,7 +289,11 @@ describe("claude-code handler — transient stream-error retry replays user mess
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -316,15 +326,19 @@ describe("claude-code handler — transient stream-error retry replays user mess
         metadata: null,
       },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
-    handler.inject({
-      id: "m2",
-      chatId: "chat-stream-retry",
-      senderId: "user-1",
-      format: "text",
-      content: SECOND_PROMPT,
-      metadata: null,
-    });
+    handler.inject(
+      {
+        id: "m2",
+        chatId: "chat-stream-retry",
+        senderId: "user-1",
+        format: "text",
+        content: SECOND_PROMPT,
+        metadata: null,
+      },
+      deliveryTokenFromSessionContext(ctx),
+    );
 
     await waitForObservedInputs(2, 2);
     await waitForObservedInputs(3, 2);
@@ -376,7 +390,11 @@ describe("claude-code handler — transient stream-error retry replays user mess
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const plumbing = mockCtxPlumbing({ sendMessage }, "chat-stream-retry");
     const ctx: SessionContext = {
       agent: {
@@ -415,16 +433,20 @@ describe("claude-code handler — transient stream-error retry replays user mess
         metadata: null,
       },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
     await waitForObservedInputs(1, 1);
-    handler.inject({
-      id: "m2",
-      chatId: "chat-stream-retry",
-      senderId: "user-1",
-      format: "text",
-      content: SECOND_PROMPT,
-      metadata: null,
-    });
+    handler.inject(
+      {
+        id: "m2",
+        chatId: "chat-stream-retry",
+        senderId: "user-1",
+        format: "text",
+        content: SECOND_PROMPT,
+        metadata: null,
+      },
+      deliveryTokenFromSessionContext(ctx),
+    );
     await m2Pushed;
     releaseAttempt1();
 

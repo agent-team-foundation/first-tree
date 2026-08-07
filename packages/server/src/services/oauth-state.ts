@@ -47,6 +47,8 @@ type StatePayload = {
    * browser). Absent on the plain `/auth/github/start` sign-in flow.
    */
   kickoffUserId?: string;
+  /** Two-step App install: prove the linked user first, then open the picker. */
+  installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
@@ -59,6 +61,8 @@ export type SignOAuthStateOptions = {
   targetOrganizationId?: string;
   /** See `StatePayload.kickoffUserId`. */
   kickoffUserId?: string;
+  /** See `StatePayload.installPhase`. */
+  installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
@@ -84,6 +88,7 @@ export async function signOAuthState(
   if (opts.kickoffUserId) {
     claims.kickoffUserId = opts.kickoffUserId;
   }
+  if (opts.installPhase) claims.installPhase = opts.installPhase;
   if (opts.intent) claims.intent = opts.intent;
   if (opts.userId) claims.userId = opts.userId;
   if (opts.provider) claims.provider = opts.provider;
@@ -115,6 +120,7 @@ export async function verifyOAuthState(
   next: string;
   targetOrganizationId?: string;
   kickoffUserId?: string;
+  installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
@@ -139,6 +145,9 @@ export async function verifyOAuthState(
   if (payload.kickoffUserId !== undefined && typeof payload.kickoffUserId !== "string") {
     throw new Error("OAuth state payload malformed");
   }
+  if (payload.installPhase !== undefined && !["identity", "installation"].includes(payload.installPhase)) {
+    throw new Error("OAuth state payload malformed");
+  }
   if (payload.intent !== undefined && !["sign-in", "link", "unlink", "install"].includes(payload.intent)) {
     throw new Error("OAuth state payload malformed");
   }
@@ -160,6 +169,7 @@ export async function verifyOAuthState(
     next: payload.next,
     ...(payload.targetOrganizationId ? { targetOrganizationId: payload.targetOrganizationId } : {}),
     ...(payload.kickoffUserId ? { kickoffUserId: payload.kickoffUserId } : {}),
+    ...(payload.installPhase ? { installPhase: payload.installPhase } : {}),
     ...(payload.intent ? { intent: payload.intent } : {}),
     ...(payload.userId ? { userId: payload.userId } : {}),
     ...(payload.provider ? { provider: payload.provider } : {}),

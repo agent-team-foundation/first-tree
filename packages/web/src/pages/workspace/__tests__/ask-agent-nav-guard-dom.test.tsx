@@ -69,10 +69,6 @@ vi.mock("../center/index.js", () => ({
   ),
 }));
 
-vi.mock("../need-you/need-you-page.js", () => ({
-  NeedYouPage: () => <section data-testid="need-you-page">Need you review</section>,
-}));
-
 vi.mock("../../../components/doc-preview-drawer.js", () => ({
   DocPreviewDrawer: () => <div data-testid="doc-preview">Doc preview</div>,
 }));
@@ -155,22 +151,20 @@ afterEach(() => {
 describe("Workspace Ask agent navigation lock", () => {
   it("blocks rail rows, new chat, and chat-dropping filters while an attempt is pending", async () => {
     const { WorkspaceBody } = await import("../index.js");
-    const { container, root } = await renderDom("/?review=need-you", <WorkspaceBody />);
+    // The Need-you queue session is chat-based now (`?c=` + `?nq=1`); an
+    // ordinary rail selection both switches chats and ends the session.
+    const { container, root } = await renderDom("/?c=chat-1&nq=1", <WorkspaceBody />);
 
-    // Sanity: unlocked, a rail row switches chats and clears the review.
-    expect(container.querySelector('[data-testid="need-you-page"]')).not.toBeNull();
     await click(buttonByText(container, "Select chat"));
     expect(locationText(container)).toContain("c=chat-picked");
-    expect(locationText(container)).not.toContain("review=need-you");
-    expect(container.querySelector('[data-testid="need-you-page"]')).toBeNull();
+    expect(locationText(container)).not.toContain("nq=1");
 
     await act(async () => root.unmount());
   });
 
-  it("keeps the review surface mounted for every in-app exit while locked", async () => {
+  it("keeps the owning chat mounted for every in-app exit while locked", async () => {
     const { WorkspaceBody } = await import("../index.js");
-    const { container, root } = await renderDom("/?review=need-you", <WorkspaceBody />);
-    expect(container.querySelector('[data-testid="need-you-page"]')).not.toBeNull();
+    const { container, root } = await renderDom("/?c=chat-1&nq=1", <WorkspaceBody />);
 
     // A pending Ask agent attempt engages the shared lock.
     await act(async () => {
@@ -179,12 +173,11 @@ describe("Workspace Ask agent navigation lock", () => {
     await flush();
 
     await click(buttonByText(container, "Select chat"));
-    expect(locationText(container)).toBe("/?review=need-you");
+    expect(locationText(container)).toBe("/?c=chat-1&nq=1");
     await click(buttonByText(container, "New chat"));
-    expect(locationText(container)).toBe("/?review=need-you");
+    expect(locationText(container)).toBe("/?c=chat-1&nq=1");
     await click(buttonByText(container, "Archived"));
-    expect(locationText(container)).toBe("/?review=need-you");
-    expect(container.querySelector('[data-testid="need-you-page"]')).not.toBeNull();
+    expect(locationText(container)).toBe("/?c=chat-1&nq=1");
 
     // The attempt lifts: the same rail row navigates again.
     await act(async () => {
@@ -193,7 +186,7 @@ describe("Workspace Ask agent navigation lock", () => {
     await flush();
     await click(buttonByText(container, "Select chat"));
     expect(locationText(container)).toContain("c=chat-picked");
-    expect(container.querySelector('[data-testid="need-you-page"]')).toBeNull();
+    expect(locationText(container)).not.toContain("nq=1");
 
     await act(async () => root.unmount());
   });

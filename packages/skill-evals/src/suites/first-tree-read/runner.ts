@@ -42,7 +42,14 @@ export async function runFirstTreeReadCase(
   );
   const runnerExitCode = runnerResult.exitCode;
   const events = readEvents(paths.eventsPath);
-  const metrics = deriveMetrics(events, fixtureValidation, runnerExitCode, evalCase.expectedFacts);
+  const metrics = deriveMetrics(
+    events,
+    fixtureValidation,
+    runnerExitCode,
+    evalCase.expectedFacts,
+    evalCase.impactNote,
+    evalCase.managedTransport,
+  );
   const passed = casePassed(evalCase.expectedTrigger, metrics, evalCase.readMode);
   const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed, evalCase.readMode);
   const observability = deriveRunObservability(events);

@@ -76,8 +76,8 @@ export function GithubTaskAgentControls({
             : settingQuery.error
               ? "First Tree could not load the configured Agent."
               : projectedAgent
-                ? `${projectedAgent.displayName} handles GitHub App mentions and assignments outside the Context Tree repository.`
-                : "Not configured. An admin can choose the Agent that handles GitHub App mentions and assignments outside the Context Tree repository."}
+                ? `${projectedAgent.displayName} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`
+                : "Not configured. An admin can choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."}
         </span>
       </div>
     );
@@ -117,10 +117,7 @@ export function GithubTaskAgentControls({
       className="flex flex-col"
       style={{
         gap: "var(--sp-3)",
-        padding: "var(--sp-4)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        background: "var(--bg-sunken)",
+        padding: "var(--sp-3) 0",
       }}
     >
       <div>
@@ -129,8 +126,8 @@ export function GithubTaskAgentControls({
         </span>
         <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
           {selectedLabel
-            ? `${selectedLabel} handles GitHub App mentions and assignments outside the Context Tree repository.`
-            : "Choose the Agent that handles GitHub App mentions and assignments outside the Context Tree repository."}
+            ? `${selectedLabel} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`
+            : "Choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."}
         </div>
       </div>
 
@@ -177,8 +174,7 @@ export function GithubTaskAgentControls({
             searchable={candidates.length > 6}
           />
           <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-            The GitHub Task Agent and Context Reviewer must be different Agents. Automatic Review does not control this
-            delegation.
+            Context Tree activity uses Context Reviewer. These roles must use different Agents.
           </div>
         </div>
       )}

@@ -70,12 +70,6 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
 };
 
-/** One plain exploration line for every first-chat finale — admin or invitee,
- *  team ready or not. The page introduces the managed First Tree agent without
- *  exposing repo / Context Tree readiness or turning Chat into the concept the
- *  member has to understand first. */
-const START_CHAT_LAUNCH_WHY = "Explore First Tree together, then choose what you’d like to try first.";
-
 /** Shared phrases reused across steps so wording stays consistent. */
 export const COPY = {
   /** Title shown across the flow's top chrome. */
@@ -251,52 +245,20 @@ export const COPY = {
     templateIntentUnavailable:
       "The template you started from is no longer available — you can still create your agent from scratch.",
   },
-  /** start-chat — one unified "launch" finale across every path. Titles/bodies are
-      rendered per-state by the step; the shell leaves STEP_COPY["start-chat"] empty
-      for this finale. */
+  /** One exact-agent arrival for every personal-agent start-chat path. */
   startChat: {
-    // Every finale below shares one title + one subtitle + one button. The
-    // per-state keys are kept because the step still selects them by path/state,
-    // but they resolve to the same strings on purpose (see START_CHAT_LAUNCH_WHY):
-    // the team/tree difference behind them is invisible to the user, so a
-    // differentiated subtitle only leaked backend readiness they can't act on.
-
-    // admin · new tree (the default — the team has none yet). `newWhy`/`existingWhy`
-    // are only read by the dormant repo-aware branch (StepConnectCode is out of the
-    // live sequence); kept as functions so that call site's shape is unchanged.
-    newTitle: "Meet your agent",
-    newWhy: (_repoCount: number): string => START_CHAT_LAUNCH_WHY,
-    startBuilding: "Start exploring",
-
-    // admin · the team already has a Context Tree (re-run / second admin /
-    // CLI-bound). Detected silently; also part of the dormant repo-aware branch.
-    existingTitle: "Meet your agent",
-    existingWhy: (_repoCount: number): string => START_CHAT_LAUNCH_WHY,
-    startExisting: "Start exploring",
-
-    // admin · no repo connected (the live default path).
-    noProjectTitle: "Meet your agent",
-    noProjectBody: START_CHAT_LAUNCH_WHY,
-    startChatting: "Start exploring",
-
-    // invitee · ready (team has a tree + a GitHub connection). The agent inherits
-    // the team's recommended repos automatically, so there is nothing to select.
-    inviteeReadyTitle: "Meet your agent",
-    inviteeReadyBody: START_CHAT_LAUNCH_WHY,
-    startWorking: "Start exploring",
-
+    eyebrow: "YOUR FIRST TREE AGENT",
+    title: (agentDisplayName: string): string => `Meet ${agentDisplayName}`,
+    body: (agentDisplayName: string): string =>
+      `${agentDisplayName} is ready to explore First Tree with you. Bring a question, a project, or a task you want to move forward.`,
+    meetAgent: "Meet your agent",
+    nextStepHint: "You’ll open your first Chat and can start typing right away.",
+    resolvingAgent: "Finding your agent…",
+    resolveAgentFailed: "We couldn't load your agent just now.",
+    resolveAgentRetry: "Try again",
+    preparing: "Preparing your first Chat…",
     // shared launch transition
     starting: "Opening your first Chat…",
-  },
-  /** Invitee not-ready (blocked-on-admin) state. The not-ready screen covers
-   *  both "no Context Tree" and "no GitHub connection" — the invitee can't act
-   *  on either, and it advances on its own once the admin finishes. */
-  invitee: {
-    notReadyTitle: "Meet your agent",
-    notReadyBody: START_CHAT_LAUNCH_WHY,
-    // The primary action on the not-ready screen — start a simple first chat now
-    // instead of waiting on the team.
-    startAnyway: "Start exploring",
   },
   /** Progressive Member entry: one recommended personal-agent path first,
    *  then Team-agent and external Context access after explicit continuation. */

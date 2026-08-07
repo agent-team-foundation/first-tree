@@ -72,6 +72,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext, TurnOutcome } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { formatProviderFailureRuntimeNotice } from "../runtime/runtime-notice.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -156,7 +157,11 @@ async function startSingleResultTurn() {
   const cache = buildCache();
   await cache.refresh(AGENT_ID);
 
-  const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+  const handler = createClaudeCodeHandler({
+    runtimeProvider: "claude-code",
+    workspaceRoot,
+    agentConfigCache: cache,
+  });
   const ctx: SessionContext = {
     agent: {
       agentId: AGENT_ID,
@@ -191,9 +196,21 @@ async function startSingleResultTurn() {
       metadata: null,
     },
     ctx,
+    deliveryTokenFromSessionContext(ctx),
   );
 
-  return { handler, cache, sendMessage, forwardResult, emitted, completed, logs, retryTurn, failSessionForRecovery };
+  return {
+    handler,
+    cache,
+    ctx,
+    sendMessage,
+    forwardResult,
+    emitted,
+    completed,
+    logs,
+    retryTurn,
+    failSessionForRecovery,
+  };
 }
 
 async function runSingleResultTurn() {
@@ -428,14 +445,17 @@ describe("claude-code handler — structured provider error result", () => {
       mockState.configVersion = 2;
       mockState.promptAppend = "updated prompt";
       await result.cache.refresh(AGENT_ID);
-      result.handler.inject({
-        id: "m2",
-        chatId: "chat-claude-provider-error",
-        senderId: "user-1",
-        format: "text",
-        content: "continue with the updated config",
-        metadata: null,
-      });
+      result.handler.inject(
+        {
+          id: "m2",
+          chatId: "chat-claude-provider-error",
+          senderId: "user-1",
+          format: "text",
+          content: "continue with the updated config",
+          metadata: null,
+        },
+        deliveryTokenFromSessionContext(result.ctx),
+      );
 
       await waitForCondition(() => mockState.queryCalls === 2, "config restart query");
       await waitForCondition(
@@ -483,14 +503,17 @@ describe("claude-code handler — structured provider error result", () => {
       mockState.configVersion = 2;
       mockState.configModel = "claude-opus-4-6";
       await result.cache.refresh(AGENT_ID);
-      result.handler.inject({
-        id: "m2",
-        chatId: "chat-claude-provider-error",
-        senderId: "user-1",
-        format: "text",
-        content: "continue with the new model",
-        metadata: null,
-      });
+      result.handler.inject(
+        {
+          id: "m2",
+          chatId: "chat-claude-provider-error",
+          senderId: "user-1",
+          format: "text",
+          content: "continue with the new model",
+          metadata: null,
+        },
+        deliveryTokenFromSessionContext(result.ctx),
+      );
 
       await waitForCondition(() => mockState.queryCalls === 2, "config restart query");
       await vi.advanceTimersByTimeAsync(500);

@@ -16,11 +16,15 @@ function describe(): string {
   return (
     "Update a chat's topic and/or description — each updates independently. " +
     "The topic is the short display label the workspace chat list shows. The " +
-    "description is the chat's work summary + status report: task background + " +
-    "plan + progress, Markdown-supported, surfaced to the agent each turn, shown " +
-    "by default at the top of the chat's right sidebar, and used to locate the " +
-    "chat via `chat list`. Keep blockers / decisions OUT of the description — " +
-    "raise `chat ask <human>` for those. By default acts on the " +
+    "description is the chat's Summary: a current-state brief rewritten in " +
+    "place from blank each time, leading with the current result and what it " +
+    "means for the reader, then only the context needed to trust it (2–4 short " +
+    "sentences by default). Markdown-supported, surfaced to the agent each turn, " +
+    "shown on the web between the chat header and the message stream and on mobile " +
+    "as the timeline's Current state card, and used to locate " +
+    "the chat via `chat list`. Keep stage history, process metadata, and human " +
+    "decisions OUT of the description — raise `chat ask <human>` for a " +
+    "decision. By default acts on the " +
     "caller's current chat (FIRST_TREE_CHAT_ID); use --chat <id> to target " +
     "another. Owner-gated: the chat's creator may update it, and when no agent " +
     "owner is present (human-created chats, or the creator left) every worker " +
@@ -132,7 +136,7 @@ export function registerChatUpdateCommand(chat: Command): void {
     .option("--clear-topic", "Clear the topic (falls back to auto-derived title)")
     .option(
       "--description <text>",
-      "Set the chat's work summary + status report (Markdown supported). Pass `-` to read it from stdin/heredoc " +
+      "Set the chat's Summary — its current-state brief (Markdown supported). Pass `-` to read it from stdin/heredoc " +
         "when the body has real newlines (avoids literal \\n escapes).",
     )
     .option("--clear-description", "Clear the description (sets it to null)")

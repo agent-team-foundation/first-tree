@@ -3,23 +3,44 @@ import { ChevronRight, CircleHelp } from "lucide-react";
 import { useAuth } from "../../../auth/auth-context.js";
 import { needYouQueryOptions } from "./query.js";
 
-export function NeedYouEntry({ variant, onOpen }: { variant: "desktop" | "mobile"; onOpen: () => void }) {
+export function NeedYouEntry({
+  variant,
+  onOpen,
+}: {
+  variant: "desktop" | "mobile";
+  /** Open the chat holding the OLDEST open request, with the cross-chat
+   *  queue session active — answering there auto-advances to the next
+   *  question's chat. There is no separate review page: the ask takeover
+   *  over the real conversation is the single answering surface. */
+  onOpen: (chatId: string) => void;
+}) {
   const { organizationId } = useAuth();
   const queue = useQuery(needYouQueryOptions(organizationId));
   const count = queue.data?.total ?? 0;
+  const first = queue.data?.items[0] ?? null;
   // Three distinct "no count" states, never collapsed into one:
   //  - pending: the queue state is UNKNOWN — disabled with loading semantics,
   //    and never announced as "no questions";
-  //  - error: the queue is UNAVAILABLE — the entry stays reachable so the
-  //    review page's own error + Retry recovery path can be opened;
+  //  - error: the queue is UNAVAILABLE — the entry stays reachable and a
+  //    click retries the fetch (there is no review page to recover in);
   //  - success with total=0: a CONFIRMED zero — the only state that disables
   //    the entry as "no questions".
-  const enabled = queue.isError || count > 0;
+  const enabled = queue.isError || first !== null;
+  const handleOpen = () => {
+    if (queue.isError) {
+      void queue.refetch();
+      return;
+    }
+    if (first) onOpen(first.chat.id);
+  };
+  // Label keys on `first` (the same predicate that enables the button), not
+  // on the raw count: an items-empty-but-total>0 intermediate snapshot must
+  // not announce questions on a disabled control.
   const accessibleLabel = queue.isPending
     ? "Need you, loading"
     : queue.isError
-      ? "Need you, failed to load, open to retry"
-      : count > 0
+      ? "Need you, failed to load, tap to retry"
+      : first
         ? `Need you, ${count} ${count === 1 ? "question" : "questions"}`
         : "Need you, no questions";
 
@@ -28,7 +49,7 @@ export function NeedYouEntry({ variant, onOpen }: { variant: "desktop" | "mobile
       <button
         type="button"
         disabled={!enabled}
-        onClick={onOpen}
+        onClick={handleOpen}
         aria-label={accessibleLabel}
         className="flex min-h-14 w-full items-center text-left transition-colors"
         style={{
@@ -68,7 +89,7 @@ export function NeedYouEntry({ variant, onOpen }: { variant: "desktop" | "mobile
     <button
       type="button"
       disabled={!enabled}
-      onClick={onOpen}
+      onClick={handleOpen}
       aria-label={accessibleLabel}
       className="flex w-full items-center text-left transition-colors"
       style={{

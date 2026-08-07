@@ -27,7 +27,11 @@ type ContextTreeAvailability = "active" | "stale" | "unavailable" | "checking" |
  * assignment, and personal coding-agent handoff. Members see the same Team
  * facts without receiving admin mutation controls.
  */
-export function SettingsContextTreePage() {
+export function SettingsContextTreePage({
+  preparePrompt,
+}: {
+  preparePrompt?: (organizationId: string) => Promise<string>;
+} = {}) {
   const { organizationId, role } = useAuth();
   const location = useLocation();
   const bindingRef = useRef<HTMLElement>(null);
@@ -156,13 +160,13 @@ export function SettingsContextTreePage() {
         ref={codingAgentAccessRef}
         id={CODING_AGENT_ACCESS_HASH.slice(1)}
         tabIndex={-1}
-        aria-label="Coding-agent access"
+        aria-label="Coding agent setup"
         style={{ scrollMarginTop: "var(--sp-4)" }}
       >
-        <Section title="Coding-agent access" description="Use this Team's Context Tree from Claude Code or Codex.">
+        <Section title="Coding agent setup" description="Use this Team's Context Tree in Claude Code or Codex.">
           <div style={{ padding: "var(--sp-3) 0" }}>
             {contextBound ? (
-              <ContextPersonalAccess organizationId={organizationId} />
+              <ContextPersonalAccess organizationId={organizationId} preparePrompt={preparePrompt} />
             ) : (
               <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
                 Available once this Team has a valid Context Tree binding.

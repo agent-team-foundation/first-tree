@@ -107,6 +107,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430db";
@@ -153,7 +154,11 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -179,6 +184,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       await handler.start(
         { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForCondition("scheduled retry", () => providerRetryPayloads(emitted).length === 1);
       await vi.advanceTimersByTimeAsync(5000);
@@ -245,7 +251,11 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -269,6 +279,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       await handler.start(
         { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForCondition("scheduled retry", () => providerRetryPayloads(emitted).length === 1);
       await vi.advanceTimersByTimeAsync(5000);
@@ -327,7 +338,11 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const plumbing = mockCtxPlumbing({ sendMessage }, "chat-resume-fail");
     const ctx: SessionContext = {
       agent: {
@@ -365,16 +380,20 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       await handler.start(
         { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForObservedInputs(1, 1);
-      handler.inject({
-        id: "m2",
-        chatId: "chat-resume-fail",
-        senderId: "u",
-        format: "text",
-        content: SECOND_PROMPT,
-        metadata: null,
-      });
+      handler.inject(
+        {
+          id: "m2",
+          chatId: "chat-resume-fail",
+          senderId: "u",
+          format: "text",
+          content: SECOND_PROMPT,
+          metadata: null,
+        },
+        deliveryTokenFromSessionContext(ctx),
+      );
       await m2Pushed;
       releaseAttempt1();
 

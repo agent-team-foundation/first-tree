@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isSameModelFamily, mapMcpServers } from "../handlers/claude-code.js";
+import { mapMcpServers } from "../handlers/claude/mcp-config.js";
+import { isSameModelFamily } from "../handlers/claude/sdk-query-options.js";
 
 describe("claude-code handler helpers (Step 6)", () => {
   describe("mapMcpServers", () => {

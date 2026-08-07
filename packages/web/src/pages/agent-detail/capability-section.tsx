@@ -16,7 +16,14 @@ import { useNavigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { ApiError } from "../../api/client.js";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Popover } from "../../components/ui/popover.js";
@@ -24,13 +31,13 @@ import { Section } from "../../components/ui/section.js";
 import { normalizeRepoUrl } from "../../lib/normalize-repo-url.js";
 import { typeLabelSingular } from "../settings/resource-editors.js";
 import { ResourceRowView, type RowMenu, type RowStatusMarker, type RowToggle } from "./resource-row.js";
-import { sourceLabel, templateSourceLabel } from "./resource-source.js";
+import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 /**
  * Shared agent-resource (repo / skill / mcp) section, used by two tabs:
  *   - Tools & skills tab (`resources-tab.tsx`) renders the `skill` + `mcp` sections.
- *   - Environment tab (`runtime-tab.tsx`) renders the `repo` section.
+ *   - Repositories (`repositories-tab.tsx`) renders the `repo` section.
  *
  * Both consume the SAME `["agent-resources", uuid]` React Query cache via
  * `useAgentResources`, so a mutation on one tab is reflected on the other with
@@ -41,6 +48,10 @@ import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 export type AgentResourcesController = {
   data: AgentResourcesOutput | undefined;
   isLoading: boolean;
+  /** True for the initial load and for background refetches (shared cache observers). */
+  isFetching: boolean;
+  /** True for hard failures and for background refetch failures that retain cached data. */
+  isError: boolean;
   error: unknown;
   /** Submit the full bindings array; saves immediately. */
   mutateBindings: (bindings: AgentResourceBindingInput[]) => void;
@@ -48,6 +59,9 @@ export type AgentResourcesController = {
   saveError: unknown;
   /** True for ~2.5s after a successful immediate save (drives the "Saved" tag). */
   justSaved: boolean;
+  reloading: boolean;
+  reloadComplete: boolean;
+  reload: () => void;
 };
 
 /**
@@ -59,8 +73,9 @@ export type AgentResourcesController = {
  *  - onSuccess cancels any in-flight GET before writing, so a stale response can't
  *    resolve afterwards and clobber the version just written (which would desync
  *    rows/badges and 409 the next mutation);
- *  - onError refetches on a 409 so a retry uses the latest version instead of
- *    dead-ending on the same stale expectedVersion.
+ *  - onError refetches on a 409 so the user can repeat the narrow control
+ *    action against current data. A rejected full replace-set is never replayed
+ *    automatically because doing so could delete a concurrent operator's work.
  */
 export function agentResourcesMutationHandlers(
   queryClient: QueryClient,
@@ -82,13 +97,19 @@ export function agentResourcesMutationHandlers(
   };
 }
 
-export function useAgentResources(uuid: string, opts: { enabled: boolean }): AgentResourcesController {
+export function useAgentResources(
+  uuid: string,
+  opts: { enabled: boolean; refetchOnMount?: boolean },
+): AgentResourcesController {
   const queryClient = useQueryClient();
   const { justSaved, markSaved } = useJustSaved();
+  const [reloading, setReloading] = useState(false);
+  const [reloadComplete, setReloadComplete] = useState(false);
   const resourcesQuery = useQuery({
     queryKey: ["agent-resources", uuid],
     queryFn: () => getAgentResources(uuid),
     enabled: opts.enabled,
+    refetchOnMount: opts.refetchOnMount,
   });
   const updateMut = useMutation({
     mutationFn: (bindings: AgentResourceBindingInput[]) => {
@@ -100,11 +121,29 @@ export function useAgentResources(uuid: string, opts: { enabled: boolean }): Age
   return {
     data: resourcesQuery.data,
     isLoading: resourcesQuery.isLoading,
+    isFetching: resourcesQuery.isFetching,
+    isError: resourcesQuery.isError,
     error: resourcesQuery.error,
-    mutateBindings: updateMut.mutate,
+    mutateBindings: (bindings) => {
+      setReloadComplete(false);
+      updateMut.mutate(bindings);
+    },
     pending: updateMut.isPending,
     saveError: updateMut.error,
     justSaved,
+    reloading,
+    reloadComplete,
+    reload: async () => {
+      if (reloading) return;
+      setReloading(true);
+      setReloadComplete(false);
+      const result = await resourcesQuery.refetch();
+      if (!result.error) {
+        updateMut.reset();
+        setReloadComplete(true);
+      }
+      setReloading(false);
+    },
   };
 }
 
@@ -117,7 +156,9 @@ export function ResourceTypeSection(props: {
   type: ResourceType;
   data: AgentResourcesOutput;
   canEdit: boolean;
+  readOnlyReason?: "suspended" | "suspended-unbound" | "viewer";
   pending: boolean;
+  saving?: boolean;
   onMutate: (bindings: AgentResourceBindingInput[]) => void;
   /** Flash a "Saved" tag after a successful immediate write (from useAgentResources). */
   saved?: boolean;
@@ -138,55 +179,71 @@ export function ResourceTypeSection(props: {
       resource.type !== "repo" &&
       !activeBindingIds.has(resource.id),
   );
+  const teamResourcesOfType = data.availableTeamResources.filter((resource) => resource.type === type);
   const rows = data.effective[resourceBucket(type)];
   const templateNameById = new Map(data.adoptedTemplates.map((summary) => [summary.id, summary.name]));
+  const addControl = canEdit ? (
+    <AddCapabilityMenu
+      type={type}
+      enableable={enableable}
+      pending={pending}
+      onNavigateAway={onNavigateAway}
+      onAddAgentRepo={() => setRepoOpen(true)}
+      onEnable={(resource) =>
+        onMutate([
+          ...currentBindings,
+          { type: resource.type, mode: "include", resourceId: resource.id, order: currentBindings.length + 1 },
+        ])
+      }
+    />
+  ) : null;
   return (
     <Section
-      title={titleWithSemantics(typeLabel(type), saved)}
+      headingLevel={3}
+      title={titleWithSemantics(typeLabel(type), saved, props.saving)}
       count={rows.length}
-      action={
-        canEdit ? (
-          <AddCapabilityMenu
-            type={type}
-            enableable={enableable}
-            pending={pending}
-            onNavigateAway={onNavigateAway}
-            onAddAgentRepo={() => setRepoOpen(true)}
-            onEnable={(resource) =>
-              onMutate([
-                ...currentBindings,
-                { type: resource.type, mode: "include", resourceId: resource.id, order: currentBindings.length + 1 },
-              ])
-            }
-          />
-        ) : null
-      }
+      description={type === "mcp" ? "Services this agent can access through MCP." : undefined}
+      action={rows.length > 0 ? addControl : null}
     >
       <div className="ad-tail-trim">
         {rows.length === 0 ? (
-          <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-            No {emptyNoun(type)} yet.
-          </p>
+          <CapabilityEmptyState
+            type={type}
+            canEdit={canEdit}
+            readOnlyReason={props.readOnlyReason}
+            teamHasResources={teamResourcesOfType.length > 0}
+            action={addControl}
+            onNavigateAway={onNavigateAway}
+          />
         ) : (
-          rows.map((row) => (
-            <EffectiveRow
-              key={row.id}
-              row={row}
-              templateName={row.originTemplateId ? (templateNameById.get(row.originTemplateId) ?? null) : undefined}
-              canEdit={canEdit}
-              bindings={currentBindings}
-              pending={pending}
-              onRemoveBinding={(bindingId) => onMutate(currentBindings.filter((b) => b.id !== bindingId))}
-              onDisable={(resourceId) =>
-                onMutate([
-                  // Drop any existing include/replace binding for this resource first —
-                  // otherwise the resolver sees include + disable and it stays enabled.
-                  ...currentBindings.filter((b) => b.resourceId !== resourceId && b.replacesResourceId !== resourceId),
-                  { type: row.type, mode: "disable", resourceId, order: currentBindings.length + 1 },
-                ])
-              }
-            />
-          ))
+          <>
+            {!canEdit ? (
+              <p className="m-0 text-caption" style={{ color: "var(--fg-3)", padding: "var(--sp-3) 0" }}>
+                {readOnlyCapabilityCopy(type, props.readOnlyReason)}
+              </p>
+            ) : null}
+            {rows.map((row) => (
+              <EffectiveRow
+                key={row.id}
+                row={row}
+                templateName={row.originTemplateId ? (templateNameById.get(row.originTemplateId) ?? null) : undefined}
+                canEdit={canEdit}
+                bindings={currentBindings}
+                pending={pending}
+                onRemoveBinding={(bindingId) => onMutate(currentBindings.filter((b) => b.id !== bindingId))}
+                onDisable={(resourceId) =>
+                  onMutate([
+                    // Drop any existing include/replace binding for this resource first —
+                    // otherwise the resolver sees include + disable and it stays enabled.
+                    ...currentBindings.filter(
+                      (b) => b.resourceId !== resourceId && b.replacesResourceId !== resourceId,
+                    ),
+                    { type: row.type, mode: "disable", resourceId, order: currentBindings.length + 1 },
+                  ])
+                }
+              />
+            ))}
+          </>
         )}
       </div>
       {type === "repo" ? (
@@ -204,6 +261,68 @@ export function ResourceTypeSection(props: {
       ) : null}
     </Section>
   );
+}
+
+function CapabilityEmptyState(props: {
+  type: ResourceType;
+  canEdit: boolean;
+  readOnlyReason?: "suspended" | "suspended-unbound" | "viewer";
+  teamHasResources: boolean;
+  action: ReactNode;
+  onNavigateAway?: (to: string) => void;
+}) {
+  const navigate = useNavigate();
+  const noun = props.type === "mcp" ? "integrations" : emptyNoun(props.type);
+  const headline = props.teamHasResources
+    ? `No ${noun} are enabled for this agent.`
+    : `No ${noun} are set up for this team.`;
+  const helper = props.canEdit
+    ? props.teamHasResources
+      ? `Add ${props.type === "mcp" ? "an integration" : `a ${capabilitySingular(props.type).toLowerCase()}`} from your team.`
+      : `Set up ${props.type === "mcp" ? "an integration" : `a ${capabilitySingular(props.type).toLowerCase()}`} in Team Settings, then enable it here.`
+    : readOnlyCapabilityCopy(props.type, props.readOnlyReason);
+  const directSetup = props.canEdit && !props.teamHasResources && props.type !== "repo";
+  const action = directSetup ? (
+    <Button
+      className="min-h-11"
+      size="xs"
+      variant="outline"
+      onClick={() => (props.onNavigateAway ?? navigate)("/settings/resources")}
+    >
+      Set up {capabilitySingular(props.type).toLowerCase()}
+    </Button>
+  ) : (
+    props.action
+  );
+
+  return (
+    <div
+      className={props.canEdit ? "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" : undefined}
+      style={{
+        padding: "var(--sp-4) 0",
+      }}
+    >
+      <div className="min-w-0">
+        <p className="m-0 text-body font-medium" style={{ color: "var(--fg)" }}>
+          {headline}
+        </p>
+        <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+          {helper}
+        </p>
+      </div>
+      {props.canEdit ? <div className="shrink-0">{action}</div> : null}
+    </div>
+  );
+}
+
+function readOnlyCapabilityCopy(
+  type: ResourceType,
+  reason: "suspended" | "suspended-unbound" | "viewer" | undefined,
+): string {
+  const noun = type === "mcp" ? "integrations" : emptyNoun(type);
+  if (reason === "suspended-unbound") return `Choose a runtime before changing ${noun}.`;
+  if (reason === "suspended") return `Reactivate this agent to change ${noun}.`;
+  return `This agent’s manager or a team admin manages ${noun}.`;
 }
 
 /**
@@ -231,16 +350,31 @@ function AddCapabilityMenu(props: {
   // page; the other resource types stay on Settings → Resources. The anchor
   // makes this exit deterministic even from a deeply scrolled Agent page.
   const settingsPath = props.type === "repo" ? "/settings/repositories#code-repositories" : "/settings/resources";
-  const settingsLabel = props.type === "repo" ? "Manage Team repositories" : "Manage in Settings → Resources";
+  const settingsLabel =
+    props.type === "repo"
+      ? "Manage team repositories"
+      : props.type === "mcp"
+        ? "Manage team integrations"
+        : "Manage team skills";
   const goToSettings = () => (props.onNavigateAway ?? navigate)(settingsPath);
   return (
     <Popover
       align="end"
       trigger={({ open, toggle }) => {
-        const label = `Add ${typeLabelSingular(props.type)}`;
+        const label = `Add ${capabilitySingular(props.type).toLowerCase()}`;
         return (
-          <Button size="xs" variant="ghost" aria-expanded={open} aria-label={label} title={label} onClick={toggle}>
+          <Button
+            className="min-h-11"
+            size="xs"
+            variant="outline"
+            aria-expanded={open}
+            aria-label={label}
+            title={label}
+            onClick={toggle}
+            disabled={props.pending}
+          >
             <Plus className="h-4 w-4" />
+            {label}
           </Button>
         );
       }}
@@ -305,7 +439,7 @@ function MenuButton(props: { children: ReactNode; muted?: boolean; disabled?: bo
     <button
       type="button"
       disabled={props.disabled}
-      className="flex w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50"
+      className="flex min-h-11 w-full items-center text-left text-body transition-colors hover:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50"
       style={{
         gap: "var(--sp-2)",
         padding: "var(--sp-1_5) var(--sp-2)",
@@ -332,13 +466,14 @@ function EffectiveRow(props: {
   onRemoveBinding: (bindingId: string) => void;
   onDisable: (resourceId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const row = props.row;
   // Unavailable rows surface the failure reason as the subtitle; everything
   // else shows a type-appropriate detail. The subtitle never falls back to the
   // raw `source` enum (that used to duplicate the source under skills/MCP rows).
   const subtitle = row.mode === "unavailable" ? row.unavailableReason : rowSubtitle(row);
   const status = statusMarker(row.mode);
-  const source = props.templateName !== undefined ? templateSourceLabel(props.templateName) : sourceLabel(row.source);
+  const source = sourceLabel(row.source);
   const isTeamRecommended = row.source === "team_recommended";
   const canRemove = !!row.bindingId && props.bindings.some((b) => b.id === row.bindingId);
   // Mono only for technical detail (repo URL, MCP command). A skill description
@@ -390,8 +525,49 @@ function EffectiveRow(props: {
       menu={menu}
       dimmed={row.mode === "disabled"}
       leadingIcon={resourceTypeIcon(row.type)}
+      expand={{
+        canExpand: true,
+        expanded,
+        onToggle: () => setExpanded((current) => !current),
+        body: <CapabilityDetails row={row} source={source} templateName={props.templateName} />,
+      }}
     />
   );
+}
+
+function CapabilityDetails(props: { row: EffectiveResourceRow; source: string; templateName?: string | null }) {
+  const facts = [
+    { label: "Applied as", value: props.source },
+    { label: "Source", value: capabilityOrigin(props.row) },
+    ...(props.templateName !== undefined
+      ? [{ label: "Originally imported", value: props.templateName ?? "A template" }]
+      : []),
+    ...(props.row.unavailableReason ? [{ label: "Issue", value: props.row.unavailableReason }] : []),
+  ];
+
+  return (
+    <dl className="m-0 grid gap-2">
+      {facts.map((fact) => (
+        <div key={fact.label} className="grid gap-1 sm:grid-cols-[var(--sp-35)_1fr]">
+          <dt className="text-caption" style={{ color: "var(--fg-4)" }}>
+            {fact.label}
+          </dt>
+          <dd className="m-0 text-body" style={{ color: "var(--fg-2)" }}>
+            {fact.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function capabilityOrigin(row: EffectiveResourceRow): string {
+  if (row.source === "inline_prompt") return "Custom instructions";
+  if (row.source === "agent_extra") return "Agent repository";
+  if (row.type === "skill") return "Team skill";
+  if (row.type === "mcp") return "Team integration";
+  if (row.type === "repo") return "Team repository";
+  return "Team instructions";
 }
 
 /** Leading glyph per resource kind, so the four types read apart at a glance. */
@@ -433,6 +609,9 @@ function AgentRepoDialog(props: {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add agent repository</DialogTitle>
+          <DialogDescription>
+            Add a repository to this agent’s workspace. The change applies immediately.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <Field
@@ -494,14 +673,20 @@ function typeLabel(type: ResourceType): string {
   if (type === "repo") return "Repositories";
   if (type === "prompt") return "Prompts";
   if (type === "skill") return "Skills";
-  return "Integrations (MCP)";
+  return "Integrations";
 }
 
 function emptyNoun(type: ResourceType): string {
   if (type === "repo") return "repositories";
   if (type === "prompt") return "prompts";
   if (type === "skill") return "skills";
-  return "MCP integrations";
+  return "integrations";
+}
+
+function capabilitySingular(type: ResourceType): string {
+  if (type === "mcp") return "Integration";
+  if (type === "repo") return "Repository";
+  return typeLabelSingular(type);
 }
 
 /** One-line, human subtitle per resource type. Never the raw `source` enum. */
@@ -524,12 +709,13 @@ function rowSubtitle(row: EffectiveResourceRow): string | null {
 }
 
 /**
- * Status marker — a dense badge, rendered only for the two states a row can't
- * convey through its own controls: `Overridden` (a team resource replaced by a
- * custom one) and `Can't load` (a broken reference). The plain disabled state is
- * NOT a badge — it's the Switch in its off position plus a greyed (`dimmed`) row.
+ * Compact status marker for the resource's effective state. It is deliberately
+ * neutral for enabled/disabled so resource configuration cannot be mistaken for
+ * the agent's overall availability.
  */
 export function statusMarker(mode: EffectiveResourceRow["mode"]): RowStatusMarker {
+  if (mode === "enabled") return { label: "Enabled", tone: "outline" };
+  if (mode === "disabled") return { label: "Disabled", tone: "outline" };
   if (mode === "replaced") return { label: "Overridden", tone: "neutral" };
   if (mode === "unavailable") return { label: "Can't load", tone: "error" };
   return null;

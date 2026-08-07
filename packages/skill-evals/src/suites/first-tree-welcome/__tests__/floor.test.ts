@@ -30,7 +30,7 @@ describe("first-tree-welcome floor invariants", () => {
   it("implements periodic coverage for every concrete non-catch-all matrix row", () => {
     const periodicCases = cases.filter((evalCase) => evalCase.tier === "periodic");
 
-    expect(periodicCases).toHaveLength(10);
+    expect(periodicCases).toHaveLength(13);
     expect(periodicCases.every((evalCase) => evalCase.status === "implemented")).toBe(true);
     expect(periodicCases.some((evalCase) => hasTag(evalCase, "catch-all"))).toBe(false);
   });
@@ -109,9 +109,57 @@ describe("first-tree-welcome floor invariants", () => {
     expect(description).not.toContain("local project folder path");
     expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
     expect(skillMarkdown).toContain("local project folder path");
-    expect(skillMarkdown).toContain("GitHub/GitLab repo URL");
+    expect(skillMarkdown).toContain("Git repository URL");
+    expect(skillMarkdown).toContain('`first-tree chat ask <human> "<local-path-first request>"`');
     expect(skillMarkdown).toContain("`gh auth login` or `glab auth login`");
     expect(skillMarkdown).not.toContain("First Tree sent it");
+  });
+
+  it("keeps the post-orientation guidance on one in-chat microtask loop", () => {
+    const boundedRead = skillMarkdown.indexOf("### Bounded project read");
+    const receipt = skillMarkdown.indexOf("### Two-sentence project receipt");
+    const choice = skillMarkdown.indexOf("### One microtask choice");
+    const result = skillMarkdown.indexOf("### First result in this chat");
+    const bridge = skillMarkdown.indexOf("### One relevant bridge");
+
+    expect(boundedRead).toBeGreaterThan(-1);
+    expect(receipt).toBeGreaterThan(boundedRead);
+    expect(choice).toBeGreaterThan(receipt);
+    expect(result).toBeGreaterThan(choice);
+    expect(bridge).toBeGreaterThan(result);
+    expect(skillMarkdown).toContain("**1–2 single-select microtasks**");
+    expect(skillMarkdown).toContain("At least one option is read-only");
+    expect(skillMarkdown).toContain('`first-tree chat update --description "<brief working status>"`');
+    expect(skillMarkdown).toContain("put both receipt sentences at the start of the ask");
+    expect(skillMarkdown).toContain("free-text task");
+    expect(skillMarkdown).toContain("`first-tree chat send <human>`");
+    expect(skillMarkdown).toContain("Do the first selected microtask in this chat");
+    expect(skillMarkdown).toContain("Do not use `chat create` for the first selection");
+    expect(skillMarkdown).toContain("tracked `first-tree chat ask <human>` body");
+    expect(skillMarkdown).toContain("do not repeat\nrepository discovery or use a recursive scan");
+    expect(skillMarkdown).toContain("Do not show time ranges");
+    expect(skillMarkdown).toMatch(
+      /Do not include Context Tree, GitHub App,\s+or repository setup in the first choice/u,
+    );
+    const exampleChoices = skillMarkdown
+      .match(/Example shape:\s+```text[\s\S]*?Choose one:\n([\s\S]*?)\n\nOr type a different microtask\./u)?.[1]
+      ?.split("\n")
+      .filter((line) => line.startsWith("- "));
+    expect(exampleChoices).toHaveLength(2);
+    const exampleReceipt = skillMarkdown
+      .match(/Example shape:\s+```text\n([\s\S]*?)\n\nChoose one:/u)?.[1]
+      ?.match(/[.!?](?=\s|$)/gu);
+    expect(exampleReceipt).toHaveLength(2);
+    expect(skillMarkdown).not.toContain("### L2 — Longer value work");
+    expect(skillMarkdown).not.toContain("first choices as a multi-select ask");
+  });
+
+  it("keeps later fan-out separate from the first microtask", () => {
+    expect(skillMarkdown).toContain("Only after the user explicitly asks for multiple larger tasks");
+    expect(skillMarkdown).toMatch(/The first microtask never fans out/iu);
+    expect(skillMarkdown).toContain("`chat update --description`");
+    expect(skillMarkdown).toContain("ordinary completion message");
+    expect(skillMarkdown).toMatch(/Do not present later fan-out as the\s+first menu/u);
   });
 
   it("keeps GitLab MR attention provider-native and independent of the GitHub App", () => {
@@ -122,40 +170,25 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toMatch(/A follow failure does not\s+invalidate the MR/u);
     expect(skillMarkdown).toMatch(/report\s+only the First Tree chat attention gap/u);
     expect(skillMarkdown).toContain(
-      "do not call\n`first-tree github follow`, send the user to **Settings → Setup** for GitHub App",
+      "do not call\n`first-tree github follow`, send the user to **Settings → Getting Started** for GitHub App",
     );
     expect(skillMarkdown).toContain("Never substitute `first-tree github follow`");
     expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
   });
 
-  it("keeps capability setup milestone-gated, role-aware, and owned by Setup", () => {
-    expect(skillMarkdown).toContain("After a pre-existing Context Tree milestone: guide Review setup once");
-    expect(skillMarkdown).toContain("first-tree org context-tree review-config --json");
-    expect(skillMarkdown).toContain("its default Team can differ from this Agent/chat's Team");
-    expect(skillMarkdown).toContain("JSON `enabled` and `agentUuid` fields");
-    expect(skillMarkdown).toMatch(
-      /\*\*Settings → Setup\*\* can select an eligible managed Review Agent\s+and enable Automatic Review/u,
+  it("keeps the post-result bridge singular, contextual, and role-aware", () => {
+    expect(skillMarkdown).toContain("A first-result diff does not authorize a PR/MR");
+    expect(skillMarkdown).toContain("the PR/MR question takes priority as the only");
+    expect(skillMarkdown).toContain("the human is an **admin**");
+    expect(skillMarkdown).toContain("the team's Context Tree is still\n  **missing or empty**");
+    expect(skillMarkdown).toContain("a lasting decision that crosses module\n  boundaries");
+    expect(skillMarkdown).toContain("Never for an invitee");
+    expect(skillMarkdown).toContain("Do not inspect or surface Automatic Review");
+    expect(skillMarkdown).toContain(
+      "does not automatically\n  register the session project as a durable Team repository",
     );
-    expect(skillMarkdown).toContain("the Agent is already\n  selected");
-    expect(skillMarkdown).toContain("launcher performs no Team mutation");
-    expect(skillMarkdown).toContain("This is not a health or readiness check");
-    expect(skillMarkdown).toMatch(/infer debt when the read is invalid, fails, or is\s+ambiguous/u);
-    expect(skillMarkdown).toContain("dedicated tree task owns its own post-PR/MR handoff");
-    expect(skillMarkdown).toContain("consume that result and never repeat it");
-    expect(skillMarkdown).toContain("must not\nsend the same Setup prompt again");
-    expect(skillMarkdown).toMatch(/Never make it an\s+onboarding gate/u);
+    expect(skillMarkdown).not.toContain("first-tree org context-tree review-config --json");
     expect(skillMarkdown).not.toContain("Settings -> GitHub");
-
-    const handoffRows = [
-      "| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |",
-      "| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |",
-      "| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |",
-      "| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |",
-      "| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |",
-    ];
-    for (const row of handoffRows) {
-      expect(skillMarkdown).toContain(row);
-    }
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {

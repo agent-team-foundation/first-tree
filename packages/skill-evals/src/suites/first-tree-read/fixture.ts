@@ -12,6 +12,7 @@ import type { FirstTreeReadEvalCase, FixtureValidation, WorkspaceKind } from "./
 const DOMAIN_NODE_TARGET_COUNT = 100;
 const NAVIGATION_NODE_MARKER = "evalNodeKind: navigation";
 const SKILL_NAME = "first-tree-read";
+const EVAL_BINDING_REPOSITORY = "https://github.com/example/context-tree.git";
 const RUNTIME_SKILL_NAMES = [
   "first-tree-welcome",
   "first-tree-read",
@@ -24,6 +25,7 @@ const RUNTIME_SKILL_NAMES = [
 type DomainNode = {
   facts: readonly string[];
   path: string;
+  title?: string;
 };
 
 type RequiredTreeFile = {
@@ -44,17 +46,18 @@ function titleFromPath(path: string): string {
 }
 
 function nodeMarkdown(node: DomainNode): string {
+  const title = node.title ?? titleFromPath(node.path);
   const facts =
     node.facts.length > 0
       ? node.facts.map((fact) => `- ${fact}`).join("\n")
       : "- This eval node provides software-domain context only.";
 
   return `---
-title: "${titleFromPath(node.path)}"
+title: "${title}"
 owners: [eval-owner]
 ---
 
-# ${titleFromPath(node.path)}
+# ${title}
 
 ${facts}
 `;
@@ -85,6 +88,10 @@ owners: [eval-owner]
 This deterministic Context Tree fixture contains only software engineering
 domain knowledge. It intentionally omits cooking, poetry, lifestyle, and other
 non-software facts so off-topic prompts should not need a tree read.
+
+- Top-level Context Tree domains are systems, domains, and operations.
+- Every production rollout must keep a single reviewable scope across release
+  and billing policy.
 `;
 }
 
@@ -114,12 +121,19 @@ evaluations.
 }
 
 function workspaceAgentsMarkdown(skillDescription: string, workspaceKind: WorkspaceKind): string {
+  const standingContext =
+    workspaceKind === "byo-context-tree"
+      ? "The trusted activation standing context declares `consumerKind: byo`, provider `codex`, immutable project selector `--pathless`, and a verified session-candidate receipt for this eval task."
+      : workspaceKind === "context-tree"
+        ? `The trusted runtime standing context declares \`consumerKind: managed\`, Context Tree binding repository \`${EVAL_BINDING_REPOSITORY}\`, and binding branch \`main\`.`
+        : "The trusted runtime standing context declares `consumerKind: managed`.";
+
   return `# Eval Workspace Instructions
 
 Use installed skills only when the skill description applies to the user's
 prompt. Do not call \`first-tree\` for casual or non-software prompts.
 
-${workspaceKind === "byo-context-tree" ? "The trusted activation standing context declares `consumerKind: byo`, provider `codex`, immutable project selector `--pathless`, and a verified session-candidate receipt for this eval task." : "The trusted runtime standing context declares `consumerKind: managed`."}
+${standingContext}
 
 ## Available Skills
 
@@ -174,6 +188,8 @@ Your fixed working directory is \`${workspacePath}\`. The runtime marker
 # Context Tree (First Tree Managed)
 
 The current Context Tree checkout is \`${contextTreePath}\`.
+Its binding repository is \`${EVAL_BINDING_REPOSITORY}\` and its binding branch
+is \`main\`.
 
 ## Context Tree Policy
 
@@ -369,6 +385,22 @@ function operationNodes(): DomainNode[] {
   const nodes: DomainNode[] = [];
   for (const area of areas) {
     for (const [group, topic] of topics) {
+      if (area === "release" && group === "safety" && topic === "invariants") {
+        nodes.push({
+          facts: ["Production releases require completed security-audit approval before deployment."],
+          path: "product/release/rollout-policy",
+          title: "Rollout Policy",
+        });
+        continue;
+      }
+      if (area === "release" && group === "safety" && topic === "failure-mode") {
+        nodes.push({
+          facts: ["Billing changes must roll out after the core release reaches stable monitoring."],
+          path: "product/billing/rollout-policy",
+          title: "Rollout Policy",
+        });
+        continue;
+      }
       nodes.push({
         facts: [facts[area] ?? "Operation facts are software-only."],
         path: `operations/${area}/${group}/${topic}`,
@@ -444,11 +476,11 @@ function writeContextTreeFixture(paths: RunPaths, workspaceKind: WorkspaceKind):
     writeText(join(contextTreePath, node.path, "NODE.md"), nodeMarkdown(node));
   }
 
-  initializeGitRepo(paths, contextTreePath);
+  initializeGitRepo(paths, contextTreePath, managedWorkspace);
   return contextTreePath;
 }
 
-function initializeGitRepo(paths: RunPaths, contextTreePath: string): void {
+function initializeGitRepo(paths: RunPaths, contextTreePath: string, managedWorkspace: boolean): void {
   const originPath = join(paths.runRoot, "context-tree-origin.git");
   const commands: CommandResult[] = [
     runCommand("git", ["init", "--initial-branch=main"], contextTreePath),
@@ -464,6 +496,10 @@ function initializeGitRepo(paths: RunPaths, contextTreePath: string): void {
 
   for (const result of commands) {
     assertCommandOk(result);
+  }
+
+  if (managedWorkspace) {
+    assertCommandOk(runCommand("git", ["remote", "set-url", "origin", EVAL_BINDING_REPOSITORY], contextTreePath));
   }
 }
 

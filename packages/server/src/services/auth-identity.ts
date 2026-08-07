@@ -8,6 +8,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { uuidv7 } from "../uuid.js";
 import { decryptValue } from "./crypto.js";
@@ -247,6 +248,108 @@ export async function findOrCreateGithubAccount(
   return findOrCreateUserFromExternalAccount(db, external);
 }
 
+export type GithubInstallIdentityRefreshResult =
+  | {
+      ok: true;
+      account: { userId: string; username: string; displayName: string; created: false };
+      githubLogin: string | null;
+    }
+  | {
+      ok: false;
+      reason: "not-admin" | "identity-mismatch";
+      expectedGithubLogin: string | null;
+    };
+
+/**
+ * Refresh the GitHub credential snapshot for an App-install callback without
+ * ever acquiring or creating an identity. The kickoff user, live Team-admin
+ * membership, and exact GitHub provider subject are locked and checked in one
+ * transaction before the token metadata is updated.
+ */
+export async function refreshGithubInstallIdentity(
+  db: Database,
+  input: {
+    userId: string;
+    organizationId: string;
+    profile: GithubProfile;
+    tokens?: GithubTokenBundle;
+  },
+): Promise<GithubInstallIdentityRefreshResult> {
+  const external = githubExternalProfile({
+    id: input.profile.githubId,
+    login: input.profile.login,
+    name: input.profile.displayName,
+    email: input.profile.email,
+    avatarUrl: input.profile.avatarUrl,
+    metadata: buildTokenMetadataPatch(input.profile, input.tokens ?? {}) ?? {},
+  });
+
+  return db.transaction(async (tx) => {
+    // Use the same user -> membership -> identity lock order as supported
+    // membership and provider-unlink mutations. A concurrent unlink/replace
+    // must finish before this transaction evaluates the exact provider subject.
+    const [user] = await tx
+      .select({ id: users.id, username: users.username, displayName: users.displayName })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .for("no key update")
+      .limit(1);
+    if (!user) return { ok: false, reason: "identity-mismatch", expectedGithubLogin: null };
+
+    const [membership] = await tx
+      .select({ role: members.role, status: members.status })
+      .from(members)
+      .where(and(eq(members.userId, input.userId), eq(members.organizationId, input.organizationId)))
+      .for("update")
+      .limit(1);
+    const [identity] = await tx
+      .select({ id: authIdentities.id, identifier: authIdentities.identifier, metadata: authIdentities.metadata })
+      .from(authIdentities)
+      .where(and(eq(authIdentities.userId, input.userId), eq(authIdentities.provider, "github")))
+      .for("update")
+      .limit(1);
+    const expectedGithubLogin = identity ? accountNameFromMetadata(identity.metadata) : null;
+
+    if (!membership || membership.status !== "active" || membership.role !== "admin") {
+      return { ok: false, reason: "not-admin", expectedGithubLogin };
+    }
+    if (!identity || identity.identifier !== external.subject) {
+      return { ok: false, reason: "identity-mismatch", expectedGithubLogin };
+    }
+
+    const updated = await tx
+      .update(authIdentities)
+      .set({
+        email: external.email,
+        metadata: {
+          ...identity.metadata,
+          ...external.metadata,
+          accountName: accountNameFromProfile(external),
+          avatarUrl: external.avatarUrl,
+        },
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(authIdentities.id, identity.id),
+          eq(authIdentities.userId, input.userId),
+          eq(authIdentities.provider, "github"),
+          eq(authIdentities.identifier, external.subject),
+        ),
+      )
+      .returning({ id: authIdentities.id });
+    if (updated.length !== 1) {
+      return { ok: false, reason: "identity-mismatch", expectedGithubLogin };
+    }
+
+    return {
+      ok: true,
+      account: { userId: user.id, username: user.username, displayName: user.displayName, created: false },
+      githubLogin: accountNameFromProfile(external),
+    };
+  });
+}
+
 export async function findOrCreateUserFromGithub(
   db: Database,
   profile: GithubProfile,
@@ -316,6 +419,11 @@ async function updateIdentitySnapshot(db: Database, userId: string, profile: Ext
 function accountNameFromProfile(profile: ExternalAccountProfile): string | null {
   const first = profile.usernameCandidates.find((candidate) => candidate.trim().length > 0);
   return first?.trim() || profile.displayName?.trim() || null;
+}
+
+function accountNameFromMetadata(metadata: Record<string, unknown>): string | null {
+  const value = metadata.accountName ?? metadata.login;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim().slice(0, 100) : null;
 }
 
 function buildTokenMetadataPatch(profile: GithubProfile, opts: GithubTokenBundle): Record<string, unknown> | null {

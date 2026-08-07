@@ -38,12 +38,31 @@ card significance, lifecycle projection, topic protection, and archive behavior.
 - Unfollow in one chat and redeliver an ordinary event. Confirm the old chat stays silent. Then deliver an explicit
   reviewer, assignee, or exact body/comment mention and confirm a fresh route may be established without reviving the
   removed line.
-- Exercise reviewer, assignee, and mention targets with equivalent identities. Only reviewer routing may reuse exactly one
-  eligible membership chat without writing a new line; assignee and mention routing establish the target's own line/chat.
-  Ambiguous membership reuse must fail closed. Also create an agent follow whose stable human carrier is the reviewer but
-  whose wake agent differs from that human's current delegate. Confirm the carrier line remains intact, the current
-  delegate is still addressed by exact pair, reviewer membership reuse happens only when both sides already speak in one
-  candidate chat, and the strict path otherwise creates a separate deliverable line without human-scoped fallback.
+- Exercise reviewer, assignee, and mention targets with equivalent identities. Confirm review-only routing reuses exactly
+  one chat only when the target human and current delegate are already speakers, and writes no new line. For assignment
+  and mention, create an agent follow whose stable human carrier has a different current delegate. Confirm one uniquely
+  safe entity chat is reused, the current delegate is atomically admitted when necessary, and an exact sibling line is
+  written without deleting or replacing the original follow line. The chat must receive one card and wake the fresh
+  delegate. Repeat with `review_requested` plus `assigned`; the card must display review priority while still persisting
+  the sibling line.
+- Repeat assignment and mention with zero candidates, two otherwise-safe candidates, another human speaker, another
+  owner's non-human speaker, and an invitation-denied target. Confirm every valid-but-unsafe or ambiguous case creates a
+  strict exact-pair home, never picks by human or manager, and never writes a personnel
+  `human_fallback`/`identity_target` into an unselected chat. Resolve the audience, then change the delegate, suspend the
+  human or delegate, or deactivate the human membership before placement; stale authority must be dropped without
+  accepting an old direct line or creating a new home. After unfollow, an explicit mention may create a fresh route but
+  must not revive the removed chat.
+- Race webhook personnel placement against unfollow and `--rebind` for the same entity. Confirm all operations serialize:
+  the final exact line follows the winning current state, no old chat is resurrected, membership never commits without
+  its sibling mapping, and concurrent fresh targets converge to at most one exact home. Also race placement against
+  removing the target delegate from the candidate chat and transferring an existing private speaker to another owner;
+  the result must either remain safely wakeable in the candidate or fail over to a strict home without exposing private
+  history. During explicit GitHub and GitLab follow/rebind, change the human's delegate or remove the wake agent from the
+  destination chat after request authorization but before persistence; both providers must reject the stale pair and
+  leave the previous line unchanged.
+- Rename a GitLab project after an entity has been observed, then race webhook observation using the new path against
+  follow/unfollow using the previously stored path or mapping id. Confirm the numeric project id keeps both paths in one
+  entity serialization boundary and the final active line reflects the winning operation without stale resurrection.
 - Have a delegate act through its human's provider identity in an entity followed by that human's line. Confirm every
   valid routed chat keeps one provider card, the matching existing line does not wake itself, eligible sibling lines still
   wake, and a chat with no eligible wake line receives a silent history card instead of losing the event.

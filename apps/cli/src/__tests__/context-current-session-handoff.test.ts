@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Command } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
+import { configureContextSkillCommand } from "../commands/context/skill.js";
 import { buildByoContextAdditionalContext } from "../core/context-integration/activation.js";
 import { buildCurrentSessionHandoff } from "../core/context-integration/current-session-handoff.js";
 
@@ -14,16 +16,19 @@ afterEach(() => {
 describe("current-session Context handoff", () => {
   it("builds a stable catalog from the verified provider-installed payload", () => {
     const pluginRoot = createPlugin();
-    const handoff = buildCurrentSessionHandoff({
-      provider: "codex",
-      project: { kind: "path", root: "/work/project" },
-      activationScope: { kind: "global" },
-      organizationId: "org-acme",
-      pluginRoot,
-    });
+    const handoff = buildCurrentSessionHandoff(
+      {
+        provider: "codex",
+        project: { kind: "path", root: "/work/project" },
+        activationScope: { kind: "global" },
+        organizationId: "org-acme",
+        pluginRoot,
+      },
+      dependencies,
+    );
 
     expect(handoff).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       provider: "codex",
       project: { kind: "path", root: "/work/project" },
       consumerKind: "byo",
@@ -33,7 +38,7 @@ describe("current-session Context handoff", () => {
       skills: ["first-tree", "first-tree-read", "first-tree-write"].map((name) => ({
         name,
         description: `${name} description`,
-        skillPath: join(pluginRoot, "skills", name, "SKILL.md"),
+        loadCommand: `'/opt/first-tree' --json context skill load --protocol 1 --provider codex --name ${name === "first-tree" ? "first-tree-read" : name}`,
       })),
     });
     expect(handoff.activationContext).toContain("Selection is fail-closed");
@@ -42,16 +47,29 @@ describe("current-session Context handoff", () => {
 
   it("session-only exposes only Read/Write and carries its one candidate", () => {
     const pluginRoot = createPlugin();
-    const handoff = buildCurrentSessionHandoff({
-      provider: "codex",
-      project: { kind: "path", root: "/tmp/session" },
-      activationScope: { kind: "session" },
-      organizationId: "org-session",
-      sessionCandidateReceipt: "opaque-header.opaque-payload.opaque-signature",
-      pluginRoot,
-    });
+    const handoff = buildCurrentSessionHandoff(
+      {
+        provider: "codex",
+        project: { kind: "path", root: "/tmp/session" },
+        activationScope: { kind: "session" },
+        organizationId: "org-session",
+        sessionCandidateReceipt: "opaque-header.opaque-payload.opaque-signature",
+        pluginRoot,
+      },
+      dependencies,
+    );
     expect(handoff.skills.map((skill) => skill.name)).toEqual(["first-tree-read", "first-tree-write"]);
     expect(handoff.sessionCandidate).toEqual({ receipt: "opaque-header.opaque-payload.opaque-signature" });
+    expect(handoff.skills.every((skill) => !skill.loadCommand.includes("--session-only"))).toBe(true);
+
+    const command = new Command("skill").allowExcessArguments(false).exitOverride();
+    configureContextSkillCommand(command);
+    command.action(() => undefined);
+    expect(() =>
+      command.parse(["load", "--protocol", "1", "--provider", "codex", "--name", "first-tree-read"], {
+        from: "user",
+      }),
+    ).not.toThrow();
   });
 
   it("rejects missing Skill manifests", () => {
@@ -101,14 +119,19 @@ describe("current-session Context handoff", () => {
 });
 
 function build(pluginRoot: string) {
-  return buildCurrentSessionHandoff({
-    provider: "claude-code",
-    project: { kind: "pathless" },
-    activationScope: { kind: "global" },
-    organizationId: "org-acme",
-    pluginRoot,
-  });
+  return buildCurrentSessionHandoff(
+    {
+      provider: "claude-code",
+      project: { kind: "pathless" },
+      activationScope: { kind: "global" },
+      organizationId: "org-acme",
+      pluginRoot,
+    },
+    dependencies,
+  );
 }
+
+const dependencies = { resolveInvocation: () => ({ kind: "bin" as const, program: "/opt/first-tree" }) };
 
 function createPlugin(
   options: { omit?: string; markdown?: Partial<Record<(typeof skillNames)[number], string>> } = {},

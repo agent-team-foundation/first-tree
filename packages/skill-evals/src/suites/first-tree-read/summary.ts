@@ -79,12 +79,23 @@ export function driftNote(
   }
 
   if (expectedTrigger && readMode === "byo") {
-    if (!metrics.readHelpSucceeded) notes.push("Required first-tree tree read --help command did not succeed.");
+    if (!metrics.readRouteSucceeded) {
+      notes.push(
+        `BYO Read required exactly one successful context route command; observed calls=${metrics.readRouteCalls}.`,
+      );
+    }
     if (!metrics.readActivationSucceeded) {
       notes.push(`BYO Read required exactly one successful activation; observed calls=${metrics.readActivationCalls}.`);
     }
+    if (metrics.legacyReadActivationCalls > 0) {
+      notes.push(
+        `BYO Read forbids legacy explicit-Team tree read activation; observed calls=${metrics.legacyReadActivationCalls}.`,
+      );
+    }
     if (!metrics.byoReadSequenceOk) {
-      notes.push("BYO Read commands did not follow read help → activation → hierarchy help → selector order.");
+      notes.push(
+        "BYO Read commands did not follow context route → context snapshot → hierarchy help → selector order.",
+      );
     }
     if (!metrics.byoSelectorsNoPull) notes.push("Every BYO hierarchy selector must include --no-pull.");
     if (!metrics.byoSnapshotDetached || !metrics.byoSnapshotExactHeadConsistent) {
@@ -92,9 +103,21 @@ export function driftNote(
     }
   }
 
+  if (expectedTrigger && readMode === "managed" && !metrics.managedFinalTransportOk) {
+    notes.push(
+      `The task's final managed delivery was ${metrics.managedFinalTransportKind ?? "none"}, but this case requires chat ${metrics.managedTransportExpected ?? "send"}.`,
+    );
+  }
+
   if (expectedTrigger && !metrics.expectedFactsObserved) {
     notes.push(
       "Expected Context Tree facts were not surfaced in the model output; inspect events.jsonl for the final assistant messages.",
+    );
+  }
+
+  if (!metrics.impactNoteBehaviorOk) {
+    notes.push(
+      `Visible Context Tree impact-note behavior failed: count=${metrics.impactNoteCount}; language=${metrics.impactNoteLanguage ?? "none"}; effect=${metrics.impactNoteEffect ?? "none"}; final end=${metrics.impactNoteAtFinalEnd}; logical lines=${metrics.impactNoteLogicalLinesOk}; blank line=${metrics.impactNoteBlankLineBefore}; objective summary=${metrics.impactNoteSummaryObjectiveOk}; exact links=${metrics.impactNoteExactLinksOk}; source authority=${metrics.impactNoteSourceAuthorityOk}; source labels=${metrics.impactNoteSourceLabels.join(" | ") || "none"}; metadata free=${metrics.impactNoteMetadataFree}; outside blocking ask=${metrics.impactNoteOutsideBlockingAsk}; visible URL credentials absent=${metrics.impactNoteVisibleUrlsCredentialFree}.`,
     );
   }
 
@@ -117,26 +140,30 @@ export function buildGrading(
   const routingPass = expectedTrigger ? metrics.skillFileReadObserved : !unexpectedReadUse;
   const byoProcessPassed =
     readMode === "managed" ||
-    (metrics.readHelpSucceeded &&
+    (metrics.readRouteSucceeded &&
       metrics.readActivationSucceeded &&
       metrics.byoReadSequenceOk &&
       metrics.byoSelectorsNoPull &&
       metrics.byoSnapshotDetached &&
       metrics.byoSnapshotExactHeadConsistent);
+  const managedTransportPassed = readMode === "byo" || metrics.managedFinalTransportOk;
   const processPass = expectedTrigger
     ? metrics.fixtureValidationOk &&
       metrics.runnerExitCode === 0 &&
       metrics.helpSucceeded &&
       metrics.selectionSucceeded &&
       metrics.modelFirstTreeCommandsOk &&
+      managedTransportPassed &&
       byoProcessPassed
     : metrics.fixtureValidationOk &&
       metrics.runnerExitCode === 0 &&
       metrics.firstTreeCalls === 0 &&
       metrics.firstTreeCommandResults.length === 0 &&
       metrics.modelFirstTreeCommandsOk;
-  const outcomePass = expectedTrigger ? metrics.expectedFactsObserved : metrics.expectedFactHits.length === 0;
-  const riskPass = metrics.modelFirstTreeCommandsOk;
+  const outcomePass = expectedTrigger
+    ? metrics.expectedFactsObserved && metrics.impactNoteBehaviorOk
+    : metrics.expectedFactHits.length === 0 && metrics.impactNoteBehaviorOk;
+  const riskPass = metrics.modelFirstTreeCommandsOk && metrics.impactNoteMetadataFree;
   const failedCommands = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
 
   return {
@@ -151,28 +178,33 @@ export function buildGrading(
       evidence(
         "process_pass",
         expectedTrigger
-          ? `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; read mode=${readMode}; read help succeeded=${metrics.readHelpSucceeded}; activation calls=${metrics.readActivationCalls}; activation succeeded=${metrics.readActivationSucceeded}; sequence ok=${metrics.byoReadSequenceOk}; selectors no-pull=${metrics.byoSelectorsNoPull}; detached=${metrics.byoSnapshotDetached}; exact head consistent=${metrics.byoSnapshotExactHeadConsistent}; hierarchy help succeeded=${metrics.helpSucceeded}; selector succeeded=${metrics.selectionSucceeded}; first-tree commands ok=${metrics.modelFirstTreeCommandsOk}`
+          ? `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; read mode=${readMode}; route calls=${metrics.readRouteCalls}; route succeeded=${metrics.readRouteSucceeded}; activation calls=${metrics.readActivationCalls}; activation succeeded=${metrics.readActivationSucceeded}; legacy activation calls=${metrics.legacyReadActivationCalls}; sequence ok=${metrics.byoReadSequenceOk}; selectors no-pull=${metrics.byoSelectorsNoPull}; detached=${metrics.byoSnapshotDetached}; exact head consistent=${metrics.byoSnapshotExactHeadConsistent}; managed final transport ok=${metrics.managedFinalTransportOk}; hierarchy help succeeded=${metrics.helpSucceeded}; selector succeeded=${metrics.selectionSucceeded}; first-tree commands ok=${metrics.modelFirstTreeCommandsOk}`
           : `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; model first-tree calls=${metrics.firstTreeCalls}; first-tree results=${metrics.firstTreeCommandResults.length}`,
       ),
       evidence(
         "outcome_pass",
         expectedTrigger
-          ? `expected facts observed=${metrics.expectedFactsObserved}; hits=${metrics.expectedFactHits.join(" | ") || "none"}`
-          : `off-topic expected fact hits=${metrics.expectedFactHits.join(" | ") || "none"}`,
+          ? `expected facts observed=${metrics.expectedFactsObserved}; hits=${metrics.expectedFactHits.join(" | ") || "none"}; impact-note behavior ok=${metrics.impactNoteBehaviorOk}; count=${metrics.impactNoteCount}; effect=${metrics.impactNoteEffect ?? "none"}; language=${metrics.impactNoteLanguage ?? "none"}; outside blocking ask=${metrics.impactNoteOutsideBlockingAsk}; sources=${metrics.impactNoteSourceLabels.join(" | ") || "none"}`
+          : `off-topic expected fact hits=${metrics.expectedFactHits.join(" | ") || "none"}; impact-note behavior ok=${metrics.impactNoteBehaviorOk}; count=${metrics.impactNoteCount}`,
       ),
       evidence(
         "risk_pass",
-        failedCommands.length === 0
-          ? "no failed model-phase first-tree commands observed"
-          : `failed model-phase first-tree commands=${failedCommands
-              .map((result) => `${formatCommand(result.argv)} => ${result.exitCode}`)
-              .join("; ")}`,
+        failedCommands.length === 0 && metrics.impactNoteMetadataFree
+          ? "no failed model-phase first-tree commands or visible receipt metadata observed"
+          : `failed model-phase first-tree commands=${
+              failedCommands.map((result) => `${formatCommand(result.argv)} => ${result.exitCode}`).join("; ") || "none"
+            }; visible receipt metadata absent=${metrics.impactNoteMetadataFree}`,
       ),
     ],
     passed,
-    riskFlags: failedCommands.map((result) =>
-      riskFlag("failed_first_tree_command", `first-tree ${formatCommand(result.argv)} exited ${result.exitCode}`),
-    ),
+    riskFlags: [
+      ...failedCommands.map((result) =>
+        riskFlag("failed_first_tree_command", `first-tree ${formatCommand(result.argv)} exited ${result.exitCode}`),
+      ),
+      ...(metrics.impactNoteMetadataFree
+        ? []
+        : [riskFlag("visible_receipt_metadata", "Final visible output included receipt metadata or JSON fields.")]),
+    ],
     scores: {
       outcome_pass: outcomePass,
       process_pass: processPass,
@@ -220,15 +252,30 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - skillHit: ${markdownBool(summary.metrics.skillHit)}
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
 - expectedFactsObserved: ${markdownBool(summary.metrics.expectedFactsObserved)}
+- impactNoteBehaviorOk: ${markdownBool(summary.metrics.impactNoteBehaviorOk)}
+- impactNoteAtFinalEnd: ${markdownBool(summary.metrics.impactNoteAtFinalEnd)}
+- impactNoteCount: ${summary.metrics.impactNoteCount}
+- impactNoteEffect: ${summary.metrics.impactNoteEffect ?? "n/a"}
+- impactNoteLanguage: ${summary.metrics.impactNoteLanguage ?? "n/a"}
+- impactNoteSourceCount: ${summary.metrics.impactNoteSourceCount}
+- impactNoteSourceLabels: ${summary.metrics.impactNoteSourceLabels.join(" | ") || "none"}
+- impactNoteSummaryObjectiveOk: ${markdownBool(summary.metrics.impactNoteSummaryObjectiveOk)}
+- impactNoteMetadataFree: ${markdownBool(summary.metrics.impactNoteMetadataFree)}
+- impactNoteSourceAuthorityOk: ${markdownBool(summary.metrics.impactNoteSourceAuthorityOk)}
+- impactNoteOutsideBlockingAsk: ${markdownBool(summary.metrics.impactNoteOutsideBlockingAsk)}
+- impactNoteVisibleUrlsCredentialFree: ${markdownBool(summary.metrics.impactNoteVisibleUrlsCredentialFree)}
 - helpSucceeded: ${markdownBool(summary.metrics.helpSucceeded)}
 - selectionSucceeded: ${markdownBool(summary.metrics.selectionSucceeded)}
-- readHelpSucceeded: ${markdownBool(summary.metrics.readHelpSucceeded)}
+- readRouteCalls: ${summary.metrics.readRouteCalls}
+- readRouteSucceeded: ${markdownBool(summary.metrics.readRouteSucceeded)}
 - readActivationCalls: ${summary.metrics.readActivationCalls}
+- legacyReadActivationCalls: ${summary.metrics.legacyReadActivationCalls}
 - readActivationSucceeded: ${markdownBool(summary.metrics.readActivationSucceeded)}
 - byoReadSequenceOk: ${markdownBool(summary.metrics.byoReadSequenceOk)}
 - byoSelectorsNoPull: ${markdownBool(summary.metrics.byoSelectorsNoPull)}
 - byoSnapshotDetached: ${markdownBool(summary.metrics.byoSnapshotDetached)}
 - byoSnapshotExactHeadConsistent: ${markdownBool(summary.metrics.byoSnapshotExactHeadConsistent)}
+- managedFinalTransportOk: ${markdownBool(summary.metrics.managedFinalTransportOk)}
 - modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
@@ -279,6 +326,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     String(summary.metrics.firstTreeCalls),
     String(summary.metrics.skillFileReadObserved),
     String(summary.metrics.expectedFactsObserved),
+    String(summary.metrics.impactNoteBehaviorOk),
     String(summary.metrics.helpSucceeded),
     String(summary.metrics.selectionSucceeded),
     String(summary.metrics.modelFirstTreeCommandsOk),
@@ -291,6 +339,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     "first_tree_calls",
     "skill_file_read",
     "expected_facts_observed",
+    "impact_note_behavior_ok",
     "helpSucceeded",
     "selectionSucceeded",
     "modelFirstTreeCommandsOk",

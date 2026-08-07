@@ -13,6 +13,7 @@ import type { AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createKimiCodeHandler, formatKimiCodeError, kimiToolIsReadOnly } from "../handlers/kimi-code.js";
 import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 import type { ReplayFenceEntry } from "../runtime/replay-fence.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -556,7 +557,7 @@ describe("Kimi Code handler", () => {
       }),
     });
 
-    await expect(handler.resume(undefined, fakeSession.id, makeContext([]))).rejects.toThrow(
+    await expect(handler.resume(undefined, fakeSession.id, makeContext([]), noopDeliveryToken())).rejects.toThrow(
       `${failurePoint} setup failed`,
     );
 

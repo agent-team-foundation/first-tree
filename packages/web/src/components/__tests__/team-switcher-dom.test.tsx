@@ -202,7 +202,12 @@ function Harness({
 
 function LocationProbe() {
   const location = useLocation();
-  return <span data-testid="location">{location.pathname}</span>;
+  return (
+    <>
+      <span data-testid="location">{location.pathname}</span>
+      <span data-testid="location-hash">{location.hash}</span>
+    </>
+  );
 }
 
 async function renderHarness(
@@ -245,19 +250,22 @@ describe("TeamSwitcher", () => {
     expect(container.textContent).not.toContain("· current team");
     expect(container.textContent).toContain("Admin");
     const inviteAction = buttonByText(container, "Invite teammates");
+    const ownAgentAction = buttonByText(container, "Use your own agent");
     const leaveAction = buttonByText(container, "Leave team");
     expect(inviteAction).not.toBeNull();
+    expect(ownAgentAction).not.toBeNull();
     expect(leaveAction).not.toBeNull();
-    if (!inviteAction || !leaveAction) throw new Error("Current-team actions missing");
-    expect(inviteAction.compareDocumentPosition(leaveAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    if (!inviteAction || !ownAgentAction || !leaveAction) throw new Error("Current-team actions missing");
+    expect(inviteAction.compareDocumentPosition(ownAgentAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ownAgentAction.compareDocumentPosition(leaveAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(container.textContent).toContain("Switch team");
     expect(buttonByText(container, "Globex")).not.toBeNull();
     expect(buttonByText(container, "Initech")).not.toBeNull();
     // The current team is in the header, not the switch list.
     expect(buttonByText(container, "Globex")?.getAttribute("role")).toBe("menuitem");
-    expect(container.textContent).toContain("Add or join");
+    expect(container.textContent).toContain("Add team");
     expect(buttonByText(container, "Create team")).not.toBeNull();
-    expect(buttonByText(container, "Join with invite link")).not.toBeNull();
+    expect(buttonByText(container, "Join with invite link")).toBeNull();
     const roleBadges = [...container.querySelectorAll<HTMLElement>(".mono")];
     expect(roleBadges).toHaveLength(2);
     expect(roleBadges.every((badge) => badge.style.background === "var(--bg-sunken)")).toBe(true);
@@ -273,14 +281,14 @@ describe("TeamSwitcher", () => {
 
     const rows = [
       buttonByText(container, "Invite teammates"),
+      buttonByText(container, "Use your own agent"),
       buttonByText(container, "Leave team"),
       buttonByText(container, "Globex"),
       buttonByText(container, "Create team"),
-      buttonByText(container, "Join with invite link"),
     ];
     if (rows.some((row) => !row)) throw new Error("menu action rows missing");
 
-    // One shared row grid across Current team / Switch team / Add or join:
+    // One shared row grid across Current team / Switch team / Add team:
     // same gutter, icon column, and full-bleed hover hit area — no
     // Current-team-only inset, rounding, or extra row spacing.
     const rowClasses = new Set(rows.flatMap((row) => (row ? [row.className] : [])));
@@ -294,7 +302,7 @@ describe("TeamSwitcher", () => {
 
     // All three section eyebrows share the same section padding.
     const eyebrows = [...container.querySelectorAll<HTMLElement>(".text-eyebrow")];
-    expect(eyebrows.map((eyebrow) => eyebrow.textContent)).toEqual(["Current team", "Switch team", "Add or join"]);
+    expect(eyebrows.map((eyebrow) => eyebrow.textContent)).toEqual(["Current team", "Switch team", "Add team"]);
     expect(new Set(eyebrows.map((eyebrow) => eyebrow.style.padding)).size).toBe(1);
 
     await act(async () => root.unmount());
@@ -411,7 +419,7 @@ describe("TeamSwitcher", () => {
     expect(document.activeElement).toBe(buttonByText(container, "Invite teammates"));
 
     await keyDown(menu, "End");
-    expect(document.activeElement).toBe(buttonByText(container, "Join with invite link"));
+    expect(document.activeElement).toBe(buttonByText(container, "Create team"));
 
     await keyDown(menu, "Home");
     expect(document.activeElement).toBe(buttonByLabel(container, "Rename team"));
@@ -510,7 +518,7 @@ describe("TeamSwitcher", () => {
     await act(async () => root.unmount());
   });
 
-  it("opens team management actions and invite affordances from the menu", async () => {
+  it("opens team creation, own-agent settings, and invite affordances from the menu", async () => {
     const { container, root } = await renderHarness(vi.fn(async () => {}));
 
     await click(anchorOf(container));
@@ -518,8 +526,10 @@ describe("TeamSwitcher", () => {
     expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
 
     await click(anchorOf(container));
-    await click(buttonByText(container, "Join with invite link"));
+    await click(buttonByText(container, "Use your own agent"));
     expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/settings/context");
+    expect(container.querySelector('[data-testid="location-hash"]')?.textContent).toBe("#coding-agent-access");
 
     await click(anchorOf(container));
     await click(buttonByText(container, "Invite teammates"));

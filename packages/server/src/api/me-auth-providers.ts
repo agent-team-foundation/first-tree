@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { authProviderParamsSchema } from "@first-tree/shared";
+import { authProviderParamsSchema, oauthStartQuerySchema, safeRedirectPath } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -23,6 +23,17 @@ import { buildCookie, protectOAuthStateNonce } from "./auth/oauth-cookie.js";
 // generations land on a working page. Switch this to /settings/account only
 // once pre-Account SPA builds are out of circulation.
 const ACCOUNT_RETURN_PATH = "/user-settings";
+const GITHUB_SETTINGS_RETURN_PATH = "/settings/github";
+const SUPPORTED_ACCOUNT_LINK_RETURN_PATHS: ReadonlySet<string> = new Set([
+  ACCOUNT_RETURN_PATH,
+  GITHUB_SETTINGS_RETURN_PATH,
+]);
+
+export function resolveAccountLinkReturnPath(requested: string | undefined): string {
+  if (requested === undefined) return ACCOUNT_RETURN_PATH;
+  const safe = safeRedirectPath(requested);
+  return SUPPORTED_ACCOUNT_LINK_RETURN_PATHS.has(safe) ? safe : ACCOUNT_RETURN_PATH;
+}
 
 export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me/auth-providers", async (request) => {
@@ -79,7 +90,13 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
     async (request, reply) => {
       const { userId } = requireUser(request);
       const { provider } = authProviderParamsSchema.parse(request.params);
-      return startProviderAction(app, request, reply, { provider, userId, intent: "link" });
+      const { next } = oauthStartQuerySchema.parse(request.query);
+      return startProviderAction(app, request, reply, {
+        provider,
+        userId,
+        intent: "link",
+        next: resolveAccountLinkReturnPath(next),
+      });
     },
   );
 
@@ -138,6 +155,7 @@ async function startProviderAction(
     userId: string;
     intent: "link" | "unlink";
     targetIdentityId?: string;
+    next?: string;
   },
 ) {
   const availability = configuredProviders(app);
@@ -148,7 +166,7 @@ async function startProviderAction(
   }
   const publicUrl = resolvePublicUrl(app, request);
   const oidcNonce = input.provider === "google" ? randomBytes(24).toString("base64url") : undefined;
-  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, ACCOUNT_RETURN_PATH, {
+  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, input.next ?? ACCOUNT_RETURN_PATH, {
     ...input,
     oidcNonce,
   });

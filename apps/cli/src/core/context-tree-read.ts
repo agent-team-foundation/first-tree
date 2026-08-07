@@ -109,6 +109,12 @@ export async function activateContextTreeRead(
   reader: ContextTreeReadAuthorityReader,
   input: ActivateContextTreeReadInput,
   runGit: ContextTreeReadGitRunner = runContextTreeReadGit,
+  dependencies: {
+    prepareRepository?: (
+      teamId: string,
+      binding: ContextTreeReadActivation["binding"],
+    ) => { repositoryPath: string; commit: string };
+  } = {},
 ): Promise<ContextTreeReadActivation> {
   const teamId = validateTeamId(input.teamId);
   const snapshotPath = validateSnapshotPath(input.snapshotPath);
@@ -125,6 +131,7 @@ export async function activateContextTreeRead(
       { stage: "binding", exitCode: 1 },
     );
   }
+  const repository = dependencies.prepareRepository?.(teamId, binding);
   const parent = dirname(snapshotPath);
   let stagingPath: string | null = null;
   let published = false;
@@ -133,20 +140,26 @@ export async function activateContextTreeRead(
     try {
       mkdirSync(parent, { recursive: true });
       stagingPath = mkdtempSync(join(parent, `.${basename(snapshotPath)}.tmp-`));
-      runGit(stagingPath, ["init", "--quiet"]);
-      runGit(stagingPath, ["remote", "add", "origin", binding.repo]);
+      if (repository) {
+        runGit(parent, ["clone", "--no-checkout", "--no-hardlinks", repository.repositoryPath, stagingPath]);
+      } else {
+        runGit(stagingPath, ["init", "--quiet"]);
+        runGit(stagingPath, ["remote", "add", "origin", binding.repo]);
+      }
     } catch {
       throw snapshotFailure("Could not prepare the task-scoped Context Tree snapshot.");
     }
 
     try {
-      runGit(stagingPath, [
-        "fetch",
-        "--no-tags",
-        "--prune",
-        "origin",
-        `+refs/heads/${binding.branch}:refs/remotes/origin/${binding.branch}`,
-      ]);
+      if (!repository) {
+        runGit(stagingPath, [
+          "fetch",
+          "--no-tags",
+          "--prune",
+          "origin",
+          `+refs/heads/${binding.branch}:refs/remotes/origin/${binding.branch}`,
+        ]);
+      }
     } catch {
       throw new ContextTreeReadActivationError(
         "CONTEXT_TREE_READ_FETCH_FAILED",
@@ -157,11 +170,13 @@ export async function activateContextTreeRead(
 
     let commit: string;
     try {
-      commit = runGit(stagingPath, [
-        "rev-parse",
-        "--verify",
-        `refs/remotes/origin/${binding.branch}^{commit}`,
-      ]).toLowerCase();
+      commit = repository
+        ? repository.commit.toLowerCase()
+        : runGit(stagingPath, [
+            "rev-parse",
+            "--verify",
+            `refs/remotes/origin/${binding.branch}^{commit}`,
+          ]).toLowerCase();
       if (!EXACT_COMMIT_RE.test(commit)) {
         throw new Error("Git did not return an exact commit id");
       }

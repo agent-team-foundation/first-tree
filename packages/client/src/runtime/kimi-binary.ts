@@ -8,6 +8,7 @@ import {
 } from "@first-tree/shared";
 import { wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 /**
  * Official Kimi Code CLI binary resolution for Computer capability detection.
@@ -126,6 +127,10 @@ function readPathValue(env: Record<string, string | undefined>, platform = proce
 }
 
 function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  // Every automatic source funnels through here, so this is the one place a
+  // candidate can be vetted before `stat` / `access` follows it into a
+  // TCC-protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);

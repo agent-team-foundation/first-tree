@@ -9,6 +9,7 @@ import {
 import { prerelease, satisfies, valid } from "semver";
 import { wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 /** Lowest published compatible CLI validated by the runtime contract. */
 export const PI_MINIMUM_VERSION = "0.80.5";
@@ -29,17 +30,8 @@ export function formatPiBinaryMissingMessage(input: unknown): string {
   );
 }
 
-export function isPiBinaryMissingError(input: unknown): boolean {
-  const text = errorText(input).toLowerCase();
-  if (text.includes("pi cli is missing")) return true;
-  // Linear-time classification: any "pi" followed later by "not found" /
-  // "not installed". Avoid `pi.*not ...` regex backtracking on adversarial
-  // strings that repeat "pi" many times without a terminal phrase.
-  const piIdx = text.indexOf("pi");
-  if (piIdx < 0) return false;
-  const afterPi = text.slice(piIdx + 2);
-  return afterPi.includes("not found") || afterPi.includes("not installed");
-}
+/** Single-owner match rules live in provider-support; re-export for call sites. */
+export { isPiBinaryMissingError } from "./provider-support/binary-failure.js";
 
 export type FindPiExecutableDeps = {
   loginShellPathDirs?: () => string[];
@@ -170,6 +162,10 @@ function whitespaceTokens(value: string): string[] {
 }
 
 function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  // Every automatic source funnels through here, so this is the one place a
+  // candidate can be vetted before `stat` / `access` follows it into a
+  // TCC-protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);

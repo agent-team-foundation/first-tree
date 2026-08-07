@@ -118,6 +118,31 @@ describe("Context/client-switch account-state interlock", () => {
     ).rejects.toThrow("Wait for it to finish");
   });
 
+  it("blocks account switching while a BYO write worktree or recovery receipt is active", async () => {
+    const home = setupHome();
+    mkdirSync(join(home, "data", "byo", "org-acme", "worktrees", "write-1"), { recursive: true });
+    mkdirSync(join(home, "state", "context", "byo", "org-acme", "writes"), { recursive: true });
+    writeFileSync(join(home, "state", "context", "byo", "org-acme", "writes", "write-1.json"), "{}\n");
+
+    await expect(
+      switchLocalClientForLogin({
+        existingCredentials: {
+          accessToken: "old",
+          refreshToken: "old",
+          serverUrl: "https://first-tree.example",
+        },
+        previousOwnerSub: "old-user",
+        targetTokens: {
+          accessToken: "new",
+          refreshToken: "new",
+          serverUrl: "https://first-tree.example",
+        },
+        targetOwnerSub: "new-user",
+      }),
+    ).rejects.toThrow("BYO Context Tree write is active");
+    expect(existsSync(join(home, "state", "client-switch-journal.json"))).toBe(false);
+  });
+
   it("blocks every Context mutation/recovery while a client-switch journal exists", () => {
     const home = setupHome();
     writeFileSync(join(home, "state", "client-switch-journal.json"), "{}");

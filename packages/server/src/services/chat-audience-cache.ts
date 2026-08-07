@@ -13,11 +13,11 @@
  * would miss `chat:message` pushes for up to TTL_MS.
  *
  * Canonical bundles already enclose this step internally — callers that
- * route through `applyMembershipWrite` (used by `inviteParticipantsToChat`
- * / `ensureParticipant`) or through `joinAsParticipant` /
- * `leaveAsParticipant` do NOT need to call it themselves. Direct callers
- * of `addChatParticipants`, `recomputeChatWatchers`, or any other ad-hoc
- * speaker-row write are still responsible.
+ * route through `applyMembershipWrite`, public `inviteParticipantsToChat`,
+ * `joinAsParticipant`, or `leaveAsParticipant` do NOT need to call it
+ * themselves. Transaction-aware callers of the invite primitive, direct
+ * callers of `addChatParticipants`, `recomputeChatWatchers`, or any other
+ * ad-hoc speaker-row write are still responsible after commit.
  *
  * Cross-instance correctness: handled via a fan-out dispatcher.
  * `invalidateChatAudience` drops the LOCAL replica's entry AND fires a

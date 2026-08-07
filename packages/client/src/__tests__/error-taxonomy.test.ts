@@ -167,6 +167,47 @@ describe("error-taxonomy.classify", () => {
       expect(c.strategy.kind).toBe("exponentialBackoff");
     });
 
+    it("same-provider verify-transient still wins over that provider's missing patterns", () => {
+      // Cursor verify name + Cursor missing text: verify is checked first for
+      // Cursor, so the busy-host flake stays transient (not permanent missing).
+      const err = new Error("Cursor Agent CLI is missing on this machine");
+      err.name = "CursorBinaryVerifyTransientError";
+      const c = classify(err, { source: "session" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("cursor_verify_transient");
+      expect(c.strategy.kind).toBe("exponentialBackoff");
+    });
+
+    it("cross-provider ambiguity keeps the historical interleaved order (earlier provider missing beats later verify)", () => {
+      // Cursor verify name + Codex missing text: old taxonomy checked Codex
+      // missing before Cursor verify, so the outcome is permanent Codex missing.
+      const cursorOverCodex = new Error("Unable to locate Codex CLI binaries for x86_64-apple-darwin");
+      cursorOverCodex.name = "CursorBinaryVerifyTransientError";
+      expect(classify(cursorOverCodex, { source: "session" })).toMatchObject({
+        kind: ERROR_KINDS.PERMANENT,
+        reasonCode: "codex_binary_missing",
+        strategy: { kind: "none" },
+      });
+
+      // Grok verify name + Cursor missing text: Cursor missing precedes Grok verify.
+      const grokOverCursor = new Error("Cursor Agent CLI is missing on this machine");
+      grokOverCursor.name = "GrokBinaryVerifyTransientError";
+      expect(classify(grokOverCursor, { source: "session" })).toMatchObject({
+        kind: ERROR_KINDS.PERMANENT,
+        reasonCode: "cursor_binary_missing",
+        strategy: { kind: "none" },
+      });
+
+      // Pi verify name + Grok missing text: Grok missing precedes Pi verify.
+      const piOverGrok = new Error("Grok Build CLI is missing on this machine");
+      piOverGrok.name = "PiBinaryVerifyTransientError";
+      expect(classify(piOverGrok, { source: "session" })).toMatchObject({
+        kind: ERROR_KINDS.PERMANENT,
+        reasonCode: "grok_binary_missing",
+        strategy: { kind: "none" },
+      });
+    });
+
     it("AbortSignal.timeout TimeoutError is transient (recognised by name and by message)", () => {
       const byName = classify(new DOMException("The operation was aborted due to timeout", "TimeoutError"), {
         source: "session",

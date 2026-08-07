@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Navigate } from "react-router";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { useAuth } from "../../auth/auth-context.js";
+import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { ResourceTypeSection, useAgentResources } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
@@ -22,8 +23,14 @@ export function RepositoriesTab() {
   const ctx = useAgentDetailContext();
   // Gate on canEditConfig (not just !isHuman): non-editors hit the redirect
   // below, so there's no point firing an agent-resources GET for them.
-  const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig });
+  const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig, refetchOnMount: false });
   const canEditResources = ctx.canManageAgent && ctx.agent.status === "active";
+  const readOnlyReason =
+    ctx.canManageAgent && ctx.agent.status === "suspended"
+      ? ctx.agent.clientId
+        ? "suspended"
+        : "suspended-unbound"
+      : "viewer";
   if (!ctx.canEditConfig) return <Navigate to="../profile" replace />;
 
   return (
@@ -33,27 +40,56 @@ export function RepositoriesTab() {
           `["agent-resources", uuid]` cache keeps this in sync with Tools & skills. */}
       <div>
         {repos.isLoading ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          <div className="text-body" style={{ color: "var(--fg-3)" }} role="status">
             Loading repositories…
           </div>
         ) : repos.error || !repos.data ? (
-          <div className="text-body" style={{ color: "var(--state-error)" }}>
-            {repos.error instanceof Error ? repos.error.message : "Failed to load repositories"}
+          <div className="flex flex-wrap items-center gap-2" role="alert">
+            <span className="text-body" style={{ color: "var(--state-error)" }}>
+              Couldn’t load repositories.{repos.error instanceof Error ? ` ${repos.error.message}` : ""}
+            </span>
+            <Button className="min-h-11" size="xs" variant="outline" onClick={repos.reload}>
+              Retry
+            </Button>
           </div>
         ) : (
           <ResourceTypeSection
             type="repo"
             data={repos.data}
             canEdit={canEditResources}
-            pending={repos.pending}
+            readOnlyReason={readOnlyReason}
+            pending={repos.pending || repos.reloading}
+            saving={repos.pending}
             onMutate={repos.mutateBindings}
             saved={repos.justSaved}
             onNavigateAway={ctx.navigateAway}
           />
         )}
         {repos.saveError ? (
-          <p className="text-body" style={{ color: "var(--state-error)", margin: "var(--sp-2) 0 0" }}>
-            {repos.saveError instanceof Error ? repos.saveError.message : "Failed to save repositories"}
+          <div className="flex flex-wrap items-center gap-2" style={{ marginTop: "var(--sp-2)" }} role="alert">
+            <p className="m-0 text-body" style={{ color: "var(--state-error)" }}>
+              Couldn’t save changes. Reload the latest settings, then repeat your change.
+              {repos.saveError instanceof Error ? ` ${repos.saveError.message}` : ""}
+            </p>
+            <Button
+              className="min-h-11"
+              size="xs"
+              variant="outline"
+              onClick={repos.reload}
+              disabled={repos.pending || repos.reloading}
+            >
+              {repos.reloading ? "Reloading…" : "Reload latest"}
+            </Button>
+          </div>
+        ) : null}
+        {repos.reloadComplete ? (
+          <p
+            className="m-0 text-caption"
+            style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}
+            role="status"
+            aria-live="polite"
+          >
+            Latest settings loaded. Repeat your change.
           </p>
         ) : null}
       </div>
@@ -103,5 +139,9 @@ function ContextTreeRow(): ReactNode {
     );
   }
 
-  return <Section title="Context tree">{row}</Section>;
+  return (
+    <Section headingLevel={3} title="Context tree">
+      <div className="ad-tail-trim">{row}</div>
+    </Section>
+  );
 }

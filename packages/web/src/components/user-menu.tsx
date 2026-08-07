@@ -17,9 +17,9 @@ const PARENT_URL = "https://first-tree.ai";
  * Right-side account menu. Avatar trigger; dropdown shows the signed-in user
  * and account actions.
  *
- * Team switching and team management (the org list, Create / Join / Invite)
- * moved to the header-left `TeamSwitcher` — team and account are now separate
- * surfaces (team on the left, account on the right).
+ * Team switching and team management (the org list, Create / Invite, and the
+ * own-agent setup shortcut) moved to the header-left `TeamSwitcher` — team and
+ * account are now separate surfaces (team on the left, account on the right).
  */
 export function UserMenu() {
   const { user, logout } = useAuth();

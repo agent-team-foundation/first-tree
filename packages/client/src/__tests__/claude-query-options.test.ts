@@ -1,6 +1,6 @@
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { buildClaudeQueryOptions } from "../handlers/claude-code.js";
+import { buildClaudeQueryOptions } from "../handlers/claude/sdk-query-options.js";
 
 function claudePayload(
   overrides: Partial<Extract<AgentRuntimeConfigPayload, { kind: "claude-code" }>> = {},

@@ -237,6 +237,7 @@ export async function lockGitlabIdentityAuthoritySet(
     connectionId: string;
     normalizedUsernames: string[];
     identityLinkIds: string[];
+    humanAgentIds?: string[];
   },
 ): Promise<void> {
   const selectors = [];
@@ -246,32 +247,42 @@ export async function lockGitlabIdentityAuthoritySet(
   if (input.identityLinkIds.length > 0) {
     selectors.push(inArray(gitlabIdentityLinks.id, [...new Set(input.identityLinkIds)].sort()));
   }
-  if (selectors.length === 0) return;
-  const snapshots = await db
-    .select({ id: gitlabIdentityLinks.id, membershipId: gitlabIdentityLinks.membershipId })
-    .from(gitlabIdentityLinks)
-    .where(
-      and(
-        eq(gitlabIdentityLinks.organizationId, input.organizationId),
-        eq(gitlabIdentityLinks.connectionId, input.connectionId),
-        eq(gitlabIdentityLinks.state, "active"),
-        or(...selectors),
-      ),
-    );
-  if (snapshots.length === 0) return;
+  const snapshots =
+    selectors.length === 0
+      ? []
+      : await db
+          .select({ id: gitlabIdentityLinks.id, membershipId: gitlabIdentityLinks.membershipId })
+          .from(gitlabIdentityLinks)
+          .where(
+            and(
+              eq(gitlabIdentityLinks.organizationId, input.organizationId),
+              eq(gitlabIdentityLinks.connectionId, input.connectionId),
+              eq(gitlabIdentityLinks.state, "active"),
+              or(...selectors),
+            ),
+          );
   const membershipIds = [...new Set(snapshots.map((row) => row.membershipId))].sort();
-  await db
-    .select({ id: members.id })
-    .from(members)
-    .where(inArray(members.id, membershipIds))
-    .orderBy(asc(members.id))
-    .for("update");
-  await db
-    .select({ id: gitlabIdentityLinks.id })
-    .from(gitlabIdentityLinks)
-    .where(inArray(gitlabIdentityLinks.id, snapshots.map((row) => row.id).sort()))
-    .orderBy(asc(gitlabIdentityLinks.id))
-    .for("update");
+  const humanAgentIds = [...new Set(input.humanAgentIds ?? [])].sort();
+  if (membershipIds.length > 0 || humanAgentIds.length > 0) {
+    const memberSelectors = [];
+    if (membershipIds.length > 0) memberSelectors.push(inArray(members.id, membershipIds));
+    if (humanAgentIds.length > 0) memberSelectors.push(inArray(members.agentId, humanAgentIds));
+    await db
+      .select({ id: members.id })
+      .from(members)
+      .where(and(eq(members.organizationId, input.organizationId), or(...memberSelectors)))
+      .orderBy(asc(members.id))
+      .for("update");
+  }
+  const identityLinkIds = snapshots.map((row) => row.id).sort();
+  if (identityLinkIds.length > 0) {
+    await db
+      .select({ id: gitlabIdentityLinks.id })
+      .from(gitlabIdentityLinks)
+      .where(inArray(gitlabIdentityLinks.id, identityLinkIds))
+      .orderBy(asc(gitlabIdentityLinks.id))
+      .for("update");
+  }
 }
 
 export async function resolveActiveGitlabIdentity(
@@ -282,6 +293,12 @@ export async function resolveActiveGitlabIdentity(
     normalizedUsername: string;
     /** Holds membership + identity authority through the caller's transaction commit. */
     lockForUpdate?: boolean;
+    /**
+     * Personnel placement locks the target pair together with candidate
+     * speakers, so it keeps identity/member locks but defers agent row locks
+     * to that stable union.
+     */
+    lockAgentRowsForUpdate?: boolean;
   },
 ): Promise<
   | { outcome: "ok"; identity: ResolvedGitlabIdentity }
@@ -347,7 +364,8 @@ export async function resolveActiveGitlabIdentity(
     link = lockedLink;
   }
 
-  const humanRows = input.lockForUpdate
+  const lockAgentRowsForUpdate = input.lockForUpdate && input.lockAgentRowsForUpdate !== false;
+  const humanRows = lockAgentRowsForUpdate
     ? await db
         .select({ status: agents.status, delegateAgentId: agents.delegateMention })
         .from(agents)
@@ -362,7 +380,7 @@ export async function resolveActiveGitlabIdentity(
   const [human] = humanRows;
   if (!human || human.status !== "active") return { outcome: "membership_not_active" };
   if (!human.delegateAgentId) return { outcome: "delegate_missing" };
-  const delegateRows = input.lockForUpdate
+  const delegateRows = lockAgentRowsForUpdate
     ? await db
         .select({ status: agents.status, organizationId: agents.organizationId, type: agents.type })
         .from(agents)

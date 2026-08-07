@@ -1,16 +1,17 @@
-import type { Agent, PresenceStatus, UsageByAgentRow } from "@first-tree/shared";
+import type { Agent, UsageByAgentRow } from "@first-tree/shared";
 import { Bot, ChevronDown, Link2, Lock, type LucideIcon, User } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Avatar } from "../../components/avatar.js";
 import { mentionOptionTitle } from "../../components/mention-autocomplete.js";
+import { AgentAvailability } from "../../components/ui/agent-availability.js";
 import { Button } from "../../components/ui/button.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
-import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { SegmentedControl } from "../../components/ui/segmented-control.js";
+import { type AgentAvailabilityView, deriveAgentDirectoryAvailability } from "../../lib/agent-availability.js";
 import { formatTokenUsageTitle, processedTokenCount } from "../../lib/token-usage.js";
-import { formatCompactCount, formatRelative } from "../../lib/utils.js";
+import { formatCompactCount } from "../../lib/utils.js";
 
 export type { RowAction };
 
@@ -429,11 +430,14 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
   const { agent, managerLabel, managerAvatarUrl, isOwnedBySelf } = row;
   const clientHost = agent.clientId ? (clientHostMap.get(agent.clientId) ?? null) : null;
   const usage = usageByAgentId ? (usageByAgentId.get(agent.uuid) ?? null) : null;
+  const availability = deriveAgentDirectoryAvailability(agent);
   // Row-click opens Details, so "Details" leaves the menu; the kebab holds the
   // remaining actions (Chat, plus owner/admin Suspend/Delete).
   const open = () => onAgentDetails(agent.uuid);
   const kebabActions: RowAction[] = [
-    { key: "chat", label: "Chat", onSelect: () => onChat(agent.uuid) },
+    ...(agent.status === "active" && agent.clientId
+      ? [{ key: "chat", label: "Chat", onSelect: () => onChat(agent.uuid) }]
+      : []),
     ...getAgentMenuActions(row),
   ];
 
@@ -447,7 +451,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         seed={agent.uuid}
         colorToken={agent.avatarColorToken}
         meta={agentMetaLine(managerLabel, isOwnedBySelf, agent.runtimeProvider, usage)}
-        status={runtimeStateToPresence(agent.runtimeState)}
+        status={<AgentAvailability view={availability} />}
         actions={kebabActions}
         onOpen={open}
       />
@@ -485,7 +489,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         <RunsOnCell provider={agent.runtimeProvider} host={clientHost} />
         <UsageCell usage={usage} loading={usageLoading} />
       </div>
-      <StatusCell status={runtimeStateToPresence(agent.runtimeState)} lastSeenAt={agent.lastSeenAt} />
+      <StatusCell availability={availability} />
       <ActionsCell ariaLabel={`Actions for ${agent.displayName}`} menuActions={kebabActions} />
     </div>
   );
@@ -576,13 +580,12 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
 
 // Right-aligned within its track so it forms a tidy right-hand cluster with
 // the (also right-aligned) Usage column, clear of the columns on the left.
-// `lastSeenAt` (from agent_presence) surfaces an "active X ago" hover — free
-// signal, no extra storage.
-function StatusCell({ status, lastSeenAt }: { status: PresenceStatus; lastSeenAt?: string | null }) {
-  const title = lastSeenAt ? `Active ${formatRelative(lastSeenAt)}` : undefined;
+// The same derived availability detail shown in Agent Detail is available on
+// hover without adding another visible status column.
+function StatusCell({ availability }: { availability: AgentAvailabilityView }) {
   return (
-    <div style={{ justifySelf: "end" }} title={title}>
-      <PresenceChip status={status} />
+    <div style={{ justifySelf: "end" }} title={availability.detail ?? undefined}>
+      <AgentAvailability view={availability} />
     </div>
   );
 }
@@ -1030,7 +1033,7 @@ function CompactRow({
   colorToken?: string | null;
   seed: string;
   meta: ReactNode;
-  status?: PresenceStatus | null;
+  status?: ReactNode;
   actions: RowAction[];
   selfTag?: boolean;
   adminBadge?: boolean;
@@ -1059,7 +1062,7 @@ function CompactRow({
         adminBadge={adminBadge}
         metaLine={meta}
       />
-      <span>{status != null ? <PresenceChip status={status} /> : null}</span>
+      <span>{status}</span>
       <RowActionsMenu actions={actions} ariaLabel={`Actions for ${displayName}`} />
     </div>
   );

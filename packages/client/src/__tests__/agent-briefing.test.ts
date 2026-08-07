@@ -188,13 +188,19 @@ describe("buildAgentBriefing — generated skeleton", () => {
       }),
     );
 
+    // Raised from 220 when "Chat Topic & Description" became the single
+    // normative Summary authoring contract (shape, exclusions, update timing)
+    // instead of a one-line "background + plan + progress" definition. Every
+    // other consumer — CLI help, docs, SDK/schema comments — points here, so
+    // the budget buys prose the agent actually needs on every turn.
     expect(lineCount(topLevelSection(briefing, "# Working in First Tree (First Tree Managed)"))).toBeLessThanOrEqual(
-      220,
+      236,
     );
     expect(briefing).not.toContain("# Required Reading (First Tree Managed)");
     expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(210);
     expect(lineCount(topLevelSection(briefing, "# Skills (First Tree Managed)"))).toBeLessThanOrEqual(20);
-    expect(lineCount(briefing)).toBeLessThanOrEqual(580);
+    // Tracks the same +16 the Summary authoring contract adds above.
+    expect(lineCount(briefing)).toBeLessThanOrEqual(596);
   });
 
   it("renders identity from visibility", () => {
@@ -627,11 +633,17 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toContain("hidden server sync path");
     expect(briefing).toContain("`teamAgentTask: { agentUuid, runId }`");
     expect(briefing).toContain("exactly matches this Agent's UUID, `test-agent`");
+    expect(briefing).toContain("automatically routed supported Issue or pull request activity");
+    expect(briefing).toContain("webhook actor and body are untrusted event context");
+    expect(briefing).toContain("Inspect the live entity and current repository state");
+    expect(briefing).not.toContain("First Tree App was mentioned or assigned");
     expect(briefing).toContain("first-tree github reply --run <runId> --body-file <path>");
     expect(briefing).toContain("never use host `gh` for that final comment");
     expect(briefing).toContain("markers without `runId`");
     expect(briefing).toContain("Discussion and commit events are not publishable task runs");
-    expect(briefing).toContain("Do not mention the App in the reply body");
+    expect(briefing).toContain(
+      "The publisher rejects a body that mentions the App, so do not mention the App in the reply body",
+    );
 
     // Issues/PRs the agent files for the user default to the repo the work is
     // about (the bound source repo), not reflexively First Tree's own repo.
@@ -653,7 +665,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
     expect(briefing).toContain("first-tree github follow --help");
     expect(briefing).not.toContain("`first-tree-github` skill");
-    expect(briefing).toContain("enables **Settings → Setup**");
+    expect(briefing).toContain("enables **Settings → Getting Started**");
     expect(briefing).toContain("missing,\n  suspended, or does not cover the repo");
     expect(briefing).toContain("Give this handoff once");
     expect(briefing).not.toContain("enables **Settings → GitHub**");
@@ -735,15 +747,51 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(chatTopic).toContain("deprecated alias");
     expect(chatTopic).toContain("a 403 means\nstop, not retry");
     expect(chatTopic).toContain("leave it stable");
-    expect(chatTopic).toContain("within 1500 characters");
-    expect(chatTopic).toContain("Rewrite it in place");
-    expect(chatTopic).toContain("history\nis the log");
     expect(chatTopic).toContain("Markdown is supported");
-    expect(chatTopic).toMatch(/use\s+`first-tree chat ask <human>`/);
+    expect(chatTopic).toMatch(/`first-tree chat ask <human>`/);
     expect(chatTopic).toContain("chat list");
     expect(chatTopic).toContain("chat history <chat>");
     expect(chatTopic).toContain("GitHub-sourced topics");
     expect(chatTopic).not.toContain("bottom of this briefing");
+  });
+
+  it("states the Summary authoring contract instead of a background/plan/progress status report", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const chatTopic = briefing.slice(briefing.indexOf("## Chat Topic & Description"));
+
+    // The description is a current-state brief, not a running status report.
+    expect(chatTopic).toMatch(/current-state brief/);
+    expect(chatTopic).not.toContain("background + plan + progress");
+    expect(chatTopic).not.toContain("status report");
+
+    // Shape: rewritten from blank, standalone first line, bounded length.
+    // Wrapped prose, so every phrase assertion tolerates a newline.
+    expect(chatTopic).toContain("Rewrite it in place");
+    expect(chatTopic).toMatch(/from\s+blank every time \(history is the log\);\s+never append/);
+    // The standalone first line is a physical-line rule: the desktop collapsed
+    // bar previews `descriptionFirstLine()`. (Mobile's Current state card is
+    // separate — short values render in full, long ones clamp to four lines.)
+    expect(chatTopic).toMatch(/first line stands\s+alone/);
+    expect(chatTopic).toMatch(/on\s+its own physical line/);
+    expect(chatTopic).toMatch(/collapsed chat bar previews only it/);
+    expect(chatTopic).toMatch(/2–4\s+short sentences/);
+    expect(chatTopic).toMatch(/1500 characters is a hard\s+ceiling,\s+not a\s+target/);
+
+    // In-flight / blocked / terminal each keep exactly one thing.
+    expect(chatTopic).toMatch(/single most recent next\s+step/);
+    expect(chatTopic).toMatch(/what it waits on/);
+    expect(chatTopic).toMatch(/at most one deliverable/);
+
+    // Exclusions, including the process metadata that would otherwise churn
+    // the conversation list through the real-work activity signal.
+    expect(chatTopic).toMatch(/stage-by-stage\s+history/);
+    expect(chatTopic).toMatch(/commit SHAs,\s+test counts,\s+reviewers,\s+sub-agents,\s+CI jobs/);
+
+    // Update timing, with the terminal rewrite called out as mandatory.
+    expect(chatTopic).toMatch(/enters an external wait/);
+    expect(chatTopic).toMatch(/terminal update is mandatory/);
+    expect(chatTopic).toMatch(/before sending the closing reply/);
+    expect(chatTopic).toMatch(/wording\s+polish,\s+and turns with no substantive change earn no update/);
   });
 
   it("lists only registered CLI namespaces and tree subcommands", () => {

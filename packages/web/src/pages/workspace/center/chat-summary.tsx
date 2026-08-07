@@ -1,6 +1,17 @@
 import { ChevronDown } from "lucide-react";
-import type { RefObject } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  type CSSProperties,
+  type HTMLAttributes,
+  isValidElement,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { stripInlineMarkdown } from "../../../lib/strip-inline-markdown.js";
@@ -12,8 +23,14 @@ import { formatRelative } from "../../../lib/utils.js";
  * rather than buried in the right rail. Read-only: the description is the chat
  * `description`, maintained by agents via `chat update --description`; there is
  * deliberately NO edit affordance anywhere here (correcting it means telling an
- * agent in chat). The component renders the description's markdown faithfully —
- * it never invents sections, fields, or a "stage".
+ * agent in chat). The component preserves the description's authored markdown
+ * without inventing sections, fields, or a "stage". When the description follows
+ * the current-state contract, its first physical line is promoted into a readable
+ * lead and the remaining markdown stays as supporting copy — including when
+ * `remarkBreaks` keeps soft-break lines inside one `<p>`. The description is
+ * always rendered as one markdown document so document-scoped syntax (reference
+ * links, multiline constructs, and definitions) keeps working. Complex
+ * block-first markdown falls back to the faithful full-document presentation.
  *
  * The persistent form is a one-line bar in flow between header and stream; the
  * expanded form is a FLOATING CARD portaled over the top of the message area
@@ -29,7 +46,7 @@ import { formatRelative } from "../../../lib/utils.js";
  *     ellipsis-truncated), an "Updated" chip when there's an unread change, the
  *     freshness ("9 days ago"), and a quiet chevron. Freshness shows in BOTH
  *     states, so an auto-expanded summary still surfaces when it last changed.
- *   - Expanded card: the bar stays put (label flips to "Summary", chevron up)
+ *   - Expanded card: the bar stays put (label flips to "Current state", chevron up)
  *     while a non-modal overlay floats below it with the description rendered as
  *     markdown — own scroll (`overscroll: contain`), `--shadow-md` + border for
  *     separation, NO scrim (a summary surfacing is awareness, not a modal
@@ -118,9 +135,17 @@ function clearDismissedVersion(chatId: string, version: string): void {
  * truncation is left to CSS; this only removes markup noise. Returns "" when
  * nothing usable is found (the caller shows a fallback).
  */
-export function descriptionFirstLine(description: string): string {
-  let headingFallback = "";
-  for (const rawLine of description.split(/\r?\n/)) {
+type DescriptionLead = {
+  preview: string;
+  promotable: boolean;
+  /** 1-based source line of the lead physical line (matches mdast/hast positions). */
+  line: number;
+};
+
+function findDescriptionLead(description: string): DescriptionLead | null {
+  const lines = description.split(/\r?\n/);
+  let headingFallback: { preview: string; line: number } | null = null;
+  for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (!line) continue;
     // Skip structural-only lines that carry no readable text: thematic breaks
@@ -145,14 +170,152 @@ export function descriptionFirstLine(description: string): string {
       .replace(/\s+/g, " ")
       .trim();
     if (!stripped) continue;
+    const sourceLine = index + 1;
     if (isHeading) {
       // Remember the first heading as a fallback, but keep scanning for prose.
-      if (!headingFallback) headingFallback = stripped;
+      if (!headingFallback) {
+        headingFallback = { preview: stripped, line: sourceLine };
+      }
       continue;
     }
-    return stripped;
+    const nextLine = lines[index + 1]?.trim() ?? "";
+    const startsTable = line.includes("|") && /^\|?[\s:|-]+\|?$/.test(nextLine) && nextLine.includes("-");
+    const startsSetextHeading = /^ {0,3}(?:=+|-+)\s*$/.test(lines[index + 1] ?? "");
+    const startsComplexBlock =
+      /^(?:\t| {4})/.test(rawLine) ||
+      /^([-*+]\s+|\d+[.)]\s+|>\s?|\||`{3,}|~{3,})/.test(line) ||
+      startsTable ||
+      startsSetextHeading;
+    return {
+      preview: stripped,
+      promotable: !startsComplexBlock,
+      line: sourceLine,
+    };
   }
-  return headingFallback;
+  if (!headingFallback) return null;
+  return {
+    preview: headingFallback.preview,
+    promotable: false,
+    line: headingFallback.line,
+  };
+}
+
+export function descriptionFirstLine(description: string): string {
+  return findDescriptionLead(description)?.preview ?? "";
+}
+
+type MarkdownParagraphNode = {
+  position?: {
+    start?: { line?: number };
+    end?: { line?: number };
+  };
+};
+
+/** Pure: true when this paragraph's source span covers the lead physical line. */
+function paragraphContainsLeadLine(node: MarkdownParagraphNode | undefined, leadLine: number): boolean {
+  const start = node?.position?.start?.line;
+  const end = node?.position?.end?.line;
+  if (start == null || end == null) return false;
+  return start <= leadLine && leadLine <= end;
+}
+
+function isBreakElement(node: ReactNode): boolean {
+  return isValidElement(node) && node.type === "br";
+}
+
+/** Split a paragraph's React children on soft-break `<br>` nodes. */
+function splitChildrenByBreak(children: ReactNode): ReactNode[][] {
+  const segments: ReactNode[][] = [[]];
+  Children.forEach(children, (child) => {
+    if (isBreakElement(child)) {
+      segments.push([]);
+      return;
+    }
+    const current = segments[segments.length - 1];
+    if (current) current.push(child);
+  });
+  return segments;
+}
+
+/** Join soft-break segments without inventing list keys for stable source order. */
+function joinSoftBreakSegments(segments: ReactNode[][]): ReactNode {
+  return segments.reduce<ReactNode>((acc, segment, index) => {
+    if (index === 0) return <>{segment}</>;
+    return (
+      <>
+        {acc}
+        <br />
+        {segment}
+      </>
+    );
+  }, null);
+}
+
+const LEAD_SPAN_STYLE: CSSProperties = {
+  display: "block",
+  color: "var(--fg)",
+  // Inline measure beats parent `[&_p]:text-body` inheritance/specificity on <p>.
+  fontSize: "var(--text-subtitle)",
+  // Body weight, deliberately: the lead separates itself through size and colour,
+  // not emphasis. Most descriptions are a single physical line, where the lead is
+  // the entire summary — bolding it emphasises the text against nothing and just
+  // reads as a heavy block. Authored `**bold**` inside the description is
+  // untouched.
+  fontWeight: "var(--text-body--font-weight)" as CSSProperties["fontWeight"],
+  lineHeight: "var(--text-subtitle--line-height)",
+  letterSpacing: "var(--text-subtitle--letter-spacing)",
+  // Separation below the lead lives in index.css so it can collapse when the lead
+  // is the last thing in the summary; an inline margin would outrank that rule
+  // and leave dead space under a single-line brief.
+};
+
+function LeadSpan({ children }: { children: ReactNode }) {
+  return (
+    <span data-summary-part="lead" className="text-subtitle" style={LEAD_SPAN_STYLE}>
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Promote only the first physical line of the prose paragraph that covers the
+ * lead source line. Soft breaks from the writing contract stay in one Markdown
+ * `<p>`; the lead is always a child span so `[&_p]:text-body` cannot flatten
+ * headline weight back to body. Blank-line paragraphs wrap their sole segment
+ * the same way.
+ */
+function LeadAwareParagraph({
+  children,
+  promoteLead,
+  ...props
+}: HTMLAttributes<HTMLParagraphElement> & {
+  children?: ReactNode;
+  promoteLead: boolean;
+}) {
+  if (!promoteLead) {
+    return <p {...props}>{children}</p>;
+  }
+  const segments = splitChildrenByBreak(children);
+  const nonEmpty = segments.filter((segment) =>
+    segment.some((node) => {
+      if (typeof node === "string") return node.trim().length > 0;
+      return node != null && node !== false;
+    }),
+  );
+  if (nonEmpty.length <= 1) {
+    return (
+      <p {...props}>
+        <LeadSpan>{children}</LeadSpan>
+      </p>
+    );
+  }
+  const [lead, ...rest] = nonEmpty;
+  return (
+    <p {...props}>
+      <LeadSpan>{lead}</LeadSpan>
+      {joinSoftBreakSegments(rest)}
+    </p>
+  );
 }
 
 export function ChatSummary({
@@ -186,8 +349,8 @@ export function ChatSummary({
    *  portaled here and floated `absolute; top:0` over the message area. */
   overlayContainerRef: RefObject<HTMLDivElement | null>;
 }) {
-  const trimmed = description?.trim() ?? "";
-  const hasDescription = trimmed.length > 0;
+  const markdownDescription = description ?? "";
+  const hasDescription = markdownDescription.trim().length > 0;
 
   const updatedAtMs = useMemo(() => {
     if (!descriptionUpdatedAt) return null;
@@ -377,9 +540,30 @@ export function ChatSummary({
     };
   }, [expanded, dismiss]);
 
+  const descriptionLead = useMemo(() => findDescriptionLead(markdownDescription), [markdownDescription]);
+  const promotesHeadline = descriptionLead?.promotable ?? false;
+  const leadSourceLine = promotesHeadline ? (descriptionLead?.line ?? null) : null;
+  const summaryMarkdownComponents = useMemo(() => {
+    if (leadSourceLine == null) return undefined;
+    return {
+      p: ({
+        node,
+        children,
+        ...props
+      }: HTMLAttributes<HTMLParagraphElement> & {
+        node?: MarkdownParagraphNode;
+        children?: ReactNode;
+      }) => (
+        <LeadAwareParagraph promoteLead={paragraphContainsLeadLine(node, leadSourceLine)} {...props}>
+          {children}
+        </LeadAwareParagraph>
+      ),
+    };
+  }, [leadSourceLine]);
+
   if (!hasDescription) return null;
 
-  const firstLine = descriptionFirstLine(trimmed);
+  const firstLine = descriptionFirstLine(markdownDescription);
   const freshnessText = updatedAtMs !== null ? formatRelative(descriptionUpdatedAt) : null;
   const showAmberChip = unread && !unreadCleared && !expanded;
   const amberActive = highlighted && expanded;
@@ -407,7 +591,7 @@ export function ChatSummary({
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          aria-label={expanded ? "Collapse summary" : "Expand summary"}
+          aria-label={expanded ? "Collapse current state" : "Expand current state"}
           className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
           style={{
             gap: "var(--sp-2)",
@@ -428,7 +612,7 @@ export function ChatSummary({
               fontWeight: expanded ? 600 : undefined,
             }}
           >
-            {expanded ? "Summary" : firstLine || "No summary yet"}
+            {expanded ? "Current state" : firstLine || "No summary yet"}
           </span>
           {showAmberChip ? (
             <span
@@ -474,28 +658,48 @@ export function ChatSummary({
         ? createPortal(
             <section
               ref={cardRef}
-              aria-label="Chat summary"
+              aria-label="Current state"
               className="chat-summary-card-in z-10"
               style={{
                 position: "absolute",
                 top: 0,
                 left: 0,
+                // Stretched edge to edge: the card takes the width of the chat
+                // header and the collapsed bar it drops from, so the expanded and
+                // collapsed forms of the same surface line up. The copy inherits
+                // that width — deliberately NO measure of its own, which would
+                // both wrap the text early and leave the card wider than its own
+                // content.
                 right: 0,
                 background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-raised)",
                 border: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border)"}`,
                 borderRadius: "var(--radius-dialog)",
                 boxShadow: "var(--shadow-md)",
-                padding: "var(--sp-1) var(--sp-6) var(--sp-3)",
+                padding: "var(--sp-4) var(--sp-6) var(--sp-5)",
                 maxHeight: "min(46vh, 30rem)",
                 overflowY: "auto",
                 overscrollBehavior: "contain",
               }}
             >
-              <div className="text-body" style={{ color: "var(--fg)" }}>
-                {/* Faithful markdown render; headings flattened to body size so
-                    hierarchy is weight + spacing, not shouting over the bar. */}
-                <Markdown className="[&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
-                  {trimmed}
+              <div
+                data-summary-part="document"
+                data-summary-layout={promotesHeadline ? "lead" : "faithful"}
+                className="text-body"
+                style={{ color: promotesHeadline ? "var(--fg-2)" : "var(--fg)" }}
+              >
+                {/* Keep one markdown tree so reference definitions and other
+                    document-scoped syntax remain available to every block.
+                    The current-state contract promotes the first physical line;
+                    a custom first paragraph styles only that line when soft
+                    breaks stay inside one <p>. Legacy block-first markdown
+                    stays faithful. */}
+                <Markdown
+                  className={
+                    "[&_p]:text-body [&_li]:text-body [&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4"
+                  }
+                  components={summaryMarkdownComponents}
+                >
+                  {markdownDescription}
                 </Markdown>
               </div>
             </section>,

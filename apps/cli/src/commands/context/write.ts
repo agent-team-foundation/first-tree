@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Command } from "commander";
+import {
+  assertContextMutationCanStart,
+  withAccountStateMutationLockAsync,
+} from "../../core/context-integration/account-state-guard.js";
+import { ensureByoContextRepository } from "../../core/context-integration/byo-repository.js";
 import { readContextRouteReceipt } from "../../core/context-integration/context-route.js";
+import { writeContextWritePlanReceipt } from "../../core/context-integration/write-confirmation.js";
 import { readContextTreeReadSnapshotIdentity } from "../../core/context-tree-read.js";
 import { ContextTreeWritePreflightCliError, preflightContextTreeWrite } from "../../core/context-tree-write.js";
 import { isJsonMode, print } from "../../core/output.js";
@@ -42,18 +48,45 @@ export async function runContextWrite(context: CommandContext): Promise<void> {
       throw new Error("unreachable");
     }
     const sdk = createMemberSdk();
-    const preflight = await preflightContextTreeWrite(
-      {
-        preflightMemberContextTreeWrite(teamId, request, callOptions): Promise<unknown> {
-          return sdk.preflightMemberContextTreeWrite(teamId, request, callOptions);
+    const writePlanAnchor = createHash("sha256")
+      .update(
+        JSON.stringify({
+          candidateId: candidate.candidateId,
+          teamId: candidate.organizationId,
+          binding: candidate.binding,
+          commit: candidate.commit,
+        }),
+      )
+      .digest("hex");
+    const preflight = await withAccountStateMutationLockAsync(async () => {
+      assertContextMutationCanStart();
+      const result = await preflightContextTreeWrite(
+        {
+          preflightMemberContextTreeWrite(teamId, request, callOptions): Promise<unknown> {
+            return sdk.preflightMemberContextTreeWrite(teamId, request, callOptions);
+          },
         },
-      },
-      {
-        teamId: candidate.organizationId,
-        snapshotPath: options.snapshot ?? "",
-        ...(options.githubLogin ? { requesterGithubLogin: options.githubLogin } : {}),
-      },
-    );
+        {
+          teamId: candidate.organizationId,
+          snapshotPath: options.snapshot ?? "",
+          ...(options.githubLogin ? { requesterGithubLogin: options.githubLogin } : {}),
+        },
+        undefined,
+        undefined,
+        {
+          fetchCurrentCommit: (teamId, binding) =>
+            ensureByoContextRepository(teamId, binding, candidate.accountClientId).commit,
+        },
+      );
+      writeContextWritePlanReceipt({
+        planAnchor: writePlanAnchor,
+        candidateId: candidate.candidateId,
+        organizationId: candidate.organizationId,
+        binding: candidate.binding,
+        commit: candidate.commit,
+      });
+      return result;
+    });
     const result = {
       ...preflight,
       consumerKind: "byo" as const,
@@ -65,16 +98,7 @@ export async function runContextWrite(context: CommandContext): Promise<void> {
       confirmationRequired: true,
       confirmationContract:
         "Show the exact Team, source artifact/revision, target nodes, and proposed mutations. Wait for a new user reply confirming this exact plan before creating an authoring worktree or making any Tree mutation.",
-      writePlanAnchor: createHash("sha256")
-        .update(
-          JSON.stringify({
-            candidateId: candidate.candidateId,
-            teamId: candidate.organizationId,
-            binding: candidate.binding,
-            commit: candidate.commit,
-          }),
-        )
-        .digest("hex"),
+      writePlanAnchor,
     };
     if (context.options.json || isJsonMode()) {
       print.result(result);

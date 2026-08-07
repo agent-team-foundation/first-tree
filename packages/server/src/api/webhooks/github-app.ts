@@ -16,6 +16,7 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
+import { isGithubAppSelfOutput } from "../../services/github-app-self-output.js";
 import { resolveGithubAudience } from "../../services/github-audience.js";
 import { deliverGithubEvent } from "../../services/github-delivery.js";
 import { setEntityState, setEntityTitle } from "../../services/github-entity-state.js";
@@ -250,6 +251,14 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     };
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
+    // One canonical self-output verdict for the whole delivery, so automatic
+    // task routing and trusted Context Review cannot drift into two loop rules.
+    const appSelfOutput = isGithubAppSelfOutput({
+      appSlug: appConfig.slug,
+      eventType,
+      action: rawAction,
+      payload,
+    });
     const normalized = normalizeGithubWebhook(eventType, payload, ingress);
     const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
     if (!normalized.event && !shouldRunContextReviewer && !normalized.observation) {
@@ -288,12 +297,14 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
               payload,
               organizationId,
               installationId,
+              appSelfOutput,
             })
           : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
       resolveAudience: async (normalizedEvent) => {
         const resolution = await resolveGithubAudience(app.db, normalizedEvent, {
           appSlug: appConfig.slug,
           appPermissions: installation.permissions,
+          appSelfOutput,
         });
         appTaskBlocker = resolution.appTaskBlocker;
         return resolution;

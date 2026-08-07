@@ -1,12 +1,13 @@
 import type { LandingCampaignActionContext } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import type { OnboardingFailureReason } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { listTeamResourcesForOrg } from "../../../api/resources.js";
+import { Avatar } from "../../../components/avatar.js";
 import { Button } from "../../../components/ui/button.js";
 import { readCampaignActionHandoffFlag, writeCampaignActionHandoffFlag } from "../../../utils/onboarding-flags.js";
 import { getCampaign } from "../../quickstart/campaigns.js";
@@ -17,7 +18,7 @@ import {
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
+import { FlowHint } from "../flow-ui.js";
 import { type TreeBindingPlan, useOnboardingFlow } from "../onboarding-flow.js";
 import { startChatErrorMessage } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
@@ -26,9 +27,8 @@ import { ensureStartChatRepos, type StartChatAgent, startOnboardingChat } from "
 
 /** Shared "create chat + send start-chat bootstrap + finish" sequence for single-chat paths. */
 async function runStartChat(args: {
+  agent: StartChatAgent;
   bootstrap: string | ((agent: StartChatAgent) => string);
-  /** The selected org — scopes agent resolution so the seed never lands on an
-   *  agent from a different org. */
   organizationId: string | null;
   /** Display title for the created chat. */
   topic: string;
@@ -38,10 +38,9 @@ async function runStartChat(args: {
   campaignAction?: LandingCampaignActionContext;
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
-  const agent = await resolveOnboardingAgent(args.organizationId);
-  const bootstrap = typeof args.bootstrap === "function" ? args.bootstrap(agent) : args.bootstrap;
+  const bootstrap = typeof args.bootstrap === "function" ? args.bootstrap(args.agent) : args.bootstrap;
   const chatId = await startOnboardingChat({
-    agent,
+    agent: args.agent,
     bootstrap,
     organizationId: args.organizationId,
     topic: args.topic,
@@ -53,13 +52,111 @@ async function runStartChat(args: {
 }
 
 export function StepStartChat() {
-  const { path } = useOnboardingFlow();
-  return path === "admin" ? <AdminStartChat /> : <InviteeStartChat />;
+  const { organizationId, path } = useOnboardingFlow();
+  const resolutionInstance = useId();
+  const agentQuery = useQuery({
+    // Scope the cache to this mounted payoff screen. A later same-org resume
+    // must resolve again instead of rendering an agent cached by an older run.
+    queryKey: ["onboarding", "start-chat-agent", organizationId, resolutionInstance],
+    queryFn: () => resolveOnboardingAgent(organizationId),
+    retry: false,
+    // The reveal and kickoff must stay bound to one exact object for the life
+    // of this screen. A later mount gets a new useId-scoped key and resolves
+    // again, but focus/reconnect cannot silently swap the visible target.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  if (agentQuery.isPending) {
+    return (
+      <p className="text-label" role="status" style={{ margin: 0, color: "var(--fg-3)" }}>
+        {COPY.startChat.resolvingAgent}
+      </p>
+    );
+  }
+
+  if (agentQuery.isError) {
+    return (
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <FlowHint tone="error" role="alert">
+          {COPY.startChat.resolveAgentFailed}
+        </FlowHint>
+        <div className="flex">
+          <Button type="button" variant="outline" onClick={() => void agentQuery.refetch()}>
+            {COPY.startChat.resolveAgentRetry}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return path === "admin" ? <AdminStartChat agent={agentQuery.data} /> : <InviteeStartChat agent={agentQuery.data} />;
+}
+
+type AgentArrivalProps = {
+  agent: StartChatAgent;
+  error: string | null;
+  onStart: () => void;
+  phase: "idle" | "starting";
+  preparing?: boolean;
+};
+
+export function AgentArrival({ agent, error, onStart, phase, preparing = false }: AgentArrivalProps): ReactNode {
+  const displayName = agent.displayName.trim() || agent.name || "Your agent";
+  const starting = phase === "starting";
+
+  return (
+    <div
+      className="flex min-w-0 flex-col"
+      data-agent-arrival
+      aria-busy={starting || preparing}
+      style={{ gap: "var(--sp-6)" }}
+    >
+      <div className="flex min-w-0 flex-col" style={{ gap: "var(--sp-4)" }}>
+        <Avatar src={agent.avatarImageUrl} name={displayName} seed={agent.uuid} size={64} className="shrink-0" />
+        <div className="flex min-w-0 flex-col" style={{ gap: "var(--sp-2_5)" }}>
+          <p className="text-eyebrow" style={{ margin: 0, color: "var(--fg-3)" }}>
+            {COPY.startChat.eyebrow}
+          </p>
+          <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)", overflowWrap: "anywhere" }}>
+            {COPY.startChat.title(displayName)}
+          </h1>
+          <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", overflowWrap: "anywhere" }}>
+            {COPY.startChat.body(displayName)}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-col" style={{ gap: "var(--sp-3)" }}>
+        {error && (
+          <FlowHint tone="error" role="alert">
+            {error}
+          </FlowHint>
+        )}
+        <div className="flex">
+          <Button type="button" variant="cta" onClick={onStart} disabled={starting || preparing}>
+            <span>{COPY.startChat.meetAgent}</span>
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+        <p
+          className="text-label"
+          role={starting || preparing ? "status" : undefined}
+          aria-live={starting || preparing ? "polite" : undefined}
+          style={{ margin: 0, color: "var(--fg-4)" }}
+        >
+          {starting ? COPY.startChat.starting : preparing ? COPY.startChat.preparing : COPY.startChat.nextStepHint}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────
 
-function AdminStartChat() {
+function AdminStartChat({ agent }: { agent: StartChatAgent }) {
   const {
     organizationId,
     selectedRepoUrls,
@@ -87,7 +184,6 @@ function AdminStartChat() {
   // branches below stay dormant — kept intact for when/if a GitHub connect step
   // is re-added to onboarding.
   const hasRepos = selectedRepoUrls.length > 0;
-  const repoCount = selectedRepoUrls.length;
 
   // Silently detect a bound team Context Tree (a re-run / second admin /
   // CLI-bound tree). There is no "paste your tree URL" path anymore. Detection
@@ -110,8 +206,6 @@ function AdminStartChat() {
     setTreeBindingPlan("useBoundTree");
   }, [detectedTreeUrl, setTreeUrl, setTreeBindingPlan, treeAutoDetectDone, markTreeAutoDetectDone]);
 
-  const canStart = phase === "form";
-
   const handleStart = async (): Promise<void> => {
     setError(null);
     setPhase("starting");
@@ -119,6 +213,7 @@ function AdminStartChat() {
     try {
       if (!hasRepos) {
         await runStartChat({
+          agent,
           bootstrap: (agent) =>
             campaignActionHandoff && campaignActionConfig
               ? buildCampaignActionBootstrap(
@@ -188,6 +283,7 @@ function AdminStartChat() {
       // provisioning a tree from repos the app can no longer access.
       if (repos.length === 0) {
         await runStartChat({
+          agent,
           bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
           topic: "Get started with First Tree",
@@ -205,7 +301,6 @@ function AdminStartChat() {
 
       const useBoundTree = treeBindingPlan === "useBoundTree";
       const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "none";
-      const agent = await resolveOnboardingAgent(organizationId);
       failureReason = "repo_resource_sync_failed";
       await ensureStartChatRepos(organizationId, repos);
 
@@ -230,66 +325,23 @@ function AdminStartChat() {
     }
   };
 
-  if (phase === "starting") return <StartingState />;
-
-  // No repo connected is now a normal value-first path. The user can start
-  // chatting and share a project path or GitHub URL in the agent chat; GitHub
-  // access is no longer a required onboarding chore.
-  if (!hasRepos) {
-    return (
-      <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-        <StepHeading title={COPY.startChat.noProjectTitle} why={COPY.startChat.noProjectBody} />
-        <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-          {error && (
-            <FlowHint tone="error" role="alert">
-              {error}
-            </FlowHint>
-          )}
-          <div className="flex">
-            <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-              <span>{COPY.startChat.startChatting}</span>
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Wait for the bound-tree probe so we don't flash "create" then flip to
-  // "bound".
-  if (treeSettingQuery.isLoading) {
-    return <StatusRow state="waiting" label="Checking your team's setup…" />;
-  }
-
-  const usesBoundTree = treeBindingPlan === "useBoundTree";
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading
-        title={usesBoundTree ? COPY.startChat.existingTitle : COPY.startChat.newTitle}
-        why={usesBoundTree ? COPY.startChat.existingWhy(repoCount) : COPY.startChat.newWhy(repoCount)}
-      />
-      <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-        {error && (
-          <FlowHint tone="error" role="alert">
-            {error}
-          </FlowHint>
-        )}
-        <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-            <span>{usesBoundTree ? COPY.startChat.startExisting : COPY.startChat.startBuilding}</span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-    </div>
+    <AgentArrival
+      agent={agent}
+      error={error}
+      onStart={() => void handleStart()}
+      phase={phase === "starting" ? "starting" : "idle"}
+      preparing={hasRepos && treeSettingQuery.isLoading}
+    />
   );
 }
 
 // ── Invitee ─────────────────────────────────────────────────────────────
 
-function InviteeStartChat() {
-  const { organizationId } = useOnboardingFlow();
+function InviteeStartChat({ agent }: { agent: StartChatAgent }) {
+  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
+  const [phase, setPhase] = useState<"idle" | "starting">("idle");
+  const [error, setError] = useState<string | null>(null);
   // This is the member's already-selected managed-agent path. Readiness here
   // controls only the first First Tree chat; optional external Context access
   // is not part of this managed-agent path.
@@ -336,42 +388,21 @@ function InviteeStartChat() {
     },
   });
 
-  if (teamQuery.isLoading) {
-    return <StatusRow state="waiting" label="Checking what your team has set up…" />;
-  }
-
-  // Read failure → not-ready; the query keeps polling so a transient blip
-  // resolves on its own.
-  if (teamQuery.isError || !teamQuery.data) {
-    return <InviteeNotReady />;
-  }
-
-  const { treeUrl, hasInstallation, installationKnown, hasCodeRepository } = teamQuery.data;
+  const { treeUrl, hasInstallation, installationKnown, hasCodeRepository } = teamQuery.data ?? {
+    treeUrl: "",
+    hasInstallation: false,
+    installationKnown: false,
+    hasCodeRepository: false,
+  };
   // "ready" requires an AUTHORITATIVE install=true. `hasInstallation` is optimistic
   // on a failed probe (null → true) so the query keeps polling instead of flapping
   // — but we must NOT render the ready launch (which reads the tree and would 403
-  // without an installation) until the probe actually confirms one. Until then,
-  // not-ready holds: it offers a simple first chat (no git op, no 403) and keeps
-  // polling, so it advances to ready on its own once install is confirmed.
+  // without an installation) until the probe actually confirms one. Until then
+  // the shared arrival keeps the launch in its no-repo mode and the
+  // query keeps polling, so the exact same surface advances quietly once the
+  // provider capability is confirmed.
   const installed = installationKnown && hasInstallation;
-  return resolveInviteeStartChatState({ treeUrl, hasInstallation: installed }) === "ready" && hasCodeRepository ? (
-    <InviteeReady />
-  ) : (
-    <InviteeNotReady />
-  );
-}
-
-/**
- * Invitee · ready to launch. The team has a Context Tree and the provider
- * capability needed by the managed first chat, so the agent already inherits
- * the team's `recommended` repo resources automatically (they're enabled for
- * every org agent). This is the member's selected First Tree path; optional
- * external Context access is not replayed here.
- */
-function InviteeReady() {
-  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
-  const [phase, setPhase] = useState<"idle" | "starting">("idle");
-  const [error, setError] = useState<string | null>(null);
+  const ready = resolveInviteeStartChatState({ treeUrl, hasInstallation: installed }) === "ready" && hasCodeRepository;
 
   const handleStart = async (): Promise<void> => {
     setError(null);
@@ -381,10 +412,11 @@ function InviteeReady() {
       // chat is value-first: read the team's tree/recommended repos, show
       // concrete understanding, then ask which useful first task to do.
       await runStartChat({
+        agent,
         bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
         organizationId,
         topic: "Get settled on First Tree",
-        treeBindingPlan: "useBoundTree",
+        treeBindingPlan: ready ? "useBoundTree" : "none",
         joinPath: "invite",
         complete: async (chatId) => {
           // Scan-fix handoffs are consumed by the admin fix path only — drop
@@ -401,97 +433,13 @@ function InviteeReady() {
     }
   };
 
-  if (phase === "starting") return <StartingState />;
-
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.startChat.inviteeReadyTitle} why={COPY.startChat.inviteeReadyBody} />
-      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        {error && (
-          <FlowHint tone="error" role="alert">
-            {error}
-          </FlowHint>
-        )}
-        <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleStart()}>
-            <span>{COPY.startChat.startWorking}</span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-    </div>
+    <AgentArrival
+      agent={agent}
+      error={error}
+      onStart={() => void handleStart()}
+      phase={phase}
+      preparing={teamQuery.isLoading}
+    />
   );
-}
-
-/**
- * Invitee · the managed first chat isn't ready yet. This can be an Admin-owned
- * Context/Team-repository gap or only the legacy GitHub capability gap.
- * Missing Team setup stays out of the finale because a member cannot fix it
- * here, and optional external Context access is not replayed after this First
- * Tree path was selected.
- *
- * The primary action starts a real first chat with the agent. Routing it through
- * `completeAndEnterChat` — not `finishLater` — means the button lands the user
- * in a real chat WITH the agent, instead of dropping them into an empty workspace.
- */
-function InviteeNotReady() {
-  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
-  const [phase, setPhase] = useState<"idle" | "starting">("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  const handleMeet = async (): Promise<void> => {
-    setError(null);
-    setPhase("starting");
-    try {
-      await runStartChat({
-        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
-        organizationId,
-        topic: "Get settled on First Tree",
-        treeBindingPlan: "none",
-        joinPath: "invite",
-        complete: async (chatId) => {
-          // Scan-fix handoffs are consumed by the admin fix path only — drop
-          // any stale flag once a non-fix first chat exists, so a later
-          // onboarding run in this tab cannot consume someone else's scan.
-          writeCampaignActionHandoffFlag(null);
-          await completeAndEnterChat(chatId);
-        },
-      });
-    } catch (err) {
-      setError(startChatErrorMessage(err, COPY.errors.chatFailed));
-      setPhase("idle");
-      reportStepFailure("start_chat_failed", { step: "start-chat" });
-    }
-  };
-
-  if (phase === "starting") return <StartingState />;
-
-  return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.invitee.notReadyTitle} why={COPY.invitee.notReadyBody} />
-      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        {error && (
-          <FlowHint tone="error" role="alert">
-            {error}
-          </FlowHint>
-        )}
-        {/* The primary action is not an escape hatch: the common not-ready case
-            (admin finished without a tree) never resolves, so the real path
-            forward is to start now. If the team does finish, the page still
-            advances on its own — quietly, no longer announced. */}
-        <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleMeet()}>
-            <span>{COPY.invitee.startAnyway}</span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── shared ──────────────────────────────────────────────────────────────
-
-function StartingState() {
-  return <WorkingState label={COPY.startChat.starting} />;
 }

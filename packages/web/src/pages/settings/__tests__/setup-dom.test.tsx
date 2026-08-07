@@ -346,7 +346,7 @@ describe("Settings Setup overview", () => {
       "Context Tree",
     ]);
     expect(view.host.querySelector('[data-setup-row="repository-automation"]')?.textContent).toContain(
-      "Repository events, identity, and GitHub task routing.",
+      "Repository events, identity, and automatic GitHub handling.",
     );
     expect(view.host.querySelector('[data-setup-row="automatic-review"]')).toBeNull();
     expect(view.host.querySelector('[data-setup-row="work-access"] .lucide-message-circle')).not.toBeNull();
@@ -995,17 +995,18 @@ describe("Settings Setup overview", () => {
     const { page } = await openContextTreeControls(view);
     const personalAccess = await waitForSelector<HTMLElement>(page, "[data-setup-personal-access]");
 
-    expect(personalAccess.textContent).toContain("Use with Claude Code or Codex");
+    expect(personalAccess.textContent).toContain("Setup prompt");
     expect(personalAccess.textContent).toContain(
-      "Open your project in Claude Code or Codex, then copy and paste the setup prompt.",
+      "Open your project in Claude Code or Codex, then paste this prompt into the conversation.",
     );
-    expect(personalAccess.textContent).toContain("Copy setup prompt");
-    expect(personalAccess.textContent).toContain("Preview prompt");
+    expect(personalAccess.textContent).toContain("View setup prompt");
+    expect(personalAccess.textContent).not.toContain("Copy setup prompt");
+    expect(personalAccess.textContent).not.toContain("Preview prompt");
     expect(personalAccess.textContent).not.toContain("context enable --provider");
     expect(contextEnablementMocks.getContextEnablementHandoff).not.toHaveBeenCalled();
 
     const preview = [...personalAccess.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Preview prompt",
+      (button) => button.textContent === "View setup prompt",
     );
     await act(async () => preview?.click());
     await flush();
@@ -1027,6 +1028,8 @@ describe("Settings Setup overview", () => {
       expect.stringContaining("first-tree-dev login short-lived-code"),
     );
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("exact `applyCommand`"));
+    expect(document.body.querySelector("[data-byo-setup-prompt-preview]")).not.toBeNull();
+    expect(document.body.textContent).toContain("Copied");
 
     await act(async () => view.root.unmount());
   });
@@ -1048,17 +1051,23 @@ describe("Settings Setup overview", () => {
     const view = await renderSettingsSetupPage("/settings/context");
     const page = await waitForSelector<HTMLElement>(view.host, '[data-context-tree-settings="member"]');
     const personalAccess = await waitForSelector<HTMLElement>(page, "[data-setup-personal-access]");
-    expect(personalAccess.textContent).toContain("Use with Claude Code or Codex");
-    expect(personalAccess.textContent).toContain("Copy setup prompt");
-    expect(personalAccess.textContent).toContain("Preview prompt");
+    expect(personalAccess.textContent).toContain("Setup prompt");
+    expect(personalAccess.textContent).toContain("View setup prompt");
+    expect(personalAccess.textContent).not.toContain("Copy setup prompt");
+    expect(personalAccess.textContent).not.toContain("Preview prompt");
     expect(page.querySelector<HTMLAnchorElement>('a[href="/context"]')?.textContent).toContain("Open Context");
     expect(page.querySelector("[data-setup-owner-controls]")).toBeNull();
     expect(page.querySelector('[role="switch"]')).toBeNull();
     expect(reviewerMocks.getContextReviewerCandidates).not.toHaveBeenCalled();
     expect(orgSettingsMocks.getRawContextTreeSetting).not.toHaveBeenCalled();
 
-    const copy = [...personalAccess.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Copy setup prompt",
+    const viewPrompt = [...personalAccess.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "View setup prompt",
+    );
+    await act(async () => viewPrompt?.click());
+    await flush();
+    const copy = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Copy prompt",
     );
     await act(async () => copy?.click());
     await flush();
@@ -1068,6 +1077,8 @@ describe("Settings Setup overview", () => {
       expect.stringContaining("first-tree-dev login short-lived-code"),
     );
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("exact `applyCommand`"));
+    expect(document.body.querySelector("[data-byo-setup-prompt-preview]")).not.toBeNull();
+    expect(document.body.textContent).toContain("Copied");
 
     await act(async () => view.root.unmount());
   });
@@ -1363,7 +1374,7 @@ describe("Settings Setup overview", () => {
     await act(async () => view.root.unmount());
   });
 
-  it("redirects the retired Team Agent hash to GitHub task routing", async () => {
+  it("redirects the retired Team Agent hash to GitHub automatic handling", async () => {
     const view = await renderSettingsSetupPage("/settings/setup#team-agent");
     await waitForText(view.host, "/settings/integrations/github#task-routing");
 

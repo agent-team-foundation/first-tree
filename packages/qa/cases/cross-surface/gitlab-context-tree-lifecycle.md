@@ -72,7 +72,7 @@ runtime, network, credential, and cross-surface behavior.
   and confirm the documented fail-open duplicate risk rather than false
   suppression.
   Generic GitLab entity attention remains independently observable.
-- Observe connection health in Web Settings and Setup with only a Project Hook,
+- Observe connection health in Web Settings and Getting Started with only a Project Hook,
   only a System Hook, and both hooks. Require each observed source to appear
   independently. A Project-only Issue or Note must show the Project Hook as
   observed without claiming untested event types, and without a System Hook

@@ -69,7 +69,7 @@ basic live eval controls as gates, including `--suite`, `--case`, `--model`,
 installed First Tree skill topology; it is fixture coverage for the generated
 briefing boundary, not a live First Tree Cloud/session E2E. `first-tree-welcome`
 periodic runs the concrete setup-state matrix rows as live eval cases while
-keeping the default welcome gate limited to its three high-risk rows.
+keeping the default welcome gate limited to four high-risk rows.
 `first-tree-seed` periodic runs a real-repo realism case that builds a per-run
 bare source fixture from the current `first-tree` repo `HEAD` and still
 requires the seed bare-source worktree protocol. `eval:periodic` with no
@@ -94,9 +94,10 @@ judge:
 - `first-tree-seed` skeleton quality from the actual `empty-tree-source-present`
   Phase 1 proposal, with scores for source grounding, structure fit,
   phase-boundary discipline, coverage calibration, and conciseness;
-- `first-tree-welcome` first-task quality from the actual readable-repo +
-  populated-tree row output, with scores for evidence grounding, boundedness,
-  usefulness, verifiability, and avoiding setup-as-task.
+- `first-tree-welcome` project-receipt and initial-microtask quality from the
+  actual readable-repo + populated-tree row output, with scores for evidence
+  grounding, bounded reading, receipt honesty, low choice cost, a reviewable
+  read-only option, mutation qualification, and avoiding premature expansion.
 
 The quality runner calls Codex as the judge by default. Use `--judge-model` or
 `JUDGE_MODEL` to select the judge model, and `--judge-bin` or `JUDGE_CODEX_BIN`
@@ -178,22 +179,27 @@ the currently implemented `first-tree-welcome` gate rows:
 
 - tree kickoff chat routes to the tree setup lane instead of welcome first-task
   options;
-- no repo connected / intro chat asks for a local project folder path or GitHub repo URL
+- no repo connected / intro chat asks for a local project folder path or Git repository URL
   without requiring GitHub authorization first;
-- readable repo + populated Context Tree reads both evidence sources and offers
-  two or three bounded first-task options without seeding or setting up the
-  tree.
+- readable repo + populated Context Tree uses existing working status, keeps the
+  source read bounded, gives a two-sentence project receipt, and offers one or
+  two single-select microtasks with at least one reviewable read-only option and
+  free-text input; it rejects time estimates, setup, multi-select, and first-task
+  fan-out;
+- a selected first microtask completes in the current chat with a reviewable
+  result and exactly one directly related bridge.
 
 `eval:periodic -- --suite first-tree-welcome` runs the broader live welcome
 matrix. It covers every concrete setup-state row from the current
 `first-tree-welcome` matrix, including invitee not-ready/ready states, selected
 repo authorization failure, local-readable repo with missing GitHub App,
-installed app with no selected repo, readable repo with empty tree, and
-readable repo with unknown tree. For the admin + readable repo + missing/empty
-tree row, the welcome chat leads with evidence-backed code-first task options
-and may also offer "Build your Context Tree" as a first-class menu option; it
-must never seed, create, or bind the tree from the launcher itself — that side
-effect stays forbidden. The explicit catch-all row remains a no-model
+installed app with no readable project, readable repo with empty tree, readable
+repo with unknown tree, and qualified admin/invitee post-result bridges. The
+welcome chat never auto-registers a Team repo; the Context Tree bridge is valid
+only for a confirmed admin after a result exposes a lasting cross-module
+decision and the tree is confirmed missing/empty. The selected first task must
+remain in the current chat, while later fan-out remains outside the first-menu
+contract. The explicit catch-all row remains a no-model
 floor invariant because it is a structural fallback rather than a stable live
 oracle. Periodic case ids use the gate row id plus `-periodic`; `--case` also
 accepts the source row id as an alias.

@@ -38,6 +38,7 @@ export function PromptTab() {
     queryKey: ["agent-resources", ctx.uuid],
     queryFn: () => getAgentResources(ctx.uuid),
     enabled: !!ctx.uuid && ctx.canManageAgent && !ctx.isHuman,
+    refetchOnMount: false,
   });
   const savePromptMut = useMutation({
     mutationFn: (body: string) => {
@@ -47,8 +48,8 @@ export function PromptTab() {
         bindings: updatePromptBindings(resourcesQuery.data.bindings, editor, body),
       });
     },
-    // Same hardening as the shared resource hook (stale-GET cancel + 409 refetch),
-    // since the shell now also observes this cache. `onSuccessAfter` closes the editor.
+    // Same hardening as the shared resource hook (stale-GET cancel + 409 refetch).
+    // `onSuccessAfter` closes the editor.
     ...agentResourcesMutationHandlers(queryClient, ctx.uuid, {
       onSuccessAfter: () => {
         setEditor(null);
@@ -66,7 +67,11 @@ export function PromptTab() {
     },
     ...agentResourcesMutationHandlers(queryClient, ctx.uuid, { onSuccessAfter: markSaved }),
   });
-  if (ctx.isHuman) return <Navigate to="../profile" replace />;
+  // Instructions is an editor-only tab (`tabKeysFor` gates it on
+  // `canEditConfig`, and the runtime config query is disabled without it).
+  // Non-editors reach this route by deep link or by switching agents while on
+  // it, and would otherwise land on a permanently empty editor.
+  if (ctx.isHuman || !ctx.canEditConfig) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
   const prompt = ctx.config?.payload.prompt.append ?? "";
   const promptSections = ctx.config?.payload.prompt.sections;
@@ -130,6 +135,7 @@ export function PromptTab() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <Section
+        headingLevel={3}
         title={titleWithSemantics("Instructions", justSaved)}
         action={
           canEditPrompt && !resourceError && !editor && resources ? (
@@ -274,7 +280,7 @@ function EffectiveInstructionsBlock({ prompt, sections }: { prompt: string; sect
 // exactly like its row does.
 function segmentLabel(section: PromptSection): string {
   const name = section.name.trim() || "Custom instructions";
-  const source = section.scope === "team" ? "From your team" : "Added by you";
+  const source = section.scope === "team" ? "Team default" : "Custom for this agent";
   return `${name} · ${source}`;
 }
 
@@ -696,7 +702,11 @@ function PromptResourceBlock(props: {
   return (
     <ResourceRowView
       name={props.name}
-      source={props.templateName !== undefined ? templateSourceLabel(props.templateName) : sourceLabel(props.source)}
+      source={
+        <span title={props.templateName !== undefined ? templateSourceLabel(props.templateName) : undefined}>
+          {sourceLabel(props.source)}
+        </span>
+      }
       status={props.marker}
       toggle={props.toggle}
       menu={props.menu}

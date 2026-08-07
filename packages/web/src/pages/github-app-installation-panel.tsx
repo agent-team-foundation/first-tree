@@ -10,17 +10,15 @@ import {
   getGithubAppInstallation,
   getGithubAppInstallUrl,
 } from "../api/github-app.js";
+import { getAuthProviders, startProviderLink } from "../api/user-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-
-/**
- * Per-tab marker set when the admin kicks off an install. It locks the CTA (a
- * second mint would overwrite the first attempt's `oauth_state_nonce` cookie and
- * break its callback) and gates the "waiting for GitHub" affordance. Cleared once
- * a connectable installation shows up in the panel. Mirrors the connect-code /
- * Context-build entries, which use the same open-popup-in-a-new-tab-then-poll flow.
- */
-const INSTALL_ATTEMPT_KEY = "settings:github:install-attempt";
+import { clearGithubAccountLinkReturn, rememberGithubAccountLinkReturn } from "../lib/github-account-link-return.js";
+import {
+  clearGithubInstallAttemptForOrganization,
+  hasGithubInstallAttemptForOrganization,
+  rememberGithubInstallAttempt,
+} from "../lib/github-install-attempt.js";
 
 /**
  * How often the open connect panel refreshes its installation list. Two
@@ -44,9 +42,21 @@ const CONNECT_PANEL_POLL_MS = 2000;
  *     holds them. Binding is always an explicit click here — installs
  *     never auto-connect.
  */
-export function GithubAppInstallationPanel({ readOnly = false }: { readOnly?: boolean }) {
+export function GithubAppInstallationPanel({
+  readOnly = false,
+  initiallyOpen = false,
+  accountLinkError = null,
+}: {
+  readOnly?: boolean;
+  initiallyOpen?: boolean;
+  accountLinkError?: string | null;
+}) {
   const { organizationId } = useAuth();
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(initiallyOpen);
+
+  useEffect(() => {
+    if (initiallyOpen) setPanelOpen(true);
+  }, [initiallyOpen]);
 
   const installationQuery = useQuery({
     queryKey: ["github-app-installation", organizationId],
@@ -79,6 +89,7 @@ export function GithubAppInstallationPanel({ readOnly = false }: { readOnly?: bo
       <ConnectPanel
         organizationId={organizationId}
         bound={installationQuery.data ?? null}
+        accountLinkError={accountLinkError}
         onBack={() => setPanelOpen(false)}
       />
     );
@@ -207,11 +218,13 @@ function InstalledState({
 function ConnectPanel({
   organizationId,
   bound,
+  accountLinkError,
   onBack,
 }: {
   organizationId: string | null;
   /** The installation currently connected to this team (summary query), or null. */
   bound: GithubAppInstallationOutput | null;
+  accountLinkError: string | null;
   onBack: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -223,34 +236,75 @@ function ConnectPanel({
     refetchInterval: CONNECT_PANEL_POLL_MS,
   });
 
+  // GitHub is a capability-specific identity requirement, not a core sign-in
+  // requirement. Google/OIDC users remain fully authenticated in First Tree;
+  // this one panel asks them to link GitHub before it can mint install state.
+  const providersQuery = useQuery({
+    queryKey: ["auth-providers"],
+    queryFn: getAuthProviders,
+  });
+  const githubProvider = providersQuery.data?.providers.find((provider) => provider.provider === "github");
+
+  const linkGithubMutation = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("No organization selected");
+      rememberGithubAccountLinkReturn(organizationId);
+      try {
+        return await startProviderLink("github", "/settings/github");
+      } catch (error) {
+        clearGithubAccountLinkReturn();
+        throw error;
+      }
+    },
+    onSuccess: ({ redirectUrl }) => window.location.assign(redirectUrl),
+  });
+
   const installations = panelQuery.data?.installations ?? [];
   const connectable = installations.filter((i) => i.status === "connectable");
 
   // Install-attempt marker: locks the install CTA and shows the waiting
   // affordance until something connectable appears (the thing to click next).
   const [attempted, setAttempted] = useState(
-    () => typeof window !== "undefined" && !!window.sessionStorage.getItem(INSTALL_ATTEMPT_KEY),
+    () => typeof window !== "undefined" && hasGithubInstallAttemptForOrganization(organizationId),
   );
   useEffect(() => {
+    setAttempted(typeof window !== "undefined" && hasGithubInstallAttemptForOrganization(organizationId));
+  }, [organizationId]);
+  useEffect(() => {
     if (attempted && connectable.length > 0 && typeof window !== "undefined") {
-      window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
+      clearGithubInstallAttemptForOrganization(organizationId);
       setAttempted(false);
     }
-  }, [attempted, connectable.length]);
+  }, [attempted, connectable.length, organizationId]);
 
   // The install URL is minted on click (not preloaded): the server signs a
   // `state` JWT and sets the matching `oauth_state_nonce` cookie before handing
-  // back the `installations/new?state=…` URL, and both expire after 10 minutes.
-  // Minting at click time keeps them fresh (codex P2 follow-up).
+  // back the GitHub identity-preflight URL. A matching callback mints a fresh
+  // state/cookie pair and continues to `installations/new`; both phases expire
+  // after 10 minutes. Minting at click time keeps them fresh.
   const installUrlMutation = useMutation({
     mutationFn: (next: string | undefined) => {
       if (!organizationId) throw new Error("No organization selected");
       return getGithubAppInstallUrl(organizationId, next);
     },
+    onError: (error) => {
+      // The identity can be unlinked in another tab after this panel loaded.
+      // Refresh the capability query so the UI recovers to the actionable
+      // Continue-with-GitHub state instead of leaving a stale Install button.
+      if (error instanceof ApiError && error.code === "github_identity_required") {
+        void providersQuery.refetch();
+      }
+    },
   });
 
   const handleInstall = (): void => {
     if (!organizationId) return;
+    // Set before opening so a same-origin blank popup inherits the marker. If
+    // state verification fails before the callback can recover its signed
+    // intent, the OAuth error surface can still return this install attempt to
+    // the stable GitHub panel rather than the app root.
+    rememberGithubInstallAttempt(organizationId);
+    setAttempted(true);
     // Open the tab synchronously inside the click gesture so the browser doesn't
     // treat the post-await open as a blocked popup; fill its location once the
     // URL is minted, or close it on failure. GitHub installs in that tab and
@@ -265,12 +319,14 @@ function ConnectPanel({
     const next = installTab ? "/onboarding/connected" : undefined;
     installUrlMutation.mutate(next, {
       onSuccess: (installUrl) => {
-        window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
-        setAttempted(true);
         if (installTab) installTab.location.href = installUrl;
         else window.location.assign(installUrl); // popup blocked — full redirect
       },
-      onError: () => installTab?.close(),
+      onError: () => {
+        clearGithubInstallAttemptForOrganization(organizationId);
+        setAttempted(false);
+        installTab?.close();
+      },
     });
   };
 
@@ -278,7 +334,7 @@ function ConnectPanel({
   // installing): a fresh URL overwrites the nonce cookie, so retry is a
   // conscious action, never an auto re-click while the first tab may be mid-flow.
   const handleStartOver = (): void => {
-    window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
+    clearGithubInstallAttemptForOrganization(organizationId);
     setAttempted(false);
     installUrlMutation.reset();
   };
@@ -307,6 +363,78 @@ function ConnectPanel({
   const slugMissing = installUrlMutation.error instanceof ApiError && installUrlMutation.error.status === 503;
   const installDisabled = !organizationId || installUrlMutation.isPending || attempted;
 
+  // Keep the ordinary connected-user path unchanged. Only the missing-
+  // identity edge case is intercepted, in place, before any install URL can
+  // be minted. The server independently enforces the same gate.
+  if (!bound && (providersQuery.isLoading || providersQuery.error || !githubProvider?.connected)) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+        <div>
+          <Button type="button" variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft aria-hidden className="h-3 w-3" />
+            Back
+          </Button>
+        </div>
+        <div aria-live="polite">
+          <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
+            Connect your GitHub account
+          </div>
+          {providersQuery.isLoading ? (
+            <p className="text-body" role="status" style={{ color: "var(--fg-3)", margin: 0 }}>
+              Checking your GitHub connection…
+            </p>
+          ) : providersQuery.error ? (
+            <div>
+              <p className="text-body" role="status" style={{ color: "var(--fg-3)", margin: 0 }}>
+                We couldn't check your GitHub connection. Try again.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void providersQuery.refetch()}
+                style={{ marginTop: "var(--sp-2)" }}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : githubProvider?.available === false ? (
+            <p className="text-body" role="alert" style={{ color: "var(--state-error)", margin: 0 }}>
+              GitHub sign-in isn't configured on this First Tree deployment. Ask your operator to configure it.
+            </p>
+          ) : (
+            <div>
+              {accountLinkError ? (
+                <p className="text-body" role="alert" style={{ color: "var(--state-error)", margin: 0 }}>
+                  {accountLinkErrorCopy(accountLinkError)}
+                </p>
+              ) : null}
+              <p className="text-body" style={{ color: "var(--fg-2)", margin: 0 }}>
+                Required before installing the First Tree GitHub App.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => linkGithubMutation.mutate()}
+                disabled={linkGithubMutation.isPending}
+                style={{ marginTop: "var(--sp-2)" }}
+              >
+                {linkGithubMutation.isPending ? "Opening GitHub…" : "Continue with GitHub"}
+              </Button>
+              {linkGithubMutation.error ? (
+                <p className="text-body" role="alert" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+                  {linkGithubMutation.error instanceof Error
+                    ? linkGithubMutation.error.message
+                    : "Could not start GitHub account connection."}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
       <div>
@@ -316,11 +444,22 @@ function ConnectPanel({
         </Button>
       </div>
 
+      {accountLinkError ? (
+        <p className="text-body" role="alert" style={{ color: "var(--state-error)", margin: 0 }}>
+          {accountLinkErrorCopy(accountLinkError, githubProvider?.accountName)}
+        </p>
+      ) : null}
+
       {/* ── Step 1: get the App installed on GitHub ──────────────────── */}
       <div>
         <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-2)" }}>
           Step 1: Install the First Tree App on your GitHub
         </div>
+        {githubProvider?.connected ? (
+          <p className="text-label" style={{ color: "var(--fg-3)", margin: "0 0 var(--sp-2)" }}>
+            GitHub connected{githubProvider.accountName ? ` as @${githubProvider.accountName}` : ""}.
+          </p>
+        ) : null}
         {slugMissing ? (
           <p className="text-body" style={{ color: "var(--state-error)", margin: 0 }}>
             The GitHub App slug isn't configured on this First Tree deployment. Ask your operator to set{" "}
@@ -328,16 +467,51 @@ function ConnectPanel({
           </p>
         ) : bound ? (
           // This team already has a connected installation, so Step 1 is done —
-          // surface that state instead of a primary CTA. Reinstall kicks off a
-          // fresh install (e.g. on another GitHub account); Manage on GitHub
-          // opens the installed App's own settings page.
+          // surface that state instead of a primary CTA. Reinstall remains
+          // identity-gated, while Manage and Disconnect keep working even when
+          // the current First Tree admin has no linked GitHub identity.
           <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
             <span className="text-body" style={{ color: "var(--fg-2)" }}>
               GitHub App installed.
             </span>
-            <Button type="button" variant="outline" size="sm" onClick={handleInstall} disabled={installDisabled}>
-              {installUrlMutation.isPending ? "Opening GitHub…" : "Reinstall"}
-            </Button>
+            {providersQuery.isLoading ? (
+              <span className="text-label" role="status" style={{ color: "var(--fg-3)" }}>
+                Checking your GitHub connection…
+              </span>
+            ) : providersQuery.error ? (
+              <>
+                <span className="text-label" role="status" style={{ color: "var(--fg-3)" }}>
+                  We couldn't check your GitHub connection.
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={() => void providersQuery.refetch()}>
+                  Try again
+                </Button>
+              </>
+            ) : githubProvider?.available === false ? (
+              <span className="text-label" role="alert" style={{ color: "var(--state-error)" }}>
+                GitHub sign-in isn't configured. Ask your operator to configure it before reinstalling.
+              </span>
+            ) : githubProvider?.connected ? (
+              <Button type="button" variant="outline" size="sm" onClick={handleInstall} disabled={installDisabled}>
+                {installUrlMutation.isPending ? "Opening GitHub…" : "Reinstall"}
+              </Button>
+            ) : (
+              <div>
+                <span className="text-label" style={{ color: "var(--fg-2)" }}>
+                  Required before installing the First Tree GitHub App.
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => linkGithubMutation.mutate()}
+                  disabled={linkGithubMutation.isPending}
+                  style={{ marginLeft: "var(--sp-2)" }}
+                >
+                  {linkGithubMutation.isPending ? "Opening GitHub…" : "Continue with GitHub"}
+                </Button>
+              </div>
+            )}
             <Button asChild variant="outline" size="sm">
               <a href={bound.manageUrl} target="_blank" rel="noreferrer">
                 Manage on GitHub
@@ -422,6 +596,27 @@ function ConnectPanel({
       </InstallationGroup>
     </div>
   );
+}
+
+function accountLinkErrorCopy(code: string, linkedGithubLogin?: string | null): string {
+  if (code === "identity-conflict") {
+    return "That GitHub account is already connected to another First Tree user. Continue with a different GitHub account.";
+  }
+  if (code === "identity-mismatch") {
+    return "You selected a different GitHub account. Continue with the account you want linked to this First Tree user.";
+  }
+  if (code === "provider-denied") return "GitHub authorization was canceled. Continue when you're ready.";
+  if (code === "state-expired") return "That GitHub connection request expired. Start again.";
+  if (code === "github-exchange-failed") return "GitHub didn't accept the connection. Try again in a moment.";
+  if (code === "install-not-verified") {
+    return linkedGithubLogin
+      ? `GitHub couldn't verify the account for this install. Use @${linkedGithubLogin}, then try again.`
+      : "GitHub couldn't verify the account for this install. Try again with your linked GitHub account.";
+  }
+  if (code === "install-not-admin") {
+    return "Your Team admin access changed during the install. Restore access or ask an active admin to try again.";
+  }
+  return "GitHub account connection did not complete. Try again.";
 }
 
 function connectError(error: unknown): string {

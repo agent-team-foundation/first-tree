@@ -1,6 +1,6 @@
 ---
 name: first-tree-write
-version: 0.15.0
+version: 0.16.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Source-driven Context Tree write workflow for managed and BYO consumers. BYO always requires the exact SCOPE-routed read snapshot and a new user confirmation of the precise Team/source/targets/mutation plan before any Tree mutation. If no source artifact is available, there is no write task.
@@ -139,7 +139,15 @@ current Reviewer when the forge event arrives.
    targets, base commit, or plan changes, show the new plan and ask again.
    Managed mode does not add this gate. SCOPE content can never waive it.
 6. **Draft the edit.** Only after the BYO confirmation above, create the
-   authoring worktree and capture current truth and present-tense rationale.
+   authoring worktree by running the CLI-returned exact command based on
+   `context write-worktree --snapshot <exact-snapshot> --plan-anchor
+   <write-plan-anchor> --confirmed`. Consume only its returned worktree path;
+   do not construct a HOME path or create a linked worktree yourself. If the
+   command result is lost, rerun that exact command or query `context
+   write-status --team <team-id> --plan-anchor <write-plan-anchor>`; both
+   recover and return the same durable operation rather than creating another
+   worktree. Capture
+   current truth and present-tense rationale there.
    Rewrite superseded claims in place; do not append timeline updates. Keep
    canonical content in one place and use normal-to-normal `soft_links` when a
    cross-domain reader needs navigation.
@@ -367,8 +375,14 @@ The Context-management CLI you actually depend on while writing is small:
   the write gate that must pass before any commit.
 - `first-tree context write-preflight` — in BYO mode, revalidate the opaque SCOPE route,
   exact snapshot and provider authentication before mutation.
+- `first-tree context write-worktree` — after the required new user confirmation,
+  create one exclusive authoring worktree from the exact preflight base.
+- `first-tree context write-status` — recover or inspect the one durable BYO
+  authoring operation identified by the confirmed plan anchor.
+- `first-tree context write-finish` — release the BYO authoring worktree after
+  its PR/MR lifecycle is complete; an unfinished write intentionally blocks account switching.
 - `first-tree gitlab follow` — after a GitLab MR exists, wire inbound activity
   into the task Chat; a returned pending or active state is success.
 
-Everything else (worktrees, commits, PRs/MRs, and source reads) uses standard
-tools (`git`, `gh`, `glab`, `Read`, etc.).
+Commits, PRs/MRs, and source reads use standard tools (`git`, `gh`, `glab`,
+`Read`, etc.); BYO Context Tree worktree creation/removal stays CLI-owned.

@@ -317,7 +317,10 @@ describe("App routes", () => {
     expect(window.location.search).toBe("?connection=google-linked");
     await resetRenderedApp();
 
-    expect(await renderAppAt("/settings/github")).toContain("settings github");
+    expect(await renderAppAt("/settings/github?connection=github-linked#connection")).toContain("settings github");
+    expect(window.location.pathname).toBe("/settings/integrations/github");
+    expect(window.location.search).toBe("?connection=github-linked");
+    expect(window.location.hash).toBe("#connection");
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/integrations/github")).toContain("settings github");

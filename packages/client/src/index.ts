@@ -14,7 +14,6 @@ export {
 } from "./client-connection.js";
 // Handlers
 export { detectStreamApiError, StreamApiTransientError } from "./handlers/claude-code.js";
-export { registerBuiltinHandlers } from "./handlers/index.js";
 export { createKimiCodeHandler, formatKimiCodeError, kimiToolIsReadOnly } from "./handlers/kimi-code.js";
 export {
   buildOpenCodeConfigContent,
@@ -42,7 +41,10 @@ export { RUNTIME_AUTH_DRIVERS } from "./providers/auth-drivers.js";
 export type { BuiltinProviderProbeTable, CapabilityProbe } from "./providers/builtin-probes.js";
 export { BUILTIN_PROVIDER_PROBES, probedRuntimeProviders } from "./providers/builtin-probes.js";
 export type { BuiltinHandlerRegistry, BuiltinHandlerRegistryDeps } from "./providers/builtin-registry.js";
-export { createBuiltinHandlerRegistry } from "./providers/builtin-registry.js";
+export {
+  createBuiltinHandlerRegistry,
+  resolveAndLogClaudeExecutable,
+} from "./providers/builtin-registry.js";
 export { PROVIDER_SKILL_ROOTS } from "./providers/skill-roots.js";
 export { readCanonicalContextTreeWriteRouting } from "./runtime/agent-briefing.js";
 // Runtime
@@ -148,10 +150,10 @@ export type {
   HandlerConfig,
   HandlerContext,
   HandlerFactory,
+  HandlerFactoryMap,
   SessionContext,
   SessionMessage,
 } from "./runtime/handler.js";
-export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
 export type { BuildImageAttachmentsOptions, BuildMessageImageSnapshotsResult } from "./runtime/image-snapshots.js";
 export { buildMessageImageSnapshots } from "./runtime/image-snapshots.js";
 export { InputController } from "./runtime/input-controller.js";
@@ -198,8 +200,6 @@ export {
   type LoginOutcome,
   stripAnsi,
 } from "./runtime/runtime-login.js";
-export { SessionManager } from "./runtime/session-manager.js";
-export { SessionRegistry } from "./runtime/session-registry.js";
 // Skills (slash-command discovery)
 export { discoverClaudeCodeSkills } from "./runtime/skills/index.js";
 export type {
@@ -224,6 +224,12 @@ export {
   INIT_COMPLETE_SENTINEL_REL,
   markWorkspaceInitComplete,
 } from "./runtime/workspace.js";
+export type {
+  CleanAgentWorkspacesOptions,
+  CleanAgentWorkspacesResult,
+  CleanedWorkspaceEntry,
+} from "./runtime/workspace-maintenance.js";
+export { cleanAgentWorkspaces } from "./runtime/workspace-maintenance.js";
 export type {
   AccessTokenProvider,
   ContextReviewRuntimeConfig,

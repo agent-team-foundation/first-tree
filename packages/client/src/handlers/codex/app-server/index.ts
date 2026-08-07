@@ -5,6 +5,7 @@ import {
   encodeProviderRetryEventMessage,
   isLandingCampaignTrialAgentMetadata,
   RUNTIME_NOTICE_METADATA_KEY,
+  runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
@@ -32,8 +33,9 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
+} from "../../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../../runtime/contracts.js";
+
 import {
   isManagedSkillsUnsafeDiscoveryError,
   type ReconciledTeamSkill,
@@ -195,7 +197,7 @@ const CODEX_COMPACT_FAILURE_MESSAGE =
   "Codex failed to compact this thread before answering. Start a new thread or clear earlier history before retrying.";
 export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfig): AgentHandler => {
   const workspaceRoot = config.workspaceRoot as string;
-  const runtimeProvider = "codex" as const;
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -1862,8 +1864,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
   return {
     async start(message, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       shutdownRequested = false;
       providerRetryFence = false;
       startupTurnPending = true;
@@ -1881,13 +1882,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           sessionCtx.log(
             `codex app-server initial formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
           );
-          return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "queued" } } : id;
+          return { sessionId: id, route: { kind: "owned", mode: "queued" } };
         }
         const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
         // Fresh thread: seed the briefing baseline once the turn actually
         // delivered, so a later resume only nudges on a real briefing change.
         if (cwd && delivered) writeSessionBriefingFingerprint(cwd, id, briefingFingerprint);
-        return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "processing" } } : id;
+        return { sessionId: id, route: { kind: "owned", mode: "processing" } };
       } finally {
         startupTurnPending = false;
         schedulePendingDrain();
@@ -1895,8 +1896,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     },
 
     async resume(message, sessionId, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       shutdownRequested = false;
       providerRetryFence = false;
       startupTurnPending = message !== undefined;
@@ -1937,9 +1937,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             sessionCtx.log(
               `codex app-server resume formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
             );
-            return hasExplicitDeliveryToken
-              ? { sessionId: effectiveSessionId, route: { kind: "owned", mode: "queued" } }
-              : effectiveSessionId;
+            return { sessionId: effectiveSessionId, route: { kind: "owned", mode: "queued" } };
           }
           const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
           effectiveSessionId = threadId ?? effectiveSessionId;
@@ -1947,9 +1945,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           // delivered; a retried / pre-provider turn leaves it for redelivery.
           if (cwd && delivered) writeSessionBriefingFingerprint(cwd, effectiveSessionId, briefingFingerprint);
         }
-        return hasExplicitDeliveryToken
-          ? { sessionId: effectiveSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-          : effectiveSessionId;
+        return { sessionId: effectiveSessionId, route: message ? { kind: "owned", mode: "processing" } : null };
       } finally {
         startupTurnPending = false;
         schedulePendingDrain();
@@ -1958,7 +1954,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
     inject(message, token) {
       if (!ctx || shutdownRequested) return { kind: "rejected", reason: "no_active_context", retryable: true };
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      const deliveryToken = token;
       pendingInputs.push({ message, token: deliveryToken });
       pendingInputGeneration++;
       schedulePendingDrain();

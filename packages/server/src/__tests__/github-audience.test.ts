@@ -7,9 +7,9 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { putContextReviewerAssignment } from "../services/context-reviewer-settings.js";
+import { isGithubAppTargetLogin } from "../services/github-app-self-output.js";
 import {
   type GithubProviderTaskContext,
-  isGithubAppTargetLogin,
   resolveGithubAudience as resolveAudienceResolution,
   resolveGithubActorHumanId,
 } from "../services/github-audience.js";
@@ -56,8 +56,8 @@ function projectAudienceTargets(targets: ScmAudienceTarget<GithubProviderTaskCon
         delegateAgentId: target.entry.wakeAgentId,
         kind: "new" as const,
         chatId: null,
-        involveReason: target.entry.reason,
-        involveLogin: target.entry.externalUsername,
+        involveReason: null,
+        involveLogin: null,
         teamAgentTask: { agentUuid: target.entry.providerContext.agentUuid },
       };
     }
@@ -204,6 +204,7 @@ function makeEvent(opts: {
   actorIsBot?: boolean;
   actorAuthorAssociation?: string | null;
   projectKey?: string;
+  entityUrl?: string;
   targets?: Array<{ externalUsername: string; reason: "mentioned" | "review_requested" | "assigned" }>;
   kind?: NormalizedScmEvent["kind"];
   eventType?: string;
@@ -225,7 +226,7 @@ function makeEvent(opts: {
       projectKey: opts.projectKey ?? "owner/repo",
       key: opts.entityKey,
       title: "X",
-      url: "https://github.com/owner/repo",
+      url: opts.entityUrl ?? "https://github.com/owner/repo",
     },
     actor: {
       externalUsername: opts.actorLogin,
@@ -298,9 +299,9 @@ describe("resolveAudience", () => {
   const getApp = useTestApp();
 
   it.each([
-    ["mentioned", "test-app-slug"],
-    ["assigned", "test-app-slug[bot]"],
-  ] as const)("routes an App %s target to the selected GitHub Task Agent while Automatic Review is off", async (reason, externalUsername) => {
+    ["issue", "owner/repo#41", { issues: "write" }, "commented"],
+    ["pull_request", "owner/repo#42", { pull_requests: "write" }, "reviewed"],
+  ] as const)("automatically routes a normalized %s event without App mention or assignment evidence", async (entityType, entityKey, appPermissions, kind) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const teamAgentUuid = await configureTeamAgent(app, admin);
@@ -309,26 +310,28 @@ describe("resolveAudience", () => {
       app.db,
       makeEvent({
         orgId: admin.organizationId,
-        entityType: "issue",
-        entityKey: "owner/repo#41",
-        actorLogin: admin.username,
-        actorAuthorAssociation: reason === "mentioned" ? "MEMBER" : "NONE",
-        targets: [{ externalUsername, reason }],
-        kind: reason === "assigned" ? "assigned" : "commented",
+        entityType,
+        entityKey,
+        actorLogin: "external-contributor",
+        actorAuthorAssociation: "CONTRIBUTOR",
+        targets: [],
+        kind,
       }),
-      { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
+      { appSlug: "test-app-slug", appPermissions },
     );
 
     expect(projectAudienceTargets(resolution.targets)).toEqual([
-      expect.objectContaining({
+      {
         humanAgentId: admin.humanAgentUuid,
         delegateAgentId: teamAgentUuid,
         kind: "new",
-        involveReason: reason,
-        involveLogin: externalUsername.toLowerCase(),
+        chatId: null,
+        involveReason: null,
+        involveLogin: null,
         teamAgentTask: { agentUuid: teamAgentUuid },
-      }),
+      },
     ]);
+    expect(resolution.appTaskBlocker).toBeNull();
   });
 
   it("does not treat the App login as a human target when no GitHub Task Agent is selected", async () => {
@@ -351,7 +354,63 @@ describe("resolveAudience", () => {
     expect(projectAudienceTargets(resolution.targets)).toEqual([]);
   });
 
-  it("ignores an unauthorized public text mention while preserving ordinary audience routing", async () => {
+  it("does not use App mention text or author association as automatic-task authority", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const teamAgentUuid = await configureTeamAgent(app, admin);
+
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#43",
+        actorLogin: "external-contributor",
+        actorAuthorAssociation: "CONTRIBUTOR",
+        targets: [{ externalUsername: "test-app-slug", reason: "mentioned" }],
+        kind: "commented",
+      }),
+      { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
+    );
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([
+      expect.objectContaining({
+        delegateAgentId: teamAgentUuid,
+        involveReason: null,
+        involveLogin: null,
+        teamAgentTask: { agentUuid: teamAgentUuid },
+      }),
+    ]);
+  });
+
+  it.each([
+    ["issue", { issues: "read" }, "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED"],
+    ["pull_request", { pull_requests: "read" }, "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED"],
+  ] as const)("fails closed with a stable blocker for an automatic %s task without App write permission", async (entityType, permissions, blocker) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await configureTeamAgent(app, admin);
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType,
+        entityKey: "owner/repo#19",
+        actorLogin: "external",
+        actorAuthorAssociation: "NONE",
+        targets: [],
+        kind: "commented",
+      }),
+      { appSlug: "test-app-slug", appPermissions: permissions },
+    );
+    expect(projectAudienceTargets(resolution.targets)).toEqual([]);
+    expect(resolution.appTaskBlocker).toBe(blocker);
+  });
+
+  it.each([
+    ["a non-positive entity number", "owner/repo#0", "https://github.com/owner/repo/issues/0"],
+    ["a non-HTTPS entity URL", "owner/repo#23", "http://github.com/owner/repo/issues/23"],
+  ] as const)("fails closed without a task run for %s", async (_label, entityKey, entityUrl) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await configureTeamAgent(app, admin);
@@ -361,42 +420,194 @@ describe("resolveAudience", () => {
       makeEvent({
         orgId: admin.organizationId,
         entityType: "issue",
-        entityKey: "owner/repo#public-mention",
-        actorLogin: "external-contributor",
-        actorAuthorAssociation: "CONTRIBUTOR",
-        targets: [{ externalUsername: "test-app-slug", reason: "mentioned" }],
+        entityKey,
+        entityUrl,
+        actorLogin: "external",
         kind: "commented",
       }),
       { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
     );
 
     expect(projectAudienceTargets(resolution.targets)).toEqual([]);
+    expect(resolution.appTaskBlocker).toBe("GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED");
   });
 
   it.each([
-    ["issue", { issues: "read" }, "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED"],
-    ["pull_request", { pull_requests: "read" }, "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED"],
-    ["discussion", { issues: "write", pull_requests: "write" }, "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED"],
-    ["commit", { issues: "write", pull_requests: "write" }, "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED"],
-  ] as const)("fails closed with a stable blocker for an App-directed %s without a safe App comment publisher", async (entityType, permissions, blocker) => {
+    ["discussion", "owner/repo#19", "discussion_comment", "commented"],
+    ["commit", "owner/repo@abc1234", "commit_comment", "commit_commented"],
+  ] as const)("does not mint a provider task or blocker for normalized %s activity", async (entityType, entityKey, eventType, kind) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await configureTeamAgent(app, admin);
+
     const resolution = await resolveAudienceResolution(
       app.db,
       makeEvent({
         orgId: admin.organizationId,
         entityType,
-        entityKey: entityType === "commit" ? "owner/repo@abc1234" : "owner/repo#19",
-        actorLogin: admin.username,
-        actorAuthorAssociation: "MEMBER",
+        entityKey,
+        eventType,
+        actorLogin: "external",
         targets: [{ externalUsername: "test-app-slug", reason: "mentioned" }],
+        kind,
+      }),
+      { appSlug: "test-app-slug", appPermissions: { issues: "write", pull_requests: "write" } },
+    );
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([]);
+    expect(resolution.appTaskBlocker).toBeNull();
+  });
+
+  it("requires a configured App slug and preserves an independent subscription when it is missing", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await configureTeamAgent(app, admin);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `subscribed-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, admin.humanAgentUuid);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: admin.humanAgentUuid,
+      delegateId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#20",
+      chatId,
+      boundVia: "human_declared",
+    });
+
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#20",
+        actorLogin: "external",
         kind: "commented",
       }),
-      { appSlug: "test-app-slug", appPermissions: permissions },
+      { appSlug: null, appPermissions: { issues: "write" } },
     );
-    expect(projectAudienceTargets(resolution.targets)).toEqual([]);
-    expect(resolution.appTaskBlocker).toBe(blocker);
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([
+      expect.objectContaining({ kind: "existing", chatId, delegateAgentId: delegate }),
+    ]);
+    expect(resolution.appTaskBlocker).toBeNull();
+  });
+
+  it("preserves an independent subscription when no GitHub Task Agent is selected", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `subscribed-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, admin.humanAgentUuid);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: admin.humanAgentUuid,
+      delegateId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#22",
+      chatId,
+      boundVia: "human_declared",
+    });
+
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#22",
+        actorLogin: "external",
+        kind: "commented",
+      }),
+      { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
+    );
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([
+      expect.objectContaining({ kind: "existing", chatId, delegateAgentId: delegate }),
+    ]);
+    expect(resolution.appTaskBlocker).toBeNull();
+  });
+
+  it("preserves an independent subscription when the automatic task lacks App permission", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await configureTeamAgent(app, admin);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `subscribed-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, admin.humanAgentUuid);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: admin.humanAgentUuid,
+      delegateId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#21",
+      chatId,
+      boundVia: "human_declared",
+    });
+
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#21",
+        actorLogin: "external",
+        kind: "commented",
+      }),
+      { appSlug: "test-app-slug", appPermissions: { issues: "read" } },
+    );
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([
+      expect.objectContaining({ kind: "existing", chatId, delegateAgentId: delegate }),
+    ]);
+    expect(resolution.appTaskBlocker).toBe("GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED");
+  });
+
+  it("preserves an independent subscription while suppressing provider-task self-output", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await configureTeamAgent(app, admin);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `subscribed-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, admin.humanAgentUuid);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: admin.humanAgentUuid,
+      delegateId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#22",
+      chatId,
+      boundVia: "human_declared",
+    });
+
+    const resolution = await resolveAudienceResolution(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#22",
+        actorLogin: "test-app-slug[bot]",
+        actorIsBot: true,
+        kind: "commented",
+      }),
+      { appSlug: "test-app-slug", appPermissions: { issues: "write" }, appSelfOutput: true },
+    );
+
+    expect(projectAudienceTargets(resolution.targets)).toEqual([
+      expect.objectContaining({ kind: "existing", chatId, delegateAgentId: delegate }),
+    ]);
+    expect(resolution.appTaskBlocker).toBeNull();
   });
 
   it("routes the bound GitHub Context Tree repo to the Context Reviewer and other repos to the GitHub Task Agent", async () => {
@@ -416,7 +627,7 @@ describe("resolveAudience", () => {
       { updatedBy: admin.userId },
     );
 
-    const resolveAppAssignment = async (projectKey: string) => {
+    const resolveAutomaticEvent = async (projectKey: string) => {
       const resolution = await resolveAudienceResolution(
         app.db,
         makeEvent({
@@ -426,15 +637,15 @@ describe("resolveAudience", () => {
           projectKey,
           actorLogin: "external",
           actorAuthorAssociation: "NONE",
-          targets: [{ externalUsername: "test-app-slug[bot]", reason: "assigned" }],
-          kind: "assigned",
+          targets: [],
+          kind: "commented",
         }),
         { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
       );
       return { ...resolution, targets: projectAudienceTargets(resolution.targets) };
     };
 
-    await expect(resolveAppAssignment("OWNER/CONTEXT-TREE")).resolves.toMatchObject({
+    await expect(resolveAutomaticEvent("OWNER/CONTEXT-TREE")).resolves.toMatchObject({
       targets: [
         expect.objectContaining({
           delegateAgentId: reviewerUuid,
@@ -442,7 +653,7 @@ describe("resolveAudience", () => {
         }),
       ],
     });
-    await expect(resolveAppAssignment("owner/code")).resolves.toMatchObject({
+    await expect(resolveAutomaticEvent("owner/code")).resolves.toMatchObject({
       targets: [
         expect.objectContaining({
           delegateAgentId: teamAgentUuid,
@@ -477,8 +688,8 @@ describe("resolveAudience", () => {
         entityKey: "owner/context-tree#43",
         projectKey: "owner/context-tree",
         actorLogin: "external",
-        targets: [{ externalUsername: "test-app-slug[bot]", reason: "assigned" }],
-        kind: "assigned",
+        targets: [],
+        kind: "commented",
       }),
       { appSlug: "test-app-slug", appPermissions: { issues: "write" } },
     );

@@ -191,7 +191,8 @@ describe("ResponsibilitiesSection", () => {
 
   it("shows a clear empty state with zero responsibilities", async () => {
     await renderSection({ templateIds: [] });
-    expect(document.body.textContent).toContain("No template responsibilities are assigned to this agent.");
+    expect(document.body.textContent).toContain("No starting responsibilities yet.");
+    expect(buttonByText("Add responsibility")).toBeTruthy();
   });
 
   it("renders active, retired, and missing states with safe summaries", async () => {
@@ -210,14 +211,14 @@ describe("ResponsibilitiesSection", () => {
     });
     const text = document.body.textContent ?? "";
     expect(text).toContain("PR Engineer");
-    expect(text).toContain("Active");
+    expect(text).not.toContain("Active");
     expect(text).toContain("Old Writer");
     expect(text).toContain("Retired");
     expect(text).toContain("Try Docs Writer");
     expect(text).toContain("Unavailable template");
     const labels = document.body.querySelectorAll('[data-slot="template-responsibility-label"]');
     expect(labels).toHaveLength(3);
-    expect(labels[0]?.textContent).toBe("PR EngineerActivepurposevaluetools");
+    expect(labels[0]?.textContent).toBe("PR Engineerpurpose");
   });
 
   it("hides the edit affordance for read-only members", async () => {
@@ -323,7 +324,7 @@ describe("ResponsibilitiesSection", () => {
     // The authoritative response written into the cache is the zero set; the
     // card shows the neutral current-state copy, not a created-from-scratch
     // claim.
-    await waitForText("No template responsibilities are assigned to this agent.");
+    await waitForText("No starting responsibilities yet.");
     expect(document.body.textContent).not.toContain("created from scratch");
   });
 
@@ -420,6 +421,7 @@ describe("ResponsibilitiesSection", () => {
     await click(buttonByText("Remove"));
     await click(buttonByText("Save"));
     await waitForText("refreshed — review and save again.");
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toContain("refreshed — review and save again.");
 
     // The real subscription refetched after the 409 invalidate.
     expect(resourceMocks.getAgentResources.mock.calls.length).toBeGreaterThanOrEqual(2);

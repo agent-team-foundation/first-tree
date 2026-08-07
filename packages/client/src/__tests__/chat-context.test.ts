@@ -77,7 +77,10 @@ describe("renderRuntimeOutputContract", () => {
     expect(contract).toContain('first-tree chat send <name> "<message>"');
     expect(contract).toContain("first-tree chat ask <human> -F <body.md>");
     expect(contract).not.toContain('chat ask <human> "<question>"');
-    expect(contract).toContain('first-tree chat update --description "<status>"');
+    // Current state, not "status": the per-turn quick reference is the
+    // highest-salience shorthand for the Summary contract in the briefing, so
+    // it must not read as a work-log instruction.
+    expect(contract).toContain('first-tree chat update --description "<current state>"');
     // The quick-reference lines carry the send/ask boundary in miniature:
     // dependency-routed asks with a self-sufficient body; sends never carry a
     // blocking question.

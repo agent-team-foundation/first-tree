@@ -384,8 +384,8 @@ async function makeSlot(options?: {
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
   const handlerFactory = vi.fn((config: HandlerConfig) => ({
-    start: vi.fn(async () => "session-1"),
-    resume: vi.fn(async () => "session-1"),
+    start: vi.fn(async () => ({ sessionId: "session-1", route: { kind: "owned" as const, mode: "queued" as const } })),
+    resume: vi.fn(async () => ({ sessionId: "session-1", route: { kind: "owned" as const, mode: "queued" as const } })),
     inject: vi.fn(),
     suspend: vi.fn(async () => {}),
     shutdown: vi.fn(async () => {}),
@@ -456,6 +456,18 @@ describe("AgentSlot", () => {
     expect(connection.bindAgent).toHaveBeenCalledWith("agent-1", "claude-code", "1.2.3");
     expect(state.sessions).toHaveLength(0);
     expect(state.logger.info).toHaveBeenCalledWith("server reports type=human — message processing disabled");
+  });
+
+  it("refuses to construct SessionManager when runtimeType is not a known RuntimeProvider", async () => {
+    const { slot, connection, state } = await makeSlot({ runtimeType: "not-a-provider" });
+
+    await expect(slot.start()).rejects.toThrow(/Unsupported agent runtime type "not-a-provider"/);
+
+    expect(connection.bindAgent).toHaveBeenCalledWith("agent-1", "not-a-provider", "1.2.3");
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+    expect(state.sessions).toHaveLength(0);
+    expect(state.sessionConfigs).toHaveLength(0);
+    expect(Reflect.get(slot, "sessionManager")).toBeNull();
   });
 
   it("aborts the bind immediately on a permanent (4xx) config rejection — no retry", async () => {

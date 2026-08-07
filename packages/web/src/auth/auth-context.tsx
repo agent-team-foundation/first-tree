@@ -32,7 +32,7 @@ type MeResponse = {
      * ISO timestamp when the user finished the kickoff (Context Tree) step.
      * Distinct from `dismissedAt` (which only hides onboarding, leaving it
      * resumable). This completes first-run routing but does not hide the
-     * permanent Settings → Setup overview.
+     * permanent Settings → Getting Started overview.
      */
     completedAt?: string | null;
   };
@@ -115,7 +115,7 @@ type AuthContextValue = {
   onboardingDismissedAt: string | null;
   /**
    * ISO timestamp when the user finished the first-run flow. This controls
-   * onboarding redirects only; the permanent Settings → Setup overview remains
+   * onboarding redirects only; the permanent Settings → Getting Started overview remains
    * available after completion. `null` while onboarding is incomplete or only
    * dismissed.
    */
@@ -128,7 +128,7 @@ type AuthContextValue = {
   /**
    * PATCH `/me/onboarding { dismissed: false }`. Clears `onboardingDismissedAt`
    * so onboarding is pending again (the root redirects into `/onboarding`).
-   * Used by the Settings → Setup "Resume setup" toggle.
+   * Used by the Settings → Getting Started "Resume setup" toggle.
    */
   restoreOnboarding: () => Promise<void>;
   /**

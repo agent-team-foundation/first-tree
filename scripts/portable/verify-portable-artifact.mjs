@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,7 +75,9 @@ function verify(options) {
 
   const root = mkdtempSync(join(tmpdir(), "first-tree-portable-verify-"));
   try {
-    run("tar", tarExtractArgs(options.tarball, root));
+    const versionRoot = join(root, "versions", manifest.version);
+    mkdirSync(versionRoot, { recursive: true });
+    run("tar", tarExtractArgs(options.tarball, versionRoot));
     for (const path of [
       "VERSION",
       "INSTALL.json",
@@ -85,20 +87,20 @@ function verify(options) {
       `bin/${manifest.binName}`,
       `bin/${manifest.aliasName}`,
     ]) {
-      if (!existsSync(join(root, path))) fail(`extracted artifact missing ${path}`);
+      if (!existsSync(join(versionRoot, path))) fail(`extracted artifact missing ${path}`);
     }
-    const install = readJson(join(root, "INSTALL.json"));
+    const install = readJson(join(versionRoot, "INSTALL.json"));
     if (install.version !== manifest.version) fail("INSTALL.json version mismatch");
     if (install.platform !== options.platform) fail("INSTALL.json platform mismatch");
     if (install.appEntry !== "app/cli/index.mjs") fail("INSTALL.json appEntry mismatch");
-    const packageJson = readJson(join(root, "app", "package.json"));
+    const packageJson = readJson(join(versionRoot, "app", "package.json"));
     if (packageJson.name !== manifest.packageName) fail("app/package.json package name mismatch");
     if (packageJson.version !== manifest.version) fail("app/package.json version mismatch");
     if (!packageJson.dependencies?.["fs-native-extensions"]) {
       fail("app/package.json is missing the external native workspace-lock dependency");
     }
     const nativeLockPrebuild = join(
-      root,
+      versionRoot,
       "app",
       "node_modules",
       "fs-native-extensions",
@@ -109,11 +111,25 @@ function verify(options) {
     if (!existsSync(nativeLockPrebuild)) {
       fail(`portable artifact is missing native workspace-lock prebuild for ${options.platform}`);
     }
-    const versionRes = run(join(root, "bin", manifest.binName), ["--version"], {
+    const versionRes = run(join(versionRoot, "bin", manifest.binName), ["--version"], {
       env: { ...process.env, FIRST_TREE_HOME: join(root, "home") },
     });
     if (!versionRes.stdout.includes(manifest.version)) {
       fail(`expected --version output to include ${manifest.version}, got ${versionRes.stdout}`);
+    }
+    const loaderRes = run(
+      join(versionRoot, "bin", manifest.binName),
+      ["--json", "context", "skill", "load", "--protocol", "1", "--provider", "codex", "--name", "first-tree-read"],
+      { env: { ...process.env, FIRST_TREE_HOME: join(root, "home") } },
+    );
+    const loader = JSON.parse(loaderRes.stdout);
+    const appRoot = join(versionRoot, "app");
+    if (
+      loader?.ok !== true ||
+      loader.data?.skillPath !== join(appRoot, "skills", "first-tree-read", "SKILL.md") ||
+      loader.data?.policyPath !== join(appRoot, "runtime-assets", "context-tree-policy.md")
+    ) {
+      fail("portable Context loader did not resolve Core files from the immutable installed app root");
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

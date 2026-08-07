@@ -15,8 +15,8 @@ function describe(): string {
   return (
     "[DEPRECATED — use `chat update`] Set or clear a chat's topic and/or " +
     "description. The topic is the short display label the workspace chat list " +
-    "shows; the description is the chat's work summary + status report, surfaced " +
-    "to the agent each turn and used to locate the chat via `chat list`. By " +
+    "shows; the description is the chat's Summary — a current-state brief " +
+    "surfaced to the agent each turn and used to locate the chat via `chat list`. By " +
     "default acts on the caller's current chat (FIRST_TREE_CHAT_ID); use --chat " +
     "<id> to target another. Owner-gated: the chat's creator may set topic or " +
     "description, and when no agent owner is present (human-created chats, or the " +
@@ -104,7 +104,7 @@ export function registerChatSetTopicCommand(chat: Command): void {
     .description(describe())
     .option("--chat <chatId>", "Target chat id (default: FIRST_TREE_CHAT_ID)")
     .option("--clear", "Clear the topic (sets it to null, falls back to auto-derived title)")
-    .option("--description <text>", "Set the chat's running work summary")
+    .option("--description <text>", "Set the chat's Summary — its current-state brief")
     .option("--clear-description", "Clear the description (sets it to null)")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (topicArg: string | undefined, options: Options) => {

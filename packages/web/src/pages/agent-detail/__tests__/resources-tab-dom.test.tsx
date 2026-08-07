@@ -38,7 +38,7 @@ function agent(overrides: Partial<Agent> = {}): Agent {
     inboxId: overrides.inboxId ?? "inbox-1",
     metadata: overrides.metadata ?? {},
     source: overrides.source ?? "portal",
-    clientId: overrides.clientId ?? "client-1",
+    clientId: overrides.clientId === undefined ? "client-1" : overrides.clientId,
     runtimeProvider: overrides.runtimeProvider ?? "claude-code",
     runtimeState: overrides.runtimeState ?? "idle",
     createdAt: overrides.createdAt ?? NOW,
@@ -104,8 +104,6 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
       savedField: null,
     },
     clientStatus: undefined,
-    clientStatusLoading: false,
-    clientStatusError: null,
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: "gandy-macbook",
@@ -208,6 +206,14 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
 }
 
+function sectionByHeading(container: ParentNode, heading: string): HTMLElement | null {
+  return (
+    [...container.querySelectorAll<HTMLElement>("section")].find(
+      (section) => section.querySelector("h3")?.textContent?.trim() === heading,
+    ) ?? null
+  );
+}
+
 async function setInputValue(element: HTMLInputElement, value: string): Promise<void> {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -240,12 +246,39 @@ describe("ResourcesTab", () => {
 
     spy.mockReturnValue(context({ canEditConfig: false, canManageAgent: false }));
     let container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Integrations (MCP)");
+    await waitForText(container, "Integrations");
     expect(container.textContent).toContain("Skills");
-    expect(container.textContent).toContain("Integrations (MCP)");
-    // Code repositories moved to the Environment tab — not on Tools & skills.
+    expect(container.textContent).toContain("Integrations");
+    expect(container.textContent).toContain("This agent’s manager or a team admin manages skills.");
+    expect(container.textContent).toContain("This agent’s manager or a team admin manages integrations.");
+    // Code repositories live in Repositories — not in Tools & skills.
     expect(container.textContent).not.toContain("Repositories");
     expect(container.textContent).not.toContain("Agent repo");
+
+    await act(async () => root?.unmount());
+    root = null;
+    document.body.innerHTML = "";
+
+    spy.mockReturnValue(context({ agent: agent({ status: "suspended" }), canEditConfig: true, canManageAgent: true }));
+    container = await renderWithContext(<ResourcesTab />);
+    await waitForText(container, "Reactivate this agent to change skills.");
+    expect(container.textContent).toContain("Reactivate this agent to change integrations.");
+    expect(container.textContent).not.toContain("Team admins manage");
+
+    await act(async () => root?.unmount());
+    root = null;
+    document.body.innerHTML = "";
+
+    spy.mockReturnValue(
+      context({
+        agent: agent({ status: "suspended", clientId: null }),
+        canEditConfig: true,
+        canManageAgent: true,
+      }),
+    );
+    container = await renderWithContext(<ResourcesTab />);
+    await waitForText(container, "Choose a runtime before changing skills.");
+    expect(container.textContent).toContain("Choose a runtime before changing integrations.");
 
     await act(async () => root?.unmount());
     root = null;
@@ -316,17 +349,17 @@ describe("ResourcesTab", () => {
     await waitForText(container, "Skills");
 
     expect(container.textContent).toContain("Skills");
-    expect(container.textContent).toContain("Integrations (MCP)");
+    expect(container.textContent).toContain("Integrations");
     expect(container.textContent).not.toContain("Prompts");
     // Repos are not on this tab anymore (they moved to Environment).
     expect(container.textContent).not.toContain("Repositories");
     expect(container.textContent).not.toContain("Team repo");
     // Each editable section gets a quiet "+" add control (aria "Add <Type>").
-    expect(container.querySelector('button[aria-label="Add Skill"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Add skill"]')).toBeTruthy();
 
     // Enable an opt-in team skill via the skill section's add menu. The menu
     // panel portals to document.body, so query the item there.
-    await click(container.querySelector('button[aria-label="Add Skill"]'));
+    await click(container.querySelector('button[aria-label="Add skill"]'));
     await click(buttonByText(document.body, "Available skill"));
     expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
       expectedVersion: 3,
@@ -403,14 +436,20 @@ describe("ResourcesTab", () => {
 
     expect(container.textContent).toContain("Repositories");
     expect(container.textContent).toContain("Team repo");
+    const section = sectionByHeading(container, "Repositories · 1");
+    const sectionContent = section?.children.item(1) as HTMLElement | null;
+    const resourceList = sectionContent?.firstElementChild as HTMLElement | null;
+    expect(sectionContent?.style.cssText).toContain("border-top");
+    expect(resourceList?.style.border).toBe("");
+    expect(resourceList?.style.borderRadius).toBe("");
     // Repo peek is the compact `owner/repo` coordinate (default branch + derived
     // path are omitted), not the full clone URL.
     expect(container.textContent).toContain("acme/web");
     expect(container.textContent).not.toContain("https://github.com/acme/web.git");
-    expect(container.querySelector('button[aria-label="Add Repo"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Add repository"]')).toBeTruthy();
 
     // Open the repo section's add menu (panel portals to document.body).
-    await click(container.querySelector('button[aria-label="Add Repo"]'));
+    await click(container.querySelector('button[aria-label="Add repository"]'));
     // The opt-in repo is not enableable, and there's no "Enable from team" list…
     expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
     expect(document.body.textContent).not.toContain("Enable from team");
@@ -418,7 +457,7 @@ describe("ResourcesTab", () => {
     // provider-neutral Team repositories area in Settings. Skill/MCP/prompt
     // menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    await click(buttonByText(document.body, "Manage Team repositories"));
+    await click(buttonByText(document.body, "Manage team repositories"));
     expect(onNavigateAway).toHaveBeenCalledWith("/settings/repositories#code-repositories");
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
@@ -433,7 +472,14 @@ describe("ResourcesTab", () => {
     const container = await renderRouted(
       <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={onMutate} />,
     );
-    await click(container.querySelector('button[aria-label="Add Repo"]'));
+    const section = sectionByHeading(container, "Repositories · 0");
+    const sectionContent = section?.children.item(1) as HTMLElement | null;
+    const resourceList = sectionContent?.firstElementChild as HTMLElement | null;
+    const emptyState = resourceList?.firstElementChild as HTMLElement | null;
+    expect(sectionContent?.style.cssText).toContain("border-top");
+    expect(emptyState?.style.border).toBe("");
+    expect(emptyState?.style.borderRadius).toBe("");
+    await click(container.querySelector('button[aria-label="Add repository"]'));
     await click(buttonByText(document.body, "Add agent repo"));
     // Two fields only — URL + Default branch — no Name (matches Settings → Resources).
     expect(document.getElementById("agent-repo-url")).toBeTruthy();
@@ -458,19 +504,18 @@ describe("ResourcesTab", () => {
   it("keeps the MCP add menu actionable with no team MCP (routes to Settings, no dead end)", async () => {
     const layoutMocks = await import("../layout-context.js");
     const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
-    spy.mockReturnValue(context());
+    const ctx = context();
+    spy.mockReturnValue(ctx);
     // Default fixtures: empty effective MCP + no available team resources.
     const { ResourcesTab } = await import("../resources-tab.js");
 
     const container = await renderWithContext(<ResourcesTab />);
-    await waitForText(container, "Integrations (MCP)");
+    await waitForText(container, "Integrations");
 
-    // The MCP section is empty and the team offers nothing to enable — but the
-    // "+" (Add MCP) menu must still be actionable: it explains the source and
-    // routes to Settings → Resources instead of leaving a dead end.
-    await click(container.querySelector('button[aria-label="Add MCP"]'));
-    expect(document.body.textContent).toContain("No team MCP integrations to enable yet");
-    expect(document.body.textContent).toContain("Manage in Settings → Resources");
+    // With nothing in the Team catalog, the empty state routes straight to the
+    // shared setup surface instead of opening an intermediate dead-end menu.
+    await click(buttonByText(container, "Set up integration"));
+    expect(ctx.navigateAway).toHaveBeenCalledWith("/settings/resources");
   });
 
   it("disables a recommended skill via its Switch (off = disable binding)", async () => {
@@ -511,6 +556,11 @@ describe("ResourcesTab", () => {
     );
     const sw = container.querySelector('button[role="switch"]');
     expect(sw?.getAttribute("aria-checked")).toBe("true");
+    await click(container.querySelector('button[aria-label="Expand Team skill"]'));
+    expect(container.textContent).toContain("Applied as");
+    expect(container.textContent).toContain("Team default");
+    expect(container.textContent).toContain("Source");
+    expect(container.textContent).toContain("Team skill");
     await click(sw);
     expect(onMutate).toHaveBeenCalledWith([{ type: "skill", mode: "disable", resourceId: "skill-1", order: 1 }]);
   });

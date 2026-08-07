@@ -4,6 +4,7 @@ import {
   type Agent,
   type ChatDetail,
   type ChatParticipantDetail,
+  CONTEXT_DECISION_METADATA_KEY,
   encodeProviderRetryEventMessage,
   FIRST_CHAT_ORIENTATION_CHAT_STATES,
   FIRST_CHAT_ORIENTATION_METADATA_KEY,
@@ -12,7 +13,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -71,6 +72,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
+  listNeedYouRequests: vi.fn(),
 }));
 
 const readStateMocks = vi.hoisted(() => ({
@@ -650,6 +652,15 @@ function buttonByTitle(container: ParentNode, title: string): HTMLButtonElement 
   return container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="loc">{location.pathname + location.search}</div>;
+}
+
+function locText(container: ParentNode): string | null {
+  return container.querySelector('[data-testid="loc"]')?.textContent ?? null;
+}
+
 function buttonByText(container: ParentNode, text: string): HTMLButtonElement | null {
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
@@ -797,6 +808,7 @@ beforeEach(() => {
   imageStoreMocks.getImage.mockResolvedValue(null);
   imageStoreMocks.putImage.mockResolvedValue(undefined);
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
+  meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
   sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
@@ -826,24 +838,37 @@ describe("ChatView", () => {
     const bootstrap = message({
       id: "orientation-bootstrap",
       senderId: "human-agent-self",
-      content: "Nova, welcome aboard.\n\nPlease help me get started with First Tree.",
+      content: "Design Critique, welcome aboard.\n\nPlease help me get started with First Tree.",
       metadata: {
-        mentions: ["agent-1"],
+        mentions: ["agent-2"],
         [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
       },
       source: "api",
       createdAt: "2026-05-28T11:55:00.000Z",
     });
+    const orientationChat = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-2", name: "design", displayName: "Design Critique" }),
+      ],
+    });
     chatMocks.listChatMessages.mockResolvedValue(messages([bootstrap]));
     const { container, root } = await renderDom(
-      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={chatDetail()} />,
-      (queryClient) => seedChat(queryClient, chatDetail(), messages([bootstrap])),
+      <ChatView agentId="agent-2" chatId="chat-1" initialChatDetail={orientationChat} />,
+      (queryClient) => seedChat(queryClient, orientationChat, messages([bootstrap])),
       "/",
     );
 
-    await waitForText(container, "Skip introduction and start");
+    await waitForText(container, "Start with Design Critique");
+    const orientationRow = container.querySelector(
+      '[data-onboarding-orientation-row][data-message-id="orientation-bootstrap"]',
+    );
+    expect(orientationRow).not.toBeNull();
+    expect(orientationRow?.textContent).not.toContain("welcome aboard");
+    expect(container.textContent).not.toContain("Design Critique, welcome aboard.");
     const composer = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!composer) throw new Error("Composer textarea missing");
+    expect(composer.placeholder).toBe("Message Design Critique anything — or start with the tour above");
     await setValue(composer, "A draft I still want to send");
     chatMocks.listChatMessages.mockResolvedValue(
       messages([
@@ -851,21 +876,108 @@ describe("ChatView", () => {
         message({
           id: "orientation-ready-message",
           senderId: "human-agent-self",
-          content: "I'm ready. Please help me get started with First Tree.",
-          metadata: { mentions: ["agent-1"] },
+          content: "I'm ready — let's get started.",
+          metadata: { mentions: ["agent-2"] },
           createdAt: "2026-05-28T11:56:00.000Z",
         }),
       ]),
     );
-    await click(buttonByText(container, "Skip introduction and start"));
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
-      "chat-1",
-      "I'm ready. Please help me get started with First Tree.",
-      ["agent-1"],
-    );
+    const skipButton = buttonByText(container, "Skip intro");
+    const startButton = buttonByText(container, "Start with Design Critique");
+    if (!skipButton || !startButton) throw new Error("Orientation actions missing");
+    // Both controls are visible at once. A fast double activation must still
+    // produce only one continuation before React has time to disable them.
+    await act(async () => {
+      skipButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected Orientation continuation");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "I'm ready — let's get started.", ["agent-2"]);
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(composer.value).toBe("A draft I still want to send");
-    await waitForText(container, "Watch again");
+    await waitForText(container, "Watch");
     expect(container.querySelectorAll('[data-onboarding-orientation="pending"]')).toHaveLength(0);
+    expect(composer.placeholder).not.toContain("tour above");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the trusted Orientation bootstrap senderless for a later human viewer", async () => {
+    authMock.value = {
+      agentId: "human-agent-alice",
+      memberId: "member-alice",
+      organizationId: "org-1",
+      role: "member",
+    };
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-shared-view",
+      senderId: "human-agent-self",
+      content: "Design Critique, welcome aboard. Please help me get started with First Tree.",
+      metadata: {
+        mentions: ["agent-2"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const sharedChat = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "human-agent-alice", type: "human", name: "alice", displayName: "Alice" }),
+        participant({ agentId: "agent-2", name: "design", displayName: "Design Critique" }),
+      ],
+    });
+    const page = messages([bootstrap]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-2" chatId="chat-1" initialChatDetail={sharedChat} />,
+      (queryClient) => seedChat(queryClient, sharedChat, page),
+      "/",
+    );
+
+    await waitForText(container, "First Tree introduction");
+    expect(
+      container.querySelector('[data-onboarding-orientation-row][data-message-id="orientation-bootstrap-shared-view"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("welcome aboard");
+    expect(container.textContent).not.toContain("Start with Design Critique");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not advertise a removed Orientation target in the composer", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const bootstrap = message({
+      id: "orientation-bootstrap-removed-target",
+      senderId: "human-agent-self",
+      content: "Nova, welcome aboard.",
+      metadata: {
+        mentions: ["agent-1"],
+        [FIRST_CHAT_ORIENTATION_METADATA_KEY]: { version: 1 },
+      },
+      source: "api",
+      createdAt: "2026-05-28T11:55:00.000Z",
+    });
+    const targetRemovedChat = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-2", name: "design", displayName: "Design Critique" }),
+      ],
+    });
+    const page = messages([bootstrap]);
+    chatMocks.listChatMessages.mockResolvedValue(page);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={targetRemovedChat} />,
+      (queryClient) => seedChat(queryClient, targetRemovedChat, page),
+      "/",
+    );
+
+    await waitForText(container, "Start with Nova");
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!composer) throw new Error("Composer textarea missing");
+    expect(composer.placeholder).not.toContain("tour above");
 
     await act(async () => root.unmount());
   });
@@ -898,9 +1010,9 @@ describe("ChatView", () => {
       "/",
     );
 
-    await waitForText(container, "Watch again");
+    await waitForText(container, "Watch");
     expect(container.textContent).toContain("Start by reading /projects/acme.");
-    expect(container.textContent).not.toContain("Skip introduction and start");
+    expect(container.textContent).not.toContain("Start with Nova");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -934,9 +1046,9 @@ describe("ChatView", () => {
       "/",
     );
 
-    await waitForText(container, "Skip introduction and start");
+    await waitForText(container, "Start with Nova");
     expect(container.querySelectorAll('[data-onboarding-orientation="pending"]')).toHaveLength(1);
-    expect(container.textContent).not.toContain("Watch again");
+    expect(container.textContent).not.toContain("First Tree introduction");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -966,8 +1078,8 @@ describe("ChatView", () => {
       "/",
     );
 
-    await waitForText(container, "Watch again");
-    expect(container.textContent).not.toContain("Skip introduction and start");
+    await waitForText(container, "Watch");
+    expect(container.textContent).not.toContain("Start with Nova");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -2774,15 +2886,15 @@ describe("ChatView", () => {
 
     const blockedComposer = container.querySelector<HTMLButtonElement>("[data-inspect-ask-composer]");
     expect(blockedComposer).not.toBeNull();
-    expect(blockedComposer?.textContent).toContain("有 2 条待处理的问题");
+    expect(blockedComposer?.textContent).toContain("2 pending questions");
     await click(blockedComposer);
     await waitForText(container, "Submit");
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).not.toBeNull();
     expect(container.textContent).toContain("Approve the migration?");
 
-    await click(container.querySelector('button[aria-label="Close question"]'));
+    await click(container.querySelector('button[aria-label="Show earlier chat"]'));
     expect(container.querySelector('[role="dialog"][aria-label^="Question"]')).toBeNull();
-    expect(container.querySelector("[data-inspect-ask-composer]")?.textContent).toContain("有 2 条待处理的问题");
+    expect(container.querySelector("[data-inspect-ask-composer]")?.textContent).toContain("2 pending questions");
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -2833,7 +2945,7 @@ describe("ChatView", () => {
     await act(async () => {
       resolveOpenRequests({ items: [buriedAsk] });
     });
-    await waitForText(container, "有 1 条待处理的问题");
+    await waitForText(container, "1 pending question");
     expect(container.querySelector("[data-inspect-ask-composer]")).not.toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
@@ -2926,7 +3038,7 @@ describe("ChatView", () => {
     await act(async () => {
       resolveOpenRequests({ items: [buriedAsk] });
     });
-    await waitForText(container, "有 1 条待处理的问题");
+    await waitForText(container, "1 pending question");
     expect(container.querySelector("[data-inspect-ask-composer]")).not.toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
@@ -3842,7 +3954,7 @@ describe("ChatView", () => {
       return container.querySelector('aside[aria-label="Chat details"]') !== null;
     }
     function chatSummaryButton(container: ParentNode): HTMLButtonElement | null {
-      return container.querySelector<HTMLButtonElement>('button[aria-label$="summary"]');
+      return container.querySelector<HTMLButtonElement>('button[aria-label$="current state"]');
     }
 
     it("renders the description's first line collapsed and the full markdown when expanded", async () => {
@@ -3869,7 +3981,7 @@ describe("ChatView", () => {
       await act(async () => {
         button.click();
       });
-      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).toContain("Current state");
       expect(chatSummaryButton(container)?.textContent).not.toContain("Status: shipping DescBody soon.");
       await waitForCondition(
         () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
@@ -3896,11 +4008,11 @@ describe("ChatView", () => {
 
       await waitForCondition(
         () =>
-          chatSummaryButton(container)?.getAttribute("aria-label") === "Collapse summary" &&
+          chatSummaryButton(container)?.getAttribute("aria-label") === "Collapse current state" &&
           [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
         "Expected the unread summary version to auto-expand on entry",
       );
-      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).toContain("Current state");
 
       await act(async () => root.unmount());
     });
@@ -3971,5 +4083,1228 @@ describe("ChatView", () => {
 
       await act(async () => root.unmount());
     });
+  });
+});
+
+describe("timeline message filter", () => {
+  const FILTER_MESSAGES = messages([
+    message({
+      id: "pf-human-to-nova",
+      senderId: "human-agent-self",
+      content: "Nova, please check the deploy.",
+      createdAt: "2026-05-28T11:50:00.000Z",
+      metadata: { mentions: ["agent-1"] },
+    }),
+    message({
+      id: "pf-nova-reply",
+      senderId: "agent-1",
+      content: "Deploy checked, all green.",
+      createdAt: "2026-05-28T11:51:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    }),
+    message({
+      id: "pf-design-to-human",
+      senderId: "agent-2",
+      content: "Design notes for the banner.",
+      createdAt: "2026-05-28T11:52:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    }),
+  ]);
+
+  it("applies the transient ?focus= pair filter and clears it via Show all messages", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("temporary view");
+    expect(container.textContent).toContain("Deploy checked, all green.");
+    expect(container.textContent).not.toContain("Design notes for the banner.");
+    // No focusMsg handoff anchor → no out-of-window warning.
+    expect(container.textContent).not.toContain("older than the loaded history");
+    // The pair view is messages-only: session events carry no pair
+    // attribution, so even the selected agent's rows stay hidden.
+    expect(container.textContent).not.toContain("Example recoverable runtime error");
+
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Design notes for the banner.");
+    expect(container.querySelector("[data-message-filter-banner]")).toBeNull();
+    await waitForText(container, "Example recoverable runtime error");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps unaddressed pair messages in a two-speaker group-typed chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // New chats persist as `type: "group"` even for 1-on-1s; the pair filter
+    // must key on the two-speaker SHAPE, or a DM's plain (mention-less)
+    // exchange would vanish under the group addressing rule.
+    const dmDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const dmMessages = messages([
+      message({
+        id: "dm-human",
+        senderId: "human-agent-self",
+        content: "Plain DM line without a mention.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "dm-nova",
+        senderId: "agent-1",
+        content: "Plain DM reply without a mention.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(dmDetail);
+    chatMocks.listChatMessages.mockResolvedValue(dmMessages);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, dmDetail, dmMessages),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("Plain DM line without a mention.");
+    expect(container.textContent).toContain("Plain DM reply without a mention.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the group addressing rule when filtering on a departed agent in a two-speaker chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // agent-2 has LEFT: current speakers are {viewer, agent-1}. Focusing the
+    // departed agent-2 (still reachable via history / an old open request)
+    // must NOT trip the exact-pair shortcut — otherwise every viewer message,
+    // including ones addressed to agent-1, would leak into the pair view.
+    const twoSpeakerDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const history = messages([
+      message({
+        id: "dep-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova-only instruction line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "dep-human-to-design",
+        senderId: "human-agent-self",
+        content: "Design, please revisit the banner.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-2"] },
+      }),
+      message({
+        id: "dep-design-reply",
+        senderId: "agent-2",
+        content: "Banner revisited, done.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(twoSpeakerDetail);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, twoSpeakerDetail, history),
+      "/?focus=agent-2",
+    );
+
+    await waitForText(container, "Showing your conversation with Design Critique");
+    expect(container.textContent).toContain("Design, please revisit the banner.");
+    expect(container.textContent).toContain("Banner revisited, done.");
+    expect(container.textContent).not.toContain("Nova-only instruction line.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("reports when the focused request is older than the loaded history", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1&focusMsg=req-outside-window",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    await waitForText(container, "older than the loaded history");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the group rule when the current exact-pair chat once had a third speaker", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Membership evolved {viewer, Nova, Design} → {viewer, Nova}: the speaker
+    // rows say "exact pair", but history still holds the departed Design
+    // era. The direct shortcut must NOT engage — messages addressed to the
+    // departed agent stay out of the pair view, and mention-less pair
+    // messages fall back to the group addressing rule.
+    const shrunkDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const historyWithDeparted = messages([
+      message({
+        id: "hist-human-to-design",
+        senderId: "human-agent-self",
+        content: "Design-era side instruction.",
+        createdAt: "2026-05-28T11:49:00.000Z",
+        metadata: { mentions: ["agent-2"] },
+      }),
+      message({
+        id: "hist-human-plain",
+        senderId: "human-agent-self",
+        content: "Plain unaddressed line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "hist-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, please take over.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "hist-nova-reply",
+        senderId: "agent-1",
+        content: "Taking over now.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(shrunkDetail);
+    chatMocks.listChatMessages.mockResolvedValue(historyWithDeparted);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, shrunkDetail, historyWithDeparted),
+      "/?focus=agent-1",
+    );
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("Nova, please take over.");
+    expect(container.textContent).toContain("Taking over now.");
+    expect(container.textContent).not.toContain("Design-era side instruction.");
+    expect(container.textContent).not.toContain("Plain unaddressed line.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("caps the persisted read watermark just below the oldest hidden message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { root: filteredRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+    // Unmount flushes the tracker. The filtered DOM tip (pf-nova-reply) sits
+    // AFTER older visible rows but the newest loaded message (agent-2's,
+    // hidden) must never be marked known — the safe watermark is the message
+    // just before the oldest hidden one. Here that happens to equal the
+    // visible tip; the critical assertion is that the hidden id is never
+    // persisted while the read pair messages still get digested (a plain
+    // freeze would re-flag them as new on every future visit).
+    await act(async () => filteredRoot.unmount());
+    const filteredWrites = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(filteredWrites.length).toBeGreaterThan(0);
+    for (const call of filteredWrites) {
+      expect(call[2]).toBe("pf-nova-reply");
+    }
+
+    // Control: the same visit without the filter persists the true tip.
+    readStateMocks.setReadState.mockClear();
+    document.body.innerHTML = "";
+    const { root: plainRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+    await act(async () => plainRoot.unmount());
+    const chatWrites = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(chatWrites.length).toBeGreaterThan(0);
+    for (const call of chatWrites) {
+      expect(call[2]).toBe("pf-design-to-human");
+    }
+  });
+
+  it("persists the true tip when an active focus hides nothing", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Transient exact-pair focus in a genuine two-speaker chat: the full
+    // message DOM renders, so read persistence must behave exactly as an
+    // unfiltered visit — freezing here would strand a stale watermark and
+    // scroll anchor for the next ordinary visit.
+    const dmDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const dmMessages = messages([
+      message({
+        id: "dm-human",
+        senderId: "human-agent-self",
+        content: "Plain DM line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "dm-nova",
+        senderId: "agent-1",
+        content: "Plain DM reply.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(dmDetail);
+    chatMocks.listChatMessages.mockResolvedValue(dmMessages);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, dmDetail, dmMessages),
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Plain DM reply.");
+    await act(async () => root.unmount());
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[2]).toBe("dm-nova");
+    }
+  });
+
+  it("still offers the filter when a departed third party never addressed the viewer", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Current speakers are exactly {viewer, Nova}, and departed agent-2 only
+    // ever talked TO NOVA — so it is not a filter candidate, but its side
+    // conversation is still in history. Filtering on Nova is therefore NOT a
+    // no-op, and the control must stay available (the suppression shares the
+    // projection's own predicate, membership shape alone is not enough).
+    const shrunkDetail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const history = messages([
+      message({
+        id: "sup-b-to-nova",
+        senderId: "agent-2",
+        content: "Legacy design note for Nova only.",
+        createdAt: "2026-05-28T11:49:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "sup-viewer-plain",
+        senderId: "human-agent-self",
+        content: "Plain unaddressed viewer line.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+      }),
+      message({
+        id: "sup-viewer-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, your turn.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "sup-nova-reply",
+        senderId: "agent-1",
+        content: "On it, boss.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.getChat.mockResolvedValue(shrunkDetail);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, shrunkDetail, history),
+      "/",
+    );
+
+    await waitForText(container, "Legacy design note for Nova only.");
+    const trigger = container.querySelector("[data-message-filter-trigger]");
+    expect(trigger).not.toBeNull();
+    await click(trigger);
+    const menu = document.body.querySelector('[role="menu"][aria-label="Filter messages"]');
+    if (!menu) throw new Error("filter menu missing");
+    await click(buttonByText(menu, "Nova"));
+
+    await waitForText(container, "Showing your conversation with Nova");
+    expect(container.textContent).toContain("On it, boss.");
+    expect(container.textContent).not.toContain("Legacy design note for Nova only.");
+    // Third-party trace in history keeps the group rule too.
+    expect(container.textContent).not.toContain("Plain unaddressed viewer line.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("clamps the persisted scroll anchor below an interleaved hidden message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // visible-A1, hidden-B2, visible-A3: the filtered DOM bottom (A3) is
+    // chronologically AFTER the hidden B2. Persisting A3 as the scroll
+    // anchor would land the next ordinary visit below B2, whose live
+    // bottom-advance would then swallow B2's pill. Both persisted ids must
+    // stay at A1 — the safe side of the oldest hidden row.
+    const interleaved = messages([
+      message({
+        id: "il-nova-a1",
+        senderId: "agent-1",
+        content: "Pair line before the hidden arrival.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "il-design-b2",
+        senderId: "agent-2",
+        content: "Hidden interleaved note.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "il-nova-a3",
+        senderId: "agent-1",
+        content: "Pair line after the hidden arrival.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(interleaved);
+    const { root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), interleaved),
+      "/?focus=agent-1",
+    );
+    await act(async () => root.unmount());
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[1]).toBe("il-nova-a1");
+      expect(call[2]).toBe("il-nova-a1");
+    }
+
+    // Full revisit restored at the clamped anchor: the hidden message is
+    // surfaced as new (divider), not silently digested.
+    readStateMocks.setReadState.mockClear();
+    document.body.innerHTML = "";
+    const { container: revisit, root: revisitRoot } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), interleaved);
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "il-nova-a1",
+          latestKnownMessageId: "il-nova-a1",
+          updatedAt: Date.now(),
+        });
+      },
+      "/",
+    );
+    await waitForText(revisit, "Hidden interleaved note.");
+    await waitForText(revisit, "New Messages");
+    await act(async () => revisitRoot.unmount());
+  });
+
+  it("keeps the hidden arrival marked as new across a same-session filter lift", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The interleaved shape again, but the filter is lifted IN the mounted
+    // view. Two anchors must both hold: the stale filtered live-bottom (A3)
+    // is provenance-gated so it cannot promote the session high-water when
+    // the ceiling releases, and a filtered divider dismissal advances the
+    // divider anchor only to the clamped bound (A1). Either one advancing
+    // to A3 would strip B2's "new" marking without the user reaching it.
+    const observers: Array<{ cb: IntersectionObserverCallback; targets: Element[] }> = [];
+    class RecordingIntersectionObserver {
+      cb: IntersectionObserverCallback;
+      targets: Element[] = [];
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+        observers.push({ cb, targets: this.targets });
+      }
+      observe = (target: Element) => {
+        this.targets.push(target);
+      };
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+    }
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      value: RecordingIntersectionObserver,
+    });
+
+    const interleaved = messages([
+      message({
+        id: "sl-nova-a1",
+        senderId: "agent-1",
+        content: "Pair line before the hidden arrival.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "sl-design-b2",
+        senderId: "agent-2",
+        content: "Hidden interleaved note.",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+      message({
+        id: "sl-nova-a3",
+        senderId: "agent-1",
+        content: "Pair line after the hidden arrival.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(interleaved);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), interleaved);
+        // Previous visit ended at A1, so the divider arms for this visit.
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "sl-nova-a1",
+          latestKnownMessageId: "sl-nova-a1",
+          updatedAt: Date.now(),
+        });
+      },
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Pair line after the hidden arrival.");
+    expect(container.textContent).toContain("New Messages");
+
+    // Scroll the divider past the viewport top while STILL FILTERED: the
+    // dismissal advance must clamp to A1, not adopt the filtered bottom A3.
+    const dividerObservers = observers.filter((o) => o.targets.some((t) => t.textContent?.includes("New Messages")));
+    expect(dividerObservers.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const o of dividerObservers) {
+        o.cb(
+          [
+            {
+              rootBounds: { top: 100 } as DOMRectReadOnly,
+              boundingClientRect: { bottom: 0 } as DOMRectReadOnly,
+            } as IntersectionObserverEntry,
+          ],
+          o as unknown as IntersectionObserver,
+        );
+      }
+    });
+    await flush();
+
+    // Lift the filter in the same mounted view. The stale filtered bottom
+    // must not advance the high-water, and the divider anchor stayed at A1,
+    // so the hidden arrival still reads as new after effects settle.
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Hidden interleaved note.");
+    await flush();
+    await flush();
+    expect(container.textContent).toContain("New Messages");
+    const pill = container.querySelector('button[aria-label$="new messages"], button[aria-label$="new message"]');
+    expect(pill).not.toBeNull();
+
+    // A dismissal callback firing AFTER the lift but BEFORE any fresh
+    // unfiltered bottom publication (re-rendering the timeline can trigger
+    // the observer): the observation ref still holds the filtered bottom
+    // (A3) while the clamp now has no ceiling. The provenance gate must
+    // refuse it — B2 keeps its divider and pill.
+    const postLiftDividerObservers = observers.filter((o) =>
+      o.targets.some((t) => t.textContent?.includes("New Messages")),
+    );
+    expect(postLiftDividerObservers.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const o of postLiftDividerObservers) {
+        o.cb(
+          [
+            {
+              rootBounds: { top: 100 } as DOMRectReadOnly,
+              boundingClientRect: { bottom: 0 } as DOMRectReadOnly,
+            } as IntersectionObserverEntry,
+          ],
+          o as unknown as IntersectionObserver,
+        );
+      }
+    });
+    await flush();
+    await flush();
+    expect(container.textContent).toContain("New Messages");
+    expect(
+      container.querySelector('button[aria-label$="new messages"], button[aria-label$="new message"]'),
+    ).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the watermark at the blocking question while a stored filter is active", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // Stored filter + an unanswered ask + a message AFTER the ask. The
+    // blocking truncation hides everything past the question from the DOM,
+    // so the ceiling must stop at the question — "hidden" means NOT
+    // RENDERED, regardless of which layer (pair filter or block truncation)
+    // hid the row. Building the ceiling from the filter projection alone
+    // would persist the never-rendered trailing message as known.
+    window.localStorage.setItem(
+      "first-tree:chat-message-filter:v1",
+      JSON.stringify({ "u:anon:chat:chat-1": { agentId: "agent-1", updatedAt: 1 } }),
+    );
+    const blockedHistory = messages([
+      message({
+        id: "bk-human-to-nova",
+        senderId: "human-agent-self",
+        content: "Nova, run the deploy.",
+        createdAt: "2026-05-28T11:50:00.000Z",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      message({
+        id: "bk-request",
+        senderId: "agent-1",
+        format: "request",
+        content: "Approve the rollout window?",
+        createdAt: "2026-05-28T11:51:00.000Z",
+        metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+      }),
+      message({
+        id: "bk-after",
+        senderId: "agent-1",
+        content: "Extra evidence after the question.",
+        createdAt: "2026-05-28T11:52:00.000Z",
+        metadata: { mentions: ["human-agent-self"] },
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(blockedHistory);
+    const { root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), blockedHistory),
+      "/",
+    );
+    await act(async () => root.unmount());
+
+    const writes = readStateMocks.setReadState.mock.calls.filter((call) => call[0] === "chat-1");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const call of writes) {
+      expect(call[2]).toBe("bk-request");
+      expect(call[1]).not.toBe("bk-after");
+    }
+  });
+
+  it("does not advance the read watermark past a hidden arrival on an own send", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The hidden agent-2 message is the NEWEST loaded row; the viewer then
+    // sends. The own send is chronologically after the hidden arrival, so
+    // neither the durable read-state write nor the session pre-advance may
+    // move the watermark to it.
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Deploy checked, all green.");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await setValue(textarea, "Ping @nova");
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected the send to fire");
+    await flush();
+
+    for (const call of readStateMocks.setReadState.mock.calls) {
+      expect(call[2]).not.toBe("msg-sent");
+    }
+    const cached = queryClient.getQueryData<{ latestKnownMessageId?: string }>(["chat-read-state", "chat-1"]);
+    expect(cached?.latestKnownMessageId).not.toBe("msg-sent");
+
+    await act(async () => root.unmount());
+  });
+
+  it("reports a failed focus window as a retryable load error, never as request age", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // The ordinary timeline is seeded (staleTime: Infinity), so this rejection
+    // hits ONLY the supplemental focus-window query.
+    chatMocks.listChatMessages.mockRejectedValue(new Error("history unavailable"));
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/?focus=agent-1&focusMsg=req-outside-window",
+    );
+
+    // A failed fetch is not evidence the request is old: the age line must
+    // stay absent and the failure must be visible + retryable instead.
+    await waitForText(container, "Earlier chat could not be loaded.");
+    expect(container.textContent).not.toContain("older than the loaded history");
+    expect(container.querySelector("[data-focus-window-error]")).not.toBeNull();
+
+    // Retry succeeds; the request is genuinely outside the window, so the
+    // honest age report replaces the error line.
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    await click(buttonByText(container, "Retry"));
+    await waitForText(container, "older than the loaded history");
+    expect(container.querySelector("[data-focus-window-error]")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not strand the new-messages pill on an arrival the pair filter hides", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const lateArrival = message({
+      id: "pf-late-design",
+      senderId: "agent-2",
+      content: "Late design note.",
+      createdAt: "2026-05-28T12:05:00.000Z",
+      metadata: { mentions: ["human-agent-self"] },
+    });
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), FILTER_MESSAGES);
+        // Previous visit left the chat at the newest pair message, so any
+        // later non-self arrival is "new since last visit".
+        client.setQueryData(["chat-read-state", "chat-1"], {
+          chatId: "chat-1",
+          bottomVisibleMessageId: "pf-design-to-human",
+          latestKnownMessageId: "pf-design-to-human",
+          updatedAt: Date.now(),
+        });
+      },
+      "/?focus=agent-1",
+    );
+    await waitForText(container, "Showing your conversation with Nova");
+
+    // A filtered-out agent's message arrives. It has no DOM row, so scrolling
+    // could never advance the watermark past it — the pill must not count it.
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], messages([...FILTER_MESSAGES.items, lateArrival]));
+    });
+    await flush();
+    expect(container.querySelector('button[aria-label$="new message"]')).toBeNull();
+    expect(container.querySelector('button[aria-label$="new messages"]')).toBeNull();
+
+    // Lifting the filter surfaces the arrival itself. (The pill's own
+    // clear-on-reach behavior is unchanged; in this harness the read tracker
+    // reaches the new row as soon as it renders, so the pill is not asserted
+    // here — the regression under test is the STUCK pill above.)
+    await click(buttonByText(container, "Show all messages"));
+    await waitForText(container, "Late design note.");
+
+    await act(async () => root.unmount());
+  });
+
+  it("filters via the header control and persists the choice for this user + chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+
+    await waitForText(container, "Design notes for the banner.");
+    expect(container.querySelector("[data-message-filter-banner]")).toBeNull();
+
+    await click(container.querySelector("[data-message-filter-trigger]"));
+    const menu = document.body.querySelector('[role="menu"][aria-label="Filter messages"]');
+    expect(menu).not.toBeNull();
+    if (!menu) throw new Error("filter menu missing");
+    expect(buttonByText(menu, "All messages")).not.toBeNull();
+    await click(buttonByText(menu, "Nova"));
+
+    await waitForText(container, "Showing your conversation with Nova");
+    // An explicit choice is not the transient navigation-applied view.
+    expect(container.textContent).not.toContain("temporary view");
+    expect(container.textContent).not.toContain("Design notes for the banner.");
+    const stored: unknown = JSON.parse(window.localStorage.getItem("first-tree:chat-message-filter:v1") ?? "{}");
+    expect(stored).toMatchObject({ "u:anon:chat:chat-1": { agentId: "agent-1" } });
+
+    await act(async () => root.unmount());
+  });
+
+  it("restores a stored filter choice when the chat opens", async () => {
+    window.localStorage.setItem(
+      "first-tree:chat-message-filter:v1",
+      JSON.stringify({ "u:anon:chat:chat-1": { agentId: "agent-2", updatedAt: 1 } }),
+    );
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatMessages.mockResolvedValue(FILTER_MESSAGES);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), FILTER_MESSAGES),
+      "/",
+    );
+
+    await waitForText(container, "Showing your conversation with Design Critique");
+    expect(container.textContent).toContain("Design notes for the banner.");
+    expect(container.textContent).not.toContain("Deploy checked, all green.");
+
+    await act(async () => root.unmount());
+  });
+});
+
+describe("need-you queue session", () => {
+  const OPEN_ASK = message({
+    id: "nq-request",
+    senderId: "agent-1",
+    format: "request",
+    content: "Queue question: approve?",
+    metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+    createdAt: "2026-05-28T11:50:00.000Z",
+  });
+
+  async function answerOpenAsk(container: HTMLElement) {
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "resolving send");
+    await flush();
+    await flush();
+  }
+
+  it("advances to the next chat holding an open question after answering", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "agent-2" } }],
+      total: 1,
+      nextCursor: null,
+    });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await answerOpenAsk(container);
+
+    // Queue session active + next question lives in another chat: the
+    // resolution navigates there (a push — Back walks the queue hops) and
+    // keeps the session flag for the question after it.
+    await waitForCondition(() => locText(container)?.includes("c=chat-2") === true, "expected queue advance");
+    expect(locText(container)).toContain("nq=1");
+
+    await act(async () => root.unmount());
+  });
+
+  it("ends the queue session in place when the queue is empty", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await answerOpenAsk(container);
+
+    await waitForCondition(() => locText(container) === "/", "expected the session flag to clear in place");
+
+    await act(async () => root.unmount());
+  });
+
+  it("never lets a stale queue continuation override a manual chat switch", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({
+      items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "agent-2" } }],
+      total: 1,
+      nextCursor: null,
+    });
+    // The resolving send stays in flight until the test releases it, keeping
+    // the rail-usable window open.
+    let releaseSend!: (value: MessageWithDelivery) => void;
+    chatMocks.sendChatMessage.mockImplementation(
+      () =>
+        new Promise<MessageWithDelivery>((resolve) => {
+          releaseSend = resolve;
+        }),
+    );
+
+    // Harness stand-in for the workspace shell: the chat follows `?c=` and a
+    // rail-like button performs a manual switch (new chat + `nq` deleted).
+    function QueueRaceHarness() {
+      const [params, setParams] = useSearchParams();
+      const chatId = params.get("c") ?? "chat-1";
+      return (
+        <>
+          <ChatView agentId="agent-1" chatId={chatId} />
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              next.set("c", "chat-elsewhere");
+              next.delete("nq");
+              setParams(next);
+            }}
+          >
+            Manual switch
+          </button>
+          <LocationProbe />
+        </>
+      );
+    }
+
+    const { container, root } = await renderDom(
+      <QueueRaceHarness />,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "send started");
+
+    // Mid-flight manual exit: switches chat and deletes `nq`.
+    await click(buttonByText(container, "Manual switch"));
+    expect(locText(container)).toBe("/?c=chat-elsewhere");
+
+    // The send settles AFTER the switch. The stale continuation must neither
+    // navigate to the queue's next chat nor resurrect the session flag.
+    await act(async () => {
+      releaseSend(message({ id: "msg-late", senderId: "human-agent-self", createdAt: "2026-05-28T12:10:00.000Z" }));
+    });
+    await flush();
+    await flush();
+    expect(locText(container)).toBe("/?c=chat-elsewhere");
+    expect(locText(container)).not.toContain("nq=1");
+    expect(locText(container)).not.toContain("chat-2");
+
+    await act(async () => root.unmount());
+  });
+
+  it("respects a same-chat session exit that lands while the queue fetch is pending", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    // Hold the QUEUE fetch (not the send): the exit happens in the window
+    // between resolution and the continuation's write.
+    let releaseQueue!: (value: { items: unknown[]; total: number; nextCursor: null }) => void;
+    meChatMocks.listNeedYouRequests.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseQueue = resolve;
+        }),
+    );
+
+    // Same chat throughout — the exit only deletes `nq` (the shape of
+    // re-clicking the already-selected rail row).
+    function SameChatExitHarness() {
+      const [params, setParams] = useSearchParams();
+      return (
+        <>
+          <ChatView agentId="agent-1" chatId="chat-1" />
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              next.delete("nq");
+              setParams(next);
+            }}
+          >
+            End session
+          </button>
+          <LocationProbe />
+        </>
+      );
+    }
+
+    const { container, root } = await renderDom(
+      <SameChatExitHarness />,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/?nq=1",
+    );
+
+    await waitForText(container, "Queue question: approve?");
+    const answerBox = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!answerBox) throw new Error("takeover answer input missing");
+    await setValue(answerBox, "Approved.");
+    await click(buttonByText(container, "Submit"));
+    await waitForCondition(() => meChatMocks.listNeedYouRequests.mock.calls.length > 0, "queue fetch started");
+
+    // The user exits the session in place — same chat, `nq` deleted.
+    await click(buttonByText(container, "End session"));
+    expect(locText(container)).toBe("/");
+
+    // The queue settles with a next chat available. The committed chat never
+    // changed, so only the LIVE params can protect this exit: no navigation,
+    // no resurrected flag.
+    await act(async () => {
+      releaseQueue({
+        items: [{ request: { id: "req-next" }, chat: { id: "chat-2", title: "Next" }, asker: { agentId: "a2" } }],
+        total: 1,
+        nextCursor: null,
+      });
+    });
+    await flush();
+    await flush();
+    expect(locText(container)).toBe("/");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not touch navigation when answering outside a queue session", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [OPEN_ASK] });
+    const { container, root } = await renderDom(
+      <>
+        <ChatView agentId="agent-1" chatId="chat-1" />
+        <LocationProbe />
+      </>,
+      (client) => {
+        seedChat(client, chatDetail(), messages([OPEN_ASK]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [OPEN_ASK] });
+      },
+      "/",
+    );
+
+    await answerOpenAsk(container);
+    expect(locText(container)).toBe("/");
+    expect(meChatMocks.listNeedYouRequests).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+});
+
+describe("ChatView Context Tree decision receipt", () => {
+  const RECEIPT = {
+    version: 1,
+    effect: "constrained",
+    summary: "Team rollout policy caps Web at 20%; CLI stays at 5% until the migration guard clears.",
+    evidence: [
+      {
+        repoUrl: "https://github.com/example/context-tree",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        nodePath: "product/release/rollout-policy.md",
+        heading: "Expansion gates",
+      },
+    ],
+  };
+
+  function withReceipt(
+    overrides: Partial<MessageWithDelivery> & { id: string; senderId: string },
+    receipt: unknown = RECEIPT,
+  ): MessageWithDelivery {
+    return message({
+      ...overrides,
+      metadata: { ...(overrides.metadata ?? {}), [CONTEXT_DECISION_METADATA_KEY]: receipt },
+    });
+  }
+
+  it("shows the receipt under an agent reply", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const history = messages([
+      withReceipt({
+        id: "msg-receipt",
+        senderId: "agent-1",
+        content: "Expanding Web to 20% and holding CLI at 5%.",
+        source: "cli",
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), history),
+      "/",
+    );
+
+    await waitForText(container, "Context Tree in action");
+    expect(container.textContent).toContain("Options narrowed");
+    expect(container.textContent).toContain("Team rollout policy caps Web at 20%");
+    // Collapsed by default: the exact source is one click away, not in the way.
+    expect(container.textContent).not.toContain("product/release/rollout-policy.md");
+
+    await act(async () => root.unmount());
+  });
+
+  it("ignores a receipt on a human message and a malformed receipt from an agent", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const history = messages([
+      withReceipt({
+        id: "msg-human",
+        senderId: "human-agent-self",
+        content: "Human message claiming context influence.",
+        metadata: { mentions: ["agent-1"] },
+      }),
+      withReceipt(
+        { id: "msg-broken", senderId: "agent-1", content: "Agent reply with a broken receipt.", source: "cli" },
+        { ...RECEIPT, effect: "none" },
+      ),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), history),
+      "/",
+    );
+
+    await waitForText(container, "Agent reply with a broken receipt.");
+    expect(container.textContent).not.toContain("Context Tree in action");
+
+    await act(async () => root.unmount());
+  });
+
+  // The participant list holds CURRENT speakers only, so a removed human's
+  // historical row would read as "not a known human" under a negative gate and
+  // surface a receipt forged before the server-side guard existed.
+  it("hides a receipt from a sender who is no longer a chat participant", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const history = messages([
+      withReceipt({
+        id: "msg-departed-human",
+        senderId: "human-agent-removed",
+        content: "Message from a human who has since been removed.",
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), history),
+      "/",
+    );
+
+    await waitForText(container, "Message from a human who has since been removed.");
+    expect(container.textContent).not.toContain("Context Tree in action");
+
+    await act(async () => root.unmount());
+  });
+
+  // Cached messages paint before `chatDetail` resolves; an unresolved sender is
+  // not evidence of an agent sender.
+  it("hides a receipt while the participant list is still loading", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const history = messages([
+      withReceipt({
+        id: "msg-loading",
+        senderId: "agent-1",
+        content: "Agent reply rendered before chat detail resolves.",
+        source: "cli",
+      }),
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    chatMocks.getChat.mockReturnValue(new Promise(() => {}));
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), history);
+        client.removeQueries({ queryKey: ["chat-detail", "chat-1"] });
+      },
+      "/",
+    );
+
+    await waitForText(container, "Agent reply rendered before chat detail resolves.");
+    expect(container.textContent).not.toContain("Context Tree in action");
+
+    await act(async () => root.unmount());
+  });
+
+  // `chatParticipantDetailSchema.type` is a loose wire string so legacy and
+  // unrecognised values flow through. Under version skew a `!== "human"` set
+  // would readmit exactly the forged human row the gate exists to stop.
+  it("hides a receipt from a sender whose participant type is unknown, in both timeline and ask", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const skewedChat = chatDetail({
+      participants: [
+        ...PARTICIPANTS,
+        participant({ agentId: "agent-legacy", type: "autonomous_agent", name: "legacy", displayName: "Legacy" }),
+        participant({ agentId: "agent-untyped", type: "", name: "untyped", displayName: "Untyped" }),
+      ],
+    });
+    const ask = withReceipt({
+      id: "ask-unknown-type",
+      senderId: "agent-untyped",
+      format: "request",
+      content: "Question from a sender with no resolved type?",
+      metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+      createdAt: "2026-05-28T11:59:00.000Z",
+    });
+    const history = messages([
+      withReceipt({
+        id: "msg-legacy-type",
+        senderId: "agent-legacy",
+        content: "Reply from a legacy participant type.",
+        source: "cli",
+      }),
+      ask,
+    ]);
+    chatMocks.listChatMessages.mockResolvedValue(history);
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [ask] });
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={skewedChat} />,
+      (client) => {
+        seedChat(client, skewedChat, history);
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [ask] });
+      },
+      "/",
+    );
+
+    await waitForText(container, "Question from a sender with no resolved type?");
+    expect(container.textContent).not.toContain("Context Tree in action");
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows the asking agent's receipt inside the blocking ask, above the answer controls", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const ask = withReceipt({
+      id: "ask-receipt",
+      senderId: "agent-1",
+      format: "request",
+      content: "Expand Web to 20% now, or hold for 24 hours?",
+      metadata: { mentions: ["human-agent-self"], request: { multiSelect: false } },
+      createdAt: "2026-05-28T11:59:00.000Z",
+    });
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [ask] });
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        seedChat(client, chatDetail(), messages([ask]));
+        client.setQueryData(["chat-open-requests", "chat-1"], { items: [ask] });
+      },
+      "/",
+    );
+
+    await waitForText(container, "Expand Web to 20% now, or hold for 24 hours?");
+    await waitForText(container, "Context Tree in action");
+    const takeover = container.querySelector<HTMLElement>('[aria-label^="Question from"]');
+    if (!takeover) throw new Error("ask takeover missing");
+    const receipt = takeover.querySelector<HTMLElement>('[aria-label="Context Tree influence reported by the agent"]');
+    const answerBox = takeover.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!receipt || !answerBox) throw new Error("receipt or answer input missing from the takeover");
+    // The receipt is context for the decision, so it must precede the controls.
+    expect(receipt.compareDocumentPosition(answerBox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => root.unmount());
   });
 });

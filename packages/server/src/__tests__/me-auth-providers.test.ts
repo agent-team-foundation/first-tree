@@ -12,6 +12,72 @@ import { createTestApp, useTestApp } from "./helpers.js";
 describe("user authentication provider management", () => {
   const getApp = useTestApp({ googleOAuth: true });
 
+  it("pins a safe capability return path into GitHub account-link state", async () => {
+    const app = getApp();
+    const userId = uuidv7();
+    await app.db.insert(users).values({
+      id: userId,
+      username: "provider-link-return",
+      passwordHash: "x",
+      displayName: "Provider Link Return",
+    });
+    const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/auth-providers/github/link/start?next=%2Fsettings%2Fgithub",
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const state = new URL(response.json().redirectUrl).searchParams.get("state") ?? "";
+    const cookieNonce = readOAuthStateNonce(
+      response.headers["set-cookie"],
+      STATE_NONCE_COOKIE_NAME,
+      app.config.secrets.encryptionKey,
+    );
+    const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
+    expect(verified).toMatchObject({
+      intent: "link",
+      provider: "github",
+      userId,
+      next: "/settings/github",
+    });
+  });
+
+  it.each([
+    "https://evil.example/settings/github",
+    "//evil.example/settings/github",
+    "/settings/team",
+    "/settings/github?org=another-team",
+  ])("falls back to Account settings for unsupported account-link return path %s", async (next) => {
+    const app = getApp();
+    const userId = uuidv7();
+    await app.db.insert(users).values({
+      id: userId,
+      username: `provider-link-reject-${uuidv7().slice(0, 8)}`,
+      passwordHash: "x",
+      displayName: "Provider Link Reject",
+    });
+    const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/me/auth-providers/github/link/start?next=${encodeURIComponent(next)}`,
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const state = new URL(response.json().redirectUrl).searchParams.get("state") ?? "";
+    const cookieNonce = readOAuthStateNonce(
+      response.headers["set-cookie"],
+      STATE_NONCE_COOKIE_NAME,
+      app.config.secrets.encryptionKey,
+    );
+    const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
+    expect(verified.next).toBe("/user-settings");
+  });
+
   it("reports configured providers without exposing raw subjects", async () => {
     const app = getApp();
     const userId = uuidv7();

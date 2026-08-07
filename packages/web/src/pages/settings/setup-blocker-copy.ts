@@ -8,7 +8,7 @@ const SETUP_BLOCKER_COPY = {
   github_pull_requests_permission_required: "GitHub pull-request write access is required.",
   github_tree_repo_not_covered: "The GitHub App cannot access this Context Tree repository.",
   github_app_slug_missing:
-    "A deployment operator must configure the GitHub App login before App-target delegation can run.",
+    "A deployment operator must configure the GitHub App login before automatic GitHub handling can run.",
   github_app_task_reply_permission_required:
     "The GitHub App installation must grant Issues and Pull requests write access for App-authored task replies.",
   gitlab_webhook_not_seen: "Waiting for the first valid GitLab webhook.",

@@ -1,6 +1,6 @@
 ---
 id: external-context-current-session-handoff
-description: Validate same-session Team Context adoption through verified handoffs across Claude Code and Codex.
+description: Validate thin-Plugin migration, exact-release Core loading, concise setup recovery, Claude next-session adoption, and safe current-session handoff.
 areas: [cross-surface]
 surfaces: [web, server, cli, claude-code, codex, context-tree]
 ---
@@ -9,127 +9,131 @@ surfaces: [web, server, cli, claude-code, codex, context-tree]
 
 ## Goal
 
-Confirm that a member can paste the First Tree Web setup prompt into an
-already-running Claude Code or Codex conversation, choose one activation scope,
-and route Team Context in that same conversation. Prove that persistent
-handoffs come from the payload-verified Plugin and session-only handoffs come
-from the same verified release bundle without installing provider state.
+Confirm that Codex can install the thin First Tree Context Plugin, complete
+provider-owned consent, and load the current CLI release's canonical Core
+workflow in the same conversation. Confirm Claude setup accurately waits for a
+new session instead of returning a blocked handoff. Prove that a later Core-only
+CLI upgrade needs no Plugin reinstall, Claude lifecycle action, or repeated
+Codex trust.
 
 ## Preconditions
 
-- Use the formal isolated QA run cell with disposable Claude Code and Codex
-  provider homes, a staging member, and a disposable Team whose Context Tree
-  has a uniquely identifiable normal-content decision.
-- Use one attached non-Git parent containing two disposable source repositories
-  and one pathless fixture. Keep credentials and raw setup prompts outside
-  committed artifacts and redact login codes, Team ids, and private Tree data.
-- Begin Claude Code and Codex attached sessions with no First Tree Plugin.
-  Also prepare Codex already-trusted and pathless variants.
-- Put an older same-channel global npm CLI earlier on `PATH` than
-  `~/.local/bin`, while allowing the Web bootstrap to install the current
-  portable CLI. Record both versions before setup.
+- Use isolated disposable provider homes, a staging member, and a disposable
+  Team with a uniquely identifiable Context Tree decision.
+- Prepare both no-Plugin and legacy full-Plugin provider states. Keep an older
+  same-channel CLI earlier on `PATH` while Web bootstrap installs the current
+  portable exact-version release.
+- Prepare attached, pathless, expired-login, transient-network, local Plugin
+  drift, account-switch, and missing-permission fixtures. Redact credentials,
+  receipts, internal paths, and private Tree content.
 
 ## Operate
 
-1. Copy the provider-neutral setup prompt from Web and paste it into the
-   already-running Claude Code conversation. Let the agent run bootstrap and
-   the server-authored JSON enable plan with its host-confirmed selector. Verify
-   it shows global/directory/session and waits for a new user choice. Capture
-   the complete `applyCommand` attached to every available choice.
-   Confirm the enable command uses the same `~/.local/bin` portable executable
-   as bootstrap rather than the older global CLI resolved from `PATH`.
-2. With disposable extra login codes, exercise an expired/used code and a code
-   for a different signed-in First Tree user. Confirm the agent relays the CLI's
-   recovery, never reuses a consumed code, and asks for explicit switch approval
-   before requesting a fresh setup prompt with `--force-switch`.
-3. Without restarting or running `/reload-plugins`, ask a task that triggers
-   `first-tree-read`. Confirm the same agent reads the exact `skillPath`,
-   uses the handoff's immutable provider/project receipt for the first Read,
-   activates an exact Context Tree snapshot, and uses the unique Team decision.
-4. Choose directory, then paste a fresh prompt into the already-running Codex
-   attached conversation. Capture the first apply result, run `/hooks`, Enable + Trust First Tree
-   Context, return to the original conversation, and reply `continue`.
-5. Confirm that same Codex agent re-runs the exact `applyCommand`, consumes the
-   handoff, then completes the same Context read task without exit or a new
-   conversation.
-6. Repeat Codex with an already-trusted Hook. Separately choose session-only in
-   a projectless session; it must consume a complete Read/Write handoff without
-   installing a Hook or asking for Trust.
-7. After both a path-project and pathless handoff, change shell cwd to a
-   different bound project (and then to an unbound directory) before the first
-   Read. Confirm the path receipt still supplies its original `--project-root`
-   and the pathless receipt still supplies `--pathless`; neither may invoke the
-   current-cwd classifier or switch Team.
-8. Run a direct human-mode `context enable` and retain its output. Confirm a
-   Complete verdict includes the full usable handoff JSON with provider,
-   project, activation context, and all three Skill catalog entries.
-9. Tamper one installed Skill manifest, remove one Skill, make one manifest a
-   symbolic link, and separately make live authority unavailable. Re-run enable
-   for each state, restoring the fixture between attempts.
-10. Start one later attached session for each provider and confirm the existing
-   SessionStart path still activates automatically.
+1. Paste the Web bootstrap prompt into each already-running provider. Verify
+   normal progress mentions only checking, installing/updating, required user
+   action, and completion; it must not narrate commands or expose raw JSON,
+   plan ids, digests, receipts, journals, Plugin cache paths, or Hook internals.
+2. Inject one retryable timeout and one reversible local Plugin drift. Confirm
+   the agent retries the exact transient action no more than twice, or runs only
+   the CLI-provided exact repair/retry action, then rechecks the original step.
+3. Exercise scope choice, account-switch consent, login/auth/permission, Codex
+   Hook trust, destructive reset, and a changed plan. Confirm the agent always
+   stops for the user at these boundaries and never hand-edits provider cache,
+   Context config, receipts, or journals.
+4. Install or migrate Claude. Confirm apply completes with
+   `currentSessionHandoff: null`, does not provide a Read loader or claim that
+   Context is active in the current conversation, and tells the user that
+   persistent automatic routing begins in the next session. Confirm the Plugin contains only SessionStart lifecycle logic,
+   no same-session adoption hook or receipt path, and the general Skill loader
+   creates no lifecycle state. Start a new session and verify its exact
+   SessionStart consumes the obligation before routing.
+5. Install Codex, complete `/hooks` trust in the same conversation, then rerun
+   the same apply command. Repeat with an already trusted Hook.
+6. Inspect the complete schema-v3 handoff. Trigger two Read tasks and then a
+   Write task. Every task must run its loader anew. With unchanged digests,
+   confirm the second Read does not reread either full Core file, and the first
+   Write reads its distinct Skill once while reusing the already-read Policy.
+   Confirm there is no independent hash command or persistent Core cache.
+   Change cwd before first Read and prove the immutable provider/project receipt
+   still governs routing.
+7. Upgrade to CLI releases that change only the Core Skill digest and only the
+   Policy digest while adapter bytes and `adapterVersion` are unchanged. In each
+   new task, confirm the loader returns the new exact release paths and digests
+   and only the changed or unavailable content is reread. Simulate startup,
+   resume, clear, or compact without the previous full text and confirm both
+   items are reread. A matching path, name, release version, or summary must not
+   authorize reuse. Do not reinstall or reload the Plugin; Codex trust remains
+   trusted.
+8. Invoke the legacy full Plugin's retired `context read` against the new CLI.
+   Confirm typed `CONTEXT_PLUGIN_RELOAD_REQUIRED` and no Tree read. Tamper a
+   Core file, symlink a Core path outside the exact release, and remove an old
+   exact release; each must fail closed without a HOME Core cache fallback.
+9. Upgrade only the Claude thin adapter to `adapterVersion` 1.0.2 while keeping
+   Codex at 1.0.1 and loader protocol v1 compatible.
+   Confirm SessionStart returns one exact sync action within five seconds and
+   does not install. The agent syncs in the normal turn while the old adapter
+   continues the current task. The new Claude adapter is guaranteed next
+   session. Repair Claude twice and confirm the cache version and payload digest
+   remain identical for 1.0.2. Inject one provider-install failure, verify
+   rollback and quiet `update_deferred`, and confirm current First Tree work
+   continues.
+10. If bounded safe recovery still fails, confirm the agent reports only the
+   blocker, attempted recovery, and one concrete next step; raw diagnostics are
+   attached only when needed for targeted troubleshooting or a bug report.
 
 ## Observe
 
-- The Server command places global `--json` before `context enable`, includes
-  the exact provider and Team, and ends in `--plan`; Web adds no flags. Every
-  available plan choice contains an exact CLI-authored `applyCommand`, and the
-  agent runs the selected one byte-for-byte without constructing scope, plan-id,
-  Team, project, or consent flags. On
-  non-dev channels, the command uses bootstrap's `~/.local/bin` portable
-  executable even when an older same-channel global CLI shadows it on `PATH`.
-- The Web prompt does not duplicate login recovery, Codex Hook instructions,
-  scope mechanics, or the handoff's deep schema. It relays CLI errors and
-  `nextActions`, while retaining only host choice, human consent, envelope
-  trust, schema-version compatibility, and handoff adoption.
-- Claude Code completes setup in one agent turn. Codex without consent returns
-  `setup.complete: false` and `currentSessionHandoff: null`, asks only for
-  `/hooks` consent plus return to the original conversation, and re-runs enable
-  after `continue`.
-- Every complete result has `currentSessionHandoff.schemaVersion: 2`,
-  `consumerKind: byo`, exact activation scope, neutral `activationContext`, and
-  the immutable provider/project receipt. Persistent scope has exactly
-  `first-tree`, `first-tree-read`, and `first-tree-write`; session-only has only
-  Read/Write plus an opaque signed candidate. Each absolute
-  `skillPath` is a readable regular file inside the provider-installed cache.
-- The current agent adopts `activationContext` verbatim, treats the three
-  entries as progressive-disclosure catalog entries, and reads the complete
-  selected `SKILL.md` only when triggered.
-- The agent preserves the handoff's verified `{ provider, project }` as an
-  immutable current-session activation receipt. The first Read uses its exact
-  path root or pathless selector even after cwd changes, and the returned
-  `activationProject` receipt governs all later Read/Write routes.
-- Human-mode Complete output includes the same usable receipt and Skill catalog
-  rather than claiming a handoff is ready while printing only Team Context.
-- Tampered, missing, linked, unreadable, stale-payload, binding, activation, or
-  authority failures never produce a handoff or Complete verdict. First Tree
-  never writes Hook trust, uses a bypass flag, or replays SessionStart.
-- Later persistent sessions still activate through provider Plugin + neutral
-  SessionStart routing. Session-only leaves no Plugin, Hook, grant or candidate
-  file and does not promise continuity across clear/compact/resume/new session.
+- Persistent handoff schema is 3 and contains stable descriptions plus loader
+  commands, not reusable Plugin-cache Core paths. Loader response schema is 1,
+  `consumerKind` is `byo`, and paths remain inside one verified exact CLI
+  release root with matching Skill and Policy digests.
+- Provider Plugins contain only discovery stubs, SessionStart adapter, and
+  loader calls. They contain no full Read/Write workflow or Policy copy.
+- Legacy full→thin migration and repair wait for the next Claude SessionStart
+  before automatic persistent routing. Core-only upgrades and new
+  Team grants leave adapter bytes/version/digest and install plan unchanged.
+- A routine compatible adapter update is not setup failure: current tasks keep
+  their verified loaded adapter, sync runs outside SessionStart, and provider
+  action is requested only for a provider-reported Hook identity change.
+- Session-only loads verified Core without installing Plugin, Hook, grant, or
+  lifecycle state and does not promise future-session activation.
+- The current conversation adopts `activationContext`, loader catalog, scope,
+  and immutable provider/project receipt. It never reclassifies from changed
+  cwd. Every task still runs the loader; reuse requires the exact Skill or
+  Policy digest plus full content that remains directly available in the
+  current provider context. It never relies on a path or summary, independently
+  hashes Core files, or persists a Core cache.
+- Human confirmation boundaries remain unchanged under recovery. No recovery
+  path chooses scope, changes account, authenticates, grants permission, trusts
+  a provider, resets state, or accepts a changed plan.
 
 ## Expected Result
 
-`PASS`: both providers use Team Context in the installation conversation with
-the exact verified handoff contract, Codex consent remains provider-owned, all
-failure states fail closed, and later SessionStart activation remains intact.
+`PASS`: Codex returns a usable current-session handoff in the original
+conversation; first Claude migration returns no current-session handoff and
+uses next-session adoption for automatic routing; later Core-only releases load on the next task with stable adapter
+identity; unchanged Core content is reused only by
+digest while changed or unavailable content is reread; adapter 1.0.2 is adopted
+through the compatible update path; recovery is bounded, concise, and preserves
+every human boundary; all tamper and legacy paths fail closed.
 
-`FAIL`: either provider needs a restart/new conversation for functional Team
-Context, Codex bypasses consent, Complete coexists with a null/invalid handoff,
-an unverified Skill path is adopted, or future SessionStart behavior regresses.
+`FAIL`: a legacy workflow reads Tree data, Claude automatic routing resumes
+before a valid next SessionStart, same-version repair changes the cache payload,
+a Core-only release repairs or retrusts the Plugin, loader escapes or uses
+a mutable path/HOME cache, a task skips the loader, Core reuse relies on a path,
+name, release, or summary, setup leaks internal envelopes by default, or safe
+recovery crosses a human boundary.
 
-`BLOCKED`: a disposable provider bridge, staging identity/Team, Context Tree,
-or Web setup prompt cannot be prepared without reusing operator state.
+`BLOCKED`: disposable real providers, staging identity/Team, exact-version
+release fixtures, or controlled failure injection cannot be prepared.
 
-`INCONCLUSIVE`: only unit tests or mocked surfaces were observed, the Context
-read did not use the same provider conversation, or provider/auth evidence is
-missing.
+`INCONCLUSIVE`: only unit tests/mocks were observed, provider conversations are
+not the same ones used for setup, or adapter/Core byte evidence is missing.
 
 ## Evidence
 
-Keep redacted Web prompt/server handoff responses, plan choices and exact apply
-commands, login recovery errors, both enable JSON envelopes,
-provider conversation/session identifiers, `/hooks` screenshots and
-`hooks/list` rows, absolute Skill paths plus payload digest evidence, exact Tree
-read receipts, and later SessionStart output. Record CLI/provider versions,
-project classification, commands, timestamps, and all fixture restoration.
+Keep redacted Web prompt and concise transcript, exact apply commands, typed
+failure/recovery evidence, before/after adapter manifests and byte digests,
+Claude next-session adoption, Codex trust rows, loader envelopes and exact release
+paths, Tree read receipts, and tamper/legacy failure output. Record versions,
+timestamps, task/session ids, and fixture restoration.

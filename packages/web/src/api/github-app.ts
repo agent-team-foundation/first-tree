@@ -44,9 +44,11 @@ export async function getGithubAppInstallationExists(organizationId: string): Pr
 /**
  * Fetch the GitHub App install URL for the active org. The server mints a
  * signed `state` JWT, sets the `oauth_state_nonce` cookie alongside it,
- * and returns `https://github.com/apps/<slug>/installations/new?state=…`
- * — GitHub's install dialog (repo picker + permission review). The SPA
- * navigates the browser to it via `window.location`.
+ * and returns a GitHub OAuth authorize URL. That first hop verifies that the
+ * active github.com account matches the linked First Tree identity; only a
+ * matching callback receives a fresh state/cookie pair and continues to
+ * `https://github.com/apps/<slug>/installations/new?state=…`. The SPA navigates
+ * the browser to the returned preflight URL via `window.location`.
  *
  * codex P1-1: the previous implementation pointed the "Install on GitHub"
  * CTA at `/auth/github/start`, which builds the OAuth `authorize` URL.

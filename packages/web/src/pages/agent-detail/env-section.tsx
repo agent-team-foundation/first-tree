@@ -120,6 +120,7 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
 
   return (
     <Section
+      headingLevel={3}
       title={titleWithSemantics("Environment variables", saved)}
       count={items.length}
       description="Sensitive values are encrypted and hidden after save."

@@ -42,14 +42,15 @@ import type {
   AgentHandler,
   DeliveryToken,
   HandlerFactory,
+  ReplayFenceWriter,
   SessionContext,
   SessionMessage,
-} from "../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
+} from "../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
+
 import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../runtime/managed-skills.js";
 import { ProviderAttempt, type ProviderAttemptSettlement } from "../runtime/provider-attempt.js";
 import { maxProviderTurnRetryAttempts } from "../runtime/provider-retry-policy.js";
-import type { ReplayFenceWriter } from "../runtime/replay-fence.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { teamSkillBundleResolverFromSdk } from "../runtime/team-skill-bundle-resolver.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
@@ -247,7 +248,7 @@ function additionalDirectories(workspaceCwd: string, contextTreePath: string | n
 /** Kimi Code handler backed by the direct Botiverse/Moonshot Node SDK. */
 export const createKimiCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot;
-  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "kimi-code");
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -979,8 +980,7 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
 
   return {
     async start(message, sessionCtx, token) {
-      const explicitToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       const prepared = await prepareSession(sessionCtx);
       const mcpServers = mapKimiMcpServers(prepared.payload);
       // The pinned SDK runtime accepts caller-scoped MCP servers here even
@@ -1012,12 +1012,11 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         initialTurnPreparing = false;
         scheduleQueuedMessagesDrain();
       }
-      return explicitToken ? { sessionId, route: { kind: "owned", mode: "processing" } } : sessionId;
+      return { sessionId, route: { kind: "owned", mode: "processing" } };
     },
 
     async resume(message, id, sessionCtx, token) {
-      const explicitToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       const prepared = await prepareSession(sessionCtx);
       const mcpServers = mapKimiMcpServers(prepared.payload);
       // ResumeSessionInput has the same declaration gap as create options.
@@ -1050,12 +1049,12 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
         initialTurnPreparing = false;
         scheduleQueuedMessagesDrain();
       }
-      return explicitToken ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null } : sessionId;
+      return { sessionId, route: message ? { kind: "owned", mode: "processing" } : null };
     },
 
     inject(message, token) {
       if (!ctx || !sessionActive) return { kind: "rejected", reason: "no_active_context", retryable: true };
-      queuedMessages.push({ message, token: token ?? deliveryTokenFromSessionContext(ctx) });
+      queuedMessages.push({ message, token });
       scheduleQueuedMessagesDrain();
       return { kind: "owned", mode: "queued" };
     },

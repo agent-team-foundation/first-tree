@@ -16,6 +16,8 @@ import {
 } from "@first-tree/shared";
 import { defaultHome } from "@first-tree/shared/config";
 import { z } from "zod";
+import { readActiveContextAccountClientId } from "./account-state-guard.js";
+import { assertContextAdapterReadyForRouting } from "./adapter-observation.js";
 import { resolveContextGrantCandidates } from "./context-binding-store.js";
 
 const ROUTE_RECEIPT_TTL_MS = 24 * 60 * 60_000;
@@ -45,6 +47,7 @@ export type ContextRouteReader = {
 
 export type ContextRouteCandidate = {
   candidateId: string;
+  accountClientId: string;
   provider: ContextIntegrationProvider;
   project: ContextIntegrationProject;
   organizationId: string;
@@ -70,6 +73,7 @@ export type ContextRouteResult = {
 const contextRouteCandidateSchema = z
   .object({
     candidateId: z.uuid(),
+    accountClientId: z.string().regex(/^client_[a-f0-9]{8}$/u),
     provider: contextIntegrationProviderSchema,
     project: contextIntegrationProjectSchema,
     organizationId: z.string().min(1),
@@ -95,9 +99,14 @@ export async function resolveContextRoute(
     project: ContextIntegrationProject;
     sessionCandidateReceipt?: string;
   },
-  dependencies: { fetchScope?: typeof fetchExactScope } = {},
+  dependencies: {
+    fetchScope?: typeof fetchExactScope;
+    readAccountClientId?: typeof readActiveContextAccountClientId;
+    assertAdapterReady?: typeof assertContextAdapterReadyForRouting;
+  } = {},
 ): Promise<ContextRouteResult> {
   const readScope = dependencies.fetchScope ?? fetchExactScope;
+  const accountClientId = (dependencies.readAccountClientId ?? readActiveContextAccountClientId)();
   if (input.sessionCandidateReceipt) {
     if (!reader.validateMemberContextSessionCandidate) {
       throw new Error("This First Tree client cannot validate a session-only Context candidate.");
@@ -121,8 +130,10 @@ export async function resolveContextRoute(
       response,
       new Map([[response.candidates[0].organizationId, "session"]]),
       readScope,
+      accountClientId,
     );
   }
+  (dependencies.assertAdapterReady ?? assertContextAdapterReadyForRouting)(input.provider);
   const localCandidates = resolveContextGrantCandidates(input.provider, input.project).map((match) => ({
     organizationId: match.grant.organizationId,
     source: match.priority,
@@ -141,7 +152,7 @@ export async function resolveContextRoute(
       localCandidates.map((candidate) => candidate.organizationId),
       response,
     );
-    return materializeValidatedCandidates(input, response, sources, readScope);
+    return materializeValidatedCandidates(input, response, sources, readScope, accountClientId);
   }
   for (const local of localCandidates) {
     try {
@@ -158,6 +169,7 @@ export async function resolveContextRoute(
       const exact = readScope(binding);
       const candidate: ContextRouteCandidate = {
         candidateId: randomUUID(),
+        accountClientId,
         provider: input.provider,
         project: input.project,
         organizationId: local.organizationId,
@@ -215,6 +227,7 @@ function materializeValidatedCandidates(
   response: ReturnType<typeof contextRouteCandidatesResponseSchema.parse>,
   sources: Map<string, "session" | "directory" | "global">,
   readScope: typeof fetchExactScope,
+  accountClientId: string,
 ): ContextRouteResult {
   const candidates: ContextRouteCandidate[] = [];
   const unavailable: ContextRouteResult["unavailable"] = [];
@@ -229,6 +242,7 @@ function materializeValidatedCandidates(
       const exact = readScope(resolved.binding);
       const candidate: ContextRouteCandidate = {
         candidateId: randomUUID(),
+        accountClientId,
         provider: input.provider,
         project: input.project,
         organizationId: resolved.organizationId,
@@ -248,7 +262,10 @@ function materializeValidatedCandidates(
   return routeResult(input, candidates, unavailable);
 }
 
-export function readContextRouteReceipt(candidateId: string): ContextRouteCandidate {
+export function readContextRouteReceipt(
+  candidateId: string,
+  expectedAccountClientId = readActiveContextAccountClientId(),
+): ContextRouteCandidate {
   if (!/^[0-9a-f-]{36}$/iu.test(candidateId)) throw new Error("Invalid Context route candidate id.");
   const path = routeReceiptPath(candidateId);
   const entry = lstatSync(path);
@@ -258,6 +275,7 @@ export function readContextRouteReceipt(candidateId: string): ContextRouteCandid
   const parsed = contextRouteCandidateSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   if (
     parsed.candidateId !== candidateId ||
+    parsed.accountClientId !== expectedAccountClientId ||
     !Number.isFinite(Date.parse(parsed.createdAt)) ||
     Date.now() - Date.parse(parsed.createdAt) > ROUTE_RECEIPT_TTL_MS ||
     !EXACT_COMMIT_RE.test(parsed.commit)

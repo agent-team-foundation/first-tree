@@ -4,6 +4,13 @@ import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep 
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
+import {
+  type ShellCommandSegment,
+  shellCommandSegments,
+  shellCommandSegmentsWithConnectors,
+  shellWords,
+  unwrapShellCommand,
+} from "../../core/shell.js";
 import type { RunPaths } from "../../core/types.js";
 import { approvedPhase1ChatHistoryMarkdown, SEED_EVAL_TEAM_ID, sourceRemoteRef } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
@@ -158,98 +165,6 @@ function segmentTouchesSourceWorktree(segment: string): boolean {
     return true;
   }
   return false;
-}
-
-// True when a captured command string operates on the source worktree. Split on
-// shell operators first so a search sub-command's quoted pattern is not
-// attributed to a neighboring real operation.
-function unwrapShellCommand(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^(?:\S*\/)?(?:bash|sh|zsh)\s+-lc\s+([\s\S]+)$/u);
-  if (!match?.[1]) return trimmed;
-  const wrapped = match[1].trim();
-  const quote = wrapped[0];
-  if ((quote === '"' || quote === "'") && wrapped.at(-1) === quote) {
-    return wrapped.slice(1, -1).replace(/\\(["'])/gu, "$1");
-  }
-  return wrapped;
-}
-
-type ShellConnector = "&&" | "||" | ";" | "|";
-type ShellCommandSegment = { connectorBefore: ShellConnector | null; text: string };
-
-// Split the command without discarding the operators that determine whether a
-// segment ran. Separators inside quoted arguments are data, not shell control
-// flow (for example `sed -n '1;20p'`). This is deliberately a small shell
-// scanner rather than an attempted full shell parser: it recognizes the
-// top-level operators the grader reasons about and treats everything else as
-// opaque command text.
-function shellCommandSegmentsWithConnectors(text: string): ShellCommandSegment[] {
-  const command = unwrapShellCommand(text);
-  const segments: ShellCommandSegment[] = [];
-  let connectorBefore: ShellConnector | null = null;
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-
-  const push = (connector: ShellConnector | null): void => {
-    if (current.trim().length > 0) {
-      segments.push({ connectorBefore, text: current });
-      current = "";
-    }
-    connectorBefore = connector;
-  };
-
-  for (let index = 0; index < command.length; index++) {
-    const character = command[index] ?? "";
-    const next = command[index + 1] ?? "";
-
-    if (escaped) {
-      current += character;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\" && quote !== "'") {
-      current += character;
-      escaped = true;
-      continue;
-    }
-    if (quote !== null) {
-      current += character;
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      current += character;
-      continue;
-    }
-    if (character === "&" && next === "&") {
-      push("&&");
-      index++;
-      continue;
-    }
-    if (character === "|" && next === "|") {
-      push("||");
-      index++;
-      continue;
-    }
-    if (character === "|") {
-      push("|");
-      continue;
-    }
-    if (character === ";" || character === "\n") {
-      push(";");
-      continue;
-    }
-    current += character;
-  }
-  push(null);
-  return segments;
-}
-
-function shellCommandSegments(text: string): string[] {
-  return shellCommandSegmentsWithConnectors(text).map((segment) => segment.text);
 }
 
 function commandTouchesSourceWorktree(text: string): boolean {
@@ -1048,45 +963,6 @@ function deriveTreeInitObservation(
   }
 
   return { observed, withContextTreeDir };
-}
-
-function shellWords(segment: string): string[] {
-  const words: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-  const push = (): void => {
-    if (current.length > 0) words.push(current);
-    current = "";
-  };
-
-  for (const character of segment.trim()) {
-    if (escaped) {
-      current += character;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) quote = null;
-      else current += character;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (/\s/u.test(character)) {
-      push();
-      continue;
-    }
-    current += character;
-  }
-  push();
-  return words;
 }
 
 function commandIsStrictTreeFetch(command: string, paths: RunPaths): boolean {

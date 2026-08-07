@@ -23,6 +23,7 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { resolveAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { lockChatMembershipMutation } from "./chat-membership-lock.js";
 import { resolveChatTitle } from "./me-chat.js";
 import {
   type DeferredSendMessagePostCommitEffects,
@@ -1175,47 +1176,40 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 }
 
 export async function removeParticipant(db: Database, chatId: string, requesterId: string, targetAgentId: string) {
-  const chat = await getChat(db, chatId);
-  if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
-    throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
-  }
+  const speakers = await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    await lockChatMembershipMutation(tx, [chatId]);
+    const chat = await getChat(tx, chatId);
+    if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
+      throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
+    }
 
-  // Verify requester is a participant
-  await assertParticipant(db, chatId, requesterId);
+    await assertParticipant(tx, chatId, requesterId);
+    if (requesterId === targetAgentId) {
+      throw new BadRequestError("Cannot remove yourself from a chat");
+    }
 
-  // Cannot remove self (use leave instead, if implemented)
-  if (requesterId === targetAgentId) {
-    throw new BadRequestError("Cannot remove yourself from a chat");
-  }
-
-  // Only target the speaker row — leaving any watcher row to be handled
-  // by `recomputeChatWatchers` below (it will be dropped if its anchor
-  // condition no longer holds, or kept otherwise).
-  const [removed] = await db
-    .delete(chatMembership)
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        eq(chatMembership.agentId, targetAgentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
-    .returning();
-
-  if (!removed) {
-    throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
-  }
-  // Reconcile watchers: a manager who was previously anchored to the
-  // removed agent may need their watcher row dropped (if no other
-  // managed agent remains in chat) or re-created (if the removed agent
-  // was a speaker but their manager is now eligible to watch).
-  await recomputeChatWatchers(db, chatId);
+    const [removed] = await tx
+      .delete(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, chatId),
+          eq(chatMembership.agentId, targetAgentId),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      )
+      .returning();
+    if (!removed) {
+      throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
+    }
+    await recomputeChatWatchers(tx, chatId);
+    return tx
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+  });
   invalidateChatAudience(chatId);
-
-  return db
-    .select()
-    .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+  return speakers;
 }
 
 /**

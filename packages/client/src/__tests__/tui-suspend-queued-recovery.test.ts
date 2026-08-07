@@ -46,11 +46,14 @@ vi.mock("../runtime/workspace.js", () => ({
   markWorkspaceInitComplete: vi.fn(),
 }));
 
-vi.mock("../handlers/claude-code.js", () => ({
+vi.mock("../handlers/claude/tool-call-processor.js", () => ({
   createToolCallProcessor: vi.fn(() => ({
     flush: vi.fn(),
     onMessage: vi.fn(),
   })),
+}));
+
+vi.mock("../handlers/claude/mcp-config.js", () => ({
   mapMcpServers: vi.fn(() => []),
 }));
 
@@ -95,6 +98,7 @@ vi.mock("../handlers/claude-code-tui/transcript-tail.js", () => ({
 
 import { createClaudeCodeTuiHandler } from "../handlers/claude-code-tui/index.js";
 import { newSession } from "../handlers/claude-code-tui/tmux-session.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 
 const AGENT_ID = "019eca71-0000-7000-8000-000000000001";
 const CHAT_ID = "chat-tui-suspend-queued-recovery";
@@ -158,11 +162,15 @@ afterEach(() => {
 
 describe("claude-code-tui suspend queued recovery", () => {
   it("starts claude with the runtime output contract and Current Chat Context", async () => {
-    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const handler = createClaudeCodeTuiHandler({
+      runtimeProvider: "claude-code-tui",
+      workspaceRoot: state.workspaceRoot,
+      clientId: "client-test",
+    });
     const ctx = makeContext();
     const first = makeMessage("m1", "active turn");
 
-    const start = handler.start(first, ctx);
+    const start = handler.start(first, ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => vi.mocked(newSession).mock.calls.length > 0);
 
     const command = vi.mocked(newSession).mock.calls[0]?.[0].command ?? "";
@@ -187,20 +195,24 @@ describe("claude-code-tui suspend queued recovery", () => {
   });
 
   it("drops handler-local queued injects on suspend so recovered messages are not pasted twice", async () => {
-    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const handler = createClaudeCodeTuiHandler({
+      runtimeProvider: "claude-code-tui",
+      workspaceRoot: state.workspaceRoot,
+      clientId: "client-test",
+    });
     const ctx = makeContext();
     const first = makeMessage("m1", "active turn");
     const recovered = makeMessage("m2", "queued recovered turn");
 
-    const start = handler.start(first, ctx);
+    const start = handler.start(first, ctx, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => state.pasteTexts.some((text) => text.includes("active turn")));
 
-    handler.inject(recovered);
+    handler.inject(recovered, deliveryTokenFromSessionContext(ctx));
     await handler.suspend();
     const startResult = await start;
     const sessionId = typeof startResult === "string" ? startResult : startResult.sessionId;
 
-    await handler.resume(recovered, sessionId, ctx);
+    await handler.resume(recovered, sessionId, ctx, deliveryTokenFromSessionContext(ctx));
     await new Promise((resolve) => setImmediate(resolve));
 
     const recoveredPastes = state.pasteTexts.filter((text) => text.includes("queued recovered turn"));
@@ -217,7 +229,11 @@ describe("claude-code-tui suspend queued recovery", () => {
   });
 
   it("does not paste a drained queued batch when suspend arrives during formatting", async () => {
-    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const handler = createClaudeCodeTuiHandler({
+      runtimeProvider: "claude-code-tui",
+      workspaceRoot: state.workspaceRoot,
+      clientId: "client-test",
+    });
     const queued = makeMessage("m2", "format-held queued turn");
     let formattingStarted = false;
     let releaseFormat!: () => void;
@@ -235,9 +251,9 @@ describe("claude-code-tui suspend queued recovery", () => {
       },
     });
 
-    await handler.resume(undefined, "existing-session", ctx);
+    await handler.resume(undefined, "existing-session", ctx, deliveryTokenFromSessionContext(ctx));
 
-    handler.inject(queued);
+    handler.inject(queued, deliveryTokenFromSessionContext(ctx));
     await waitFor(() => formattingStarted);
 
     const suspend = handler.suspend();
@@ -254,7 +270,11 @@ describe("claude-code-tui suspend queued recovery", () => {
   });
 
   it("retries a queued batch when all inbound formatting fails before paste", async () => {
-    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const handler = createClaudeCodeTuiHandler({
+      runtimeProvider: "claude-code-tui",
+      workspaceRoot: state.workspaceRoot,
+      clientId: "client-test",
+    });
     const queued = makeMessage("m3", "format-fail queued turn");
     const ctx = makeContext({
       formatInboundContent: async (message) => {
@@ -264,8 +284,8 @@ describe("claude-code-tui suspend queued recovery", () => {
       },
     });
 
-    await handler.resume(undefined, "existing-session", ctx);
-    handler.inject(queued);
+    await handler.resume(undefined, "existing-session", ctx, deliveryTokenFromSessionContext(ctx));
+    handler.inject(queued, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => vi.mocked(ctx.retryTurn).mock.calls.length > 0);
 
@@ -288,7 +308,11 @@ describe("claude-code-tui suspend queued recovery", () => {
       messages: [makeMessage("m4", "good first"), makeMessage("m5", "bad second")],
     },
   ])("retries the whole queued batch when mixed formatting occurs: $name", async ({ failingIds, messages }) => {
-    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const handler = createClaudeCodeTuiHandler({
+      runtimeProvider: "claude-code-tui",
+      workspaceRoot: state.workspaceRoot,
+      clientId: "client-test",
+    });
     const ctx = makeContext({
       formatInboundContent: async (message) => {
         if (failingIds.has(message.id)) throw new Error(`format failed for ${message.id}`);
@@ -297,8 +321,8 @@ describe("claude-code-tui suspend queued recovery", () => {
       },
     });
 
-    await handler.resume(undefined, "existing-session", ctx);
-    for (const message of messages) handler.inject(message);
+    await handler.resume(undefined, "existing-session", ctx, deliveryTokenFromSessionContext(ctx));
+    for (const message of messages) handler.inject(message, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => vi.mocked(ctx.retryTurn).mock.calls.length >= messages.length);
 

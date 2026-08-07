@@ -1713,55 +1713,54 @@ describe("POST /webhooks/github-app", () => {
 
   it.each([
     {
-      label: "mention",
-      action: "opened",
-      body: "@test-app-slug please investigate this issue.",
-      assignees: [] as Array<{ login: string; type: string }>,
-      assignee: undefined,
-      expectedReason: "mentioned",
-      expectedLogin: "test-app-slug",
+      label: "Issue",
+      eventType: "issues",
+      entityType: "issue",
+      number: 12,
+      payload: {
+        action: "opened",
+        issue: {
+          number: 12,
+          title: "Automatic Issue handling",
+          html_url: "https://github.com/owner/repo/issues/12",
+          body: "Please investigate this issue.",
+          assignees: [],
+          author_association: "CONTRIBUTOR",
+        },
+      },
     },
     {
-      label: "assignment",
-      action: "assigned",
-      body: "Please investigate this issue.",
-      assignees: [{ login: "test-app-slug[bot]", type: "Bot" }],
-      assignee: { login: "test-app-slug[bot]", type: "Bot" },
-      expectedReason: "assigned",
-      expectedLogin: "test-app-slug[bot]",
+      label: "pull request",
+      eventType: "pull_request",
+      entityType: "pull_request",
+      number: 13,
+      payload: {
+        action: "opened",
+        pull_request: {
+          number: 13,
+          title: "Automatic pull request handling",
+          html_url: "https://github.com/owner/repo/pull/13",
+          body: "Please inspect this pull request.",
+          assignees: [],
+          author_association: "NONE",
+          draft: false,
+        },
+      },
     },
-  ])("delegates an App $label to the selected GitHub Task Agent and wakes it", async (scenario) => {
+  ] as const)("automatically delegates $label activity without an App mention or assignment", async (scenario) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const installationId = scenario.action === "opened" ? 100032 : 100033;
+    const installationId = scenario.entityType === "issue" ? 100032 : 100033;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const teamAgent = await configureTeamAgent(app, admin);
-    const [managerHuman] = await app.db
-      .select({ name: agents.name })
-      .from(agents)
-      .where(eq(agents.uuid, admin.humanAgentUuid))
-      .limit(1);
-    if (!managerHuman?.name) throw new Error("GitHub Task Agent manager human is missing a GitHub-compatible name");
 
     const payload = {
-      action: scenario.action,
-      issue: {
-        number: scenario.action === "opened" ? 12 : 13,
-        title: `App ${scenario.label}`,
-        html_url: `https://github.com/owner/repo/issues/${scenario.action === "opened" ? 12 : 13}`,
-        body: scenario.body,
-        assignees: scenario.assignees,
-        author_association: scenario.expectedReason === "mentioned" ? "MEMBER" : "NONE",
-      },
-      ...(scenario.assignee ? { assignee: scenario.assignee } : {}),
+      ...scenario.payload,
       repository: { full_name: "owner/repo" },
-      // The manager is also the GitHub actor. The directed App target must
-      // survive actor-echo pruning even when this attention line already
-      // belongs to that manager.
-      sender: { login: managerHuman.name, type: "User" },
+      sender: { login: "external-contributor", type: "User" },
       installation: { id: installationId },
     };
-    const res = await postWebhook(app, "issues", payload);
+    const res = await postWebhook(app, scenario.eventType, payload);
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, delivered: 1, newChats: 1, failed: 0 });
@@ -1770,7 +1769,7 @@ describe("POST /webhooks/github-app", () => {
     expect(mapping).toMatchObject({
       humanAgentId: admin.humanAgentUuid,
       delegateAgentId: teamAgent,
-      entityType: "issue",
+      entityType: scenario.entityType,
       boundVia: "direct",
     });
 
@@ -1781,10 +1780,11 @@ describe("POST /webhooks/github-app", () => {
       .limit(1);
     expect(message?.content).toMatchObject({
       type: "github_event",
-      reason: scenario.expectedReason,
-      mentionedUser: scenario.expectedLogin,
+      reason: "subscribed",
+      kind: "opened",
       teamAgentTask: { agentUuid: teamAgent, runId: expect.any(String) },
     });
+    expect(message?.content).not.toHaveProperty("mentionedUser");
     expect(message?.metadata).toMatchObject({
       mentions: [teamAgent],
       teamAgentTask: { agentUuid: teamAgent, runId: expect.any(String) },
@@ -1793,10 +1793,11 @@ describe("POST /webhooks/github-app", () => {
       githubTaskAgentUuid: teamAgent,
       githubTaskManagerHumanAgentId: admin.humanAgentUuid,
       githubTaskRepository: "owner/repo",
-      githubTaskEntityType: "issue",
-      githubTaskEntityNumber: scenario.action === "opened" ? 12 : 13,
+      githubTaskEntityType: scenario.entityType,
+      githubTaskEntityNumber: scenario.number,
       githubTaskReplySubmission: { state: "pending" },
     });
+    expect(message?.metadata).not.toHaveProperty("mentionedUser");
     expect(message?.metadata.githubTaskRunId).toBe(
       (message?.content as { teamAgentTask?: { runId?: string } }).teamAgentTask?.runId,
     );
@@ -1808,7 +1809,7 @@ describe("POST /webhooks/github-app", () => {
       .limit(1);
     expect(entry?.notify).toBe(true);
 
-    const repeated = await postWebhook(app, "issues", payload);
+    const repeated = await postWebhook(app, scenario.eventType, payload);
     expect(repeated.statusCode).toBe(200);
     expect(repeated.json()).toMatchObject({ ok: true, delivered: 1, newChats: 0, failed: 0 });
     const mappingRows = await app.db.select().from(githubEntityChatMappings);
@@ -1846,9 +1847,9 @@ describe("POST /webhooks/github-app", () => {
         number: 16,
         title: "Permission downgraded",
         html_url: "https://github.com/owner/repo/issues/16",
-        body: "@test-app-slug investigate",
+        body: "Please investigate",
         assignees: [],
-        author_association: "MEMBER",
+        author_association: "CONTRIBUTOR",
       },
       repository: { full_name: "owner/repo" },
       sender: { login: "authorized-member", type: "User" },
@@ -1874,7 +1875,7 @@ describe("POST /webhooks/github-app", () => {
           number: 17,
           title: "Unsupported discussion task",
           html_url: "https://github.com/owner/repo/discussions/17",
-          body: "@test-app-slug investigate",
+          body: "Please investigate",
           author_association: "MEMBER",
         },
         repository: { full_name: "owner/repo" },
@@ -1888,7 +1889,7 @@ describe("POST /webhooks/github-app", () => {
       payload: (installationId: number) => ({
         action: "created",
         comment: {
-          body: "@test-app-slug investigate",
+          body: "Please investigate",
           commit_id: "abc1234",
           html_url: "https://github.com/owner/repo/commit/abc1234#commitcomment-1",
           author_association: "MEMBER",
@@ -1898,7 +1899,7 @@ describe("POST /webhooks/github-app", () => {
         installation: { id: installationId },
       }),
     },
-  ])("returns a stable unsupported blocker and zero task mutation for an App-targeted $label", async (scenario) => {
+  ])("does not create a task run for normalized $label activity", async (scenario) => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = scenario.eventType === "discussion" ? 100037 : 100038;
@@ -1908,10 +1909,8 @@ describe("POST /webhooks/github-app", () => {
     const response = await postWebhook(app, scenario.eventType, scenario.payload(installationId));
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      audience: 0,
-      appTaskBlocker: "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED",
-    });
+    expect(response.json()).toMatchObject({ audience: 0 });
+    expect(response.json()).not.toHaveProperty("appTaskBlocker");
     expect(await app.db.select().from(messages)).toHaveLength(0);
     expect(await app.db.select().from(githubEntityChatMappings)).toHaveLength(0);
   });
@@ -1965,6 +1964,47 @@ describe("POST /webhooks/github-app", () => {
     expect(delivered[0]?.metadata).not.toHaveProperty("githubTaskRun");
     expect(delivered[0]?.content).not.toHaveProperty("teamAgentTask");
     expect(await app.db.select().from(githubEntityChatMappings)).toHaveLength(1);
+  });
+
+  it("treats configured App-bot activity without a valid task marker as an ordinary automatic event", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100040;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const teamAgent = await configureTeamAgent(app, admin);
+
+    const response = await postWebhook(app, "issue_comment", {
+      action: "created",
+      issue: {
+        number: 19,
+        title: "App activity without a terminal marker",
+        html_url: "https://github.com/owner/repo/issues/19",
+        author_association: "NONE",
+      },
+      comment: {
+        body: "An App-authored update with no First Tree task marker.",
+        html_url: "https://github.com/owner/repo/issues/19#issuecomment-19",
+        user: { login: "test-app-slug[bot]", type: "Bot" },
+        author_association: "NONE",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "test-app-slug[bot]", type: "Bot" },
+      installation: { id: installationId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ delivered: 1, newChats: 1, failed: 0 });
+    const [message] = await app.db.select().from(messages).limit(1);
+    expect(message?.content).toMatchObject({
+      type: "github_event",
+      reason: "subscribed",
+      teamAgentTask: { agentUuid: teamAgent, runId: expect.any(String) },
+    });
+    expect(message?.metadata).toMatchObject({
+      mentions: [teamAgent],
+      githubTaskRun: true,
+      githubTaskAgentUuid: teamAgent,
+    });
   });
 
   it("suppresses an App-authored task reply from trusted Context Review while preserving a same-Agent generic subscription", async () => {
@@ -2062,21 +2102,36 @@ describe("POST /webhooks/github-app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
+      delivered: 1,
       contextReviewer: { handled: true, reused: false },
     });
     const messageRows = await app.db.select().from(messages);
-    expect(messageRows).toHaveLength(1);
-    expect(messageRows[0]?.metadata).toMatchObject({
+    expect(messageRows).toHaveLength(2);
+    const reviewMessage = messageRows.find((message) => message.metadata.contextTreeReviewer === true);
+    const taskMessage = messageRows.find((message) => message.metadata.githubTaskRun === true);
+    expect(reviewMessage?.metadata).toMatchObject({
       contextTreeReviewer: true,
       mentions: [reviewer],
     });
-    expect(messageRows[0]?.metadata.contextReviewRunId).toEqual(expect.any(String));
-    expect(messageRows[0]?.metadata).not.toHaveProperty("teamAgentTask");
+    expect(reviewMessage?.metadata.contextReviewRunId).toEqual(expect.any(String));
+    expect(reviewMessage?.metadata).not.toHaveProperty("teamAgentTask");
+    expect(reviewMessage?.metadata).not.toHaveProperty("githubTaskRun");
+    expect(taskMessage?.metadata).toMatchObject({
+      teamAgentTask: { agentUuid: reviewer, runId: expect.any(String) },
+      githubTaskRun: true,
+      githubTaskAgentUuid: reviewer,
+      mentions: [reviewer],
+    });
+    expect(taskMessage?.metadata).not.toHaveProperty("contextTreeReviewer");
+    expect(taskMessage?.metadata).not.toHaveProperty("contextReviewRunId");
+    expect(taskMessage?.content).toMatchObject({ reason: "subscribed" });
+    expect(taskMessage?.content).not.toHaveProperty("mentionedUser");
+    expect(taskMessage?.chatId).not.toBe(reviewMessage?.chatId);
 
     const [reviewerNotification] = await app.db
       .select({ notify: inboxEntries.notify })
       .from(inboxEntries)
-      .where(and(eq(inboxEntries.messageId, messageRows[0]?.id ?? ""), eq(inboxEntries.inboxId, `inbox_${reviewer}`)))
+      .where(and(eq(inboxEntries.messageId, reviewMessage?.id ?? ""), eq(inboxEntries.inboxId, `inbox_${reviewer}`)))
       .limit(1);
     expect(reviewerNotification?.notify).toBe(true);
   });
@@ -2144,6 +2199,9 @@ describe("POST /webhooks/github-app", () => {
     expect(message?.metadata).toMatchObject({
       teamAgentTask: { agentUuid: teamAgent },
     });
+    expect(message?.content).toMatchObject({ reason: "subscribed", kind: "assigned" });
+    expect(message?.content).not.toHaveProperty("mentionedUser");
+    expect(message?.metadata).not.toHaveProperty("mentionedUser");
     expect(message?.metadata.mentions).toEqual(expect.arrayContaining([teamAgent, otherDelegate]));
     expect(message?.metadata.mentions).toHaveLength(2);
     const notified = await app.db
@@ -2225,8 +2283,8 @@ describe("POST /webhooks/github-app", () => {
       },
       assignee: { login: "test-app-slug[bot]", type: "Bot" },
       repository: { full_name: "owner/repo" },
-      // Prune only the manager's historical line. The fresh directed task
-      // remains eligible, as does the other human's explicit subscription.
+      // Prune only the manager's historical line. The automatic task remains
+      // eligible, as does the other human's explicit subscription.
       sender: { login: managerHuman.name, type: "User" },
       installation: { id: installationId },
     });
@@ -2239,6 +2297,8 @@ describe("POST /webhooks/github-app", () => {
     expect(message?.metadata).toMatchObject({
       teamAgentTask: { agentUuid: teamAgent },
     });
+    expect(message?.content).toMatchObject({ reason: "subscribed", kind: "assigned" });
+    expect(message?.content).not.toHaveProperty("mentionedUser");
     expect(message?.metadata.mentions).toEqual(expect.arrayContaining([teamAgent, subscribedDelegate]));
     expect(message?.metadata.mentions).toHaveLength(2);
     expect(message?.metadata.mentions).not.toContain(historicalDelegate);
@@ -2258,7 +2318,7 @@ describe("POST /webhooks/github-app", () => {
     );
   });
 
-  it("pull_request.opened on the bound context repo creates a Context Reviewer task message", async () => {
+  it("pull_request.opened on the bound context repo keeps generic task and trusted review capabilities separate", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100041;
@@ -2272,29 +2332,33 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toMatchObject({
       ok: true,
       event: "pull_request",
-      audience: 0,
+      delivered: 1,
+      newChats: 1,
       contextReviewer: { handled: true, reused: false },
     });
 
-    const [chat] = await app.db.select().from(chats).limit(1);
-    expect(chat?.metadata).toMatchObject({
+    const chatRows = await app.db.select().from(chats);
+    expect(chatRows).toHaveLength(2);
+    const reviewChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer === true);
+    const taskChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer !== true);
+    expect(reviewChat?.metadata).toMatchObject({
       source: "github",
       entityType: "pull_request",
       entityKey: "owner/context-tree#42",
       contextTreeReviewer: true,
       reviewerAgentUuid: reviewer,
     });
+    expect(taskChat?.metadata).not.toHaveProperty("contextTreeReviewer");
 
-    const [message] = await app.db
-      .select()
-      .from(messages)
-      .where(eq(messages.chatId, chat?.id ?? ""))
-      .limit(1);
-    expect(message?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(message?.content).not.toContain("gh pr review");
-    expect(message?.content).not.toContain("Context changes requested");
-    expect(message?.content).toContain("Draft status from webhook: ready for review");
-    expect(message?.metadata).toMatchObject({
+    const messageRows = await app.db.select().from(messages);
+    expect(messageRows).toHaveLength(2);
+    const reviewMessage = messageRows.find((message) => message.metadata.contextTreeReviewer === true);
+    const taskMessage = messageRows.find((message) => message.metadata.githubTaskRun === true);
+    expect(reviewMessage?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(reviewMessage?.content).not.toContain("gh pr review");
+    expect(reviewMessage?.content).not.toContain("Context changes requested");
+    expect(reviewMessage?.content).toContain("Draft status from webhook: ready for review");
+    expect(reviewMessage?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
       action: "opened",
@@ -2303,6 +2367,26 @@ describe("POST /webhooks/github-app", () => {
       pullRequestDraft: false,
       mentions: [reviewer],
     });
+    expect(reviewMessage?.metadata.contextReviewRunId).toEqual(expect.any(String));
+    expect(reviewMessage?.metadata).not.toHaveProperty("teamAgentTask");
+    expect(reviewMessage?.metadata).not.toHaveProperty("githubTaskRun");
+    expect(taskMessage?.content).toMatchObject({
+      type: "github_event",
+      reason: "subscribed",
+      kind: "opened",
+      teamAgentTask: { agentUuid: reviewer, runId: expect.any(String) },
+    });
+    expect(taskMessage?.content).not.toHaveProperty("mentionedUser");
+    expect(taskMessage?.metadata).toMatchObject({
+      githubTaskRun: true,
+      githubTaskAgentUuid: reviewer,
+      mentions: [reviewer],
+    });
+    expect(taskMessage?.metadata).not.toHaveProperty("contextTreeReviewer");
+    expect(taskMessage?.metadata).not.toHaveProperty("contextReviewRunId");
+    expect(taskMessage?.chatId).toBe(taskChat?.id);
+    expect(reviewMessage?.chatId).toBe(reviewChat?.id);
+    expect(taskMessage?.chatId).not.toBe(reviewMessage?.chatId);
   });
 
   it("follow-up activity on a bound context PR wakes the existing Context Reviewer chat", async () => {
@@ -2325,19 +2409,20 @@ describe("POST /webhooks/github-app", () => {
     expect(followUp.json()).toMatchObject({
       ok: true,
       event: "issue_comment",
-      audience: 0,
+      delivered: 1,
       contextReviewer: { handled: true, reused: true },
     });
 
     const chatRows = await app.db.select().from(chats);
-    expect(chatRows).toHaveLength(1);
+    expect(chatRows).toHaveLength(2);
+    const reviewChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer === true);
+    const taskChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer !== true);
 
-    const messageRows = await app.db
-      .select()
-      .from(messages)
-      .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
-    expect(messageRows).toHaveLength(2);
-    const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
+    const messageRows = await app.db.select().from(messages);
+    expect(messageRows).toHaveLength(4);
+    const followUpMessage = messageRows.find(
+      (message) => message.metadata.triggerEvent === "issue_comment.created" && message.metadata.contextTreeReviewer,
+    );
     expect(followUpMessage?.content).toContain("Trigger event: issue_comment.created");
     expect(followUpMessage?.content).toContain("Comment author: context-commenter");
     expect(followUpMessage?.content).toContain(
@@ -2356,6 +2441,18 @@ describe("POST /webhooks/github-app", () => {
       commentUrl: "https://github.com/owner/context-tree/pull/42#issuecomment-2",
       mentions: [reviewer],
     });
+    expect(followUpMessage?.chatId).toBe(reviewChat?.id);
+    expect(followUpMessage?.metadata).not.toHaveProperty("teamAgentTask");
+    const genericFollowUp = messageRows.find(
+      (message) => message.metadata.event === "issue_comment" && message.metadata.githubTaskRun === true,
+    );
+    expect(genericFollowUp?.chatId).toBe(taskChat?.id);
+    expect(genericFollowUp?.metadata).toMatchObject({
+      teamAgentTask: { agentUuid: reviewer, runId: expect.any(String) },
+      githubTaskAgentUuid: reviewer,
+      mentions: [reviewer],
+    });
+    expect(genericFollowUp?.metadata).not.toHaveProperty("contextReviewRunId");
 
     const [entry] = await app.db
       .select({ notify: inboxEntries.notify })
@@ -2392,11 +2489,14 @@ describe("POST /webhooks/github-app", () => {
       contextReviewer: { handled: true, reused: true },
     });
 
-    const [chat] = await app.db.select().from(chats).limit(1);
+    const chatRows = await app.db.select().from(chats);
+    expect(chatRows).toHaveLength(2);
+    const reviewChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer === true);
+    const taskChat = chatRows.find((chat) => chat.metadata.contextTreeReviewer !== true);
     const messageRows = await app.db
       .select()
       .from(messages)
-      .where(eq(messages.chatId, chat?.id ?? ""));
+      .where(eq(messages.chatId, reviewChat?.id ?? ""));
     expect(messageRows).toHaveLength(2);
     const followUpMessage = messageRows.find(
       (message) => message.metadata.triggerEvent === "pull_request.ready_for_review",
@@ -2416,6 +2516,16 @@ describe("POST /webhooks/github-app", () => {
       pullRequestDraft: false,
       mentions: [reviewer],
     });
+    const taskMessageRows = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, taskChat?.id ?? ""));
+    expect(taskMessageRows).toHaveLength(1);
+    expect(taskMessageRows[0]?.metadata).toMatchObject({
+      githubTaskRun: true,
+      teamAgentTask: { agentUuid: reviewer, runId: expect.any(String) },
+    });
+    expect(taskMessageRows[0]?.metadata).not.toHaveProperty("contextReviewRunId");
   });
 
   it("pull_request.opened on an ordinary code repo does not trigger Context Reviewer", async () => {
@@ -2483,7 +2593,9 @@ describe("POST /webhooks/github-app", () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(second.json().deduped).toBe(true);
-    const messageRows = await app.db.select({ id: messages.id }).from(messages);
-    expect(messageRows).toHaveLength(1);
+    const messageRows = await app.db.select().from(messages);
+    expect(messageRows).toHaveLength(2);
+    expect(messageRows.filter((message) => message.metadata.contextTreeReviewer === true)).toHaveLength(1);
+    expect(messageRows.filter((message) => message.metadata.githubTaskRun === true)).toHaveLength(1);
   });
 });

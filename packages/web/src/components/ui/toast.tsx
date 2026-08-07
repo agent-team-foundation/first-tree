@@ -3,7 +3,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 
 /**
  * Minimal toast system — used for transient informational nudges (e.g.
- * "Setup hidden — resume any time in Settings → Setup"). Mount `<Toaster>`
+ * "Setup hidden — resume any time in Settings → Getting Started"). Mount `<Toaster>`
  * once at the app root and call `useToast().addToast(...)` anywhere under
  * it. Auto-dismisses after `durationMs` (default 5s) unless the toast is
  * persistent (`durationMs: null`).

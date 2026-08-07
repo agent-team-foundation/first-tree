@@ -103,6 +103,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { DeliveryToken, SessionContext } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430da";
@@ -142,7 +143,11 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -168,6 +173,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       await handler.start(
         { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForCondition("first scheduled retry", () => scheduledRetryCount(emitted) === 1);
       await vi.advanceTimersByTimeAsync(5000);
@@ -254,7 +260,11 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const plumbing = mockCtxPlumbing({ sendMessage }, "chat-retry");
     const ctx: SessionContext = {
       agent: {
@@ -291,6 +301,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       await handler.start(
         { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
         ctx,
+        deliveryTokenFromSessionContext(ctx),
       );
       await waitForObservedInputs(1, 1);
       handler.inject(
@@ -347,7 +358,11 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -371,6 +386,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     await handler.start(
       { id: "m1", chatId: "chat-retry-emit-throw", senderId: "u", format: "text", content: "hi", metadata: null },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
     await handler.suspend();
     await new Promise((r) => setImmediate(r));

@@ -23,6 +23,7 @@ describe("OAuth state JWT", () => {
   it("round-trips the GitHub App installation intent", async () => {
     const { token, nonce } = await signOAuthState(SECRET, "/settings/github", {
       intent: "install",
+      installPhase: "identity",
       provider: "github",
       targetOrganizationId: "01961234-aaaa-7000-8000-000000000001",
     });
@@ -30,6 +31,7 @@ describe("OAuth state JWT", () => {
     expect(result).toMatchObject({
       next: "/settings/github",
       intent: "install",
+      installPhase: "identity",
       provider: "github",
     });
   });

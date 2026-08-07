@@ -17,7 +17,7 @@ export type RuntimeSectionProps = {
   computerLabel: string | null;
   computerStatusLoading?: boolean;
   computerStatusError?: string | null;
-  /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
+  /** Whether the "Choose computer" CTA should be shown (only when no client is assigned and the agent is active). */
   canBindComputer: boolean;
   bindComputerPending?: boolean;
   onBindComputer?: () => void;
@@ -28,7 +28,7 @@ export type RuntimeSectionProps = {
 
 export function RuntimeSection(props: RuntimeSectionProps) {
   return (
-    <Section title={titleWithSemantics("Execution")}>
+    <Section headingLevel={3} title={titleWithSemantics("Execution")}>
       <ComputerRow
         computerLabel={props.computerLabel}
         statusLoading={props.computerStatusLoading ?? false}
@@ -59,13 +59,11 @@ export function RuntimeSwitchRecoveryNotice({
   onRecover: () => void;
 }) {
   return (
-    <Section title="Runtime switch recovery">
+    <Section headingLevel={3} title="Runtime switch recovery">
       <div
         className="flex items-start gap-3"
         style={{
-          padding: "var(--sp-3)",
-          border: "var(--hairline) solid var(--state-blocked)",
-          borderRadius: "var(--radius-panel)",
+          padding: "var(--sp-3) 0",
         }}
       >
         <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: "var(--state-blocked)", marginTop: 2 }} />
@@ -136,10 +134,10 @@ function ComputerRow(props: {
         variant="outline"
         onClick={props.onBindComputer}
         disabled={props.bindPending}
-        title={props.bindPending ? "Binding computer…" : "Pick a connected computer for this agent"}
+        title={props.bindPending ? "Assigning computer…" : "Choose a connected computer for this agent"}
       >
         <Link2 className="h-3 w-3" />
-        {props.bindPending ? "Binding…" : "Bind computer"}
+        {props.bindPending ? "Assigning…" : "Choose computer"}
       </Button>
     ) : null;
 
@@ -150,7 +148,7 @@ function ComputerRow(props: {
   } else if (props.statusError) {
     value = <span style={{ color: "var(--state-error)" }}>Could not verify computer binding: {props.statusError}</span>;
   } else if (!bound) {
-    value = "No computer bound";
+    value = "No computer assigned";
     description = "Choose a connected computer before this agent can run.";
   }
   // Bound: the computer name only. Its live online/offline state is intentionally

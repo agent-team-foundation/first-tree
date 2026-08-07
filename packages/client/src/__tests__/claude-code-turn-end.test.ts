@@ -41,6 +41,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
@@ -78,7 +79,11 @@ describe("claude-code handler — turn_end emission", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -100,6 +105,7 @@ describe("claude-code handler — turn_end emission", () => {
     await handler.start(
       { id: "m1", chatId: "chat-1", senderId: "u", format: "text", content: "hi", metadata: null },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
@@ -116,7 +122,11 @@ describe("claude-code handler — turn_end emission", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -146,6 +156,7 @@ describe("claude-code handler — turn_end emission", () => {
     await handler.start(
       { id: "m1", chatId: "chat-1", senderId: "u", format: "text", content: "hi", metadata: null },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
 
     // Consumer loop is async; let microtasks settle.

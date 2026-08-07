@@ -1,7 +1,4 @@
-import type { Agent } from "@first-tree/shared";
-import { canManageAgentDetail } from "./access.js";
-
-export type TabDef = { key: string; label: string; path: string };
+export type TabDef = { key: string; label: string; path: string; description: string };
 
 // IA labels only. Routing `path` and the `key` (deep-link mapping) are kept
 // stable so existing URLs keep resolving. Responsibilities has its own stable
@@ -16,15 +13,94 @@ const TAB_LABELS: Record<string, string> = {
   usage: "Usage",
 };
 
+const TAB_DESCRIPTIONS: Record<string, string> = {
+  profile: "Identity, ownership, and lifecycle for this agent.",
+  responsibilities: "Starting responsibilities imported from Agent Templates.",
+  runtime: "Where this agent runs and how it is configured.",
+  prompt: "Guidance that shapes how this agent behaves.",
+  capabilities: "Skills and integrations configured for this agent.",
+  repositories: "Code repositories and team context available in this agent’s workspace.",
+  usage: "Activity and turn history for this agent.",
+};
+
 /**
- * Single source of truth for WHICH tabs exist for an agent (key + path),
- * independent of label/order. `buildTabs` adds the display label on top, and the
- * agent switcher uses this to know whether a target agent supports the current
- * tab — so the two can never drift on tab availability.
+ * One side of the empty-entry gate (public catalog or agent-resources).
+ *
+ * Confirmed empty requires: data present from a successful response, no
+ * in-flight fetch/refetch, no error (including background refetch errors that
+ * retain cached data), and a zero count. Anything else is uncertain → fail open.
  */
-export function tabKeysFor(canEditConfig: boolean, isHuman: boolean): { key: string; path: string }[] {
+export type ResponsibilitiesSideState = {
+  hasData: boolean;
+  isFetching: boolean;
+  hasError: boolean;
+  count: number;
+};
+
+export type ResponsibilitiesVisibilityInput = {
+  catalog: ResponsibilitiesSideState;
+  agentResources: ResponsibilitiesSideState;
+};
+
+/** Build a side state from a live React Query observation. */
+export function responsibilitiesSideFromQuery(args: {
+  /** `null` when the query has never produced data (or cache miss). */
+  count: number | null;
+  isFetching: boolean;
+  isError: boolean;
+}): ResponsibilitiesSideState {
+  return {
+    hasData: args.count != null,
+    isFetching: args.isFetching,
+    hasError: args.isError,
+    count: args.count ?? 0,
+  };
+}
+
+export function isConfirmedEmptyResponsibilitiesSide(side: ResponsibilitiesSideState): boolean {
+  return side.hasData && !side.isFetching && !side.hasError && side.count === 0;
+}
+
+/**
+ * Whether Agent Detail should expose the Responsibilities tab.
+ *
+ * Hide only when both the public catalog and the agent's adopted `templateIds`
+ * are confirmed empty (latest request succeeded, not fetching/refetching, empty
+ * arrays). Loading, in-flight background refetch, initial errors, and cached
+ * data with a refetch error all fail open. Non-empty `templateIds` keep the tab
+ * for provenance even when the official catalog is empty.
+ */
+export function shouldShowResponsibilitiesTab(
+  isHuman: boolean,
+  input: ResponsibilitiesVisibilityInput | null,
+): boolean {
+  if (isHuman) return false;
+  if (!input) return true;
+  // Provenance / available catalog: any known non-empty side keeps the entry.
+  if (input.agentResources.hasData && input.agentResources.count > 0) return true;
+  if (input.catalog.hasData && input.catalog.count > 0) return true;
+  if (
+    isConfirmedEmptyResponsibilitiesSide(input.catalog) &&
+    isConfirmedEmptyResponsibilitiesSide(input.agentResources)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Single source of truth for WHICH sections exist for an agent (key + path),
+ * independent of label/order. `buildTabs` adds the display label and description.
+ *
+ * Humans never receive Responsibilities, even when a caller passes `true`.
+ */
+export function tabKeysFor(
+  canEditConfig: boolean,
+  isHuman: boolean,
+  showResponsibilities: boolean = !isHuman,
+): { key: string; path: string }[] {
   const tabs: { key: string; path: string }[] = [{ key: "profile", path: "profile" }];
-  if (!isHuman) {
+  if (!isHuman && showResponsibilities) {
     tabs.push({ key: "responsibilities", path: "responsibilities" });
   }
   if (canEditConfig) {
@@ -49,26 +125,14 @@ export function tabKeysFor(canEditConfig: boolean, isHuman: boolean): { key: str
   return tabs;
 }
 
-export function buildTabs(canEditConfig: boolean, isHuman: boolean): TabDef[] {
-  return tabKeysFor(canEditConfig, isHuman).map((t) => ({ ...t, label: TAB_LABELS[t.key] ?? t.key }));
-}
-
-/** Mirror of the shell's `canEditConfig` derivation, for any agent (e.g. switcher targets). */
-export function canEditConfigFor(agent: Agent, memberId: string | null, role: string | null): boolean {
-  return agent.type !== "human" && canManageAgentDetail(agent, memberId, role);
-}
-
-/**
- * Which tab PATH to open when switching to `agent`: keep the current tab when the
- * target supports it, else fall back to profile. (Some tabs render blank rather
- * than redirect for unsupported agents, so we resolve this up front.)
- */
-export function resolveTabPath(
-  agent: Agent,
-  memberId: string | null,
-  role: string | null,
-  currentPath: string,
-): string {
-  const paths = tabKeysFor(canEditConfigFor(agent, memberId, role), agent.type === "human").map((t) => t.path);
-  return paths.includes(currentPath) ? currentPath : "profile";
+export function buildTabs(
+  canEditConfig: boolean,
+  isHuman: boolean,
+  showResponsibilities: boolean = !isHuman,
+): TabDef[] {
+  return tabKeysFor(canEditConfig, isHuman, showResponsibilities).map((t) => ({
+    ...t,
+    label: TAB_LABELS[t.key] ?? t.key,
+    description: TAB_DESCRIPTIONS[t.key] ?? "",
+  }));
 }

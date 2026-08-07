@@ -94,7 +94,7 @@ export async function reportOnboardingEvent(
  * Stamp the terminal-state `onboarding_completed_at` column. Called when
  * the user walks Step 3 to success (admin Continue, invitee Confirm /
  * Continue). Once stamped, first-run onboarding no longer auto-opens; the
- * permanent Settings → Setup overview remains available.
+ * permanent Settings → Getting Started overview remains available.
  *
  * Distinct from `dismissOnboarding()`, which only hides the stepper UI
  * and stays reversible. Idempotent on the server (only writes when the

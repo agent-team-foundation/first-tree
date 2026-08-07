@@ -67,7 +67,7 @@ export function UsageTab({
 
   if (ctx.isHuman) {
     return (
-      <Section title="Usage">
+      <Section headingLevel={3} title="Usage">
         <UsagePlaceholder>
           Token usage is only tracked for agent-type accounts. This profile represents a human member and does not run
           model turns.
@@ -121,6 +121,7 @@ function ActivityBlock({
 }): ReactElement {
   return (
     <Section
+      headingLevel={3}
       title={
         <>
           Activity{" "}
@@ -363,6 +364,7 @@ function RecentTurnsBlock({
 }): ReactElement {
   return (
     <Section
+      headingLevel={3}
       title={
         <>
           Recent turns{" "}

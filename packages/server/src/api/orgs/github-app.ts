@@ -9,9 +9,9 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { authIdentities } from "../../db/schema/auth-identities.js";
-import { NotFoundError } from "../../errors.js";
+import { ConflictError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
-import { buildAppInstallUrl, listInstallationRepos } from "../../services/github-app.js";
+import { buildAppAuthorizeUrl, listInstallationRepos } from "../../services/github-app.js";
 import {
   connectInstallationToOrg,
   disconnectInstallationFromOrg,
@@ -20,12 +20,13 @@ import {
 } from "../../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../../services/oauth-state.js";
-import { buildCookie } from "../auth/oauth-cookie.js";
+import { resolvePublicUrl } from "../../utils/public-url.js";
+import { buildCookie, protectOAuthStateNonce } from "../auth/oauth-cookie.js";
 
 /**
  * Where the post-install OAuth callback lands the user once the install
  * dialog is done. Default: back on the Settings → GitHub panel so it can
- * re-render with the now-bound installation. The callback resolves the
+ * surface the webhook-recorded installation for an explicit Connect. The callback resolves the
  * actual destination from the signed state JWT, not from a query param,
  * so this is tamper-proof.
  */
@@ -33,8 +34,8 @@ const POST_INSTALL_NEXT = "/settings/github";
 
 /**
  * Internal paths the install flow is allowed to return to. The onboarding
- * flow surfaces the App-install CTA too (the only reliable `installations/new`
- * entry), and wants the user back in setup rather than dumped on Settings.
+ * flow surfaces the App-install CTA too, and wants the user back in setup
+ * rather than dumped on Settings.
  * Allowlisted — never reflect a caller-supplied path verbatim into the
  * signed redirect, so a crafted `?next=` can't become an open redirect.
  */
@@ -215,60 +216,71 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   //      identity, which only the server can authenticate.
   //
   // The SPA fetches this (with its bearer token), gets `{ installUrl }`
-  // back plus a `Set-Cookie`, then does `window.location = installUrl`.
-  // GitHub shows the install dialog, the user picks repos, GitHub
-  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`
-  // (or without `code` when the install is parked for owner approval).
-  // The callback only lands the browser back on the kickoff org's panel;
-  // the trusted `installation.created` webhook records the installation
-  // unbound, and connecting it is an explicit panel action.
-  app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>("/install-url", async (request, reply) => {
-    // Admin-gated: the resolved scope is the org the install binds to.
-    const scope = await requireOrgAdmin(request, app.db);
-    const appCfg = app.config.oauth?.githubApp;
-    if (!appCfg?.slug) {
-      // The App may be configured for sign-in/webhooks but missing the
-      // slug needed for the install dialog. 503 (not 404/400) — the
-      // operator can fix it by setting one env var; the panel renders a
-      // "ask your operator to set FIRST_TREE_GITHUB_APP_SLUG" hint.
-      return reply
-        .status(503)
-        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
-    }
+  // back plus a `Set-Cookie`, then navigates to the App's OAuth authorize
+  // endpoint. The callback first proves the active github.com account is
+  // the same numeric identity linked to the kickoff admin. Only then does
+  // it mint a fresh state/cookie pair and continue to the App picker. This
+  // prevents ordinary wrong-account starts. GitHub does not expose the
+  // requester identity on no-code approval landings, so a deliberate account
+  // switch after the picker opens can still leave a safe, unbound installation;
+  // it cannot bind or cross a First Tree Team boundary.
+  app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>(
+    "/install-url",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      // Admin-gated: the resolved scope is the org the install binds to.
+      const scope = await requireOrgAdmin(request, app.db);
+      const callerGithubId = await resolveCallerGithubId(app.db, scope.userId);
+      if (callerGithubId === null) {
+        throw new ConflictError("Connect a GitHub account before installing the GitHub App", {
+          code: "github_identity_required",
+        });
+      }
+      const appCfg = app.config.oauth?.githubApp;
+      if (!appCfg?.slug) {
+        // The App may be configured for sign-in/webhooks but missing the
+        // slug needed for the install dialog. 503 (not 404/400) — the
+        // operator can fix it by setting one env var; the panel renders a
+        // "ask your operator to set FIRST_TREE_GITHUB_APP_SLUG" hint.
+        return reply
+          .status(503)
+          .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
+      }
 
-    // `targetOrganizationId` rides inside the signed state so the callback
-    // can land the browser back on *this* org's panel rather than the
-    // caller's primary org (codex P1-3). `kickoffUserId` rides alongside it
-    // so the callback can detect the browser's github.com session resolving
-    // to a DIFFERENT identity than the kickoff admin — the github.com
-    // session and the First Tree session are independent, and a mismatch
-    // must not silently swap the signed-in user.
-    const { token, nonce } = await signOAuthState(
-      app.config.secrets.jwtSecret,
-      resolvePostInstallNext(request.query.next),
-      {
-        intent: "install",
-        provider: "github",
-        targetOrganizationId: scope.organizationId,
-        kickoffUserId: scope.userId,
-      },
-    );
-    reply.header(
-      "Set-Cookie",
-      buildCookie({
-        name: STATE_NONCE_COOKIE_NAME,
-        value: nonce,
-        maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
-        secure: process.env.NODE_ENV === "production",
-      }),
-    );
+      // `targetOrganizationId` rides inside the signed state so the callback
+      // can land the browser back on *this* org's panel rather than the
+      // caller's primary org (codex P1-3). `kickoffUserId` rides alongside it
+      // so the callback can detect the browser's github.com session resolving
+      // to a DIFFERENT identity than the kickoff admin — the github.com
+      // session and the First Tree session are independent, and a mismatch
+      // must not silently swap the signed-in user.
+      const { token, nonce } = await signOAuthState(
+        app.config.secrets.jwtSecret,
+        resolvePostInstallNext(request.query.next),
+        {
+          intent: "install",
+          installPhase: "identity",
+          provider: "github",
+          targetOrganizationId: scope.organizationId,
+          kickoffUserId: scope.userId,
+        },
+      );
+      reply.header(
+        "Set-Cookie",
+        buildCookie({
+          name: STATE_NONCE_COOKIE_NAME,
+          value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
+          maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
+          secure: process.env.NODE_ENV === "production",
+        }),
+      );
 
-    // No DB write here: `installation_id` doesn't exist until the user
-    // completes the install, and even then the webhook records it unbound —
-    // the signed state only routes the browser back to this org's panel,
-    // where connecting the recorded installation is an explicit action.
-    return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
-  });
+      const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
+      return {
+        installUrl: buildAppAuthorizeUrl({ clientId: appCfg.clientId, redirectUri, state: token }),
+      };
+    },
+  );
 
   // ── Connect panel ────────────────────────────────────────────────────
   //

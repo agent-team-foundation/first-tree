@@ -11,7 +11,13 @@ import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { BadRequestError, NotFoundError, ServiceUnavailableError, UnprocessableError } from "../errors.js";
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+  ServiceUnavailableError,
+  UnprocessableError,
+} from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { GITHUB_API_BASE } from "./github-api-base.js";
 import type { GithubAppCredentials } from "./github-app.js";
@@ -21,7 +27,12 @@ import { insertMappingIfAbsent } from "./github-entity-chat.js";
 import { githubEntityDedupKey, githubEntityKeyCandidates, legacyDiscussionEntityKey } from "./github-entity-key.js";
 import { materializeChatGithubEntity } from "./github-entity-live.js";
 import { type EntityState, setEntityTitle } from "./github-entity-state.js";
-import { executeScmFollowLine } from "./scm-attention-line.js";
+import {
+  executeScmFollowLine,
+  lockAndResolveAgentScmBindingPair,
+  lockAndResolveHumanScmBindingPair,
+} from "./scm-attention-line.js";
+import { githubEntityAttentionLockKey, withScmEntityAttentionTransaction } from "./scm-entity-attention-lock.js";
 
 const log = createLogger("GithubEntityFollow");
 
@@ -427,138 +438,163 @@ export async function declareEntityFollow(
     number: entity.number,
   };
 
-  type GithubFollowLine = { chatId: string; boundVia: GithubEntityBoundVia; entityKey: string };
-  const entityKeyCandidates = githubEntityKeyCandidates(entity.entityType, entity.entityKey);
-  const listLines = async (): Promise<GithubFollowLine[]> => {
-    const rows = await db
-      .select({
-        chatId: githubEntityChatMappings.chatId,
-        boundVia: githubEntityChatMappings.boundVia,
-        entityKey: githubEntityChatMappings.entityKey,
-      })
-      .from(githubEntityChatMappings)
-      .where(
-        and(
-          eq(githubEntityChatMappings.organizationId, params.organizationId),
-          eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
-          eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
-          eq(githubEntityChatMappings.entityType, entity.entityType),
-          inArray(githubEntityChatMappings.entityKey, entityKeyCandidates),
-        ),
-      )
-      .orderBy(
-        desc(sql`${githubEntityChatMappings.entityKey} = ${entity.entityKey}`),
-        asc(githubEntityChatMappings.boundAt),
-      );
-    return rows.map((row) => {
-      const parsed = githubEntityBoundViaSchema.safeParse(row.boundVia);
-      return {
-        chatId: row.chatId,
-        boundVia: parsed.success ? parsed.data : "direct",
-        entityKey: row.entityKey,
-      };
-    });
-  };
+  return withScmEntityAttentionTransaction(
+    db,
+    {
+      provider: "github",
+      scopeId: params.organizationId,
+      entityKey: githubEntityAttentionLockKey(entity.entityKey),
+    },
+    async (tx) => {
+      const currentPair =
+        params.boundVia === "agent_declared"
+          ? await lockAndResolveAgentScmBindingPair(tx, params.chatId, params.delegateAgentId)
+          : await lockAndResolveHumanScmBindingPair(tx, params.chatId, params.humanAgentId);
+      if (
+        !currentPair ||
+        currentPair.organizationId !== params.organizationId ||
+        currentPair.humanAgentId !== params.humanAgentId ||
+        currentPair.wakeAgentId !== params.delegateAgentId
+      ) {
+        throw new ConflictError(
+          "GitHub follow authority changed while resolving the entity; retry from current chat state",
+        );
+      }
 
-  // Refresh an existing row before the shared state machine moves it. A
-  // vanished-row fallback insert seeds the same title through createLine.
-  if (entity.title && entity.title.length > 0) {
-    await setEntityTitle(db, {
-      organizationId: params.organizationId,
-      entityType: entity.entityType,
-      entityKey: entityKeyCandidates,
-      title: entity.title,
-    });
-  }
-
-  const result = await executeScmFollowLine({
-    targetChatId: params.chatId,
-    rebind: params.rebind,
-    storage: {
-      listLines,
-      removeLines: async (rows) => {
-        const keys = rows.map((row) => row.entityKey);
-        if (keys.length === 0) return;
-        await db
-          .delete(githubEntityChatMappings)
-          .where(
-            and(
-              eq(githubEntityChatMappings.organizationId, params.organizationId),
-              eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
-              eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
-              eq(githubEntityChatMappings.entityType, entity.entityType),
-              inArray(githubEntityChatMappings.entityKey, keys),
-            ),
-          );
-      },
-      getChatTopic: async (chatId) => {
-        const [chat] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
-        return chat?.topic ?? null;
-      },
-      moveLine: async (row) => {
-        const [moved] = await db
-          .update(githubEntityChatMappings)
-          .set({
-            chatId: params.chatId,
-            boundVia: params.boundVia,
-            entityState: entity.entityState,
-            boundAt: new Date(),
-          })
-          .where(
-            and(
-              eq(githubEntityChatMappings.organizationId, params.organizationId),
-              eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
-              eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
-              eq(githubEntityChatMappings.entityType, entity.entityType),
-              eq(githubEntityChatMappings.entityKey, row.entityKey),
-            ),
-          )
-          .returning({
+      type GithubFollowLine = { chatId: string; boundVia: GithubEntityBoundVia; entityKey: string };
+      const entityKeyCandidates = githubEntityKeyCandidates(entity.entityType, entity.entityKey);
+      const listLines = async (): Promise<GithubFollowLine[]> => {
+        const rows = await tx
+          .select({
             chatId: githubEntityChatMappings.chatId,
             boundVia: githubEntityChatMappings.boundVia,
             entityKey: githubEntityChatMappings.entityKey,
-          });
-        return moved ? { ...moved, boundVia: params.boundVia } : null;
-      },
-      createLine: async () => {
-        const inserted = await insertMappingIfAbsent(db, {
-          organizationId: params.organizationId,
-          humanAgentId: params.humanAgentId,
-          delegateAgentId: params.delegateAgentId,
-          entity: {
-            type: entity.entityType,
-            key: entity.entityKey,
-            url: entity.htmlUrl,
-            title: entity.title ?? undefined,
-          },
-          chatId: params.chatId,
-          boundVia: params.boundVia,
-          entityState: entity.entityState,
+          })
+          .from(githubEntityChatMappings)
+          .where(
+            and(
+              eq(githubEntityChatMappings.organizationId, params.organizationId),
+              eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
+              eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
+              eq(githubEntityChatMappings.entityType, entity.entityType),
+              inArray(githubEntityChatMappings.entityKey, entityKeyCandidates),
+            ),
+          )
+          .orderBy(
+            desc(sql`${githubEntityChatMappings.entityKey} = ${entity.entityKey}`),
+            asc(githubEntityChatMappings.boundAt),
+          );
+        return rows.map((row) => {
+          const parsed = githubEntityBoundViaSchema.safeParse(row.boundVia);
+          return {
+            chatId: row.chatId,
+            boundVia: parsed.success ? parsed.data : "direct",
+            entityKey: row.entityKey,
+          };
         });
-        const lines = await listLines();
-        const record = lines.find((line) => line.chatId === inserted.chatId) ?? lines[0];
-        if (!record) throw new Error("GitHub follow insert completed without a surviving mapping");
-        return { record, inserted: inserted.inserted };
-      },
-    },
-  });
+      };
 
-  if (result.outcome === "conflict") return result;
-  if (result.outcome === "created") {
-    log.info(
-      { chatId: params.chatId, entityKey: entity.entityKey, boundVia: params.boundVia },
-      "github follow recorded",
-    );
-  } else if (result.outcome === "rebound") {
-    log.info({ toChatId: params.chatId, entityKey: entity.entityKey }, "github follow rebound");
-  }
-  return {
-    outcome: result.outcome,
-    entity: {
-      ...wireEntity,
-      ...(result.outcome === "already_following" ? { boundVia: result.record.boundVia } : {}),
+      // Refresh an existing row before the shared state machine moves it. A
+      // vanished-row fallback insert seeds the same title through createLine.
+      if (entity.title && entity.title.length > 0) {
+        await setEntityTitle(tx, {
+          organizationId: params.organizationId,
+          entityType: entity.entityType,
+          entityKey: entityKeyCandidates,
+          title: entity.title,
+        });
+      }
+
+      const result = await executeScmFollowLine({
+        targetChatId: params.chatId,
+        rebind: params.rebind,
+        storage: {
+          listLines,
+          removeLines: async (rows) => {
+            const keys = rows.map((row) => row.entityKey);
+            if (keys.length === 0) return;
+            await tx
+              .delete(githubEntityChatMappings)
+              .where(
+                and(
+                  eq(githubEntityChatMappings.organizationId, params.organizationId),
+                  eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
+                  eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
+                  eq(githubEntityChatMappings.entityType, entity.entityType),
+                  inArray(githubEntityChatMappings.entityKey, keys),
+                ),
+              );
+          },
+          getChatTopic: async (chatId) => {
+            const [chat] = await tx.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+            return chat?.topic ?? null;
+          },
+          moveLine: async (row) => {
+            const [moved] = await tx
+              .update(githubEntityChatMappings)
+              .set({
+                chatId: params.chatId,
+                boundVia: params.boundVia,
+                entityState: entity.entityState,
+                boundAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(githubEntityChatMappings.organizationId, params.organizationId),
+                  eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
+                  eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
+                  eq(githubEntityChatMappings.entityType, entity.entityType),
+                  eq(githubEntityChatMappings.entityKey, row.entityKey),
+                ),
+              )
+              .returning({
+                chatId: githubEntityChatMappings.chatId,
+                boundVia: githubEntityChatMappings.boundVia,
+                entityKey: githubEntityChatMappings.entityKey,
+              });
+            return moved ? { ...moved, boundVia: params.boundVia } : null;
+          },
+          createLine: async () => {
+            const inserted = await insertMappingIfAbsent(tx, {
+              organizationId: params.organizationId,
+              humanAgentId: params.humanAgentId,
+              delegateAgentId: params.delegateAgentId,
+              entity: {
+                type: entity.entityType,
+                key: entity.entityKey,
+                url: entity.htmlUrl,
+                title: entity.title ?? undefined,
+              },
+              chatId: params.chatId,
+              boundVia: params.boundVia,
+              entityState: entity.entityState,
+            });
+            const lines = await listLines();
+            const record = lines.find((line) => line.chatId === inserted.chatId) ?? lines[0];
+            if (!record) throw new Error("GitHub follow insert completed without a surviving mapping");
+            return { record, inserted: inserted.inserted };
+          },
+        },
+      });
+
+      if (result.outcome === "conflict") return result;
+      if (result.outcome === "created") {
+        log.info(
+          { chatId: params.chatId, entityKey: entity.entityKey, boundVia: params.boundVia },
+          "github follow recorded",
+        );
+      } else if (result.outcome === "rebound") {
+        log.info({ toChatId: params.chatId, entityKey: entity.entityKey }, "github follow rebound");
+      }
+      return {
+        outcome: result.outcome,
+        entity: {
+          ...wireEntity,
+          ...(result.outcome === "already_following" ? { boundVia: result.record.boundVia } : {}),
+        },
+      };
     },
-  };
+  );
 }
 
 /**
@@ -578,60 +614,78 @@ export async function removeEntityFollow(
   params: { chatId: string; entity: string },
 ): Promise<{ removed: number }> {
   const ref = parseEntityReferenceOrThrow(params.entity);
+  const [chat] = await db
+    .select({ organizationId: chats.organizationId })
+    .from(chats)
+    .where(eq(chats.id, params.chatId))
+    .limit(1);
+  if (!chat) return { removed: 0 };
+  const entityLockKey =
+    ref.kind === "commit" ? `${ref.owner}/${ref.repo}@${ref.sha}` : `${ref.owner}/${ref.repo}#${ref.number}`;
 
-  const chatCond = eq(githubEntityChatMappings.chatId, params.chatId);
-  let removedRows: Array<{ entityKey: string }>;
-  if (ref.kind === "commit") {
-    // Prefix match so a short sha unfollows the full-sha row; LIKE
-    // metacharacters in owner/repo (GitHub allows `_`) are escaped so the
-    // pattern can't over-match sibling repos.
-    const prefix = escapeLikeLiteral(`${ref.owner}/${ref.repo}@${ref.sha}`.toLowerCase());
-    removedRows = await db
-      .delete(githubEntityChatMappings)
-      .where(
-        and(
-          chatCond,
-          eq(githubEntityChatMappings.entityType, "commit"),
-          sql`lower(${githubEntityChatMappings.entityKey}) LIKE ${`${prefix}%`}`,
-        ),
-      )
-      .returning({ entityKey: githubEntityChatMappings.entityKey });
-  } else {
-    const key = `${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase();
-    // Type matching without a GitHub call (unfollow must not depend on
-    // GitHub being up):
-    //   - Issues and PRs share one numbering space, and follow auto-corrects
-    //     a `/pull/N` URL that actually points at an issue (and vice versa)
-    //     — so an explicit issue/PR reference matches BOTH types, otherwise
-    //     the row created through the auto-corrected follow could never be
-    //     removed with the same reference the caller used to create it.
-    //   - Discussions number independently; an explicit `/discussions/N`
-    //     URL matches only discussions, and only the bare `owner/repo#N`
-    //     form sweeps all three ("make this chat quiet about #N").
-    const types: GithubEntityType[] =
-      ref.explicitType === "discussion"
-        ? ["discussion"]
-        : ref.explicitType !== null
-          ? ["issue", "pull_request"]
-          : ["issue", "pull_request", "discussion"];
-    const lowerKeys = new Set([key]);
-    if (types.includes("discussion")) {
-      const legacyKey = legacyDiscussionEntityKey(key);
-      if (legacyKey) lowerKeys.add(legacyKey);
-    }
-    const keyConditions = [...lowerKeys].map(
-      (lowerKey) => sql`lower(${githubEntityChatMappings.entityKey}) = ${lowerKey}`,
-    );
-    removedRows = await db
-      .delete(githubEntityChatMappings)
-      .where(and(chatCond, inArray(githubEntityChatMappings.entityType, types), or(...keyConditions)))
-      .returning({ entityKey: githubEntityChatMappings.entityKey });
-  }
+  return withScmEntityAttentionTransaction(
+    db,
+    {
+      provider: "github",
+      scopeId: chat.organizationId,
+      entityKey: githubEntityAttentionLockKey(entityLockKey),
+    },
+    async (tx) => {
+      const chatCond = eq(githubEntityChatMappings.chatId, params.chatId);
+      let removedRows: Array<{ entityKey: string }>;
+      if (ref.kind === "commit") {
+        // Prefix match so a short sha unfollows the full-sha row; LIKE
+        // metacharacters in owner/repo (GitHub allows `_`) are escaped so the
+        // pattern can't over-match sibling repos.
+        const prefix = escapeLikeLiteral(`${ref.owner}/${ref.repo}@${ref.sha}`.toLowerCase());
+        removedRows = await tx
+          .delete(githubEntityChatMappings)
+          .where(
+            and(
+              chatCond,
+              eq(githubEntityChatMappings.entityType, "commit"),
+              sql`lower(${githubEntityChatMappings.entityKey}) LIKE ${`${prefix}%`}`,
+            ),
+          )
+          .returning({ entityKey: githubEntityChatMappings.entityKey });
+      } else {
+        const key = `${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase();
+        // Type matching without a GitHub call (unfollow must not depend on
+        // GitHub being up):
+        //   - Issues and PRs share one numbering space, and follow auto-corrects
+        //     a `/pull/N` URL that actually points at an issue (and vice versa)
+        //     — so an explicit issue/PR reference matches BOTH types, otherwise
+        //     the row created through the auto-corrected follow could never be
+        //     removed with the same reference the caller used to create it.
+        //   - Discussions number independently; an explicit `/discussions/N`
+        //     URL matches only discussions, and only the bare `owner/repo#N`
+        //     form sweeps all three ("make this chat quiet about #N").
+        const types: GithubEntityType[] =
+          ref.explicitType === "discussion"
+            ? ["discussion"]
+            : ref.explicitType !== null
+              ? ["issue", "pull_request"]
+              : ["issue", "pull_request", "discussion"];
+        const lowerKeys = new Set([key]);
+        if (types.includes("discussion")) {
+          const legacyKey = legacyDiscussionEntityKey(key);
+          if (legacyKey) lowerKeys.add(legacyKey);
+        }
+        const keyConditions = [...lowerKeys].map(
+          (lowerKey) => sql`lower(${githubEntityChatMappings.entityKey}) = ${lowerKey}`,
+        );
+        removedRows = await tx
+          .delete(githubEntityChatMappings)
+          .where(and(chatCond, inArray(githubEntityChatMappings.entityType, types), or(...keyConditions)))
+          .returning({ entityKey: githubEntityChatMappings.entityKey });
+      }
 
-  if (removedRows.length > 0) {
-    log.info({ chatId: params.chatId, entity: params.entity, removed: removedRows.length }, "github unfollow");
-  }
-  return { removed: removedRows.length };
+      if (removedRows.length > 0) {
+        log.info({ chatId: params.chatId, entity: params.entity, removed: removedRows.length }, "github unfollow");
+      }
+      return { removed: removedRows.length };
+    },
+  );
 }
 
 /**

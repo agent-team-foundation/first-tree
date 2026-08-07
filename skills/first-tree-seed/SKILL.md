@@ -321,7 +321,7 @@ PRs/MRs; report the attention gap, but consolidate the action here.
   prints a GitHub installation-settings URL — an absolute `https://` link, so
   it renders clickable in chat. Relay it and say to add the tree repo there.
 - **GitHub tree, no App installed:** give the admin a clickable link to the web
-  console's Setup surface, built from the server URL the agent knows — take
+  console's Getting Started surface, built from the server URL the agent knows — take
   the `Server:` value from `first-tree agent status` and append
   `/settings/setup` (an absolute `https://…/settings/setup` renders
   clickable; a bare `/settings/setup` path does **not** — the chat link guard
@@ -329,7 +329,7 @@ PRs/MRs; report the attention gap, but consolidate the action here.
   installation or repository coverage there.
   This assumes the web console shares the server's origin (the standard
   deployment); if it does not, the link may not resolve — then name the
-  destination in words: **Settings → Setup** in the web app. Do **not**
+  destination in words: **Settings → Getting Started** in the web app. Do **not**
   fabricate a raw GitHub App install URL yourself — the install must run
   through the web console so it binds back to your org. Add the **placement
   caveat**: the tree repo was created under the GitHub account shown as
@@ -342,7 +342,7 @@ PRs/MRs; report the attention gap, but consolidate the action here.
   attention uses `first-tree gitlab follow` after creation or recovery/reuse.
   Relay any separate recovery target only when First Tree returns it explicitly.
   Never substitute a GitHub App URL or tell the user to install the GitHub App
-  for GitLab. Use **Settings → Setup** only for an actual Team capability
+  for GitLab. Use **Settings → Getting Started** only for an actual Team capability
   handoff after the milestone below; do not invent a GitLab-specific product
   path.
 
@@ -357,21 +357,22 @@ first-tree org context-tree review-config --as-member --org "<team-id>" --json
 - Use only the JSON `enabled` and `agentUuid` fields to distinguish three
   durable configuration states. This is not a health or readiness check:
   - `agentUuid` is null: include selecting an eligible managed Review Agent and
-    enabling Automatic Review through **Settings → Setup**. Under the explicit
+    enabling Automatic Review through **Settings → Getting Started**. Under the explicit
     Welcome Reviewer contract, during this same Phase 1 process name the Agent
     that opened the Structure PR/MR as the default choice; do not replace a
     later human selection. A fresh-process Phase 2 recovery does not know that
     original Agent from durable progress and must not substitute the recovery
     Agent.
   - `agentUuid` is present and `enabled` is false: the selection is retained;
-    include only enabling Automatic Review through **Settings → Setup**.
+    include only enabling Automatic Review through **Settings → Getting Started**.
   - `agentUuid` is present and `enabled` is true: add no Review setup handoff
     and infer no Reviewer health from this command.
   Any other or ambiguous result creates no inferred debt.
 - Send one milestone response: combine any GitHub App recovery or repository
   coverage action with the applicable Review setup action above. If only one is
   missing, mention only that action. If neither is missing, add no setup
-  guidance. Setup owns provider prerequisites and the Team mutation.
+  guidance. The owning Settings surfaces hold provider prerequisites and the
+  Team mutation; Getting Started only summarizes readiness and links there.
 - A failed or ambiguous read creates no inferred debt. It does not block
   ordinary Seed. Context Review remains optional for Team, Chat, basic Tree use,
   and ordinary Seed completion. Under the explicit Welcome Reviewer contract,
@@ -386,14 +387,14 @@ Use this response matrix after the milestone:
 
 | Tree provider / coverage | Review config read | User-facing setup action |
 | --- | --- | --- |
-| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Setup |
-| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Setup |
+| GitHub coverage missing | No selected Agent | One combined handoff: authoritative coverage recovery plus select and enable Automatic Review in Settings → Getting Started |
+| GitHub coverage missing | Selected but off | One combined handoff: authoritative coverage recovery plus enable Automatic Review in Settings → Getting Started |
 | GitHub coverage missing | Enabled or read failed/ambiguous | Coverage recovery only; infer no Review debt |
-| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Setup only |
-| GitHub covered | Selected but off | Enable Automatic Review in Settings → Setup only |
+| GitHub covered | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only |
+| GitHub covered | Selected but off | Enable Automatic Review in Settings → Getting Started only |
 | GitHub covered | Enabled or read failed/ambiguous | No setup handoff |
-| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Setup only; no GitHub App guidance |
-| GitLab | Selected but off | Enable Automatic Review in Settings → Setup only; no GitHub App guidance |
+| GitLab | No selected Agent | Select and enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |
+| GitLab | Selected but off | Enable Automatic Review in Settings → Getting Started only; no GitHub App guidance |
 | GitLab | Enabled or read failed/ambiguous | No setup handoff |
 
 **B — Bound but unseeded.** The tree is bound and holds at most non-normal
@@ -1099,13 +1100,13 @@ After all sub-agents return:
   `review-config --as-member` read immediately before PR/MR creation. Require
   unambiguous JSON with a non-null `agentUuid` and `enabled: true`. Otherwise,
   do not open the Content PR/MR and handle only the observed state:
-  - `agentUuid` is null: guide the Admin to **Settings → Setup** to select and
+  - `agentUuid` is null: guide the Admin to **Settings → Getting Started** to select and
     enable a Reviewer. Repeat the Structure-PR Agent as the default only when
     this is still the same Phase 1 process and its identity remains explicit in
     working context; a fresh-process recovery asks the Admin to choose without
     naming the recovery Agent as that default.
   - `agentUuid` is present and `enabled` is false: preserve the selection and
-    guide the Admin only to enable Automatic Review in **Settings → Setup**.
+    guide the Admin only to enable Automatic Review in **Settings → Getting Started**.
   - the read fails or is ambiguous: say that Reviewer configuration could not
     be confirmed and retry the read; infer no selection or enablement action.
   This gate delays only the Content PR/MR remote mutation, not Structure

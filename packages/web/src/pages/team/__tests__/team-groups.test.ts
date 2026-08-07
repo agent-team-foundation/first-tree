@@ -1,6 +1,6 @@
 import type { Agent } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { buildTeamData, fetchAllAgents, selectDelegateCandidates } from "../index.js";
+import { buildTeamData, fetchAllAgents, orderAgentsLikeTeam, selectDelegateCandidates } from "../index.js";
 
 function agent(input: {
   uuid: string;
@@ -306,5 +306,49 @@ describe("selectDelegateCandidates", () => {
     expect(
       selectDelegateCandidates([mineOrg, theirOrg, minePrivate, suspended, human], "member-1").map((a) => a.uuid),
     ).toEqual(["mine-org", "mine-private"]);
+  });
+});
+
+describe("orderAgentsLikeTeam", () => {
+  // The API returns createdAt DESC; Team reorders client-side. The Agent Detail
+  // switcher shows the same roster without section headings, so its flat order
+  // must stay the concatenation of Team's two groups.
+  const roster = [
+    agent({ uuid: "zeta", type: "agent", displayName: "Zeta", visibility: "private", managerId: "member-2" }),
+    agent({ uuid: "alpha", type: "agent", displayName: "Alpha", managerId: "member-2" }),
+    agent({ uuid: "mine-zulu", type: "agent", displayName: "Mine Zulu", managerId: "member-1" }),
+    agent({
+      uuid: "private-mine",
+      type: "agent",
+      displayName: "Private Mine",
+      visibility: "private",
+      managerId: "member-1",
+    }),
+    agent({ uuid: "beta", type: "agent", displayName: "Beta", managerId: "member-2" }),
+  ];
+
+  it("puts organization agents before private ones, mine first, then by name", () => {
+    expect(orderAgentsLikeTeam(roster, "member-1").map((a) => a.displayName)).toEqual([
+      "Mine Zulu",
+      "Alpha",
+      "Beta",
+      "Private Mine",
+      "Zeta",
+    ]);
+  });
+
+  it("agrees with the order buildTeamData renders for the same viewer", () => {
+    const team = buildTeamData({
+      filter: "all",
+      search: "",
+      isAdmin: true,
+      selfMemberId: "member-1",
+      members: [],
+      agents: roster,
+      agentByUuid: new Map(roster.map((a) => [a.uuid, a])),
+      resolveMember: (id) => id,
+    });
+    const teamOrder = [...team.publicAgents, ...team.privateAgents].map((row) => row.agent.displayName);
+    expect(orderAgentsLikeTeam(roster, "member-1").map((a) => a.displayName)).toEqual(teamOrder);
   });
 });

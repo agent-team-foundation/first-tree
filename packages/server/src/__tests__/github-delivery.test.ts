@@ -10,6 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
+import { createChat } from "../services/chat.js";
 import { type GithubProviderTaskContext, resolveGithubAudience } from "../services/github-audience.js";
 import { deliverGithubEvent } from "../services/github-delivery.js";
 import { resolveAgentScmBindingPair } from "../services/scm-attention-line.js";
@@ -38,7 +39,13 @@ function existingTarget(input: {
       },
     },
     ...(input.reason && input.externalUsername
-      ? { directedContext: { reason: input.reason, externalUsername: input.externalUsername } }
+      ? {
+          directedContext: {
+            reason: input.reason,
+            requiresPersistentLine: input.reason === "mentioned" || input.reason === "assigned",
+            externalUsername: input.externalUsername,
+          },
+        }
       : {}),
   };
 }
@@ -53,6 +60,7 @@ function personnelTarget(input: {
     entry: {
       kind: "personnel_target",
       reason: input.reason,
+      requiresPersistentLine: input.reason === "mentioned" || input.reason === "assigned",
       humanAgentId: input.humanAgentId,
       wakeAgentId: input.wakeAgentId,
       externalUsername: input.externalUsername,
@@ -1324,7 +1332,7 @@ describe("deliverGithubEvent", () => {
     expect(content.mentionedUser).toBe(humanName.toLowerCase());
   });
 
-  it("isolates per-target failures — second target succeeds even if first throws", async () => {
+  it("drops a stale existing-line projection while another target still succeeds", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -1365,12 +1373,76 @@ describe("deliverGithubEvent", () => {
 
     const stats = await deliverGithubEvent(app, event, [broken, ok]);
     expect(stats.delivered).toBe(1);
-    // M1 (#507): the broken target's exception must be counted, not
-    // silently swallowed by the per-target catch — operators dashboard
-    // off this counter to spot regressions in single-target reliability.
-    expect(stats.failed).toBe(1);
+    // Existing lines are re-read inside the entity serialization boundary.
+    // A projection that disappeared after audience composition is stale, not
+    // a delivery failure, and must not resurrect or count the removed line.
+    expect(stats.failed).toBe(0);
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, goodChatId));
     expect(sent).toHaveLength(1);
+  });
+
+  it("reroutes directed context after unfollow without resurrecting the stale chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `stale-directed-${randomUUID().slice(0, 6)}`,
+    });
+    await app.db.update(agents).set({ delegateMention: delegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const staleChat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [delegate],
+    });
+    const entityKey = "owner/repo#2202";
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entityType: "issue",
+      entityKey,
+      chatId: staleChat.id,
+      boundVia: "agent_declared",
+    });
+    const [human] = await app.db
+      .select({ name: agents.name })
+      .from(agents)
+      .where(eq(agents.uuid, admin.humanAgentUuid));
+    if (!human?.name) throw new Error("human name missing");
+    const composedBeforeUnfollow = existingTarget({
+      humanAgentId: admin.humanAgentUuid,
+      wakeAgentId: delegate,
+      chatId: staleChat.id,
+      reason: "assigned",
+      externalUsername: human.name,
+    });
+    await app.db
+      .delete(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.entityKey, entityKey), eq(githubEntityChatMappings.chatId, staleChat.id)));
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "issue",
+      entityKey,
+      eventType: "issues",
+      action: "assigned",
+      kind: "assigned",
+    });
+    const stats = await deliverGithubEvent(app, event, [composedBeforeUnfollow]);
+
+    expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, staleChat.id))).toHaveLength(0);
+    const [replacement] = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, entityKey));
+    expect(replacement).toMatchObject({
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      boundVia: "direct",
+    });
+    expect(replacement?.chatId).not.toBe(staleChat.id);
+    expect(await notifyCount(app, replacement?.chatId ?? "", delegate)).toBe(1);
   });
 
   it("reviewer-reuse + per-chat dedup: an involved member routes into the existing chat (one card, both delegates woken, no new chat/mapping)", async () => {
@@ -1610,10 +1682,7 @@ describe("deliverGithubEvent", () => {
     expect(await notifyCount(app, strictLine?.chatId ?? "", currentDelegate)).toBe(1);
   });
 
-  it("a `mentioned` involve does NOT reuse the entity chat — it mints a fresh chat (S5, reuse is review_requested-only)", async () => {
-    // S9 reuse is scoped to review_requested. An @mention of a human who is
-    // already a speaker of the entity's bound chat must still pierce into a
-    // FRESH chat (S5), never get routed back into the existing one.
+  it("co-locates a mentioned target in one exact-membership entity chat and writes its sibling line", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegateA = await seedAgent(app, {
@@ -1674,8 +1743,7 @@ describe("deliverGithubEvent", () => {
 
     const stats = await deliverGithubEvent(app, event, [involvedMention]);
 
-    // A fresh chat was minted for the mention (NOT reused into the bound chat).
-    expect(stats.newChats).toBe(1);
+    expect(stats.newChats).toBe(0);
     const mintedMappings = await app.db
       .select()
       .from(githubEntityChatMappings)
@@ -1686,7 +1754,82 @@ describe("deliverGithubEvent", () => {
         ),
       );
     expect(mintedMappings).toHaveLength(1);
-    expect(mintedMappings[0]?.chatId).not.toBe(chatId);
+    expect(mintedMappings[0]).toMatchObject({ chatId, boundVia: "human_fallback" });
+  });
+
+  it("co-locates an assignment with a different current delegate in the unique owner-private chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const follower = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `assignment-follower-${randomUUID().slice(0, 6)}`,
+    });
+    const currentDelegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `assignment-current-${randomUUID().slice(0, 6)}`,
+    });
+    await app.db.update(agents).set({ delegateMention: currentDelegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [follower],
+    });
+    const entityKey = "owner/repo#2145";
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: follower,
+      entityType: "issue",
+      entityKey,
+      chatId: chat.id,
+      boundVia: "agent_declared",
+    });
+    const [human] = await app.db
+      .select({ name: agents.name })
+      .from(agents)
+      .where(eq(agents.uuid, admin.humanAgentUuid));
+    if (!human?.name) throw new Error("assignment human name missing");
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "issue",
+      entityKey,
+      eventType: "issues",
+      action: "assigned",
+      kind: "assigned",
+      actorLogin: human.name,
+      targets: [{ externalUsername: human.name, reason: "assigned" }],
+    });
+
+    const resolution = await resolveGithubAudience(app.db, event);
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chat.id))).toHaveLength(1);
+    const speakerIds = new Set(
+      (
+        await app.db
+          .select({ agentId: chatMembership.agentId })
+          .from(chatMembership)
+          .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.accessMode, "speaker")))
+      ).map((row) => row.agentId),
+    );
+    expect(speakerIds).toEqual(new Set([admin.humanAgentUuid, follower, currentDelegate]));
+    const mappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, entityKey));
+    expect(mappings).toHaveLength(2);
+    expect(mappings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ delegateAgentId: follower, chatId: chat.id, boundVia: "agent_declared" }),
+        expect.objectContaining({ delegateAgentId: currentDelegate, chatId: chat.id, boundVia: "human_fallback" }),
+      ]),
+    );
+    expect(await notifyCount(app, chat.id, follower)).toBe(0);
+    expect(await notifyCount(app, chat.id, currentDelegate)).toBe(1);
   });
 
   // Regression: a GitHub-bound chat that has been expanded to >=3 speakers

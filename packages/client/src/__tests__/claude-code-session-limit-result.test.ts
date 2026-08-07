@@ -37,6 +37,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext, TurnOutcome } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { formatProviderFailureRuntimeNotice } from "../runtime/runtime-notice.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -89,7 +90,11 @@ describe("claude-code handler — session-limit success result", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
@@ -122,6 +127,7 @@ describe("claude-code handler — session-limit success result", () => {
         metadata: null,
       },
       ctx,
+      deliveryTokenFromSessionContext(ctx),
     );
     await handler.suspend();
     await new Promise((r) => setImmediate(r));

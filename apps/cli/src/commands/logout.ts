@@ -253,9 +253,14 @@ export async function runLogout(opts: {
   if (opts.purge) {
     for (const entry of [
       { path: join(configDir, "client.yaml"), label: "client.yaml" },
+      { path: join(configDir, "context.yaml"), label: "Context grants" },
+      { path: join(configDir, "context.yaml.v1.bak"), label: "legacy Context grant backup" },
       { path: join(configDir, "agents"), label: "local agent configs" },
       { path: join(dataDir, "sessions"), label: "agent session state" },
       { path: join(dataDir, "workspaces"), label: "agent workspaces" },
+      { path: join(dataDir, "byo"), label: "BYO Context Tree repositories" },
+      { path: join(home, "state", "context", "byo"), label: "BYO Context recovery state" },
+      { path: join(home, "state", "context", "route-receipts"), label: "Context route receipts" },
       { path: join(home, "parked-clients"), label: "parked local clients" },
       { path: join(home, "state", "client-switch.lock"), label: "client switch lock" },
       { path: join(home, "state", "client-switch-journal.json"), label: "client switch journal" },
@@ -263,6 +268,13 @@ export async function runLogout(opts: {
       if (!existsSync(entry.path)) continue;
       rmSync(entry.path, { recursive: true, force: true });
       print.line(`  ✓ Removed ${entry.label}\n`);
+    }
+    for (const provider of ["claude-code", "codex"] as const) {
+      for (const state of ["adapter-sync", "compatible-sessions", "reload-pending", "reload-consumed"]) {
+        rmSync(join(home, "state", "context", "providers", provider, state), { recursive: true, force: true });
+      }
+      rmSync(join(home, "state", "context", "providers", provider, "reload-required.json"), { force: true });
+      rmSync(join(home, "state", "context", "providers", provider, "next-session-required.json"), { force: true });
     }
   }
   print.line(`\n  Logged out. Run \`${channelConfig.binName} login <code>\` to reconnect.\n\n`);

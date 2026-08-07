@@ -43,7 +43,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../../runtime/context-tree-git-status.js";
-import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -52,8 +51,10 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
+
 import {
   isManagedSkillsUnsafeDiscoveryError,
   type ReconciledTeamSkill,
@@ -506,7 +507,7 @@ export function toolFileRefsForTerminalCodexTool(input: {
  */
 export const createCodexSdkHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
-  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "codex");
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   let activePayload: AgentRuntimeConfigPayload | null = null;
   let reconciledTeamSkills: readonly ReconciledTeamSkill[] = [];
@@ -1554,8 +1555,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
   return {
     async start(message, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       ctx = sessionCtx;
       // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
       // by every chat session for this agent.
@@ -1642,14 +1642,11 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       // (only known after the first turn). A fresh thread starts in sync, so a
       // later resume only nudges on a real change.
       if (cwd) writeSessionBriefingFingerprint(cwd, threadId, computeBriefingFingerprint(briefing));
-      return hasExplicitDeliveryToken
-        ? { sessionId: threadId, route: { kind: "owned", mode: "processing" } }
-        : threadId;
+      return { sessionId: threadId, route: { kind: "owned", mode: "processing" } };
     },
 
     async resume(message, sessionId, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       ctx = sessionCtx;
       cwd = acquireAgentHome(workspaceRoot);
 
@@ -1740,9 +1737,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // unchanged lets the redelivery's resume re-surface it.
         if (turnDelivered && threadId) writeSessionBriefingFingerprint(cwd, threadId, briefingFingerprint);
       }
-      return hasExplicitDeliveryToken
-        ? { sessionId: threadId ?? sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : (threadId ?? sessionId);
+      return { sessionId: threadId ?? sessionId, route: message ? { kind: "owned", mode: "processing" } : null };
     },
 
     inject(message, token) {
@@ -1752,7 +1747,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       // `runTurn()` sets `currentTurnPromise` cannot start parallel turns
       // and desynchronise completion from the messages actually consumed.
       if (!ctx) return { kind: "rejected", reason: "no_active_context", retryable: true };
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      const deliveryToken = token;
       queuedMessages.push({ message, token: deliveryToken });
       scheduleQueuedMessagesDrain();
       return { kind: "owned", mode: "queued" };

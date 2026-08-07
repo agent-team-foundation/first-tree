@@ -5,7 +5,7 @@ description: A first-run user starts a workspace conversation, then pins,
 defaultEnv: local
 steps:
   - module:
-      path: ../modules/complete-first-run.module.yaml
+      path: ../modules/complete-first-run-onboarding.module.yaml
 
   - click: New chat button in the conversation list
   - assert: a new-chat draft titled What's the task is open, one assistant is

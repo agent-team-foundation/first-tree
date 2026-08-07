@@ -1,4 +1,4 @@
-import type { SessionMessage } from "../../runtime/handler.js";
+import type { SessionMessage } from "../../runtime/contracts.js";
 
 export const LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED = "landing_trial_turn_completion_confirm_failed";
 

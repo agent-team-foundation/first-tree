@@ -536,7 +536,7 @@ export function App() {
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
-                    <Route path="github" element={<Navigate to="/settings/integrations/github" replace />} />
+                    <Route path="github" element={<LegacyGithubSettingsRedirect />} />
                     <Route path="integrations" element={<SettingsIntegrationsLayout />}>
                       <Route index element={<Navigate to="github" replace />} />
                       <Route path="github" element={<SettingsGithubPage />} />
@@ -603,6 +603,16 @@ function ContextTreeSetupPreviewUnavailable() {
 function LegacyUserSettingsRedirect() {
   const location = useLocation();
   return <Navigate to={{ pathname: "/settings/account", search: location.search, hash: location.hash }} replace />;
+}
+
+function LegacyGithubSettingsRedirect() {
+  const location = useLocation();
+  return (
+    <Navigate
+      to={{ pathname: "/settings/integrations/github", search: location.search, hash: location.hash }}
+      replace
+    />
+  );
 }
 
 function LegacyMobileWorkRedirect() {

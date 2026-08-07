@@ -1,6 +1,6 @@
 import type { Organization, OrgBrief } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Link2, Loader2, LogOut, Pencil, Plus, UserPlus } from "lucide-react";
+import { Bot, ChevronDown, Loader2, LogOut, Pencil, Plus, UserPlus } from "lucide-react";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
@@ -21,10 +21,10 @@ import { Input } from "./ui/input.js";
 // frame. Tunable by feel during QA.
 const MIN_SHOW_MS = 300;
 
-// One row grid for every menu action (Invite / Leave / Switch / Create /
-// Join): same gutter, same icon column, same full-bleed hover hit area,
-// so the groups can't drift apart again. Per-row color and disabled opacity
-// stay on the row's own `style`.
+// One row grid for every menu action (Invite / own agent / Leave / Switch /
+// Create): same gutter, same icon column, same full-bleed hover hit area, so
+// the groups can't drift apart again. Per-row color and disabled opacity stay
+// on the row's own `style`.
 const MENU_ROW_CLASS =
   "flex w-full items-center gap-2 px-3.5 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]";
 
@@ -32,8 +32,9 @@ const MENU_ROW_CLASS =
  * Header-left team anchor: the always-present "which team am I in" marker and
  * the entry point for switching teams + team management. Consolidates the
  * team half of the old right-side user menu — the org list, `selectOrganization`,
- * Create / Join / Invite entries, and the `TeamSetupModal` / `InviteDialog`
- * mounts all live here now; the avatar menu is account-only.
+ * Create / Invite entries, the external-agent setup shortcut, and the
+ * `TeamSetupModal` / `InviteDialog` mounts all live here now; the avatar menu
+ * is account-only.
  *
  * One state drives the whole switch (`switchingOrg`, from `auth-context`): the
  * picked row spins + the rest of the list disables, the anchor optimistically
@@ -64,14 +65,14 @@ export function TeamSwitcher({
   } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  // While an Ask agent attempt is pending, team switching/leaving clears
-  // org-scoped caches and navigates — destroying the attempt's owning
-  // surface. The trigger goes inert and the switch/leave actions re-check
-  // the lock imperatively (a menu opened before the attempt started).
+  // While an Ask agent attempt is pending, surface-leaving actions either
+  // navigate or clear org-scoped caches — destroying the attempt's owning
+  // surface. The trigger goes inert and every such action re-checks the lock
+  // imperatively (a menu opened before the attempt started).
   const askAgentNavLocked = useAskAgentNavLocked();
   const [open, setOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
+  const [setupAction, setSetupAction] = useState<"create" | null>(null);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
@@ -373,7 +374,7 @@ export function TeamSwitcher({
             className="absolute left-0 z-[46] mt-2 overflow-hidden rounded-[var(--radius-panel)] border bg-popover shadow-[var(--shadow-md)]"
             style={{ width: "var(--sp-70)", borderColor: "var(--border)" }}
           >
-            {/* ① Current team identity and membership actions — always shown. */}
+            {/* ① Current team identity and actions — always shown. */}
             <div role="presentation" className="border-b pb-1" style={{ borderColor: "var(--border)" }}>
               <div
                 aria-hidden="true"
@@ -430,6 +431,24 @@ export function TeamSwitcher({
               >
                 <UserPlus className="h-3.5 w-3.5" />
                 <span>Invite teammates</span>
+              </button>
+              {/* TeamSwitcher preserves the active-Team context; Settings owns
+                  the actual external-agent Context Tree configuration. */}
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                disabled={askAgentNavLocked}
+                onClick={() => {
+                  if (isAskAgentNavLocked()) return;
+                  setOpen(false);
+                  navigate("/settings/context#coding-agent-access");
+                }}
+                className={MENU_ROW_CLASS}
+                style={{ color: "var(--fg)", opacity: askAgentNavLocked ? 0.5 : undefined }}
+              >
+                <Bot className="h-3.5 w-3.5" />
+                <span>Use your own agent</span>
               </button>
               <button
                 type="button"
@@ -506,18 +525,19 @@ export function TeamSwitcher({
               </div>
             )}
 
-            {/* ③ Add or join — always shown. Create/Join complete via
-                `TeamSetupModal`'s `selectOrganization` + `/onboarding` navigation,
-                so they are guarded exactly like the switch rows: inert while a
-                pending Ask agent attempt owns the surface, plus an imperative
-                re-check at the action boundary. */}
+            {/* ③ Add team — always shown. Create completes via `TeamSetupModal`'s
+                `selectOrganization` + `/onboarding` navigation, so it is guarded
+                exactly like the switch rows: inert while a pending Ask agent
+                attempt owns the surface, plus an imperative re-check at the
+                action boundary. Invite recipients join through the shared
+                `/invite/:token` URL instead of pasting that URL back into Web. */}
             <div role="presentation" className="py-1">
               <div
                 aria-hidden="true"
                 className="text-eyebrow"
                 style={{ color: "var(--fg-3)", padding: "var(--sp-1_25) var(--sp-3_5) var(--sp-0_75)" }}
               >
-                Add or join
+                Add team
               </div>
               <button
                 type="button"
@@ -534,22 +554,6 @@ export function TeamSwitcher({
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Create team</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                tabIndex={-1}
-                disabled={askAgentNavLocked}
-                onClick={() => {
-                  if (isAskAgentNavLocked()) return;
-                  setOpen(false);
-                  setSetupAction("join");
-                }}
-                className={MENU_ROW_CLASS}
-                style={{ color: "var(--fg)", opacity: askAgentNavLocked ? 0.5 : undefined }}
-              >
-                <Link2 className="h-3.5 w-3.5" />
-                <span>Join with invite link</span>
               </button>
             </div>
           </div>

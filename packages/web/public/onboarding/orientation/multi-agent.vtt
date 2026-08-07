@@ -1,16 +1,16 @@
 WEBVTT
 
-00:00.000 --> 00:05.000
-One clear task starts with one lead agent.
+00:00:00.500 --> 00:00:05.500
+Give one lead Agent a clear software task.
 
-00:05.000 --> 00:12.000
-UX makes the product constraints explicit before implementation.
+00:00:05.500 --> 00:00:12.000
+As work unfolds, the lead brings each specialist into the same Chat.
 
-00:12.000 --> 00:24.000
-The developer works in stages, using the same shared context.
+00:00:12.000 --> 00:00:21.000
+A user experience specialist clarifies the interaction. A developer implements it, with progress visible in the conversation.
 
-00:24.000 --> 00:31.000
-QA verifies the behavior without opening another chat.
+00:00:21.000 --> 00:00:29.000
+Quality assurance verifies the result without opening another Chat.
 
-00:31.000 --> 00:35.000
-One shared conversation reaches a verified pull request.
+00:00:29.000 --> 00:00:35.000
+One shared conversation reaches a reviewed pull request.

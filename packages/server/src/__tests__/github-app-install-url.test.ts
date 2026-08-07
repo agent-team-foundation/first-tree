@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import bcrypt from "bcrypt";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { readOAuthStateNonce } from "../api/auth/oauth-cookie.js";
+import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
@@ -12,19 +15,47 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
 
 /** Pull `oauth_state_nonce` out of a Set-Cookie header. */
-function readStateCookie(setCookie: string | string[] | undefined): string | null {
-  if (!setCookie) return null;
-  const raw = Array.isArray(setCookie) ? setCookie.join("; ") : setCookie;
-  const m = new RegExp(`${STATE_NONCE_COOKIE_NAME}=([^;]+)`).exec(raw);
-  return m?.[1] ? decodeURIComponent(m[1]) : null;
+function readStateCookie(app: FastifyInstance, setCookie: string | string[] | undefined): string | null {
+  return readOAuthStateNonce(setCookie, STATE_NONCE_COOKIE_NAME, app.config.secrets.encryptionKey);
+}
+
+async function linkGithubIdentity(app: FastifyInstance, userId: string): Promise<void> {
+  await app.db.insert(authIdentities).values({
+    id: uuidv7(),
+    userId,
+    provider: "github",
+    identifier: String(Math.floor(700_000 + Math.random() * 99_999)),
+    email: null,
+    verifiedAt: new Date(),
+    metadata: { login: "install-requester" },
+  });
 }
 
 describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
   const getApp = useTestApp();
 
-  it("returns the GitHub installations/new URL + sets the state cookie", async () => {
+  it("blocks an admin without a linked GitHub identity before starting the installation flow", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `no-github-${crypto.randomUUID().slice(0, 8)}` });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/install-url`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      code: "github_identity_required",
+      error: "Connect a GitHub account before installing the GitHub App",
+    });
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("returns a GitHub identity-preflight URL + sets the state cookie", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    await linkGithubIdentity(app, admin.userId);
 
     const res = await app.inject({
       method: "GET",
@@ -36,14 +67,14 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     const body = res.json<{ installUrl: string }>();
     const url = new URL(body.installUrl);
     expect(url.origin).toBe("https://github.com");
-    // helpers.ts seeds slug="test-app-slug".
-    expect(url.pathname).toBe("/apps/test-app-slug/installations/new");
+    expect(url.pathname).toBe("/login/oauth/authorize");
+    expect(url.searchParams.get("client_id")).toBe("test-app-client-id");
     const state = url.searchParams.get("state");
     expect(state).toBeTruthy();
 
     // The state cookie nonce matches the JWT — verifyOAuthState would
     // accept this pair when the callback fires.
-    const cookieNonce = readStateCookie(res.headers["set-cookie"]);
+    const cookieNonce = readStateCookie(app, res.headers["set-cookie"]);
     expect(cookieNonce).toBeTruthy();
     const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
     expect(verified.next).toBe("/settings/github");
@@ -53,12 +84,14 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     expect(verified.targetOrganizationId).toBe(admin.organizationId);
     expect(verified.kickoffUserId).toBe(admin.userId);
     expect(verified.intent).toBe("install");
+    expect(verified.installPhase).toBe("identity");
     expect(verified.provider).toBe("github");
   });
 
   it("bakes an allowlisted ?next= into the signed state (onboarding flow)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    await linkGithubIdentity(app, admin.userId);
 
     const res = await app.inject({
       method: "GET",
@@ -68,7 +101,7 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
 
     expect(res.statusCode).toBe(200);
     const state = new URL(res.json<{ installUrl: string }>().installUrl).searchParams.get("state");
-    const cookieNonce = readStateCookie(res.headers["set-cookie"]);
+    const cookieNonce = readStateCookie(app, res.headers["set-cookie"]);
     const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
     expect(verified.next).toBe("/onboarding");
   });
@@ -76,6 +109,7 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
   it("ignores a ?next= that isn't on the allowlist (no open redirect)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    await linkGithubIdentity(app, admin.userId);
 
     const res = await app.inject({
       method: "GET",
@@ -85,7 +119,7 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
 
     expect(res.statusCode).toBe(200);
     const state = new URL(res.json<{ installUrl: string }>().installUrl).searchParams.get("state");
-    const cookieNonce = readStateCookie(res.headers["set-cookie"]);
+    const cookieNonce = readStateCookie(app, res.headers["set-cookie"]);
     const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
     expect(verified.next).toBe("/settings/github");
   });
@@ -148,6 +182,7 @@ describe("install-url when the App slug is not configured", () => {
   it("503s with a slug-missing hint", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `noslug-${crypto.randomUUID().slice(0, 8)}` });
+    await linkGithubIdentity(app, admin.userId);
     const res = await app.inject({
       method: "GET",
       url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/install-url`,

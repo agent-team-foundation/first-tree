@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +19,7 @@ import {
 import { contextIntegrationMarketplaceSourcePath } from "../core/context-integration/installer.js";
 import { writeContextIntegrationInstallManifest } from "../core/context-integration/manifest.js";
 import {
+  contextOperationObservationSnapshotDigest,
   disableContextIntegrationOperation,
   enableContextIntegrationOperation,
   recoverContextIntegrationOperation,
@@ -95,21 +105,53 @@ const driver: ContextIntegrationProviderDriver = {
   uninstall: () => undefined,
 };
 
+function testClaudeDriver(): ContextIntegrationProviderDriver {
+  return {
+    ...driver,
+    provider: "claude-code",
+    executable: "claude",
+    minimumVersion: "2.1.121",
+    probe: () => ({
+      provider: "claude-code",
+      binaryAvailable: true,
+      version: "2.1.121",
+      compatible: true,
+      installed: false,
+      enabled: false,
+      installedPath: null,
+      issues: [],
+    }),
+  };
+}
+
 const unchangedPlan = {
   provider: "codex" as const,
   operation: "unchanged" as const,
   previous: null,
   release: {
     root: "/unused",
+    coreRoot: "/unused",
     manifest: {
       schemaVersion: 1 as const,
       version: "0.5.18",
       channel: "dev" as const,
       bundleDigest: `sha256:${"1".repeat(64)}`,
       policyDigest: `sha256:${"2".repeat(64)}`,
+      core: {
+        digest: `sha256:${"5".repeat(64)}`,
+        policy: { path: "policy.md", digest: `sha256:${"2".repeat(64)}` },
+        skills: {
+          "first-tree-read": { path: "read.md", digest: `sha256:${"6".repeat(64)}` },
+          "first-tree-write": { path: "write.md", digest: `sha256:${"7".repeat(64)}` },
+        },
+      },
       providers: {
-        codex: { adapterDigest: `sha256:${"3".repeat(64)}`, minimumVersion: "0.144.0" },
-        "claude-code": { adapterDigest: `sha256:${"4".repeat(64)}`, minimumVersion: "2.1.121" },
+        codex: { adapterVersion: "1.0.0", adapterDigest: `sha256:${"3".repeat(64)}`, minimumVersion: "0.144.0" },
+        "claude-code": {
+          adapterVersion: "1.0.0",
+          adapterDigest: `sha256:${"4".repeat(64)}`,
+          minimumVersion: "2.1.121",
+        },
       },
     },
   },
@@ -248,6 +290,200 @@ describe("v3 grant operation", () => {
     expect(uninstall).toHaveBeenCalledTimes(1);
     expect(readContextIntegrationConfig().grants).toEqual([]);
     expect(existsSync(join(home, "state", "context", "operation-journal.json"))).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a dangling observation symlink before provider or grant mutation",
+    () => {
+      const home = setup();
+      const providerRoot = join(home, "state", "context", "providers", "claude-code");
+      mkdirSync(providerRoot, { recursive: true });
+      const evidence = join(providerRoot, "reload-required.json");
+      symlinkSync(join(home, "missing-reload-state"), evidence);
+      const claudeDriver = testClaudeDriver();
+      const target = {
+        provider: "claude-code" as const,
+        organizationId: "org-a",
+        activationScope: { kind: "global" as const },
+      };
+      const store = inspectContextGrantStore();
+      const install = vi.fn();
+      const writeGrant = vi.fn();
+
+      expect(() =>
+        enableContextIntegrationOperation(
+          claudeDriver,
+          {
+            ...unchangedPlan,
+            provider: "claude-code",
+            operation: "install",
+            probe: claudeDriver.probe("first-tree-dev", "first-tree-context"),
+          },
+          target,
+          {
+            beforeFingerprint: store.fingerprint,
+            afterFingerprint: contextGrantStoreFingerprintAfterGrant(store, target),
+          },
+          "client_1234abcd",
+          { install, writeGrant },
+        ),
+      ).toThrow("invalid reload-required.json entry");
+      expect(install).not.toHaveBeenCalled();
+      expect(writeGrant).not.toHaveBeenCalled();
+      expect(lstatSync(evidence).isSymbolicLink()).toBe(true);
+      expect(readContextIntegrationConfig().grants).toEqual([]);
+    },
+  );
+
+  it("restores the exact Claude observation state when grant persistence fails after install", () => {
+    const home = setup();
+    const providerRoot = join(home, "state", "context", "providers", "claude-code");
+    const oldPending = join(providerRoot, "reload-pending", `${"a".repeat(64)}.json`);
+    const oldConsumed = join(providerRoot, "reload-consumed", `${"b".repeat(48)}.json`);
+    const oldNextSession = join(providerRoot, "next-session-required.json");
+    mkdirSync(join(oldPending, ".."), { recursive: true });
+    mkdirSync(join(oldConsumed, ".."), { recursive: true });
+    writeFileSync(oldPending, "old pending\n");
+    writeFileSync(oldConsumed, "old consumed\n");
+    writeFileSync(oldNextSession, "old next session\n");
+    const claudeDriver = testClaudeDriver();
+    const target = {
+      provider: "claude-code" as const,
+      organizationId: "org-a",
+      activationScope: { kind: "global" as const },
+    };
+    const plan = {
+      ...unchangedPlan,
+      provider: "claude-code" as const,
+      operation: "install" as const,
+      probe: claudeDriver.probe("first-tree-dev", "first-tree-context"),
+    };
+    const store = inspectContextGrantStore();
+
+    expect(() =>
+      enableContextIntegrationOperation(
+        claudeDriver,
+        plan,
+        target,
+        {
+          beforeFingerprint: store.fingerprint,
+          afterFingerprint: contextGrantStoreFingerprintAfterGrant(store, target),
+        },
+        "client_1234abcd",
+        {
+          install: () => {
+            rmSync(join(providerRoot, "reload-pending"), { recursive: true, force: true });
+            rmSync(join(providerRoot, "reload-consumed"), { recursive: true, force: true });
+            writeFileSync(join(providerRoot, "reload-required.json"), "new marker\n");
+            writeFileSync(join(providerRoot, "next-session-required.json"), "new next session\n");
+            const manifest = {
+              ...installManifest(),
+              provider: "claude-code" as const,
+              adapterDigest: `sha256:${"4".repeat(64)}`,
+              adoptionGeneration: "c".repeat(48),
+            };
+            writeContextIntegrationInstallManifest(manifest);
+            return { manifest, probe: claudeDriver.probe("first-tree-dev", "first-tree-context") };
+          },
+          writeGrant: () => {
+            throw new Error("grant rename failed");
+          },
+        },
+      ),
+    ).toThrow("grant rename failed");
+
+    expect(readFileSync(oldPending, "utf8")).toBe("old pending\n");
+    expect(readFileSync(oldConsumed, "utf8")).toBe("old consumed\n");
+    expect(readFileSync(oldNextSession, "utf8")).toBe("old next session\n");
+    expect(existsSync(join(providerRoot, "reload-required.json"))).toBe(false);
+  });
+
+  it("recovers Claude observation state after a provider_changed crash", () => {
+    const home = setup();
+    const operationId = "12345678-1234-4123-8123-123456789abc";
+    const recoveryRoot = join(home, "state", "context", "operation-recovery", operationId);
+    const recoveryObservationRoot = join(recoveryRoot, "observation");
+    const providerRoot = join(home, "state", "context", "providers", "claude-code");
+    mkdirSync(join(recoveryObservationRoot, "reload-pending"), { recursive: true });
+    writeFileSync(join(recoveryObservationRoot, "reload-pending", `${"d".repeat(64)}.json`), "previous\n");
+    writeFileSync(join(recoveryObservationRoot, "next-session-required.json"), "previous next session\n");
+    mkdirSync(providerRoot, { recursive: true });
+    writeFileSync(join(providerRoot, "reload-required.json"), "new marker\n");
+    writeFileSync(join(providerRoot, "next-session-required.json"), "new next session\n");
+    mkdirSync(join(home, "state", "context"), { recursive: true });
+    writeFileSync(
+      join(home, "state", "context", "operation-journal.json"),
+      `${JSON.stringify({
+        schemaVersion: 3,
+        operationId,
+        accountClientId: "client_1234abcd",
+        provider: "claude-code",
+        operation: "enable",
+        phase: "provider_changed",
+        previousConfig: { schemaVersion: 3, grants: [] },
+        previousInstallManifest: null,
+        providerInstalled: false,
+        providerEnabled: false,
+        marketplaceSourceExisted: false,
+        recoveryMarketplaceRoot: null,
+        recoveryObservationRoot,
+        recoveryObservationDigest: contextOperationObservationSnapshotDigest(recoveryObservationRoot),
+        startedAt: "2026-08-05T00:00:00.000Z",
+      })}\n`,
+    );
+
+    expect(recoverContextIntegrationOperation(testClaudeDriver())).toBe(true);
+    expect(readFileSync(join(providerRoot, "reload-pending", `${"d".repeat(64)}.json`), "utf8")).toBe("previous\n");
+    expect(readFileSync(join(providerRoot, "next-session-required.json"), "utf8")).toBe("previous next session\n");
+    expect(existsSync(join(providerRoot, "reload-required.json"))).toBe(false);
+  });
+
+  it("fails before any recovery mutation when a schema-3 observation snapshot loses a child", () => {
+    const home = setup();
+    const currentGrant = grant();
+    enableContextIntegrationOperation(driver, unchangedPlan, currentGrant, storeFence(currentGrant), "client_1234abcd");
+    const operationId = "12345678-1234-4123-8123-123456789abc";
+    const recoveryRoot = join(home, "state", "context", "operation-recovery", operationId);
+    const recoveryObservationRoot = join(recoveryRoot, "observation");
+    const snapshotChild = join(recoveryObservationRoot, "reload-pending", `${"e".repeat(64)}.json`);
+    const providerRoot = join(home, "state", "context", "providers", "claude-code");
+    mkdirSync(join(snapshotChild, ".."), { recursive: true });
+    writeFileSync(snapshotChild, "previous pending\n");
+    const recoveryObservationDigest = contextOperationObservationSnapshotDigest(recoveryObservationRoot);
+    mkdirSync(providerRoot, { recursive: true });
+    writeFileSync(join(providerRoot, "reload-required.json"), "live marker\n");
+    mkdirSync(join(home, "state", "context"), { recursive: true });
+    const journalPath = join(home, "state", "context", "operation-journal.json");
+    writeFileSync(
+      journalPath,
+      `${JSON.stringify({
+        schemaVersion: 3,
+        operationId,
+        accountClientId: "client_1234abcd",
+        provider: "claude-code",
+        operation: "enable",
+        phase: "provider_changed",
+        previousConfig: { schemaVersion: 3, grants: [] },
+        previousInstallManifest: null,
+        providerInstalled: false,
+        providerEnabled: false,
+        marketplaceSourceExisted: false,
+        recoveryMarketplaceRoot: null,
+        recoveryObservationRoot,
+        recoveryObservationDigest,
+        startedAt: "2026-08-05T00:00:00.000Z",
+      })}\n`,
+    );
+    rmSync(snapshotChild, { force: true });
+    const uninstall = vi.fn();
+
+    expect(() => recoverContextIntegrationOperation({ ...testClaudeDriver(), uninstall })).toThrow(
+      "Invalid First Tree Context operation journal",
+    );
+    expect(uninstall).not.toHaveBeenCalled();
+    expect(readContextIntegrationConfig().grants).toEqual([currentGrant]);
+    expect(readFileSync(join(providerRoot, "reload-required.json"), "utf8")).toBe("live marker\n");
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   it("keeps a rollback_failed durable journal when restoration also fails", () => {

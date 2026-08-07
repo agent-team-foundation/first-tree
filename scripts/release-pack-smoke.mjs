@@ -32,6 +32,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -41,6 +42,7 @@ import {
   readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -227,6 +229,14 @@ function assertSourceContextIntegrationPresent() {
   if (!manifest || typeof manifest !== "object" || typeof manifest.bundleDigest !== "string") {
     fail("apps/cli/context-integration/release-manifest.json is missing bundleDigest");
   }
+  if (
+    typeof manifest.core?.digest !== "string" ||
+    typeof manifest.core?.policy?.path !== "string" ||
+    typeof manifest.core?.skills?.["first-tree-read"]?.path !== "string" ||
+    typeof manifest.core?.skills?.["first-tree-write"]?.path !== "string"
+  ) {
+    fail("apps/cli/context-integration/release-manifest.json is missing exact-release Core entries");
+  }
   const providers = Object.keys(manifest.providers ?? {});
   if (providers.length < 1) {
     fail("apps/cli/context-integration/release-manifest.json declares no providers");
@@ -236,17 +246,19 @@ function assertSourceContextIntegrationPresent() {
     if (!existsSync(providerRoot)) {
       fail(`apps/cli/context-integration missing provider payload directory: ${provider}`);
     }
+    assertThinContextAdapter(providerRoot, provider);
   }
   return {
     version: String(manifest.version ?? ""),
     bundleDigest: manifest.bundleDigest,
     providers,
+    core: manifest.core,
   };
 }
 
 /**
  * @param {string} consumerDir
- * @param {{ bundleDigest: string, providers: string[] }} source
+ * @param {{ bundleDigest: string, providers: string[], core: {policy: {path: string}, skills: Record<string, {path: string}>} }} source
  */
 function assertConsumerContextIntegration(consumerDir, source) {
   const packagedRoot = join(consumerDir, "node_modules", "first-tree-dev", "context-integration");
@@ -261,8 +273,112 @@ function assertConsumerContextIntegration(consumerDir, source) {
     );
   }
   for (const provider of source.providers) {
-    if (!existsSync(join(packagedRoot, provider))) {
+    const providerRoot = join(packagedRoot, provider);
+    if (!existsSync(providerRoot)) {
       fail(`consumer context-integration missing provider payload: ${provider}`);
+    }
+    assertThinContextAdapter(providerRoot, provider);
+  }
+  const packageRoot = join(consumerDir, "node_modules", "first-tree-dev");
+  for (const entry of [source.core.policy, ...Object.values(source.core.skills)]) {
+    if (!existsSync(join(packageRoot, entry.path))) {
+      fail(`consumer is missing exact-release Context Core entry: ${entry.path}`);
+    }
+  }
+}
+
+/**
+ * Execute the public loader from the empty npm consumer and prove it fails
+ * closed. npm installs are updated in place, so this package root is not an
+ * immutable exact release root and must never be returned to a BYO task.
+ * @param {string} consumerDir
+ * @param {string} binPath
+ * @param {{ core: {policy: {path: string, digest: string}, skills: Record<string, {path: string, digest: string}>} }} source
+ * @param {string} home
+ */
+function assertConsumerContextLoaderFailsClosed(_consumerDir, binPath, _source, home) {
+  mkdirSync(home, { recursive: true });
+  const result = spawnSync(
+    binPath,
+    ["--json", "context", "skill", "load", "--protocol", "1", "--provider", "codex", "--name", "first-tree-read"],
+    { env: { ...process.env, FIRST_TREE_HOME: home }, encoding: "utf8" },
+  );
+  if (result.error) fail(`packed Context loader failed to start: ${result.error.message}`);
+  let envelope;
+  try {
+    envelope = JSON.parse(result.stderr);
+  } catch {
+    fail(`packed mutable-root Context loader did not return a typed JSON failure: ${result.stderr || result.stdout}`);
+  }
+  if (
+    result.status === 0 ||
+    envelope?.ok !== false ||
+    envelope?.error?.code !== "CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED"
+  ) {
+    fail("packed mutable-root Context loader did not fail closed with CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED");
+  }
+}
+
+function assertPinnedPortableContextLoader(consumerDir, work, version, source) {
+  const packageRoot = join(consumerDir, "node_modules", "first-tree-dev");
+  const appRoot = join(work, "portable", "versions", version, "app");
+  cpSync(packageRoot, appRoot, { recursive: true });
+  linkPortableSmokeDependencies(join(consumerDir, "node_modules"), join(appRoot, "node_modules"));
+  const result = run(
+    process.execPath,
+    [
+      join(appRoot, "dist", "cli", "index.mjs"),
+      "--json",
+      "context",
+      "skill",
+      "load",
+      "--protocol",
+      "1",
+      "--provider",
+      "codex",
+      "--name",
+      "first-tree-read",
+    ],
+    { env: { ...process.env, FIRST_TREE_HOME: join(work, "portable-home") } },
+  );
+  const envelope = JSON.parse(result.stdout);
+  const data = envelope?.ok === true ? envelope.data : null;
+  if (
+    data?.skillPath !== resolve(appRoot, source.core.skills["first-tree-read"].path) ||
+    data?.policyPath !== resolve(appRoot, source.core.policy.path)
+  ) {
+    fail("version-pinned portable Context loader did not return paths from its immutable app root");
+  }
+}
+
+function linkPortableSmokeDependencies(sourceRoot, targetRoot) {
+  mkdirSync(targetRoot, { recursive: true });
+  for (const entry of readdirSync(sourceRoot)) {
+    if (entry === ".bin" || entry === "first-tree-dev") continue;
+    const source = join(sourceRoot, entry);
+    const target = join(targetRoot, entry);
+    if (!existsSync(target)) {
+      symlinkSync(source, target, "dir");
+      continue;
+    }
+    if (!entry.startsWith("@")) continue;
+    for (const packageName of readdirSync(source)) {
+      const scopedTarget = join(target, packageName);
+      if (!existsSync(scopedTarget)) symlinkSync(join(source, packageName), scopedTarget, "dir");
+    }
+  }
+}
+
+function assertThinContextAdapter(providerRoot, provider) {
+  const pluginRoot = join(providerRoot, "plugins", "first-tree-context");
+  for (const skill of ["first-tree-read", "first-tree-write"]) {
+    const skillRoot = join(pluginRoot, "skills", skill);
+    if (JSON.stringify(readdirSync(skillRoot).sort()) !== JSON.stringify(["SKILL.md"])) {
+      fail(`${provider} Context Plugin ${skill} is not a thin single-file loader stub`);
+    }
+    const body = readFileSync(join(skillRoot, "SKILL.md"), "utf8");
+    if (!body.includes("context skill load --protocol 1") || body.includes("context write-preflight")) {
+      fail(`${provider} Context Plugin ${skill} contains a copied or invalid Core workflow`);
     }
   }
 }
@@ -334,6 +450,8 @@ function runSmoke() {
     if (!/^\d+\.\d+\.\d+/.test(versionText)) fail(`unexpected --version output: ${versionText}`);
 
     assertConsumerContextIntegration(consumerDir, contextIntegration);
+    assertConsumerContextLoaderFailsClosed(consumerDir, binPath, contextIntegration, join(work, "first-tree-home"));
+    assertPinnedPortableContextLoader(consumerDir, work, versionText, contextIntegration);
 
     const sdkEntry = join(
       consumerDir,
@@ -367,7 +485,7 @@ function runSmoke() {
     const sha256 = sha256File(tarball);
     const bytes = statSync(tarball).size;
     console.log(
-      `release-pack-smoke: PASS — packed ${tarballName} (${bytes} B, sha256=${sha256}, ${safety.entryCount} entries), consumer CLI ${versionText}, registry-safe paths, context-integration ${contextIntegration.bundleDigest}, bundled patched Kimi SDK verified`,
+      `release-pack-smoke: PASS — packed ${tarballName} (${bytes} B, sha256=${sha256}, ${safety.entryCount} entries), consumer CLI ${versionText}, registry-safe paths, exact-release Context loader ${contextIntegration.bundleDigest}, bundled patched Kimi SDK verified`,
     );
   } finally {
     cleanupPackArtifacts(work);

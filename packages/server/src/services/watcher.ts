@@ -34,6 +34,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { lockChatMembershipMutation } from "./chat-membership-lock.js";
 import { addChatParticipants, recomputeChatWatchers } from "./participant-mode.js";
 
 // Re-export so historical callers that reach for
@@ -189,6 +190,7 @@ export type LeaveResult = {
  */
 export async function leaveAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<LeaveResult> {
   const outcome = await db.transaction(async (tx): Promise<LeaveResult> => {
+    await lockChatMembershipMutation(tx, [chatId]);
     const [existing] = await tx
       .select({ accessMode: chatMembership.accessMode })
       .from(chatMembership)

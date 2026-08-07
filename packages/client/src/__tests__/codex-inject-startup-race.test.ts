@@ -108,6 +108,7 @@ vi.mock("../runtime/chat-context.js", () => ({
 }));
 
 import { createCodexHandler } from "../handlers/codex/index.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 
@@ -204,6 +205,7 @@ function makeContext(
 
 function makeAutoHandler(fake: StartupFakeAppServerClient) {
   return createCodexHandler({
+    runtimeProvider: "codex",
     workspaceRoot,
     codexHandlerEngine: "auto",
     codexRuntimeBinaryResolver: async () => ({
@@ -324,7 +326,10 @@ describe("codex handler startup inject queue", () => {
       },
       { type: "unknown_future_item" },
     ]);
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -340,7 +345,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const toolEvents = events.filter(
       (event): event is Extract<SessionEvent, { kind: "tool_call" }> => event.kind === "tool_call",
@@ -388,7 +393,10 @@ describe("codex handler startup inject queue", () => {
       { type: "error", message: warning },
       { type: "agent_message", text: "silently downgraded answer" },
     ]);
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -403,7 +411,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(events).toContainEqual({
       kind: "error",
@@ -431,17 +439,20 @@ describe("codex handler startup inject queue", () => {
 
   it("queues injects received before the Codex thread exists so their inbox entries stay aligned with acks", async () => {
     const completedCounts: Array<number | undefined> = [];
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => {
       completedCounts.push(count);
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await Promise.resolve();
 
     // The handler is active, but startup is still waiting on chat context;
     // `thread` and `currentTurnPromise` do not exist yet.
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
 
     state.resolveChatContext?.({
       chatId: "chat-startup-race",
@@ -475,7 +486,10 @@ describe("codex handler startup inject queue", () => {
     const firstFormatStartedPromise = new Promise<void>((resolve) => {
       firstFormatStarted = resolve;
     });
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -503,10 +517,10 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await firstFormatStartedPromise;
 
-    handler.inject(makeMessage("m2", "second"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(state.runInputs).toHaveLength(0);
@@ -543,10 +557,13 @@ describe("codex handler startup inject queue", () => {
       },
     );
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
     await Promise.resolve();
 
-    expect(handler.inject(makeMessage("m2", "second"))).toMatchObject({ kind: "owned", mode: "queued" });
+    expect(handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx))).toMatchObject({
+      kind: "owned",
+      mode: "queued",
+    });
 
     state.resolveChatContext?.({
       chatId: "chat-startup-race",
@@ -587,7 +604,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(fake.requests.some((request) => request.method === "turn/start")).toBe(true);
     expect(retried).toEqual([{ ids: ["m1"], reason: "codex_app_server_turn_start_unknown_custody_failed" }]);
@@ -599,7 +616,10 @@ describe("codex handler startup inject queue", () => {
 
   it("serializes ready-state injects through one drainer instead of starting parallel turns", async () => {
     const completedCounts: Array<number | undefined> = [];
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => {
       completedCounts.push(count);
     });
@@ -612,10 +632,10 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
-    handler.inject(makeMessage("m2", "second"));
-    handler.inject(makeMessage("m3", "third"));
+    handler.inject(makeMessage("m2", "second"), deliveryTokenFromSessionContext(ctx));
+    handler.inject(makeMessage("m3", "third"), deliveryTokenFromSessionContext(ctx));
 
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
@@ -633,7 +653,10 @@ describe("codex handler startup inject queue", () => {
 
   it("applies resume chat context to the next injected turn only when resume has no message", async () => {
     const completedCounts: Array<number | undefined> = [];
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => {
       completedCounts.push(count);
     });
@@ -646,16 +669,16 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.resume(undefined, "thread-test", ctx);
+    await handler.resume(undefined, "thread-test", ctx, deliveryTokenFromSessionContext(ctx));
 
-    handler.inject(makeMessage("m1", "first after resume"));
+    handler.inject(makeMessage("m1", "first after resume"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => state.runInputs.length === 1);
 
     expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
     expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
     expect(String(state.runInputs[0])).toContain("first after resume");
 
-    handler.inject(makeMessage("m2", "second after resume"));
+    handler.inject(makeMessage("m2", "second after resume"), deliveryTokenFromSessionContext(ctx));
     await waitFor(() => state.runInputs.length === 2);
 
     expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
@@ -670,7 +693,10 @@ describe("codex handler startup inject queue", () => {
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(() => {}, { sendMessage, emitEvent });
 
     state.agentMessagesByTurn.set(1, ["working note", "final answer"]);
@@ -682,7 +708,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     // Final-text mirror retired: the result is captured as assistant_text
     // events, NOT delivered as a chat message.
@@ -702,7 +728,10 @@ describe("codex handler startup inject queue", () => {
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
 
     state.agentMessagesByTurn.set(1, ["working note", "final answer"]);
@@ -715,7 +744,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     // Final-text mirror retired: result captured as assistant_text, not sent.
@@ -743,7 +772,10 @@ describe("codex handler startup inject queue", () => {
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, [
@@ -757,7 +789,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(
@@ -780,7 +812,10 @@ describe("codex handler startup inject queue", () => {
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, ["working note"]);
@@ -793,7 +828,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(sendMessage).not.toHaveBeenCalled();
@@ -830,7 +865,10 @@ describe("codex handler startup inject queue", () => {
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, []);
@@ -846,7 +884,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(state.runInputs).toHaveLength(1);
@@ -875,7 +913,10 @@ describe("codex handler startup inject queue", () => {
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, ["working note"]);
@@ -888,7 +929,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(sendMessage).not.toHaveBeenCalled();
@@ -922,7 +963,10 @@ describe("codex handler startup inject queue", () => {
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, ["working note"]);
@@ -935,7 +979,7 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     expect(sendMessage).not.toHaveBeenCalled();
@@ -966,7 +1010,10 @@ describe("codex handler startup inject queue", () => {
   it("retries queued injects when all inbound formatting fails before provider custody", async () => {
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -989,8 +1036,8 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
-    handler.inject(makeMessage("m2", "bad"));
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
+    handler.inject(makeMessage("m2", "bad"), deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => retryTurn.mock.calls.length === 1);
 
@@ -1015,7 +1062,10 @@ describe("codex handler startup inject queue", () => {
   ])("retries the whole queued batch when mixed formatting occurs: $name", async ({ failingIds, messages }) => {
     const completedCounts: Array<number | undefined> = [];
     const retryTurn = vi.fn();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext(
       (count) => {
         completedCounts.push(count);
@@ -1038,8 +1088,8 @@ describe("codex handler startup inject queue", () => {
       participants: [],
     });
 
-    await handler.start(makeMessage("m1", "first"), ctx);
-    for (const message of messages) handler.inject(message);
+    await handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
+    for (const message of messages) handler.inject(message, deliveryTokenFromSessionContext(ctx));
 
     await waitFor(() => retryTurn.mock.calls.length === messages.length);
 

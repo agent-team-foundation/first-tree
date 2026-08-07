@@ -59,6 +59,8 @@ const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)}
 const REVIEW_VERIFY_RUNNER_PATH = ${JSON.stringify(options.reviewVerifyRunnerPath ?? null)};
 const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
+const BYO_READ_SNAPSHOT_ROOT = ${JSON.stringify(join(paths.runRoot, "private-context-snapshots"))};
+const BYO_READ_BINDING_REPOSITORY = "https://github.com/example/context-tree.git";
 const CONTEXT_REVIEW_BODY_MAX_BYTES = ${JSON.stringify(CONTEXT_REVIEW_BODY_MAX_BYTES)};
 const CONTEXT_REVIEW_RUN_MARKER_PREFIX = ${JSON.stringify(CONTEXT_REVIEW_RUN_MARKER_PREFIX)};
 
@@ -130,9 +132,54 @@ function commandIndex(argv, command, subcommand) {
   return index >= 0 && argv[index + 1] === subcommand ? index : -1;
 }
 
+function commandArgv(argv) {
+  return argv[0] === "--json" ? argv.slice(1) : argv;
+}
+
+function parseCommandOptions(command, valueOptions, flagOptions) {
+  const values = {};
+  const flags = new Set();
+  for (let index = 2; index < command.length; index += 1) {
+    const arg = command[index];
+    const equalsIndex = arg.indexOf("=");
+    const optionName = equalsIndex >= 0 ? arg.slice(0, equalsIndex) : arg;
+    if (valueOptions.includes(optionName)) {
+      if (Object.hasOwn(values, optionName)) return null;
+      const value = equalsIndex >= 0 ? arg.slice(equalsIndex + 1) : command[index + 1];
+      if (!value || value.startsWith("--")) return null;
+      values[optionName] = value;
+      if (equalsIndex < 0) index += 1;
+      continue;
+    }
+    if (flagOptions.includes(arg)) {
+      if (flags.has(arg)) return null;
+      flags.add(arg);
+      continue;
+    }
+    return null;
+  }
+  return { flags, values };
+}
+
 function runContextRoute(argv, phase) {
   if ((process.env.FIRST_TREE_EVAL_CASE_ID || "") !== "byo-scope-route-trigger") {
     finish(argv, phase, 1, "", "BYO SCOPE routing is unavailable for this eval case.\\n", { blockedByEval: true });
+  }
+  const command = commandArgv(argv);
+  const options = parseCommandOptions(command, ["--provider", "--project-root", "--session-candidate"], ["--pathless"]);
+  if (
+    command[0] !== "context" ||
+    command[1] !== "route" ||
+    options === null ||
+    options.values["--provider"] !== "codex" ||
+    options.values["--session-candidate"] !== "eval-receipt" ||
+    Object.hasOwn(options.values, "--project-root") ||
+    !options.flags.has("--pathless")
+  ) {
+    finish(argv, phase, 2, "", "Expected the current pathless context route interface.\\n", {
+      authorityChecks: 0,
+      shimmedByEval: true,
+    });
   }
   const stdout = JSON.stringify({
     ok: true,
@@ -156,34 +203,7 @@ function runContextRoute(argv, phase) {
   finish(argv, phase, 0, stdout, "", { authorityChecks: 1, scopeReads: 1, shimmedByEval: true });
 }
 
-function runTreeRead(argv, phase) {
-  if (argv.includes("--help") || argv.includes("-h")) {
-    finish(
-      argv,
-      phase,
-      0,
-      "Usage: first-tree tree read [options]\\n\\nActivate one exact Context Tree snapshot for an explicit Team.\\n\\nOptions:\\n  --team <team-id>       explicit First Tree Team id\\n  --snapshot <directory> new task-owned snapshot directory\\n  -h, --help             display help for command\\n",
-      "",
-      { shimmedByEval: true },
-    );
-  }
-
-  const candidateId = optionValue(argv, "--candidate");
-  const teamId = candidateId === "candidate-byo-read-eval" ? "team-byo-read-eval" : optionValue(argv, "--team");
-  const snapshotOption = optionValue(argv, "--snapshot");
-  if ((process.env.FIRST_TREE_EVAL_CASE_ID || "") !== "byo-scope-route-trigger") {
-    finish(argv, phase, 1, "", "BYO read activation is unavailable for this eval case.\\n", {
-      blockedByEval: true,
-    });
-  }
-  if (teamId !== "team-byo-read-eval" || !snapshotOption || (argv.includes("context") && !candidateId)) {
-    finish(argv, phase, 2, "", "Opaque candidate and new snapshot path are required.\\n", {
-      authorityChecks: teamId ? 1 : 0,
-      shimmedByEval: true,
-    });
-  }
-
-  const snapshotPath = resolve(process.cwd(), snapshotOption);
+function materializeReadSnapshot(argv, phase, teamId, snapshotPath, candidateId) {
   if (existsSync(snapshotPath)) {
     finish(argv, phase, 2, "", "Snapshot path already exists.\\n", {
       authorityChecks: 0,
@@ -229,7 +249,7 @@ function runTreeRead(argv, phase) {
   const metadataCommands = [
     ["config", "first-tree-read.snapshot", "true"],
     ["config", "first-tree-read.team-id", teamId],
-    ["config", "first-tree-read.binding-repo", "https://git.example.invalid/teams/team-byo-read-eval/context-tree.git"],
+    ["config", "first-tree-read.binding-repo", BYO_READ_BINDING_REPOSITORY],
     ["config", "first-tree-read.binding-branch", "main"],
     ["config", "first-tree-read.commit", exactCommit],
     ["update-ref", "refs/first-tree-read/snapshot", exactCommit],
@@ -247,7 +267,7 @@ function runTreeRead(argv, phase) {
     }
   }
 
-  const bindingRepository = "https://git.example.invalid/teams/team-byo-read-eval/context-tree.git";
+  const bindingRepository = BYO_READ_BINDING_REPOSITORY;
   const stdout =
     JSON.stringify({
       ok: true,
@@ -258,7 +278,7 @@ function runTreeRead(argv, phase) {
         teamId,
         consumerKind: "byo",
         selectedTeam: { organizationId: teamId, displayName: "BYO Read Eval", role: "member" },
-        routeSelection: { candidateId: "candidate-byo-read-eval", scopeCommit: exactCommit, source: "session" },
+        ...(candidateId ? { routeSelection: { candidateId, scopeCommit: exactCommit, source: "session" } } : {}),
       },
     }) + "\\n";
   finish(argv, phase, 0, stdout, "", {
@@ -271,6 +291,73 @@ function runTreeRead(argv, phase) {
     strictFetches: 1,
     teamId,
   });
+}
+
+function runLegacyTreeRead(argv, phase) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    finish(
+      argv,
+      phase,
+      0,
+      "Usage: first-tree tree read [options]\\n\\nActivate one exact Context Tree snapshot for an explicit Team.\\n\\nOptions:\\n  --team <team-id>       explicit First Tree Team id\\n  --snapshot <directory> new task-owned snapshot directory\\n  -h, --help             display help for command\\n",
+      "",
+      { shimmedByEval: true },
+    );
+  }
+  if ((process.env.FIRST_TREE_EVAL_CASE_ID || "") !== "byo-scope-route-trigger") {
+    finish(argv, phase, 1, "", "BYO read activation is unavailable for this eval case.\\n", {
+      blockedByEval: true,
+    });
+  }
+  const command = commandArgv(argv);
+  const options = parseCommandOptions(command, ["--snapshot", "--team"], []);
+  const teamId = options?.values["--team"];
+  const snapshotOption = options?.values["--snapshot"];
+  if (
+    command[0] !== "tree" ||
+    command[1] !== "read" ||
+    options === null ||
+    teamId !== "team-byo-read-eval" ||
+    !snapshotOption
+  ) {
+    finish(argv, phase, 2, "", "Explicit Team and new snapshot path are required.\\n", {
+      authorityChecks: teamId ? 1 : 0,
+      shimmedByEval: true,
+    });
+  }
+  materializeReadSnapshot(argv, phase, teamId, resolve(process.cwd(), snapshotOption), null);
+}
+
+function runContextSnapshot(argv, phase) {
+  if ((process.env.FIRST_TREE_EVAL_CASE_ID || "") !== "byo-scope-route-trigger") {
+    finish(argv, phase, 1, "", "BYO read activation is unavailable for this eval case.\\n", {
+      blockedByEval: true,
+    });
+  }
+  const command = commandArgv(argv);
+  const options = parseCommandOptions(command, ["--candidate"], []);
+  const candidateId = options?.values["--candidate"];
+  if (
+    command[0] !== "context" ||
+    command[1] !== "snapshot" ||
+    options === null ||
+    candidateId !== "candidate-byo-read-eval"
+  ) {
+    finish(argv, phase, 2, "", "Exactly one opaque context route candidate is required.\\n", {
+      authorityChecks: 0,
+      shimmedByEval: true,
+    });
+  }
+  mkdirSync(BYO_READ_SNAPSHOT_ROOT, { recursive: true });
+  const privateRoot = join(BYO_READ_SNAPSHOT_ROOT, "first-tree-read-" + process.pid + "-" + Date.now());
+  mkdirSync(privateRoot, { recursive: false });
+  materializeReadSnapshot(
+    argv,
+    phase,
+    "team-byo-read-eval",
+    join(privateRoot, "context-tree"),
+    candidateId,
+  );
 }
 
 function runTreeSeed(argv, phase) {
@@ -475,6 +562,20 @@ function bodyFromFileOption(argv) {
   }
 }
 
+function chatBody(argv) {
+  if (argv[0] === "chat" && argv[1] === "update") {
+    const description = optionValueWithEquals(argv, "--description");
+    if (description === null) return "";
+    if (description !== "-") return description;
+    try {
+      return readFileSync(0, "utf8");
+    } catch {
+      return "";
+    }
+  }
+  return bodyFromFileOption(argv);
+}
+
 function runTreeVerify(argv, phase) {
   const root = resolve(process.cwd(), optionValue(argv, "--tree-path") || ".");
   const errors = [];
@@ -513,7 +614,15 @@ function runTreeVerify(argv, phase) {
 
 const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
-append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
+const recordedChatBody =
+  argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "") ? chatBody(argv) : "";
+append({
+  type: "first_tree_call",
+  phase,
+  argv,
+  body: recordedChatBody || undefined,
+  cwd: process.cwd(),
+});
 trace("first-tree call: " + commandLine(argv));
 
 if (AUDIT_FIXTURE_PATH && argv[0] === "gitlab" && argv[1] === "follow") {
@@ -722,7 +831,7 @@ if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
 }
 
 if (commandIndex(argv, "tree", "read") >= 0) {
-  runTreeRead(argv, phase);
+  runLegacyTreeRead(argv, phase);
 }
 
 if (commandIndex(argv, "context", "route") >= 0) {
@@ -730,7 +839,7 @@ if (commandIndex(argv, "context", "route") >= 0) {
 }
 
 if (commandIndex(argv, "context", "snapshot") >= 0) {
-  runTreeRead(argv, phase);
+  runContextSnapshot(argv, phase);
 }
 
 if (argv[0] === "tree" && argv[1] === "tree") {

@@ -23,12 +23,22 @@ export function SavedFlash({ saved = false }: { saved?: boolean }) {
   );
 }
 
+function SavingStatus({ saving = false }: { saving?: boolean }) {
+  if (!saving) return null;
+  return (
+    <span className="text-caption font-normal" style={{ color: "var(--fg-3)" }} role="status">
+      Saving…
+    </span>
+  );
+}
+
 /** Compose a section title with its transient "Saved" flash in one inline row. */
-export function titleWithSemantics(title: string, saved?: boolean) {
+export function titleWithSemantics(title: string, saved?: boolean, saving?: boolean) {
   return (
     <span className="inline-flex items-baseline gap-2">
       <span>{title}</span>
-      <SavedFlash saved={saved} />
+      <SavedFlash saved={saved && !saving} />
+      <SavingStatus saving={saving} />
     </span>
   );
 }

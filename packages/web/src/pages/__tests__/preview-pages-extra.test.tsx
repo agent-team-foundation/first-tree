@@ -266,7 +266,18 @@ describe("extra preview pages", () => {
     expect(admin.container.querySelector('[data-settings-context-tree-preview="admin"]')).not.toBeNull();
     expect(text(admin.container)).toContain("Binding");
     expect(text(admin.container)).toContain("Automatic review");
-    expect(text(admin.container)).toContain("Coding-agent access");
+    expect(text(admin.container)).toContain("Coding agent setup");
+    const promptActions = admin.container.querySelector<HTMLElement>("[data-byo-prompt-actions]");
+    const viewPrompt = [...(promptActions?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent === "View setup prompt",
+    );
+    expect(promptActions?.querySelectorAll("button")).toHaveLength(1);
+    await act(async () => viewPrompt?.click());
+    await flush();
+    expect(document.body.querySelector<HTMLTextAreaElement>("[data-byo-setup-prompt-preview]")?.value).toContain(
+      "Connect this coding agent to Gandy's team Context Tree.",
+    );
+    expect(text(document.body)).toContain("Copy prompt");
     expect(admin.container.querySelector('[data-setup-owner-controls="context-tree"]')).not.toBeNull();
     expect(admin.container.querySelector('[role="switch"]')).not.toBeNull();
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -288,12 +299,12 @@ describe("extra preview pages", () => {
   it("renders the seeded agent-detail preview sections", async () => {
     const rendered = await renderPreview(<AgentDetailPreviewPage />);
 
-    expect(text(rendered.container)).toContain("Agent switcher");
-    expect(text(rendered.container)).toContain("Environment tab");
-    expect(text(rendered.container)).toContain("Tools & skills tab");
-    expect(text(rendered.container)).toContain("Instructions tab");
-    expect(text(rendered.container)).toContain("Usage tab");
-    expect(text(rendered.container)).toContain("Vega");
+    expect(text(rendered.container)).toContain("Agent Detail section states");
+    expect(text(rendered.container)).toContain("Repositories section");
+    expect(text(rendered.container)).toContain("Tools & skills section");
+    expect(text(rendered.container)).toContain("Instructions section");
+    expect(text(rendered.container)).toContain("Usage section");
+    expect(text(rendered.container)).toContain("Validate the shared shell");
     expect(text(rendered.container)).toContain("first-tree");
     expect(text(rendered.container)).toContain("release-notes");
     expect(text(rendered.container)).toContain("Team style guide");

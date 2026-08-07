@@ -134,6 +134,19 @@ describe("client switch transaction recovery", () => {
     writeFileSync(join(home, "config", "context.yaml"), "schemaVersion: 1\nbindings: []\n");
     writeFileSync(join(home, "config", "context.yaml.v1.bak"), "old-account-backup\n");
     mkdirSync(join(home, "data", "sessions", "old-session"), { recursive: true });
+    mkdirSync(join(home, "data", "byo", "org-old", "context-tree.git"), { recursive: true });
+    writeFileSync(join(home, "data", "byo", "org-old", "context-tree.git", "owner"), "old\n");
+    for (const path of [
+      join(home, "state", "context", "route-receipts", "old.json"),
+      join(home, "state", "context", "providers", "claude-code", "reload-pending", "old.json"),
+      join(home, "state", "context", "providers", "claude-code", "reload-consumed", "old.json"),
+      join(home, "state", "context", "providers", "claude-code", "compatible-sessions", "old.json"),
+      join(home, "state", "context", "providers", "codex", "adapter-sync", "old.json"),
+      join(home, "state", "context", "providers", "claude-code", "reload-required.json"),
+      join(home, "state", "context", "providers", "claude-code", "next-session-required.json"),
+    ]) {
+      writeJson(path, { accountClientId: "client_aabbccdd" });
+    }
 
     const config = await switchLocalClientForLogin({
       existingCredentials: {
@@ -159,7 +172,22 @@ describe("client switch transaction recovery", () => {
       "old-account-backup\n",
     );
     expect(existsSync(join(home, "config", "context.yaml.v1.bak"))).toBe(false);
+    expect(
+      readFileSync(
+        join(home, "parked-clients", "client_aabbccdd", "data", "byo", "org-old", "context-tree.git", "owner"),
+        "utf8",
+      ),
+    ).toBe("old\n");
     expect(readFileSync(join(home, "config", "credentials.json"), "utf8")).toContain("new-refresh");
+    expect(existsSync(join(home, "state", "context", "route-receipts"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "claude-code", "reload-pending"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "claude-code", "reload-consumed"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "claude-code", "compatible-sessions"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "codex", "adapter-sync"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "claude-code", "reload-required.json"))).toBe(false);
+    expect(existsSync(join(home, "state", "context", "providers", "claude-code", "next-session-required.json"))).toBe(
+      false,
+    );
     expect(existsSync(clientSwitchJournalPath(home))).toBe(false);
     expect(existsSync(clientSwitchLockPath(home))).toBe(false);
 
@@ -182,6 +210,8 @@ describe("client switch transaction recovery", () => {
     writeFileSync(join(parkedTarget, "config", "context.yaml"), "schemaVersion: 1\nbindings: []\n");
     writeFileSync(join(parkedTarget, "config", "context.yaml.v1.bak"), "target-account-backup\n");
     mkdirSync(join(parkedTarget, "data", "sessions", "target-session"), { recursive: true });
+    mkdirSync(join(parkedTarget, "data", "byo", "org-target", "context-tree.git"), { recursive: true });
+    writeFileSync(join(parkedTarget, "data", "byo", "org-target", "context-tree.git", "owner"), "target\n");
     writeJson(join(home, "parked-clients", "index.json"), {
       version: 1,
       activeClientId: "client_aabbccdd",
@@ -223,12 +253,61 @@ describe("client switch transaction recovery", () => {
       "old-account-backup\n",
     );
     expect(existsSync(join(home, "data", "sessions", "target-session"))).toBe(true);
+    expect(readFileSync(join(home, "data", "byo", "org-target", "context-tree.git", "owner"), "utf8")).toBe("target\n");
     const index = readJson(join(home, "parked-clients", "index.json")) as {
       activeClientId: string;
       clients: Record<string, { storage: string }>;
     };
     expect(index.activeClientId).toBe("client_11223344");
     expect(index.clients.client_11223344?.storage).toBe("active-root");
+  });
+
+  it("round-trips BYO repositories across an A to B to A client switch", async () => {
+    const { switchLocalClientForLogin } = await import("../core/client-switch.js");
+    writeClientYaml("client_aabbccdd", "https://first-tree.example");
+    mkdirSync(join(home, "data", "byo", "org-a", "context-tree.git"), { recursive: true });
+    writeFileSync(join(home, "data", "byo", "org-a", "context-tree.git", "owner"), "account-a\n");
+
+    const clientB = await switchLocalClientForLogin({
+      existingCredentials: {
+        accessToken: "a-access",
+        refreshToken: "a-refresh",
+        serverUrl: "https://first-tree.example",
+      },
+      previousOwnerSub: "user-a",
+      targetTokens: {
+        accessToken: "b-access",
+        refreshToken: "b-refresh",
+        serverUrl: "https://first-tree.example",
+      },
+      targetOwnerSub: "user-b",
+    });
+    mkdirSync(join(home, "data", "byo", "org-b", "context-tree.git"), { recursive: true });
+    writeFileSync(join(home, "data", "byo", "org-b", "context-tree.git", "owner"), "account-b\n");
+
+    const restoredA = await switchLocalClientForLogin({
+      existingCredentials: {
+        accessToken: "b-access",
+        refreshToken: "b-refresh",
+        serverUrl: "https://first-tree.example",
+      },
+      previousOwnerSub: "user-b",
+      targetTokens: {
+        accessToken: "a-access-2",
+        refreshToken: "a-refresh-2",
+        serverUrl: "https://first-tree.example",
+      },
+      targetOwnerSub: "user-a",
+    });
+
+    expect(restoredA.client.id).toBe("client_aabbccdd");
+    expect(readFileSync(join(home, "data", "byo", "org-a", "context-tree.git", "owner"), "utf8")).toBe("account-a\n");
+    expect(
+      readFileSync(
+        join(home, "parked-clients", clientB.client.id, "data", "byo", "org-b", "context-tree.git", "owner"),
+        "utf8",
+      ),
+    ).toBe("account-b\n");
   });
 
   it("resumes a pending journal and restores the target client", async () => {

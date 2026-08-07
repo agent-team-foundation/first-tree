@@ -674,6 +674,7 @@ async function prepareAppTemplate({ channel, channelConfig, version }) {
     outDir: join(appDir, "context-integration"),
     version,
     channel,
+    corePolicyPath: "runtime-assets/context-tree-policy.md",
   });
   await rewriteBundleChannel(appDir, channel);
   cpSync(join(REPO_ROOT, "skills"), join(appDir, "skills"), { recursive: true });

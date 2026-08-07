@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { wellKnownBinDirs } from "../runtime/install-locations.js";
 import { getLoginShellPathDirs } from "../runtime/login-shell-path.js";
+import { automaticCandidateAllowed } from "../runtime/protected-paths.js";
 
 /**
  * A resolved `claude` candidate is usable only if it is a regular file that is
@@ -10,8 +11,14 @@ import { getLoginShellPathDirs } from "../runtime/login-shell-path.js";
  * non-executable shim, which would yield a false `ok` the runtime then can't
  * spawn (mirrors codex's executability gate, plus a regular-file check so a
  * directory entry named `claude` doesn't pass via the dir search bit).
+ *
+ * Automatic candidates are vetted first: `statSync` follows a symlink, so a
+ * `claude` that points into a TCC-protected folder would be read there before
+ * anything could reject it, no matter how safe the directory it sat in looked.
+ * Pass `automatic: false` only for a path the operator named explicitly.
  */
-export function isExecutableFile(filePath: string): boolean {
+export function isExecutableFile(filePath: string, options: { automatic?: boolean } = {}): boolean {
+  if (options.automatic !== false && !automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
@@ -110,7 +117,7 @@ export function resolveClaudeCodeExecutable(
   const override = env.CLAUDE_CODE_EXECUTABLE;
   let overrideError: string | undefined;
   if (override && override.length > 0) {
-    if (isExecutableFile(override)) return { path: override, source: "env" };
+    if (isExecutableFile(override, { automatic: false })) return { path: override, source: "env" };
     overrideError = `CLAUDE_CODE_EXECUTABLE is set to "${override}" but is not an executable file; searching PATH and well-known install dirs instead`;
   }
 

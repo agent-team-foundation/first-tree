@@ -1,0 +1,55 @@
+{
+  "voice": {
+    "model": "en_US-ljspeech-high",
+    "description": "US English",
+    "trainingDataset": "LJSpeech",
+    "trainingDatasetLicense": "public domain"
+  },
+  "chapters": {
+    "multi-agent": {
+      "title": "Multi-agent collaboration",
+      "durationInSeconds": 35,
+      "cues": [
+        [0.5, 5.5, "Give one lead Agent a clear software task."],
+        [5.5, 12, "As work unfolds, the lead brings each specialist into the same Chat."],
+        [
+          12,
+          21,
+          "A user experience specialist clarifies the interaction. A developer implements it, with progress visible in the conversation."
+        ],
+        [21, 29, "Quality assurance verifies the result without opening another Chat."],
+        [29, 35, "One shared conversation reaches a reviewed pull request."]
+      ]
+    },
+    "context-tree": {
+      "title": "Context Tree",
+      "durationInSeconds": 59,
+      "cues": [
+        [0.5, 8.5, "Context Tree carries durable team knowledge from one task into the next."],
+        [8.5, 18.5, "Before work begins, an Agent reads only the relevant, authorized paths."],
+        [18.5, 30.5, "Settled constraints guide design, code, and tests without replacing verification."],
+        [
+          30.5,
+          45.5,
+          "Temporary implementation detail stays with the code. Lasting decisions become source-backed proposals for a dedicated Context Reviewer."
+        ],
+        [45.5, 55.5, "Once approved, the shared snapshot helps every future Agent start smarter."]
+      ]
+    },
+    "github": {
+      "title": "GitHub automation",
+      "durationInSeconds": 31,
+      "cues": [
+        [0.2, 3.2, "Connect one GitHub repository to First Tree."],
+        [3.2, 9.2, "Assigning an Issue creates or reuses its Source Chat, then wakes the teammate's Delegate Agent."],
+        [9.2, 15.2, "The Issue context travels with the work, without rebuilding the task."],
+        [15.2, 22.2, "A linked pull request stays attached to the same Issue Chat."],
+        [
+          22.2,
+          30.5,
+          "Review feedback, updates, approval, and merge events return automatically, preserving the work's history."
+        ]
+      ]
+    }
+  }
+}

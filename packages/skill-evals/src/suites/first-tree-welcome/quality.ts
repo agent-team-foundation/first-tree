@@ -13,25 +13,37 @@ const WELCOME_TASK_QUALITY_DIMENSIONS: readonly JudgeRubricDimension[] = [
     threshold: 4,
   },
   {
-    description: "Each option is small enough to start immediately and does not balloon into open-ended setup work.",
-    key: "bounded",
+    description: "The project read stays intentionally narrow while still identifying a concrete relevant entry point.",
+    key: "bounded_read",
+    threshold: 5,
+  },
+  {
+    description:
+      "Exactly two short receipt sentences prove project access and identify a starting seam without presenting the receipt as completed value.",
+    key: "receipt_not_value",
     threshold: 4,
   },
   {
     description:
-      "The options are likely to create visible value for the user rather than merely explaining First Tree.",
-    key: "useful",
-    threshold: 3,
+      "The user sees only one or two single-select microtasks and may type a different task, keeping choice cost low.",
+    key: "low_choice_cost",
+    threshold: 4,
   },
   {
-    description: "The options can be checked against code, tree context, or an observable outcome.",
-    key: "verifiable",
-    threshold: 3,
+    description: "At least one microtask is explicitly read-only and promises a concrete, reviewable result.",
+    key: "read_only_result",
+    threshold: 5,
   },
   {
     description:
-      "The options do not package GitHub auth, repo selection, tree creation, or seed setup as the first task.",
-    key: "not_setup_as_task",
+      "Any local-change option names a precise target/change surface and focused verification; omitting mutation is fully acceptable.",
+    key: "qualified_mutation",
+    threshold: 4,
+  },
+  {
+    description:
+      "The first choice contains no duration estimate, longer-work menu, multi-select, child-chat fan-out, PR prompt, or capability setup.",
+    key: "no_premature_expansion",
     threshold: 5,
   },
 ];
@@ -40,7 +52,7 @@ export const FIRST_TREE_WELCOME_QUALITY_CASE: QualityEvalCase = {
   briefingMode: "generated-fixture",
   expected: {
     dimensions: WELCOME_TASK_QUALITY_DIMENSIONS.map((dimension) => dimension.key),
-    rubric: "first-tree-welcome first-task quality",
+    rubric: "first-tree-welcome bounded microtask quality",
   },
   fixture: {
     artifact: "actual chat ask/final task text produced by welcome row 8",
@@ -48,7 +60,7 @@ export const FIRST_TREE_WELCOME_QUALITY_CASE: QualityEvalCase = {
     source: "repo and Context Tree evidence from welcome row 8 fixture",
   },
   id: "first-tree-welcome-first-task-quality",
-  prompt: "Judge the quality of first-tree-welcome bounded first-task options from readable repo and tree evidence.",
+  prompt: "Judge the first-tree-welcome project receipt and initial single-select microtask choice.",
   provider: "codex",
   skill: "first-tree-welcome",
   status: "implemented",
@@ -63,10 +75,10 @@ function dimensionLines(dimensions: readonly JudgeRubricDimension[]): string {
 }
 
 function buildWelcomeJudgePrompt(input: QualityArtifactInput): string {
-  return `You are judging first-tree-welcome first-task options produced by a live gate run.
+  return `You are judging the first-tree-welcome project receipt and initial microtask choice produced by a live gate run.
 
 Return ONLY strict JSON with this shape:
-{"scores":{"evidence_backed":1,"bounded":1,"useful":1,"verifiable":1,"not_setup_as_task":1},"reasoning":"one concise paragraph"}
+{"scores":{"evidence_backed":1,"bounded_read":1,"receipt_not_value":1,"low_choice_cost":1,"read_only_result":1,"qualified_mutation":1,"no_premature_expansion":1},"reasoning":"one concise paragraph"}
 
 Scores are integers from 1 to 5. Do not include markdown or any extra text.
 
@@ -90,7 +102,7 @@ export const FIRST_TREE_WELCOME_QUALITY_DEFINITION: QualityCaseDefinition = {
   dimensions: WELCOME_TASK_QUALITY_DIMENSIONS,
   evalCase: FIRST_TREE_WELCOME_QUALITY_CASE,
   gateCaseId: "first-tree-welcome-readable-repo-populated-tree",
-  title: "first-tree-welcome first-task quality",
+  title: "first-tree-welcome bounded microtask quality",
 };
 
 function sanityInput(name: QualitySanityFixture["name"], artifact: string): QualityArtifactInput {
@@ -118,17 +130,23 @@ export const FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES: readonly QualitySanityF
     input: sanityInput(
       "good",
       [
-        "1. Trace the checkout JWT refresh path and identify the smallest failing test to add.",
-        "2. Compare the Context Tree checkout reliability note with the session refresh implementation and report one concrete fix candidate.",
+        "I read the checkout manifest and src/checkout/recovery.ts entry.",
+        "The expired-session branch is the clearest focused starting point.",
+        "Choose one:",
+        "1. Read-only — trace the checkout JWT refresh path and return a 5–8 step call chain with file references.",
+        "2. Add the missing case in src/checkout/recovery.test.ts and run pnpm test recovery as the focused check.",
+        "Or type a different microtask.",
       ].join("\n"),
     ),
     judgeOutput: judgeOutput(
       {
-        bounded: 5,
+        bounded_read: 5,
         evidence_backed: 5,
-        not_setup_as_task: 5,
-        useful: 4,
-        verifiable: 4,
+        low_choice_cost: 5,
+        no_premature_expansion: 5,
+        qualified_mutation: 5,
+        read_only_result: 5,
+        receipt_not_value: 5,
       },
       "The options are evidence-backed, bounded, and directly verifiable.",
     ),
@@ -138,15 +156,21 @@ export const FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES: readonly QualitySanityF
     expectedPassed: true,
     input: sanityInput(
       "borderline",
-      "Check the checkout session refresh code against the tree note and propose one small verification step.",
+      [
+        "I read the checkout README and recovery entry.",
+        "The expired-session path is a concrete place to begin.",
+        "Read-only — map that path with file references, or type a different microtask.",
+      ].join("\n"),
     ),
     judgeOutput: judgeOutput(
       {
-        bounded: 4,
+        bounded_read: 5,
         evidence_backed: 4,
-        not_setup_as_task: 5,
-        useful: 3,
-        verifiable: 3,
+        low_choice_cost: 4,
+        no_premature_expansion: 5,
+        qualified_mutation: 4,
+        read_only_result: 5,
+        receipt_not_value: 4,
       },
       "Exactly meets every threshold without drifting into setup work.",
     ),
@@ -156,15 +180,17 @@ export const FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES: readonly QualitySanityF
     expectedPassed: false,
     input: sanityInput(
       "bad",
-      "First connect GitHub, create a Context Tree, run seed, and then we can think about checkout work.",
+      "First connect GitHub, create a Context Tree, then pick several long tasks with hour estimates.",
     ),
     judgeOutput: judgeOutput(
       {
-        bounded: 2,
+        bounded_read: 1,
         evidence_backed: 2,
-        not_setup_as_task: 1,
-        useful: 2,
-        verifiable: 2,
+        low_choice_cost: 1,
+        no_premature_expansion: 1,
+        qualified_mutation: 1,
+        read_only_result: 1,
+        receipt_not_value: 1,
       },
       "This packages setup as the task and is not grounded in the provided evidence.",
     ),

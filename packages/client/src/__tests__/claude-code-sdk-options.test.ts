@@ -53,6 +53,7 @@ import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
@@ -114,11 +115,16 @@ describe("claude-code handler — SDK options", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx = buildSessionCtx("chat-settings");
     await handler.start(
       { id: "msg-1", chatId: "chat-settings", senderId: "user", format: "text", content: "hi", metadata: null },
       ctx,
+      noopDeliveryToken(),
     );
 
     expect(capturedCalls).toHaveLength(1);
@@ -134,11 +140,16 @@ describe("claude-code handler — SDK options", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx = buildSessionCtx("chat-perm");
     await handler.start(
       { id: "msg-2", chatId: "chat-perm", senderId: "user", format: "text", content: "hi", metadata: null },
       ctx,
+      noopDeliveryToken(),
     );
 
     const options = capturedCalls[0]?.options;
@@ -154,11 +165,16 @@ describe("claude-code handler — SDK options", () => {
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache: cache,
+    });
     const ctx = buildSessionCtx("chat-disallow");
     await handler.start(
       { id: "msg-3", chatId: "chat-disallow", senderId: "user", format: "text", content: "hi", metadata: null },
       ctx,
+      noopDeliveryToken(),
     );
 
     const options = capturedCalls[0]?.options;
@@ -190,7 +206,11 @@ describe("claude-code handler — SDK options", () => {
       const cache = buildCache([{ key: "PATH", value: payloadBin, sensitive: false }]);
       await cache.refresh(AGENT_ID);
 
-      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+      const handler = createClaudeCodeHandler({
+        runtimeProvider: "claude-code",
+        workspaceRoot,
+        agentConfigCache: cache,
+      });
       const buildAgentEnv = vi.fn((env: NodeJS.ProcessEnv) => ({ ...env, PATH: finalProviderBin }));
       const ctx = buildSessionCtx("chat-provider-path", buildAgentEnv);
       await handler.start(
@@ -203,6 +223,7 @@ describe("claude-code handler — SDK options", () => {
           metadata: null,
         },
         ctx,
+        noopDeliveryToken(),
       );
 
       const childEnv = capturedCalls[0]?.options?.env;

@@ -24,6 +24,7 @@ function personnel(
     humanAgentId,
     wakeAgentId,
     reason,
+    requiresPersistentLine: reason === "mentioned" || reason === "assigned",
     externalUsername: humanAgentId,
   };
 }
@@ -39,7 +40,11 @@ describe("composeScmAudience", () => {
     expect(composed[0]).toEqual({ entry: existing("human-h", "agent-a", "chat-a") });
     expect(composed[1]).toEqual({
       entry: existing("human-h", "agent-b", "chat-b"),
-      directedContext: { reason: "review_requested", externalUsername: "human-h" },
+      directedContext: {
+        reason: "review_requested",
+        requiresPersistentLine: false,
+        externalUsername: "human-h",
+      },
     });
   });
 
@@ -97,7 +102,9 @@ describe("composeScmAudience", () => {
     });
 
     expect(first).toEqual(second);
-    expect(first[0]).toMatchObject({ directedContext: { reason: "review_requested" } });
+    expect(first[0]).toMatchObject({
+      directedContext: { reason: "review_requested", requiresPersistentLine: true },
+    });
   });
 
   it("keeps provider tasks discriminated and outside personnel dedupe", () => {
@@ -105,8 +112,6 @@ describe("composeScmAudience", () => {
       kind: "provider_task_target",
       humanAgentId: "human-h",
       wakeAgentId: "agent-b",
-      reason: "mentioned",
-      externalUsername: "provider-app",
       providerContext: { capability: "reply-run" },
     };
     const composed = composeScmAudience({

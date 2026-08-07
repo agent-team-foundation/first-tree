@@ -106,49 +106,24 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
     expect(COPY.createAgent.codingAgentLabel).toBe("This agent will run");
   });
 
-  it("keeps the meet-your-agent finale action-oriented and consistent", () => {
-    expect(COPY.startChat.newTitle).toBe("Meet your agent");
-    expect(COPY.startChat.existingTitle).toBe("Meet your agent");
-    expect(COPY.startChat.noProjectTitle).toBe("Meet your agent");
-    expect(COPY.startChat.inviteeReadyTitle).toBe("Meet your agent");
-    expect(COPY.invitee.notReadyTitle).toBe("Meet your agent");
-
-    expect(COPY.startChat.startBuilding).toBe("Start exploring");
-    expect(COPY.startChat.startExisting).toBe("Start exploring");
-    expect(COPY.startChat.startChatting).toBe("Start exploring");
-    expect(COPY.startChat.startWorking).toBe("Start exploring");
-    expect(COPY.invitee.startAnyway).toBe("Start exploring");
+  it("anchors the finale on the exact agent and explains the next action", () => {
+    expect(COPY.startChat.eyebrow).toBe("YOUR FIRST TREE AGENT");
+    expect(COPY.startChat.title("Nova")).toBe("Meet Nova");
+    expect(COPY.startChat.body("Nova")).toBe(
+      "Nova is ready to explore First Tree with you. Bring a question, a project, or a task you want to move forward.",
+    );
+    expect(COPY.startChat.meetAgent).toBe("Meet your agent");
+    expect(COPY.startChat.nextStepHint).toBe("You’ll open your first Chat and can start typing right away.");
+    expect(COPY.startChat.starting).toBe("Opening your first Chat…");
   });
 
-  it("shows one plain launch subtitle across every start-chat state", () => {
-    // The finale intentionally reads the same regardless of role or team/tree
-    // state: that state is invisible to the user (Context Tree is introduced
-    // later, in chat), so the subtitle stays a single plain launch line.
-    const launch = "Explore First Tree together, then choose what you’d like to try first.";
-    expect(COPY.startChat.noProjectBody).toBe(launch);
-    expect(COPY.startChat.inviteeReadyBody).toBe(launch);
-    expect(COPY.invitee.notReadyBody).toBe(launch);
-    expect(COPY.startChat.newWhy(1)).toBe(launch);
-    expect(COPY.startChat.existingWhy(3)).toBe(launch);
-  });
-
-  it("keeps the launch subtitle free of the Context Tree concept", () => {
+  it("keeps the arrival body free of the Context Tree concept", () => {
     // Requirement: don't name "context" on this screen — it's taught later in chat.
-    for (const s of [COPY.startChat.noProjectBody, COPY.startChat.inviteeReadyBody, COPY.invitee.notReadyBody]) {
-      expect(s.toLowerCase()).not.toContain("context");
-    }
+    expect(COPY.startChat.body("Nova").toLowerCase()).not.toContain("context");
   });
 
   it("does not overpromise repo access on start-chat screens", () => {
-    const strings = [
-      COPY.startChat.newWhy(1),
-      COPY.startChat.newWhy(3),
-      COPY.startChat.existingWhy(1),
-      COPY.startChat.existingWhy(3),
-      COPY.startChat.noProjectBody,
-      COPY.startChat.inviteeReadyBody,
-      COPY.invitee.notReadyBody,
-    ];
+    const strings = [COPY.startChat.body("Nova")];
 
     for (const s of strings) {
       expect(s).not.toContain("It'll read your");

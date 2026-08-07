@@ -16,8 +16,12 @@ function mockSdk(): FirstTreeHubSDK {
 
 function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
   return {
-    start: vi.fn().mockResolvedValue("session-id-mock"),
-    resume: vi.fn().mockResolvedValue("session-id-mock"),
+    start: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
+    resume: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
     inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -55,7 +59,7 @@ function createSessionManager(opts: {
     },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test" },
+    handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -94,7 +98,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
       async start(msg, ctx) {
         capturedCtx = ctx;
         capturedMessage = msg;
-        return "session-1";
+        return { sessionId: "session-1", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const sm = createSessionManager({
@@ -135,7 +139,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
     handler.start = vi.fn(async (msg, ctx) => {
       capturedCtx = ctx;
       capturedMessage = msg;
-      return "session-1";
+      return { sessionId: "session-1", route: { kind: "owned" as const, mode: "queued" as const } };
     });
     const sm = createSessionManager({
       handler,
@@ -212,7 +216,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
         async start(msg, ctx) {
           capturedCtx = ctx;
           firstMessage = msg;
-          return "session-1";
+          return { sessionId: "session-1", route: { kind: "owned" as const, mode: "queued" as const } };
         },
       });
       const sm = createSessionManager({

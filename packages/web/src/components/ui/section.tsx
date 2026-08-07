@@ -29,9 +29,12 @@ type SectionProps = {
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Agent Detail has a section title above these blocks, so its blocks use h3. */
+  headingLevel?: 2 | 3;
 };
 
-export function Section({ title, count, description, action, children, className }: SectionProps) {
+export function Section({ title, count, description, action, children, className, headingLevel = 2 }: SectionProps) {
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   return (
     <section className={cn("space-y-3", className)} style={{ marginTop: "var(--sp-1_5)" }}>
       <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-3">
@@ -39,7 +42,7 @@ export function Section({ title, count, description, action, children, className
           {/* Use text-title, not text-subtitle: the section heading must clearly
               outrank a row name (text-body) — too small a step reads as an
               undesigned flat list. Hierarchy, not a container, is what groups. */}
-          <h2 className="text-title font-semibold m-0" style={{ color: "var(--fg)" }}>
+          <Heading className="text-title font-semibold m-0" style={{ color: "var(--fg)" }}>
             {title}
             {count != null && (
               <span className="font-normal" style={{ color: "var(--fg-4)" }}>
@@ -47,7 +50,7 @@ export function Section({ title, count, description, action, children, className
                 {count}
               </span>
             )}
-          </h2>
+          </Heading>
           {description && (
             <p className="text-label m-0" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
               {description}

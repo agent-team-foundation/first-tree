@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCodexHandler } from "../handlers/codex/index.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 
 const trialMetadata = {
   landingCampaignTrial: true,
@@ -46,7 +47,7 @@ describe("codex handler engine selection", () => {
       codexHandlerEngine: "sdk",
     });
 
-    expect(() => handler.start(message(), context(trialMetadata))).toThrow(
+    expect(() => handler.start(message(), context(trialMetadata), noopDeliveryToken())).toThrow(
       /require the app-server workspace-only runtime/,
     );
   });

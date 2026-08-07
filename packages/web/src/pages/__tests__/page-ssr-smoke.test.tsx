@@ -1006,11 +1006,11 @@ describe("page SSR smoke coverage", () => {
     for (const [route, expected] of [
       // IA recut: runtime shows model/effort/execution/env; repos + context tree
       // moved to their own Repositories tab; Tools & skills lists only skills + MCP.
-      ["/agents/agent-1/responsibilities", "No template responsibilities are assigned to this agent."],
+      ["/agents/agent-1/responsibilities", "No starting responsibilities yet."],
       ["/agents/agent-1/runtime", "Reasoning effort"],
       ["/agents/agent-1/repositories", "Team web"],
       ["/agents/agent-1/prompt", "Instructions"],
-      ["/agents/agent-1/resources", "Integrations (MCP)"],
+      ["/agents/agent-1/resources", "Integrations"],
     ] as const) {
       expect(
         renderPage(
@@ -1276,7 +1276,7 @@ describe("page SSR smoke coverage", () => {
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
-    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
+    const { AgentArrival, StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const { StepTeam } = await import("../onboarding/steps/step-team.js");
 
     const html = renderPage(
@@ -1336,7 +1336,29 @@ describe("page SSR smoke coverage", () => {
     expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
       "Loading your repos",
     );
-    expect(await renderOnboardingStep(<StepStartChat />, { activeStep: "start-chat" })).toContain("Meet your agent");
+    const arrivalHtml = renderPage(
+      <AgentArrival
+        agent={{
+          uuid: "agent-1",
+          name: "nova",
+          displayName: "Nova",
+          type: "agent",
+          organizationId: "org-1",
+          inboxId: "inbox-1",
+          visibility: "organization",
+          runtimeProvider: "claude-code",
+          clientId: "client-1",
+          status: "active",
+          avatarImageUrl: null,
+        }}
+        error={null}
+        onStart={() => undefined}
+        phase="idle"
+      />,
+    );
+    expect(arrivalHtml).toContain("Meet Nova");
+    expect(arrivalHtml).toContain("Meet your agent");
+    expect(await renderOnboardingStep(<StepStartChat />, { activeStep: "start-chat" })).toContain("Finding your agent");
     expect(
       await renderOnboardingStep(<StepStartChat />, {
         activeStep: "start-chat",
@@ -1344,14 +1366,14 @@ describe("page SSR smoke coverage", () => {
         treeBindingPlan: "createBinding",
         treeUrl: "",
       }),
-    ).toContain("Meet your agent");
+    ).toContain("Finding your agent");
     expect(
       await renderOnboardingStep(<StepStartChat />, {
         path: "invitee",
         activeStep: "start-chat",
         selectedRepoUrls: [],
       }),
-    ).toContain("Meet your agent");
+    ).toContain("Finding your agent");
   });
 
   it("renders invite, GitHub App, settings, and layout surfaces", async () => {

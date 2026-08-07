@@ -392,7 +392,7 @@ first-tree chat
 │     --agent <name>                                 #   selected agent must participate in the target chat
 ├── update                                           # update topic and/or description (each independently)
 │     --topic <text> / --clear-topic                 #   set/clear the short display label
-│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown; `-` = read from stdin/heredoc)
+│     --description <text> / --clear-description      #   set/clear the Summary — the chat's current-state brief (Markdown; `-` = read from stdin/heredoc)
 │     --chat <chatId> / --agent <name>               #   target another chat / the named agent
 ├── set-topic [topic]                                # [DEPRECATED — use `update`] hidden alias
 └── open <agent-name>                                # interactive REPL
@@ -563,19 +563,30 @@ first-tree chat archive
 first-tree chat send alice "Done — I’m archiving this conversation now."
 first-tree chat archive
 
-# Self-description: a short topic label + a work summary + status report,
-# updated independently through `chat update` (topic and description each on
-# their own). The description carries task background + plan + progress, renders
-# as Markdown, and shows at the top of the chat's right sidebar; agents also read
-# it via `chat list` to self-locate (see the agent briefing's "Chat Topic &
-# Description"). Keep blockers / decisions OUT of it — raise `chat ask <human>`
-# for those. Owner-gated: the chat's creator may update it, and when
+# Self-description: a short topic label + a Summary, updated independently
+# through `chat update` (topic and description each on their own). The
+# description is the chat's current-state brief — rewritten in place from blank
+# each time, first line standing alone as the current result plus what it means
+# for the reader, then only the context needed to trust it (in flight: the one
+# most recent next step; blocked: what it waits on; done: the conclusion and at
+# most one deliverable). Default 2–4 short sentences; 1500 chars is a ceiling,
+# not a target. Leave out stage history, plan/progress lists, implementation
+# detail, and process metadata (SHAs, test counts, reviewers, sub-agents, CI
+# jobs, commands). It renders as Markdown between the chat header and the
+# message stream on the web (collapsed to its first line until expanded) and as
+# the timeline's Current state card on mobile (short values in full, long ones
+# clamped) — so keep a one-line value to the headline alone and put any next
+# step on its own line;
+# agents also read it via `chat list` to self-locate (see the agent
+# briefing's "Chat Topic & Description" for the full authoring contract). Keep
+# human decisions OUT of it — raise `chat ask <human>` for those. Owner-gated:
+# the chat's creator may update it, and when
 # no agent owner is present (human-created chats — Web / GitHub-sourced — or the
 # creator left) every worker agent counts as the owner; a non-owner agent in a
 # chat whose agent creator is still present is refused with 403.
 first-tree chat update --topic "review PR #916"
-first-tree chat update --description "Reviewing PR #916. **Plan:** address review findings, re-verify. **Progress:** 2/3 findings fixed."
-first-tree chat update --topic "ship plan" --description "Drafting; next: hand to QA."
+first-tree chat update --description "PR #916 is ready to merge — no blocking findings left."
+first-tree chat update --topic "ship plan" --description "The ship plan is drafted and ready for QA to check."
 first-tree chat update --clear-description
 # A one-line --description whose newlines are written as literal `\n` is rejected
 # before the write: shell quotes do not expand `\n`, so it would persist and
@@ -583,10 +594,10 @@ first-tree chat update --clear-description
 # pass real newlines — either an ANSI-C $'...' string, or `--description -` to
 # read it from stdin/heredoc:
 cat <<'EOF' | first-tree chat update --description -
-Reviewing PR #916.
+PR #916 still has one blocking finding, so it cannot merge yet.
 
-**Plan:** address review findings, re-verify.
-**Progress:** 2/3 findings fixed.
+The retry path drops the last message when the socket closes mid-send.
+Next: fix that path and re-request review.
 EOF
 # `chat set-topic` still works as a deprecated alias.
 
@@ -742,18 +753,22 @@ first-tree github unfollow acme/api#42
 ```
 
 `github reply` is available only inside the active Agent turn and current chat
-recorded by a server-authored `teamAgentTask: { agentUuid, runId }` card. The
-CLI supplies only the run id and body; Cloud fixes the repository and Issue or
-pull request, verifies the exact selected Agent/runtime/chat and installation
-coverage, and keeps the App credential server-side. Each run accepts one
-immutable payload. Unknown GitHub writes reconcile a hidden run marker before
-retrying, and a different payload is rejected. The body must not mention the
-App or contain the reserved marker. Historical markers without a run id and
-Discussion/commit events cannot publish; webhook ingress reports the stable
-`GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED` blocker without creating a run.
-Missing accepted Issue/PR write permission similarly reports
-`GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED`. This ordinary comment publisher
-does not grant Context Review verdict or merge authority.
+recorded by a server-authored `teamAgentTask: { agentUuid, runId }` card.
+Supported Issue and pull-request activity from connected repositories creates
+these tasks automatically; it does not depend on mentioning or assigning the
+GitHub App. The CLI supplies only the run id and body; Cloud fixes the
+repository and Issue or pull request, verifies the exact selected
+Agent/runtime/chat and installation coverage, and keeps the App credential
+server-side. Each run accepts one immutable payload. Unknown GitHub writes
+reconcile a hidden run marker before retrying, and a different payload is
+rejected. The body must not mention the App or contain the reserved marker.
+Historical markers without a run id cannot publish. Discussion and commit
+events do not create task runs; an unsupported or malformed publishable entity
+reports `GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED`. Missing accepted Issue/PR write
+permission similarly reports `GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED`. A
+terminal App reply carrying its valid hidden run marker remains an ordinary
+subscription event but cannot create another task run. This ordinary comment
+publisher does not grant Context Review verdict or merge authority.
 
 `<entity>` accepts a full GitHub URL, `owner/repo#N`, or `owner/repo@<sha>`.
 A `409` means the same (human, delegate) line already lives in another chat
@@ -1224,39 +1239,78 @@ first-tree context
 
 The server-authored Web prompt first runs `enable --plan`. This operation is
 read-only and returns an exact `planId`, the real provider directory/pathless
-identity, a Codex temporary-directory warning when applicable, and three
-choices:
+identity, a Codex temporary-directory warning when applicable, and the choices
+available for that location:
 
 - `global`: make this Team eligible in all sessions for the provider;
 - `directory`: make it eligible under the displayed canonical directory;
 - `session`: use it only now, without a Plugin, Hook or persistent grant.
 
-Every available choice includes an authoritative `applyCommand` that is ready
+`directory` is present only when setup has a stable canonical directory.
+Claude uses `CLAUDE_PROJECT_DIR` unless `--project-root` is explicit; it does
+not fall back to cwd when the variable is missing or invalid. Missing or invalid
+Claude project directories become a pathless identity, which can match global
+activation but never directory activation. Pathless sessions, Codex Documents
+scratch directories, and default managed worktrees under
+`$CODEX_HOME/worktrees/<id>/<repo>` return only `global` and `session`. Codex
+temporary paths retain their canonical project identity in those commands.
+Custom Codex App worktree roots remain best-effort because the provider does
+not expose a stable public setting for them.
+
+Every returned choice includes an authoritative `applyCommand` that is ready
 to execute unchanged. It pins the channel-appropriate executable (the portable
 CLI path outside development), provider, Team, canonical `--project-root` or
 `--pathless` identity, selected scope, exact `planId`, and non-interactive
-consent flag. An unavailable directory choice has `applyCommand: null`;
-human-readable output omits a command for that choice.
+consent flag. A scope omitted from the plan has no apply command and manual
+application fails closed. Directory availability is part of plan identity, so
+a change before apply invalidates the plan.
 
 The current agent displays the choices and waits for a new user reply, then
 runs only the selected choice's exact command. Apply must use the unchanged
 `planId`; identity drift forces a new plan. Global and directory install/update
 the shared Plugin and add one schema-v3 grant. Session-only verifies the
-release bundle, writes no grant, and returns only Read/Write Skills plus a
+release bundle, writes no grant, and returns only Read/Write loader entries plus a
 signed opaque candidate receipt.
 
-Successful apply returns `currentSessionHandoff` schema v2. It contains
+Successful session-only apply, and persistent apply when the adapter is already
+usable in the current provider session, returns `currentSessionHandoff` schema
+v3. It contains
 immutable provider/project identity, `consumerKind: byo`, activation scope,
-neutral standing routing context, and absolute payload-verified Skill paths.
-Persistent scope returns `first-tree`, `first-tree-read`, and
+neutral standing routing context, and versioned exact-release loader commands.
+Claude persistent setup that installs, migrates, or repairs the Plugin returns
+`currentSessionHandoff: null` while its next-session obligation is pending and
+instructs the user to start a new session. Other usable persistent scopes return `first-tree`, `first-tree-read`, and
 `first-tree-write`; session scope returns Read/Write only. Human mode prints
 the full usable JSON handoff.
+
+Each new task invokes loader protocol v1. The loader verifies the current CLI
+release manifest and exact-version Skill/Policy digests, then returns contained
+`skillPath` and `policyPath` values. It does not return a mutable `current`
+symlink or materialize a second Core workflow under `$FIRST_TREE_HOME`.
+
+The loader runs again for every new task, but content already read in full may
+be reused in the current provider context when its exact content identity still
+matches: `(name, skillDigest)` for a Skill and `policyDigest` for the Policy.
+Read and Write have separate Skill identities and may share only an identical
+Policy. A digest change, missing full text after a provider lifecycle boundary,
+summary-only evidence, or any uncertainty requires reading the corresponding
+path from the latest loader response again. Paths, names, and release versions
+do not authorize reuse. The agent does not independently hash Core files or
+persist a Core cache; invalid loader output remains fail-closed.
 
 For persistent Codex setup, Hook consent remains provider-owned: open
 `/hooks`, enable and Trust **First Tree Context → SessionStart**, return to the
 same conversation, and reply `continue`. The same agent reruns apply and
 adopts the handoff. Session-only installs no Hook, so it needs no Trust.
-Claude Code consumes its handoff without a separate consent turn.
+Claude Code materializes deterministic thin-Plugin bytes for each
+`adapterVersion`. First install, legacy full-Plugin migration, and adapter repair
+leave a next-session obligation that only an exact repaired SessionStart can
+consume. Repeating repair for the same adapter version does not change the
+provider cache version or payload. The current session need not adopt the repair
+immediately; setup returns no current-session handoff, and persistent automatic
+routing starts in the next Claude session. Later
+Core-only upgrades and additional Team grants require no provider lifecycle
+action or repeated Codex trust.
 
 `context.yaml` schema v3 stores zero or more global/directory grants keyed by
 provider, Team and exact scope. A legacy v2/v1 file is atomically backed up,
@@ -1276,23 +1330,33 @@ otherwise every global Team. It batch-validates only those Teams, fetches only
 each exact root `SCOPE.md`, and returns complete natural-language bodies plus
 opaque candidate ids. SCOPE text is semantic routing data, never executable
 instructions. The agent selects automatically only when exactly one candidate
-clearly matches; ambiguity or an unavailable plausible candidate requires a
-user choice from the validated set.
+clearly matches and every candidate is readable. If every readable candidate
+is clearly unrelated, or no candidates are returned without blocked
+selection, it continues without a snapshot or user interruption. Multiple
+possible matches, an unclear or overlapping SCOPE, `selectionBlocked`, or any
+unavailable candidate requires a user choice from the validated set.
 
 After selection, the projected Skill uses:
 
 ```text
-first-tree --json context snapshot --candidate CANDIDATE --snapshot NEW_DIR
+first-tree --json context snapshot --candidate CANDIDATE
 first-tree --json context write-preflight --snapshot EXACT_SNAPSHOT [--github-login LOGIN]
+first-tree --json context write-worktree --snapshot EXACT_SNAPSHOT --plan-anchor DIGEST --confirmed
+first-tree --json context write-status --team TEAM --plan-anchor DIGEST
+first-tree --json context write-finish --team TEAM --operation OPERATION
 ```
 
 These hidden commands do not accept Team ids. Read revalidates the exact
-binding and SCOPE commit before creating one detached task snapshot. Write
+binding and SCOPE commit before creating one detached task snapshot in a
+CLI-owned private temporary directory. Write
 requires that snapshot's opaque route receipt and returns
 `confirmationRequired: true` with an exact plan anchor. The BYO Skill must
 show Team, SCOPE match, source revision, target nodes and mutations, then wait
 for a new user reply before creating an authoring worktree or making any Tree
-mutation.
+mutation. The confirmed plan anchor also identifies one durable authoring
+result: retrying the same exact command or querying `write-status` recovers and
+returns the same operation after a crash or lost output. `write-finish` is
+idempotent and removes both the worktree journal and its plan receipt.
 
 `context status` reports provider, Plugin/payload, Hook, project identity and
 all applicable highest-priority Team grants independently.
@@ -1302,9 +1366,13 @@ stored root. Already-read model context is not revoked.
 
 `context activate`, `context route`, `context snapshot`, and `context write-preflight`
 are hidden provider bridges. SessionStart injects only the neutral router
-contract; it does not select or expose a Team before task routing. Any
-membership, binding, SCOPE, payload or authority failure is fail-closed for
-First Tree while ordinary provider work can continue.
+contract; it does not select or expose a Team before task routing. Persistent
+adapter payload health is checked once at `context route`, before the task gets
+an opaque candidate. Snapshot and Write boundaries then rely on that candidate,
+live membership/binding, exact snapshot identity and Write confirmation instead
+of repeatedly probing provider-owned Plugin state. Any applicable membership,
+binding, SCOPE, payload or authority failure is fail-closed for First Tree while
+ordinary provider work can continue.
 
 ---
 

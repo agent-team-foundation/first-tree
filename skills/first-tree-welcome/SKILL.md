@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.4
+version: 1.4.0
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR/MR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -27,8 +27,7 @@ Two look-alikes that are NOT this launcher, and one that routes by shape:
   findings: https://report.first-tree.ai/<key>.json` line when the report key
   survived the handoff. Nothing needs re-scanning — never look for a scan
   skill. This is the launcher for a pre-selected fix: once a readable findings
-  source exists, handle the eligible blockers the way a normal first-task menu is
-  fanned out — several eligible blockers become their own parallel fix chats, a
+  source exists, route by blocker count — several eligible blockers become their own fix chats, a
   single one is just fixed in place (see "Production-scan fix handoff" below).
   The onboarding greeting ("welcome aboard") only tells you the human's role
   for the later Context Tree offer; it does NOT change how you handle the fix.
@@ -36,22 +35,21 @@ Two look-alikes that are NOT this launcher, and one that routes by shape:
 
 ## What This Is
 
-Make the user feel First Tree's value in two ways:
+Make the first work loop immediate and reviewable:
 
-1. **Concrete value from their code** — read the connected repo, show real
-   understanding, and get a bounded first task actually done and verified.
-2. **Leverage / parallelism** — First Tree lets an agent run several pieces of
-   work at once. When the user picks more than one thing, spin each into its own
-   chat so they progress in parallel, and keep this chat as the launcher.
+1. **Connect one real project** — use only the project entry the user supplied.
+2. **Show it is readable** — take a bounded look and return a two-sentence
+   project receipt, without pretending that receipt is product value.
+3. **Complete one microtask here** — offer one or two small single-select
+   choices, do the selected work in this first chat, and show a concrete result.
+4. **Bridge once** — after the result, offer only the one next step that follows
+   directly from it. Setup is never the price of starting work.
 
-This chat is **value-first and consent-gated**. After you have shown
-understanding, you offer a short first-task menu; for an **admin whose team has
-no Context Tree yet** that menu includes **building the team's Context Tree** as
-a first-class item. "First-class" means a concrete, evidence-backed offer —
-never a throwaway line, and never a wall of text; restraint is about not
-offering setup in the wrong place, not about a weak offer in the right one.
-Setup never preempts value: you always show understanding first, you never open
-with setup, and the user always chooses.
+This chat is **value-first, visible, and consent-gated**. It is not a launcher
+for the first task and it is not a parallel-work demo. Do not show longer work,
+time estimates, bundles, multi-select, Context Tree setup, GitHub App setup, or
+child-chat fan-out before the first result. The user should make one low-cost
+choice and see it finish in the chat they are already in.
 
 Treat the opening message as the user's onboarding request. Reply naturally,
 without exposing skill names or launch mechanics.
@@ -118,30 +116,34 @@ these examples are kept in sync by a test — do not paraphrase them loosely.
 
 ### Your first substantive reply
 
-- **No readable code yet** — no repo connected, no local path, no GitHub/GitLab URL, and
+- **No readable code yet** — no repo connected, no local path, no Git repository URL, and
   no readable team context. Make exactly one minimal ask: request one project
-  entry point — a local project folder path on this machine or a GitHub/GitLab repo URL
-  — without faking understanding. Recommended shape: "Share one project entry
-  point: a local project folder path on this machine, or a GitHub/GitLab repo URL. I'll
-  inspect it first, then suggest a few concrete starter tasks." If they share a
+  entry point — prefer a local project folder path on this machine, or accept a
+  Git repository URL — without faking understanding. Recommended shape: "Share
+  the local project folder path on this machine; if it is not local, send the Git
+  repository URL instead. I'll read a small slice, then give you one or two
+  concrete ways to start." If they share a
   GitHub URL, use host `gh` first; if they share a GitLab URL, use `glab` first.
-  This ask is a legitimate first result. Do not ask for GitHub App authorization
-  first, do not offer the first-task menu yet, and do not mention Context Tree
-  setup yet.
+  This is project intake, not a value result. Do not scan the machine for other
+   directories, do not ask for GitHub App authorization first, do not offer a
+   task yet, and do not mention Context Tree
+   setup yet. This input is required to continue, so deliver the minimal request
+   with `first-tree chat ask <human> "<local-path-first request>"` and no option
+   menu; do not leave it only in console/final narration.
 - **Readable code available** — a repo is connected and you can read it, or a
   local path / URL was given and you can read it. (A repo that is connected but
   local credentials cannot read it is the "cannot read it" state below — report
   the read failure, do not fake understanding or send a menu.) Your first
   substantive reply must:
-  1. State specific understanding from evidence: stack, entry points, important
-     modules, tests, TODOs, conventions, risks, or team context you actually
-     observed.
-  2. Then offer the first-task menu (see below). Do not lead with the menu; lead
-     with understanding.
-  3. Accept free text as another valid answer.
+   1. Use the existing working/status channel to say you are taking a small look
+      at the project. Do not add a new status mechanism.
+   2. Follow **Bounded project read** below; do not audit or recursively scan.
+   3. Send the two-sentence project receipt, then offer one or two single-select
+      microtasks and accept a free-text task.
 
-  Mention the Context Tree in plain product terms ("your team's shared memory")
-  — never as internal jargon.
+  Do not mention Context Tree or forge setup merely because you observed its
+  state. The project receipt proves access only; the selected microtask produces
+  the first result.
 
 ### Production-scan fix handoff (pre-selected first task)
 
@@ -228,17 +230,17 @@ never fall through silently.
 
 | State | What to do |
 | --- | --- |
-| No project yet (no repo/path/URL) | Ask for one local project folder path or a GitHub/GitLab repo URL. For GitHub URLs try host `gh` / local credentials first; for GitLab URLs try `glab` / local credentials first. Do not ask for GitHub authorization first, and do not offer tree build (no code to draw it from). |
+| No project yet (no repo/path/URL) | Ask for one local project folder path or a Git repository URL. For GitHub URLs try host `gh` / local credentials first; for GitLab URLs try `glab` / local credentials first; for another host use plain `git`. Do not ask for GitHub authorization first, and do not offer tree build (no code to draw it from). |
 | Repo/resource exists but local credentials cannot read it | **Diagnose why** (private repo needing access / `gh` or `glab` not authenticated / wrong path / network), then give the one specific next step for that cause — `gh auth login` or `glab auth login` if the matching CLI isn't authenticated; for a private repo, the narrowest access, an accessible URL, or a local project folder path; the corrected path if it's mistyped (see **Handling snags**). Do not claim private repo contents, fake understanding, or send a menu; don't just report the read failure and ask for a path/URL/credential all at once. |
-| Repo readable, tree missing or empty | Show code value, then offer the menu. **For a confirmed admin**, the menu carries BOTH the value-task bundle AND "Build your Context Tree"; otherwise value tasks only. On selection, fan out. |
-| Repo readable, tree already populated | Read both, cite concrete evidence, offer value-task options. Do NOT offer tree build (already built); do not seed the tree here. |
-| Repo readable, tree state unknown | Give repo-based value; do not invent tree readiness. Offer tree build only once you can confirm the tree is missing/empty AND the human is an admin. |
+| Repo readable, tree missing or empty | Take the bounded project read, send the receipt, and offer one or two microtasks without setup. Resolve tree details only if the post-result bridge could legitimately be a Context Tree task. |
+| Repo readable, tree already populated | Use relevant tree context only when already available, but keep the project read bounded and offer one or two microtasks. Do not turn tree state into a setup or Review prompt. |
+| Repo readable, tree state unknown | Use repo evidence for the receipt and microtask choice without inventing tree readiness. Resolve tree state only if a later result makes it relevant. |
 | Any other state (catch-all) | Give evidence-backed value from whatever is readable; do not invent repo access or tree readiness. If nothing is actionable yet, first exhaust what you can safely check yourself, then ask for the one specific thing that unblocks you (see **Handling snags**). |
 
 ### Role overlay (holds in EVERY state above)
 
-Role gates only admin-only setup (building the tree, selecting team repos,
-installing the GitHub App), not value.
+Role gates only post-result admin setup (building the tree, selecting team repos,
+installing the GitHub App), not project intake or the first microtask.
 
 - **Invitee / member**: NEVER offered tree build, team-repo selection, or GitHub
   App install, and must not mutate org-wide setup — regardless of which state
@@ -250,107 +252,147 @@ installing the GitHub App), not value.
   team setup — don't walk a non-admin into an admin surface, and don't lead with
   "who should be involved?".
 
-You do not create or bind the tree yourself in this chat. When the user picks
-"Build your Context Tree", you SPAWN a dedicated chat and let `first-tree-seed`
-own repo creation, binding, and seeding there (see Spawning Task Chats). Never
-silently create, bind, or duplicate team-wide setup from this launcher chat.
+You do not create or bind the tree yourself in this chat. When the user accepts
+the later, qualified "Build your Context Tree" bridge, SPAWN a dedicated chat and let
+`first-tree-seed` own repo creation, binding, and seeding there (see Spawning
+Task Chats). Never silently create, bind, or duplicate team-wide setup from this
+launcher chat.
 
-## The First-Task Menu
+## The First In-Chat Work Loop
 
-After you have shown understanding, offer a first-task menu. A tracked ask needs
-**2–4 options** (`chat ask <human> "..." --options '[...]' --multi-select`) — a
-one-option ask is invalid — so the menu's shape depends on whether the tree-build
-option is available:
+Use the normal file or stdin transport for every multi-line or Markdown
+`chat ask` / `chat send` body. Do not inline rich text through the shell.
 
-- **When you offer "Build your Context Tree"** (admin AND tree missing/empty):
-  send a multi-select ask with **two** options — one **bundled value option**
-  (label e.g. "Start on these tasks", naming the 2–4 concrete tasks you found:
-  checkout tests, the expired-session TODO…) plus **"Build your Context Tree"**.
-  Give the tree option **immediate** weight, not only a future benefit: its
-  first pass hands the user a reviewed map of their team's structure and key
-  decisions **now** (the orientation an "explain the architecture" task gives,
-  but captured as living memory, not a throwaway doc), reused by every future
-  agent. Ground it in what you observed in *this* repo; if you'd otherwise offer
-  an architecture-map task, fold it in here. **Render it to the user as one
-  tight line**, e.g. "Build your Context Tree — your team's decisions mapped
-  now, reused by every future agent." Bundling the value tasks keeps this a
-  clean two-way choice; the user may pick either, both, or skip.
-- **Recommend, don't just list, when the evidence warrants it.** If what you
-  read makes the tree the higher-leverage first move (lots of undocumented
-  cross-cutting decisions, a team about to grow, more agents incoming), say so
-  in **one** honest sentence with the reason — still offering the value tasks,
-  still the user's choice. Ordinary evidence → keep it a neutral one-line
-  option. Never push where the role/tree gates don't hold.
-- **When you do NOT offer tree build** (every other value state): a lone value
-  bundle would be an invalid one-option ask, so instead list the **2–4 concrete
-  value tasks as individual options** in the multi-select. The user picks the ones
-  they want.
-- **When there is only one responsible next step, or evidence is thin**: do not
-  fake options — recommend it in a normal reply and accept free text.
+### Bounded project read
 
-In all cases:
+Before the first choice, read only enough to make the choice specific:
 
-- Multi-select; several picked ⇒ they run in parallel (one chat per task — see
-  Spawning Task Chats).
-- **Never send a tracked ask with fewer than two options.**
-- Do NOT add a "Skip for now" option; the web ask UI already has a footer Skip.
-- Make clear the user can also type another task in free text.
-- **Keep every user-facing line tight.** Each option is **one** punchy line;
-  lead with the concrete value and stop — no walls of text, no stacked benefits.
-  Users skim; a big block gets skipped.
-- If there is no readable code yet, do not send this menu — get a project first.
+- the README or equivalent top-level project description;
+- one manifest or build descriptor;
+- the first-level directory structure;
+- one relevant entry point;
+- at most one nearby test or TODO.
+
+Stop when those surfaces establish the stack, project shape, and one credible
+starting point. Do not use recursive directory scans, whole-repo symbol dumps,
+broad audits, machine-wide directory discovery, or additional files merely to
+make the receipt sound richer. Choose the entry point from a path named by the
+README, manifest, or first-level structure; do not enumerate inside a
+subdirectory to discover more candidates. Before the choice, do not follow the
+entry point's imports or search for its callers; that evidence belongs to the
+selected microtask. A first-level listing may inspect the repository root only;
+do not run `rg`, `find`, `tree`, or an equivalent search against a subdirectory.
+Read only the path or repository URL the user provided. Before the read, use the existing chat status/description channel —
+`first-tree chat update --description "<brief working status>"` — to say that
+you are taking this small look. Do not substitute console narration or invent a
+UI state or orchestration protocol.
+
+### Two-sentence project receipt
+
+After the bounded read, write exactly two short sentences before the choices:
+
+1. what you successfully read — project type/stack plus the concrete files or
+   entry point;
+2. where a useful first microtask can start and why that seam is credible.
+
+This is an access receipt, not a value result. Do not label it a win, finding,
+audit, recommendation, or completed task.
+The receipt must be in the user-visible delivery that contains the choice. For
+a two-option tracked ask, put both receipt sentences at the start of the ask
+body; do not leave them only in working narration or a non-delivered final.
+
+### One microtask choice
+
+Offer **1–2 single-select microtasks** and allow a free-text task. At least one
+option is read-only: a focused understanding or verification task that returns
+a concrete judgment with evidence or a 5–8 step call chain. A second option may
+be a minimal local change only when all three are clear from the bounded read:
+the target, the exact change surface, and one focused verification command.
+
+When there are two options, use a tracked ask without `--multi-select`. When
+only one responsible option exists, recommend it in a normal reply because the
+tracked request primitive does not accept one option; deliver that reply with
+`first-tree chat send <human>`. Accept a free-text task in either shape. Do not
+show time ranges, longer tasks, bundles, collaboration
+claims, or a parallel child-chat menu. Do not include Context Tree, GitHub App,
+or repository setup in the first choice.
+
+For two options, pass `--options` a JSON array of two objects with concise
+`label` and `description` fields. The body remains in the `-F` file; do not
+search the user's project for chat CLI examples.
+
+### First result in this chat
+
+Do the first selected microtask in this chat. Do not use `chat create` for the first selection,
+even if the user chooses the minimal local change. Before a
+write, treat the selection as consent only for the explicitly described local
+change; it is not consent to push, create a PR/MR, install anything, or write
+the Context Tree.
+
+The selected option already establishes the starting seam. Begin from that
+agreed entry and follow only task-relevant direct references; do not repeat
+repository discovery or use a recursive scan to reconstruct the menu. Do not
+run `rg`, `find`, `tree`, or an equivalent search over the repository or one of
+its subtrees; open the agreed entry and the exact paths named by its direct
+imports, calls, adjacent test, or verification command.
+
+Return exactly one reviewable result shape:
+
+- a concrete judgment with file/line or command evidence;
+- a 5–8 step call chain with file references; or
+- a minimal diff plus the focused check and its actual result.
+
+The result must be useful without another task chat. Keep it scoped to the
+selected microtask and do not silently continue into a larger fix.
+
+### One relevant bridge
+
+After the result, add exactly one next-step question, directly related to that
+result. The answer controls the next action, so put the complete result and the
+one question together in a tracked `first-tree chat ask <human>` body; do not
+leave the result or bridge only in console/final narration:
+
+- ask the bridge as one free-text question without `--options` or another
+  choice menu;
+
+- if the result contains a diff, ask whether to create its PR/MR; do not mention
+  GitHub App yet;
+- after a PR exists, mention GitHub App coverage only when live CI, review, or
+  merge tracking is actually needed and unavailable;
+- offer a separate Context Tree chat only when the human is a confirmed admin,
+  the tree is missing/empty, and the result exposed a lasting cross-module
+  decision that future work must reuse;
+- otherwise bridge to one adjacent verification or implementation step.
+
+Never stack PR, GitHub App, Context Tree, repository registration, or another
+task as simultaneous bridges. The session project is not automatically added
+to the long-term Team repository catalog.
 
 Example shape:
 
 ```text
-Your acme-dashboard is a Next.js app. app/checkout/recovery.ts has a TODO for
-expired-session re-auth with no nearby test, and the routes/data flow isn't
-documented yet.
+I read the Next.js manifest and the recovery entry point in app/checkout/recovery.ts.
+Its expired-session branch is a credible first seam because it has a focused nearby test command.
 
-What do you want to kick off? You can pick more than one — I'll run each in its
-own chat so they progress in parallel.
-- Start on these tasks: checkout tests + the expired-session TODO.
-- Build your Context Tree: map your team's key decisions once — every future agent starts from them.
+Choose one:
+- Trace expired-session recovery and return a 5–8 step call chain with file references. (read-only)
+- Add the one missing recovery test and run its focused test command. (local change)
 
-Or type another task.
+Or type a different microtask.
 ```
 
-### Choosing fast-value tasks
+## Spawning Task Chats (later only)
 
-For the value tasks (bundled or listed individually), pick ones that help the
-user feel value quickly. A good one is:
+The first microtask never fans out. Only after the user explicitly asks for multiple larger tasks
+may you use independent chats, one per task, with the
+existing status and completion contract. Do not present later fan-out as the
+first menu or describe it as multi-agent collaboration when it is only separate
+work streams.
 
-- Evidence-backed: tied to a file, module, TODO, test gap, or behavior you observed.
-- Bounded: small enough for a first pass in one short work session.
-- Low-risk: avoids large architecture changes, migrations, security-sensitive changes, or broad refactors.
-- Verifiable: has a clear check — test, lint, type-check, screenshot, doc diff, or manual acceptance.
-- Useful: improves understanding, confidence, correctness, or a real workflow.
-
-Prefer: verify/explain recent changes on a feature branch or uncommitted work;
-add or repair a narrow test around an untested flow; explain the architecture
-around a concrete entry point; trace one user flow end-to-end; fix a small TODO
-or error-handling gap; map the data model or API surface.
-
-Avoid as value tasks: "refactor the codebase" or other broad work; vague
-"improve code quality"; claims of bugs without evidence; work needing new
-credentials, production access, or irreversible actions before the user agrees.
-If repo evidence is thin, choose read-only orientation tasks instead of inventing
-implementation work. ("Build your Context Tree" is a menu item in its own right —
-it does not belong in this value-task list.)
-
-## Spawning Task Chats
-
-Once the user picks — or, for a production-scan fix launcher, once you have
-triaged the eligible blockers (see "Production-scan fix handoff") — **do
-not do the work in this launcher chat** (one exception: a scan-fix launcher with
-**exactly one** eligible blocker fixes it in place, per that section). Fan the
-selected work out into parallel chats — **one chat per task**: if the user picked
-the value bundle, open one chat for EACH task in it; if they picked individual
-value tasks, open one chat per picked task; if they picked the tree build, open
-one chat for it; for a scan-fix launcher with **two or more** eligible blockers,
-open one chat per blocker, up to five active fix chats, with a distinct,
-fix-specific topic. (That per-task
-parallelism is the leverage the user is meant to feel.) Open each with:
+Two other paths may still create task chats: a user accepts the qualified
+post-result Context Tree bridge, or a production-scan fix launcher has two or
+more eligible blockers. Production-scan fan-out remains capped at five active
+fix chats with distinct topics. Open each later task with:
 
 `first-tree chat create --to <your-own-agent-name> --topic "<short task topic>" "<self-contained task brief>"`
 
@@ -369,10 +411,21 @@ Key mechanics — read these carefully, they are easy to get wrong:
   **not be able to tell the chat was self-spawned** — because the sender was
   rewritten to your manager, it reads as a fresh task from the user, and that one
   message is the ONLY context you have. So the brief must stand completely on its
-  own. Include: the task, the relevant repo/paths, and how "done" is verified. Do
-  NOT write a terse pointer like "do task 1".
-- **For a value task**: the brief states the change and its verification (test,
-  lint, screenshot, doc diff). If the likely completion artifact is a PR/MR,
+  own. Do NOT write a terse pointer like "do task 1". For later larger tasks,
+  include these explicit fields:
+  - **Goal** — the bounded user outcome and scope;
+  - **Context** — repository URL or local path, relevant files/evidence, and
+    the agreed scope;
+  - **Deliverable** — the inspectable result the user will receive;
+  - **Verification** — the independent command, evidence, or acceptance check;
+  - **Progress communication** — keep the existing chat status
+    current with `chat update --description`, then send the ordinary completion message
+    with outcome and evidence.
+- **Do not invent a second orchestration or progress protocol.** Task chats use
+  the existing chat status/description and completion message; the launcher is
+  only the map and entry point.
+- **For a value task**: the brief states the work and its verification (test,
+  lint, screenshot, doc diff, or read-only evidence report). If the likely completion artifact is a PR/MR,
   choose the review CLI from that repository's remote. For a GitHub PR, include
   that the task should run `first-tree github follow` and report whether live
   tracking is active or blocked by missing GitHub App coverage. For a GitLab MR,
@@ -387,7 +440,7 @@ Key mechanics — read these carefully, they are easy to get wrong:
   Context Tree from the connected code — propose an initial structure for me to
   review, then fill it in. Open the Structure PR/MR first. After that milestone,
   preserve any existing Reviewer; if none is selected, guide me to use this same
-  Agent as the default and enable Automatic Review in Settings → Setup. Draft
+  Agent as the default and enable Automatic Review in Settings → Getting Started. Draft
   the initial content, but do not open its PR/MR until a selected Reviewer is
   enabled so that PR/MR can exercise Automatic Review." This explicit
   Reviewer-handoff sentence is part of the brief only for the admin tree-build
@@ -398,106 +451,79 @@ Key mechanics — read these carefully, they are easy to get wrong:
   seeding — this launcher does none of that.
 - Give each chat a clear, stable topic.
 
-Then, back in THIS launcher chat, post a short line naming the chats you opened
+Then, back in THIS chat, post a short line naming the later chats you opened
 so the user can see the parallel streams. As each spawned chat produces a result
 (a PR/MR, a passing test, the seed PRs/MRs), note it here so the launcher stays the
 map of what is in flight.
 
-### After a GitHub value PR opens: consume the task's Setup handoff
+### After a value PR/MR opens
 
-A review-ready PR gives the admin a concrete reason to install or update First
-Tree GitHub App coverage: CI results, review comments, and merge state can flow
-back into chat. The spawned task owns the one user-facing install/coverage
-handoff in its task chat. The welcome launcher consumes that result and must not
-send the same Setup prompt again.
+A first-result diff does not authorize a PR/MR. Ask whether to create it as the
+single post-result bridge. If the user agrees, create and follow the PR/MR in
+this chat, then report the result. Do not move this step into a child chat.
+
+A review-ready GitHub PR makes App coverage relevant only when live CI, review,
+or merge updates are genuinely useful and following the PR reports that coverage
+is missing. In that state, a confirmed admin may receive one concise coverage
+handoff. Do not mention the App before the PR exists or merely because the
+repository is hosted on GitHub.
 
 This section's App-install guidance is GitHub-only. For a GitLab MR, do not call
-`first-tree github follow`, send the user to **Settings → Setup** for GitHub App
+`first-tree github follow`, send the user to **Settings → Getting Started** for GitHub App
 installation, or imply
-that the First Tree GitHub App is involved. Instead, consume the spawned task's
+that the First Tree GitHub App is involved. Instead, use the
 `first-tree gitlab follow <url>` result and preserve its returned pending or
 active state. GitLab attention is inbound-only; explain the webhook wait only
 when the declaration is pending. If that follow fails, report only the First
 Tree chat attention gap; the failure does not invalidate the MR. Do not invent
 a GitLab integration URL or settings target.
+Never substitute `first-tree github follow` or GitHub App setup guidance for GitLab.
 
-- The spawned value task owns following its PR in its own task chat
-  (`first-tree github follow <url>`) and reporting whether live tracking is
-  active or blocked by missing GitHub App coverage. The launcher cannot follow a
-  PR "in" another chat; it consumes the task result and explains the user-facing
-  consequence.
-- If tracking is active, say only that the task chat will track the PR. Do **not**
+- This chat follows the PR (`first-tree github follow <url>`) and reports whether
+  live tracking is active or blocked by missing GitHub App coverage.
+- If tracking is active, say only that this chat will track the PR. Do **not**
   add App-install guidance.
 - If tracking is blocked because the First Tree GitHub App is not installed on,
   or does not cover, the GitHub account/repo that owns the PR, and the human is a
   confirmed **admin**, summarize that live updates are waiting on the admin
-  action already surfaced in the task chat. Do not add a second destination or
-  repeat its setup explanation.
+  action surfaced after the follow result. Do not stack it with another bridge.
 - If the human is an invitee/member or role is unclear, do not route them into
   an admin-only install surface. Say an organization admin can enable live PR
   updates for this repo if useful.
 - If the task result did not establish whether tracking is active or blocked,
   report only the PR result. Do not infer App debt.
 
-## After value lands: the one-time tree offer
+## After value lands: the qualified tree bridge
 
 Delivering value is the moment the user is most open to the durable next step —
-building the team's Context Tree — so do not let the chance pass just because it
-was not picked up front. Offer it **once**, after value, on these conditions:
+building the team's Context Tree. Offer it **once**, after value, on these
+conditions:
 
-- Only if the user did **not** already pick "Build your Context Tree" from the
-  first-task menu (and did not already decline it). If they picked it, it is
-  already running — never re-offer.
+- The first microtask choice never included tree setup. If the user already received
+  and declined this later offer, never re-offer it.
 - Only when the same setup gates still hold: the human is an **admin** (per
   **Reading role from the greeting**) and the team's Context Tree is still
   **missing or empty** (confirm by reading the target team's tree, not by
   trusting a binding).
-- **Trigger on the first verified result** — the moment a value task returns
-  something the user can see work, whether it ran in a spawned chat or was fixed
-  in place (a passing test, a review-ready PR/MR, a shipped doc), tie the offer
-  to that win — not after everything finishes, and
-  not before the first win.
-- **When the evidence warrants it** (per **Recommend, don't just list**), make
-  this a reasoned recommendation, not a neutral question — e.g. "Test's green.
-  So much here isn't written down — want me to build your Context Tree next? You
-  get the map now; every agent reuses it." Ordinary evidence → one plain line.
-- Offer it **once**, tight (one or two short sentences). If they say no or
+- Only when the verified result exposed a lasting decision that crosses module
+  boundaries and future work needs to reuse. A routine trace, local finding,
+  test result, or small diff does not qualify.
+- If the result includes a diff, the PR/MR question takes priority as the only
+  bridge; do not add the tree offer beside it.
+- Offer it **once**, tight (one short question tied to the observed decision).
+  If they say no or
   later, drop it — no repeated nudging. Never for an invitee, and never when the
   tree is already populated.
 - On "yes", spawn the dedicated tree chat as in **Spawning Task Chats** — never
   create, bind, or seed inline in this launcher.
 
-## After a pre-existing Context Tree milestone: guide Review setup once
+## No other first-result setup
 
-Automatic Context Review is a Team capability, not an onboarding gate. After
-the user has seen value, check it here only when a populated tree was already
-readable and no dedicated tree task produced the milestone in this onboarding
-run. The dedicated tree task owns its own post-PR/MR handoff through
-`first-tree-seed`; consume that result and never repeat it in this launcher.
-
-- For a confirmed **admin**, read the current managed Agent's Team with
-  `first-tree org context-tree review-config --json`. Do not switch to
-  `--as-member`: its default Team can differ from this Agent/chat's Team.
-  Read only the JSON `enabled` and `agentUuid` fields. If `agentUuid` is null,
-  say once that **Settings → Setup** can select an eligible managed Review Agent
-  and enable Automatic Review. If `agentUuid` is present while `enabled` is
-  false, say only that Setup can enable Automatic Review; the Agent is already
-  selected. If both are present/enabled, add no Review setup handoff.
-- This is not a health or readiness check. Do not prompt a member, infer
-  Reviewer health, or infer debt when the read is invalid, fails, or is
-  ambiguous. None of these states blocks onboarding.
-- Setup owns provider prerequisites, Reviewer selection and health; this
-  launcher performs no Team mutation.
-
-The ownership matrix is intentionally small:
-
-| Observed milestone | State | This launcher's action |
-| --- | --- | --- |
-| GitHub value PR | Task chat reported missing App coverage | Summarize the blocked live updates; do not repeat its Setup handoff |
-| Pre-existing populated tree after value | Confirmed admin; no selected Agent | Hand off once to select and enable Automatic Review in Settings → Setup |
-| Pre-existing populated tree after value | Confirmed admin; Agent selected but Review off | Hand off once to enable Automatic Review in Settings → Setup |
-| Pre-existing populated tree after value | Review enabled, read failed/ambiguous, member, or unclear role | No Review setup handoff |
-| Dedicated tree task's first PR/MR | Any | Seed owns the handoff; consume its result and do not repeat |
+Do not inspect or surface Automatic Review, Team repository registration, or
+other setup after the first result. Those capabilities may become relevant in a
+later dedicated work stream, but they are not alternate onboarding bridges. A
+dedicated tree task owns its own later Review handoff; this chat does not repeat
+it.
 
 ## Doing the Work & Talking to the User
 
@@ -506,8 +532,8 @@ narrate process, and do not surface this skill's internals (the state table,
 skill names like `first-tree-seed`, "binding", "kickoff", "systemSender") — say
 it in plain product terms or not at all. Do not claim; show.
 
-Whether a task runs in a spawned chat (value task) or you are carrying it here,
-the onboarding payoff is that the user *sees* it work:
+For the first microtask, the onboarding payoff is that the user *sees* it work
+in this chat:
 
 - Run the verification the task implies — a test, lint/type-check, a `browse`
   screenshot, a visible output, or a doc diff — and show the result. Onboarding
@@ -555,8 +581,9 @@ choices — not about acting on things that are genuinely the user's to allow.
 
 **Consent gates.** Authorization, repo authorization, Context Tree
 creation/binding, `gh` / `glab` repo create, pushes, PR/MR creation, and destructive actions
-all require explicit user consent. The user's pick in the menu IS that consent
-for tree build; other authorizations use a tracked ask.
+all require explicit user consent. The user's acceptance of the later,
+contextual tree offer IS consent to open its dedicated task chat; other
+authorizations use a tracked ask.
 
 **Role.**
 
@@ -580,8 +607,8 @@ for tree build; other authorizations use a tracked ask.
 - Private repo access depends on the member's local credentials. Do not promise
   access to named private repos until reads actually succeed.
 - If First Tree says no repo is connected: (1) do not ask for GitHub App
-  authorization first; (2) ask for either a local project folder path or a GitHub/GitLab
-  repo URL; (3) local path → inspect it and give the evidence-backed menu;
+  authorization first; (2) ask for either a local project folder path or a Git repository
+  URL; (3) local path → inspect it and give the evidence-backed menu;
   (4) GitHub URL → use host `gh` or local git credentials when available; GitLab
   URL → use `glab` or local git credentials when available; (5) if `gh` or
   `glab` is missing / unauthenticated / lacks access, explain that exact gap and
@@ -597,7 +624,7 @@ milestone makes the capability relevant, then
 guide that one step to completion — do not raise setup as an opening menu, and do
 not give brittle click-by-click paths. When you do hand off, give the most
 specific stable target available (product deep link when authoritative;
-otherwise **Settings → Setup**). Do not guess slugs or URLs, and do not expose
+otherwise **Settings → Getting Started**). Do not guess slugs or URLs, and do not expose
 tokens or secrets. If the human is not an admin, do not send them into an
 admin-only surface; involve the responsible admin.
 
@@ -609,52 +636,46 @@ admin-only surface; involve the responsible admin.
   question with your recommendation. Never dump options, a raw error, or a
   mechanism choice that is yours to make (see **You drive** / **Handling snags**).
 - Read before claiming understanding; use concrete evidence, not generic prose.
-- Lead with value understanding; never open with setup.
+- Lead with concrete project understanding; never open with setup.
 - Determine the human's role from the onboarding greeting (see **Reading role
   from the greeting**) — the admin opener "get started with First Tree" vs the
   invitee opener "get settled into this team". This is your only reliable role
   signal; do not silently omit an admin's setup options just because no
   structured role field exists.
-- Offer "Build your Context Tree" ONLY to an admin whose team tree is
-  missing/empty, and only after showing value — never to an invitee, never when
-  the tree is already populated. Pushing it anywhere else — to look proactive, or
-  because setup is on your mind — is the eager-setup instinct: block it.
-- If the admin did not pick the tree up front, re-offer it exactly once when the
-  first value task delivers a verified result (see **After value lands**) — tied
-  to that win, one line, no repeated nudging.
-- When the first value result is a GitHub PR, consume the task chat's
-  follow/tracking status. When App coverage is missing, do not repeat the task
-  chat's Setup destination or explanation in this launcher. For a GitLab MR,
-  consume the task chat's
-  `first-tree gitlab follow <url>` result and report its returned pending or
-  active state. Attention is inbound-only; only pending waits for a matching
-  valid webhook. If follow failed, report only that chat attention gap and do
-  not treat the MR as invalid. Never substitute `first-tree github follow`,
-  **Settings → Setup** for GitHub App installation, or other GitHub App
-  guidance. This does not replace
-  the tree offer; if both apply, keep each to a short sentence and do not repeat
-  either later.
-- After value against a pre-existing populated tree, check Context Review
-  configuration and give a confirmed admin at most one **Settings → Setup**
-  handoff when no eligible Reviewer is selected or the retained selection is
-  disabled. Distinguish those states: do not tell an admin to select another
-  Agent when one is already retained. A dedicated tree task owns this handoff
-  for its own PR/MR; never repeat it in the launcher. Never make it an
-  onboarding gate, treat configuration as a health check, infer debt from an
-  ambiguous state, prompt a member to configure it, or perform the Team mutation
-  from this launcher.
-- Present choices as a multi-select ask with **2–4 options** — the value tasks
-  bundled with the tree-build option when tree build is offered, otherwise the
-  value tasks listed individually; never a one-option ask; no "Skip for now"
-  option; accept free text. (When there is only one responsible next step, skip
-  the ask — recommend it in a normal reply.)
-- Fan selected work out into separate chats via `chat create --to <self>`; do not
-  do the selected work in this launcher chat. (Exception: a production-scan fix
-  launcher with exactly one eligible blocker fixes it in place — see
-  Production-scan fix handoff.)
-- Every spawned chat's opening message is a self-contained task brief (task +
-  context + how "done" is verified), because it is all the context the woken
-  agent has and it reads as if the user sent it.
+- Offer "Build your Context Tree" ONLY after the first verified result, when it
+  exposed a lasting cross-module decision, the human is a confirmed admin, and
+  the team tree is missing/empty. Never put it in the first choice, offer it to
+  an invitee, or stack it beside another bridge. A routine trace, local finding,
+  test result, or small diff does not qualify.
+- A first-result diff makes the PR/MR consent question the one bridge. Only
+  after the user authorizes creation and live GitHub PR tracking reports missing
+  coverage does the GitHub App become relevant. GitLab uses
+  `first-tree gitlab follow <url>` in this chat and preserves the returned
+  pending or active state; never substitute GitHub App setup.
+- Do not inspect or surface Automatic Review, Team repository registration, or
+  other setup after the first result. The first chat does not automatically
+  register the session project as a durable Team repository. A later dedicated
+  tree task owns any setup its own PR/MR actually needs.
+- Present **1–2 single-select microtasks** grounded in the bounded read and
+  accept a free-text task. At least one option is read-only. Offer a minimal
+  local mutation only when its target, change surface, and focused verification
+  are all clear. Do not show time ranges, longer tasks, bundles, setup, or a
+  multi-select control.
+- Put the two-sentence project receipt in the same user-visible delivery as the
+  first choice, and use `chat update --description` for the bounded-read status.
+  Console narration does not satisfy either user-visible obligation.
+- Deliver required project intake and every post-result bridge through one
+  tracked `chat ask`; deliver a one-option first choice through `chat send` and
+  a two-option choice through one tracked ask without `--multi-select`.
+- Do the first selected microtask in this chat. Do not use `chat create` for the
+  first selection. Only after the user explicitly asks for multiple larger
+  tasks may those later tasks fan out through the existing task-chat workflow.
+  (Exception: the separate production-scan fix route retains its blocker
+  orchestration — see Production-scan fix handoff.)
+- Every spawned chat's opening message is a self-contained task brief with Goal,
+  Context, Deliverable, Verification, and Progress communication, because it is
+  all the context the woken agent has and it reads as if the user sent it. Long
+  tasks reuse chat status/description and the ordinary completion message.
 - Do not create, bind, or seed the Context Tree in this launcher chat —
   `first-tree-seed` owns that in the spawned tree chat.
 - Finish each task against its own check and show the evidence; never claim it

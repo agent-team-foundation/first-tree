@@ -409,7 +409,7 @@ describe("settings panels", () => {
     );
     expect(desktopLinks).toEqual([
       "Account",
-      "Setup",
+      "Getting Started",
       "Computers",
       "Repositories",
       "Context Tree",
@@ -434,16 +434,16 @@ describe("settings panels", () => {
     expect(narrow.container.textContent).toContain("Context Tree");
     expect(narrow.container.textContent).toContain("TEAM");
     expect(narrow.container.textContent).toContain("GitHub & GitLab");
-    expect(narrow.container.textContent).not.toContain("Setup");
+    expect(narrow.container.textContent).not.toContain("Getting Started");
     expect(narrow.container.querySelector('a[href="/settings/setup"]')).toBeNull();
     await act(async () => narrow.root.unmount());
 
     viewportMock.value = "xl";
     const completedDesktop = await renderDom(<SettingsLayout />, "/settings/setup");
     expect(completedDesktop.container.querySelector('aside a[href="/settings/setup"]')).not.toBeNull();
-    expect(completedDesktop.container.textContent).toContain("Setup");
+    expect(completedDesktop.container.textContent).toContain("Getting Started");
     const setupHeading = completedDesktop.container.querySelector("h1");
-    expect(setupHeading?.textContent).toBe("Setup");
+    expect(setupHeading?.textContent).toBe("Getting Started");
     expect(setupHeading?.classList.contains("sr-only")).toBe(true);
     await act(async () => completedDesktop.root.unmount());
 
@@ -462,7 +462,7 @@ describe("settings panels", () => {
     await act(async () => repositories.root.unmount());
   });
 
-  it("marks desktop Setup only for role-actionable Team or personal attention", async () => {
+  it("marks desktop Getting Started only for role-actionable Team or personal attention", async () => {
     const { SettingsLayout } = await import("../settings.js");
     const blocked = teamSetupCapabilities();
     const blockedGithub = blocked.repositoryAutomation.providers[0];
@@ -483,7 +483,7 @@ describe("settings panels", () => {
       "Expected Setup attention after the Team projection loads",
     );
     const adminSetupLink = admin.container.querySelector<HTMLAnchorElement>('aside a[href="/settings/setup"]');
-    expect(adminSetupLink?.getAttribute("aria-label")).toBe("Setup — Needs you");
+    expect(adminSetupLink?.getAttribute("aria-label")).toBe("Getting Started — Needs you");
     expect(setupCapabilitiesMocks.getTeamSetupCapabilitiesAt).toHaveBeenCalledWith("org-1");
     await act(async () => admin.root.unmount());
 
@@ -535,7 +535,7 @@ describe("settings panels", () => {
 
     expect(contextApiMocks.getContextTreeSnapshot).toHaveBeenCalledWith("org-1", "7d");
     expect(admin.container.querySelector('aside a[href="/settings/setup"]')?.getAttribute("aria-label")).toBe(
-      "Setup — Needs you",
+      "Getting Started — Needs you",
     );
     await act(async () => admin.root.unmount());
   });

@@ -3,6 +3,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { type LockedChatSpeakerSnapshot, lockChatSpeakerSnapshot } from "./chat-membership-lock.js";
 
 export type ScmBindingPair = {
   organizationId: string;
@@ -141,6 +142,16 @@ export async function resolveAgentScmBindingPair(
   };
 }
 
+/** Resolve an agent-issued pair from a transaction-stable speaker snapshot. */
+export async function lockAndResolveAgentScmBindingPair(
+  db: Database,
+  chatId: string,
+  wakeAgentId: string,
+): Promise<ScmBindingPair | null> {
+  const snapshot = await lockChatSpeakerSnapshot(db, [chatId]);
+  return resolveAgentPairFromLockedSnapshot(snapshot, chatId, wakeAgentId);
+}
+
 /**
  * Resolve the pair for a human-issued follow. A configured delegate that is
  * not an active speaker would form a silent line, so this fails closed.
@@ -198,5 +209,73 @@ export async function resolveHumanScmBindingPair(
     organizationId: human.organizationId,
     humanAgentId,
     wakeAgentId: wakeAgent.id,
+  };
+}
+
+/** Resolve a human-issued pair from a transaction-stable speaker snapshot. */
+export async function lockAndResolveHumanScmBindingPair(
+  db: Database,
+  chatId: string,
+  humanAgentId: string,
+): Promise<ScmBindingPair | null> {
+  const snapshot = await lockChatSpeakerSnapshot(db, [chatId]);
+  const chat = snapshot.chats.find((row) => row.id === chatId);
+  const human = snapshot.speakers.find((row) => row.chatId === chatId && row.agentId === humanAgentId);
+  if (
+    !chat ||
+    !human ||
+    human.type !== "human" ||
+    human.status !== "active" ||
+    human.organizationId !== chat.organizationId ||
+    !human.delegateMention
+  ) {
+    return null;
+  }
+  const wake = snapshot.speakers.find(
+    (row) =>
+      row.chatId === chatId &&
+      row.agentId === human.delegateMention &&
+      row.type !== "human" &&
+      row.status === "active" &&
+      row.organizationId === chat.organizationId,
+  );
+  if (!wake) return null;
+  return {
+    organizationId: chat.organizationId,
+    humanAgentId,
+    wakeAgentId: wake.agentId,
+  };
+}
+
+function resolveAgentPairFromLockedSnapshot(
+  snapshot: LockedChatSpeakerSnapshot,
+  chatId: string,
+  wakeAgentId: string,
+): ScmBindingPair | null {
+  const chat = snapshot.chats.find((row) => row.id === chatId);
+  const wake = snapshot.speakers.find((row) => row.chatId === chatId && row.agentId === wakeAgentId);
+  if (
+    !chat ||
+    !wake ||
+    wake.type === "human" ||
+    wake.status !== "active" ||
+    wake.organizationId !== chat.organizationId
+  ) {
+    return null;
+  }
+  const humans = snapshot.speakers.filter(
+    (row) =>
+      row.chatId === chatId &&
+      row.type === "human" &&
+      row.status === "active" &&
+      row.organizationId === chat.organizationId,
+  );
+  const linkedHumans = humans.filter((human) => human.delegateMention === wakeAgentId);
+  const representative = linkedHumans.length === 1 ? linkedHumans[0] : linkedHumans.length === 0 ? humans[0] : null;
+  if (!representative) return null;
+  return {
+    organizationId: chat.organizationId,
+    humanAgentId: representative.agentId,
+    wakeAgentId,
   };
 }

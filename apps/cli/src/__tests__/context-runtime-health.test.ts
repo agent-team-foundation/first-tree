@@ -16,7 +16,7 @@ import type {
   ContextIntegrationProviderDriver,
   ProviderPluginProbe,
 } from "../core/context-integration/provider-driver.js";
-import { providerPluginRoot, resolveContextIntegrationRelease } from "../core/context-integration/release.js";
+import { resolveContextIntegrationRelease } from "../core/context-integration/release.js";
 import { inspectContextIntegrationRuntime } from "../core/context-integration/runtime-health.js";
 import { COMMAND_VERSION } from "../core/version.js";
 
@@ -86,6 +86,8 @@ function writeMatchingInstall(releaseRoot: string): void {
     provider: "codex",
     firstTreeVersion: COMMAND_VERSION,
     bundleVersion: release.manifest.version,
+    adapterVersion: release.manifest.providers.codex.adapterVersion,
+    loaderProtocolVersion: 1,
     bundleDigest: release.manifest.bundleDigest,
     policyDigest: release.manifest.policyDigest,
     adapterDigest: release.manifest.providers.codex.adapterDigest,
@@ -98,10 +100,11 @@ function writeMatchingInstall(releaseRoot: string): void {
 
 function prepareHealthyPayload(releaseRoot: string): string {
   const release = resolveContextIntegrationRelease(releaseRoot);
-  const stablePlugin = join(contextIntegrationMarketplaceSourcePath("codex"), "plugins", "first-tree-context");
+  const stableRoot = contextIntegrationMarketplaceSourcePath("codex");
+  const stablePlugin = join(stableRoot, "plugins", "first-tree-context");
   const installedPlugin = join(process.env.FIRST_TREE_HOME ?? "", "provider-cache", "first-tree-context");
-  mkdirSync(dirname(stablePlugin), { recursive: true });
-  cpSync(providerPluginRoot(releaseRoot, "codex"), stablePlugin, { recursive: true });
+  mkdirSync(dirname(stableRoot), { recursive: true });
+  cpSync(join(releaseRoot, "codex"), stableRoot, { recursive: true });
   materializeContextPluginPayload(stablePlugin, release.manifest.providers.codex.adapterDigest, {
     kind: "bin",
     program: materializedProgram,
@@ -111,18 +114,24 @@ function prepareHealthyPayload(releaseRoot: string): string {
 }
 
 describe("Context integration runtime health", () => {
-  it("requires repair after the CLI release advances beyond the installed Plugin", () => {
+  it("keeps the Plugin unchanged when only Core release identity advances", () => {
     process.env.FIRST_TREE_HOME = mkdtempSync(join(tmpdir(), "first-tree-context-health-home-"));
     const releaseRoot = buildRelease();
     writeMatchingInstall(releaseRoot);
+    const installedPath = prepareHealthyPayload(releaseRoot);
     const installPath = contextIntegrationInstallManifestPath("codex");
     const stale = JSON.parse(readFileSync(installPath, "utf8"));
+    stale.firstTreeVersion = "0.5.17";
+    stale.bundleVersion = "0.5.17";
     stale.bundleDigest = `sha256:${"9".repeat(64)}`;
+    stale.policyDigest = `sha256:${"8".repeat(64)}`;
     writeFileSync(installPath, `${JSON.stringify(stale)}\n`);
 
-    const health = inspectContextIntegrationRuntime(driver(providerProbe()), { releaseRoot });
-    expect(health.healthy).toBe(false);
-    expect(health.issues).toContain("The installed Context Plugin does not match this First Tree release.");
+    const value = driver(providerProbe({ installedPath }));
+    const health = inspectContextIntegrationRuntime(value, { releaseRoot });
+    expect(health.healthy).toBe(true);
+    expect(health.issues).toEqual([]);
+    expect(planContextIntegrationInstall(value, { releaseRoot }).operation).toBe("unchanged");
   });
 
   it("rejects a provider downgrade below the release minimum", () => {
@@ -187,11 +196,6 @@ describe("Context integration runtime health", () => {
     ["missing Read Skill", (root: string) => rmSync(join(root, "skills", "first-tree-read", "SKILL.md"))],
     ["old Write Skill", (root: string) => writeFileSync(join(root, "skills", "first-tree-write", "SKILL.md"), "old")],
     ["hook drift", (root: string) => writeFileSync(join(root, "hooks", "hooks.json"), "{}")],
-    [
-      "Policy drift",
-      (root: string) =>
-        writeFileSync(join(root, "skills", "first-tree-read", "references", "context-tree-policy.md"), "drift"),
-    ],
     ["launcher execute-bit drift", (root: string) => chmodSync(join(root, "bin", "context-session-start"), 0o600)],
   ])("fails closed and plans repair for provider-cache %s", (_label, damage) => {
     process.env.FIRST_TREE_HOME = mkdtempSync(join(tmpdir(), "first-tree-context-health-home-"));
@@ -204,8 +208,25 @@ describe("Context integration runtime health", () => {
     const health = inspectContextIntegrationRuntime(value, { releaseRoot });
     expect(health.healthy).toBe(false);
     expect(health.issues.join(" ")).toMatch(
-      /provider-installed Context Plugin payload|SessionStart launcher is not an executable regular file/u,
+      /provider-installed Context Plugin payload|Context Plugin launcher is not an executable regular file/u,
     );
+    expect(planContextIntegrationInstall(value, { releaseRoot }).operation).toBe("repair");
+  });
+
+  it("fails closed and repairs stable adapter marketplace drift", () => {
+    process.env.FIRST_TREE_HOME = mkdtempSync(join(tmpdir(), "first-tree-context-health-home-"));
+    const releaseRoot = buildRelease();
+    writeMatchingInstall(releaseRoot);
+    const installedPath = prepareHealthyPayload(releaseRoot);
+    writeFileSync(
+      join(contextIntegrationMarketplaceSourcePath("codex"), ".agents", "plugins", "marketplace.json"),
+      "{}\n",
+    );
+    const value = driver(providerProbe({ installedPath }));
+
+    const health = inspectContextIntegrationRuntime(value, { releaseRoot });
+    expect(health.healthy).toBe(false);
+    expect(health.issues.join(" ")).toContain("stable Context adapter marketplace differs");
     expect(planContextIntegrationInstall(value, { releaseRoot }).operation).toBe("repair");
   });
 });

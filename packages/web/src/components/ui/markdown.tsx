@@ -134,6 +134,43 @@ export type MarkdownProps = {
 };
 
 /**
+ * Module-scoped defaults so ReactMarkdown sees a stable element type across
+ * parent re-renders. Inline `a`/`table` factories would remount unchanged
+ * anchors (dropping focus) when a surrounding status surface re-renders.
+ */
+const defaultMarkdownLink: NonNullable<Components["a"]> = ({ node, href, children, ...props }) => {
+  void node;
+  // issue 831: never render a local filesystem path / unknown-scheme href
+  // as a live anchor — it has no route on the cloud origin and 404s
+  // when clicked. Show the link text instead of a dead link.
+  if (!isNavigableWebHref(href)) {
+    return <>{children}</>;
+  }
+  return (
+    <a {...props} href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  );
+};
+
+const defaultMarkdownTable: NonNullable<Components["table"]> = ({ node, className: tableClassName, ...props }) => {
+  void node;
+  // Keep a wide GFM table's intrinsic column width behind a local
+  // scroll boundary. Otherwise its overflow reaches the timeline's
+  // vertical scroller and widens the entire chat on phone screens.
+  return (
+    <div className="my-2 min-w-0 max-w-full overflow-x-auto overscroll-x-contain">
+      <table {...props} className={cn("my-0 min-w-full", tableClassName)} />
+    </div>
+  );
+};
+
+const defaultMarkdownComponents: Components = {
+  a: defaultMarkdownLink,
+  table: defaultMarkdownTable,
+};
+
+/**
  * Renders a markdown string with GFM (tables, task lists, strikethrough,
  * autolinks) and treats single newlines as hard line breaks, matching the
  * way people type messages in a chat box.
@@ -171,31 +208,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
         rehypePlugins={rehypePlugins}
         urlTransform={previewSafeUrlTransform}
         components={{
-          a: ({ node, href, children, ...props }) => {
-            void node;
-            // issue 831: never render a local filesystem path / unknown-scheme href
-            // as a live anchor — it has no route on the cloud origin and 404s
-            // when clicked. Show the link text instead of a dead link.
-            if (!isNavigableWebHref(href)) {
-              return <>{children}</>;
-            }
-            return (
-              <a {...props} href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            );
-          },
-          table: ({ node, className: tableClassName, ...props }) => {
-            void node;
-            // Keep a wide GFM table's intrinsic column width behind a local
-            // scroll boundary. Otherwise its overflow reaches the timeline's
-            // vertical scroller and widens the entire chat on phone screens.
-            return (
-              <div className="my-2 min-w-0 max-w-full overflow-x-auto overscroll-x-contain">
-                <table {...props} className={cn("my-0 min-w-full", tableClassName)} />
-              </div>
-            );
-          },
+          ...defaultMarkdownComponents,
           ...components,
         }}
       >

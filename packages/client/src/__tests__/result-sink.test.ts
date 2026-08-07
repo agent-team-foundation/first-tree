@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { createResultSink, type Trigger } from "../runtime/result-sink.js";
-import type { FirstTreeHubSDK } from "../sdk.js";
+import { describe, expect, it } from "vitest";
+import { createResultSink } from "../runtime/result-sink.js";
 
 /**
  * Contract tests for the turn-completion sink.
@@ -11,52 +10,36 @@ import type { FirstTreeHubSDK } from "../sdk.js";
  * turn trigger so the next inject() starts clean.
  */
 
-const ME = "agent-me";
-
-function buildSink(initialTrigger: Trigger | null) {
-  const sendMessage = vi.fn().mockResolvedValue(undefined);
+function buildSink(initialTrigger: { messageId: string; senderId: string } | null) {
   const logs: string[] = [];
   let trigger = initialTrigger;
 
-  const sdk = { serverUrl: "http://test", sendMessage } as unknown as FirstTreeHubSDK;
-
   const sink = createResultSink({
-    sdk,
-    agent: {
-      agentId: ME,
-      inboxId: "inbox-me",
-      displayName: "test-agent",
-      type: "agent",
-      visibility: "organization",
-      delegateMention: null,
-      metadata: {},
-    },
-    chatId: "chat-1",
-    getTrigger: () => trigger,
     clearTrigger: () => {
       trigger = null;
     },
     log: (msg) => logs.push(msg),
   });
 
-  return { sink, sendMessage, logs, readTrigger: () => trigger };
+  return { sink, logs, readTrigger: () => trigger };
 }
 
 describe("createResultSink — final-text delivery retired", () => {
-  it("does NOT deliver a non-empty final text to chat", async () => {
-    const { sink, sendMessage } = buildSink({ messageId: "m1", senderId: "agent-peer" });
+  it("clears trigger and logs retired delivery for a non-empty turn", async () => {
+    const { sink, logs, readTrigger } = buildSink({ messageId: "m1", senderId: "agent-peer" });
 
     await sink("final answer");
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(readTrigger()).toBeNull();
+    expect(logs.some((m) => /retired/.test(m))).toBe(true);
   });
 
-  it("does NOT deliver an empty / whitespace-only (silent) turn either", async () => {
-    const { sink, sendMessage } = buildSink(null);
+  it("logs a silent turn for empty / whitespace-only output", async () => {
+    const { sink, logs } = buildSink(null);
 
     await sink("   ");
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(logs.some((m) => /silent turn/.test(m))).toBe(true);
   });
 
   it("clears the turn trigger so a concurrent inject() starts clean", async () => {
@@ -66,13 +49,5 @@ describe("createResultSink — final-text delivery retired", () => {
     await sink("final answer");
 
     expect(readTrigger()).toBeNull();
-  });
-
-  it("logs that final-text delivery is retired on a non-empty turn", async () => {
-    const { sink, logs } = buildSink(null);
-
-    await sink("did the thing");
-
-    expect(logs.some((m) => /retired/.test(m))).toBe(true);
   });
 });

@@ -81,6 +81,20 @@ afterEach(() => {
 });
 
 describe("api wrapper paths", () => {
+  it("carries the GitHub Settings return through authenticated account linking", async () => {
+    const userSettings = await import("../user-settings.js");
+
+    await userSettings.startProviderLink("github", "/settings/github");
+    await userSettings.startProviderLink("github");
+
+    expect(apiMock.post).toHaveBeenNthCalledWith(
+      1,
+      "/me/auth-providers/github/link/start?next=%2Fsettings%2Fgithub",
+      {},
+    );
+    expect(apiMock.post).toHaveBeenNthCalledWith(2, "/me/auth-providers/github/link/start", {});
+  });
+
   it("normalizes a legacy Attention pin without reviving the retired tier", async () => {
     const meChats = await import("../me-chats.js");
     const pinnedRequest = meChatRow({

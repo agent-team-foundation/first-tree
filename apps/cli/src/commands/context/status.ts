@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { channelConfig } from "../../core/channel.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { readContextIntegrationInstallJournal } from "../../core/context-integration/installer.js";
 import { inspectContextIntegrationOperation } from "../../core/context-integration/operation.js";
 import type { ProviderHookProbe } from "../../core/context-integration/provider-driver.js";
@@ -29,6 +30,7 @@ export async function runContextStatus(context: CommandContext): Promise<void> {
   });
   const incompleteInstall = readContextIntegrationInstallJournal();
   const incompleteOperation = inspectContextIntegrationOperation();
+  const nextSessionObligation = provider === "claude-code" ? inspectContextAdapterNextSessionObligation() : null;
   const recovery = [
     ...(incompleteInstall?.provider === provider
       ? [`Incomplete ${incompleteInstall.phase}; run ${channelConfig.binName} context repair --provider ${provider}`]
@@ -38,6 +40,11 @@ export async function runContextStatus(context: CommandContext): Promise<void> {
           `Incomplete ${incompleteOperation.operation}/${incompleteOperation.phase}; run ${channelConfig.binName} context repair --provider ${provider}`,
         ]
       : []),
+    ...(nextSessionObligation === "standalone_repair"
+      ? ["Start a new Claude session to adopt the repaired Context Plugin"]
+      : nextSessionObligation === "setup"
+        ? ["Start a new Claude session for persistent Context auto-activation"]
+        : []),
   ];
   const result = { ...status, recovery };
   if (context.options.json) {

@@ -144,6 +144,94 @@ function btn(c: ParentNode, text: string): HTMLButtonElement | null {
 }
 
 describe("AskTakeover", () => {
+  it("has no close control; Show earlier chat is the only hide affordance", async () => {
+    const onShowEarlierChat = vi.fn();
+    const c = await renderDom(
+      <AskTakeover
+        body="# Which rollout?"
+        payload={{ multiSelect: false }}
+        onReply={() => {}}
+        onSkip={() => {}}
+        onShowEarlierChat={onShowEarlierChat}
+      />,
+    );
+    expect(c.querySelector('button[aria-label="Close question"]')).toBeNull();
+    const show = c.querySelector<HTMLButtonElement>('button[aria-label="Show earlier chat"]');
+    expect(show).not.toBeNull();
+    await click(show);
+    expect(onShowEarlierChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no hide affordance at all when the host supplies none", async () => {
+    const c = await renderDom(
+      <AskTakeover body="# Which rollout?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
+    );
+    expect(c.querySelector('button[aria-label="Close question"]')).toBeNull();
+    expect(c.querySelector('button[aria-label="Show earlier chat"]')).toBeNull();
+  });
+
+  it("Enter never resolves the hidden answer while Ask agent mode is open", async () => {
+    const onReply = vi.fn();
+    const onAsk = vi.fn(async () => undefined);
+    const c = await renderDom(
+      <AskTakeover
+        requestId="request-enter-gate"
+        body="# Which rollout?"
+        payload={{ multiSelect: false }}
+        askAgent={{ exchanges: [], waiting: false, sending: false, error: null, onAsk }}
+        onReply={onReply}
+        onSkip={() => {}}
+      />,
+    );
+
+    // A VALID hidden answer exists before entering the mode.
+    const answer = freeTextBox(c);
+    if (!answer) throw new Error("answer input missing");
+    await setValue(answer, "the hidden answer");
+    await click(btn(c, "Ask agent"));
+
+    const clarification = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Ask a focused question"]');
+    if (!clarification) throw new Error("clarification input missing");
+    await setValue(clarification, "what does the rollout window mean?");
+    // Desktop Enter in the clarification composer must be a newline, never
+    // the resolving shortcut against the invisible answer draft.
+    await keyDown(clarification, "Enter");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+
+  it("Ask agent mode replaces the answer surface and hides the resolving actions", async () => {
+    const onAsk = vi.fn(async () => undefined);
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover
+        requestId="request-mode"
+        body="# Which rollout?"
+        payload={{ multiSelect: false }}
+        askAgent={{ exchanges: [], waiting: false, sending: false, error: null, onAsk }}
+        onReply={() => {}}
+        onSkip={onSkip}
+      />,
+    );
+
+    await click(btn(c, "Ask agent"));
+    // The clarification composer REPLACES the reply input — one input at a
+    // time — and Skip/Submit leave the footer so a resolving action can't
+    // fire against a half-written question. Cancel restores answering.
+    expect(freeTextBox(c)).toBeNull();
+    expect(c.querySelector('textarea[placeholder^="Ask a focused question"]')).not.toBeNull();
+    expect(btn(c, "Submit")).toBeNull();
+    expect(btn(c, "Skip")).toBeNull();
+    expect(btn(c, "Cancel")).not.toBeNull();
+
+    await click(btn(c, "Cancel"));
+    expect(freeTextBox(c)).not.toBeNull();
+    expect(c.querySelector('textarea[placeholder^="Ask a focused question"]')).toBeNull();
+    expect(btn(c, "Submit")).not.toBeNull();
+    expect(onAsk).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+  });
+
   it("moves focus into the modal card on mount", async () => {
     const c = await renderDom(
       <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
@@ -409,14 +497,14 @@ describe("AskTakeover", () => {
   it("Escape performs only the explicit non-resolving action; Enter submits a valid answer", async () => {
     const onReply = vi.fn();
     const onSkip = vi.fn();
-    const onEscape = vi.fn();
+    const onShowEarlierChat = vi.fn();
     const c = await renderDom(
       <AskTakeover
         body="# Concerns?"
         payload={{ multiSelect: false }}
         onReply={onReply}
         onSkip={onSkip}
-        onEscape={onEscape}
+        onShowEarlierChat={onShowEarlierChat}
       />,
     );
     const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
@@ -433,7 +521,7 @@ describe("AskTakeover", () => {
 
     // Escape leaves review without resolving or advancing the request.
     await keyDown(ta, "Escape");
-    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(onShowEarlierChat).toHaveBeenCalledTimes(1);
     expect(onSkip).not.toHaveBeenCalled();
   });
 
@@ -497,7 +585,7 @@ describe("AskTakeover", () => {
   it("freezes every resolving/editing action while Ask agent is waiting", async () => {
     const onReply = vi.fn();
     const onSkip = vi.fn();
-    const onEscape = vi.fn();
+    const onShowEarlierChat = vi.fn();
     const hostEscape = vi.fn();
     document.addEventListener("keydown", hostEscape);
     const c = await renderDom(
@@ -507,7 +595,7 @@ describe("AskTakeover", () => {
         askAgent={{ exchanges: [], waiting: true, sending: false, error: null, onAsk: async () => undefined }}
         onReply={onReply}
         onSkip={onSkip}
-        onEscape={onEscape}
+        onShowEarlierChat={onShowEarlierChat}
       />,
     );
 
@@ -530,7 +618,7 @@ describe("AskTakeover", () => {
       expect(ship.getAttribute("aria-checked")).toBe("false");
       expect(onReply).not.toHaveBeenCalled();
       expect(onSkip).not.toHaveBeenCalled();
-      expect(onEscape).not.toHaveBeenCalled();
+      expect(onShowEarlierChat).not.toHaveBeenCalled();
       // The locked card fences Escape in capture phase, before a surrounding
       // workspace/document handler can turn it into route navigation.
       expect(hostEscape).not.toHaveBeenCalled();

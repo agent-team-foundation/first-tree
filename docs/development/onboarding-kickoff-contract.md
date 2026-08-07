@@ -6,12 +6,17 @@ chats and the adjacent campaign quickstart handoff.
 ## Current Contract
 
 - `POST /api/v1/me/onboarding/kickoff` starts the user's first onboarding chat.
-- The first message is visible task text sent through task `createChat`; the
-  agent sees the same message the user sees.
+- The first message is task text sent through task `createChat`. Without the
+  Orientation capability it remains an ordinary visible message and the agent
+  sees the same text as the user. With Orientation enabled, Web replaces that
+  marked row with the senderless Orientation surface while the stored text
+  remains the agent's replayable conversational context.
 - An ordinary onboarding client may send `orientation: 1` to opt into the
-  current soft Orientation flow. The server then stores the visible bootstrap
-  as silent, replayable context and adds the server-owned
-  `firstChatOrientation` marker for Web rendering. The next ordinary visible
+  current soft Orientation flow. The server then stores the bootstrap as
+  silent, replayable context and adds the server-owned
+  `firstChatOrientation` marker for Web rendering. Web must not expose the
+  bootstrap body or attribute it to its human sender; it renders a senderless
+  Orientation row instead. The next ordinary visible
   human message addressed to the original bootstrap target wakes that agent
   and carries the bootstrap as preceding context. A message addressed only to
   a participant added later remains an ordinary turn and does not consume the
@@ -35,9 +40,10 @@ chats and the adjacent campaign quickstart handoff.
   If the bootstrap was already claimed, the continuation is a normal next turn
   and wakes independently. Campaign actions and dedicated tree-setup kickoffs
   do not accept or render this Orientation marker.
-- Skill activation comes from the visible message, bound resources, and skill
-  descriptions. The client must not append hidden onboarding directives from
-  message metadata.
+- Skill activation comes from conversational message text delivered to the
+  agent, bound resources, and skill descriptions. Orientation changes only the
+  Web presentation of its stored bootstrap; the client must not append hidden
+  onboarding directives from message metadata.
 - Campaign quickstart starts through `POST /api/v1/me/landing-campaigns/start`.
   That server-owned path creates the trial chat, binds the managed trial prompt
   guardrail, and wakes the agent from visible task text. The campaign skill is

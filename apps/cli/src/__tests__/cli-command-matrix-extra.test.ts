@@ -51,8 +51,7 @@ const coreMocks = vi.hoisted(() => ({
 }));
 
 const clientMocks = vi.hoisted(() => ({
-  SessionRegistry: vi.fn(),
-  cleanWorkspaces: vi.fn(),
+  cleanAgentWorkspaces: vi.fn(),
 }));
 
 const localAgentMocks = vi.hoisted(() => ({
@@ -145,8 +144,7 @@ beforeEach(() => {
     unitPath: "/tmp/unit.plist",
     state: "active",
   });
-  clientMocks.SessionRegistry.mockImplementation(() => ({ load: vi.fn(() => new Map()) }));
-  clientMocks.cleanWorkspaces.mockReturnValue([]);
+  clientMocks.cleanAgentWorkspaces.mockReturnValue({ kind: "cleaned", removed: [] });
   localAgentMocks.createSdk.mockReturnValue({
     addChatParticipant: vi.fn(async () => [{ agentId: "agent-2" }]),
     listChats: vi.fn(async () => ({ items: [], nextCursor: null })),
@@ -482,32 +480,29 @@ describe("agent admin and local commands", () => {
   });
 
   it("cleans workspaces across all agents or one agent", async () => {
-    const workspaces = join(tempDir, "data", "workspaces");
-    mkdirSync(join(workspaces, "nova"), { recursive: true });
-    mkdirSync(join(workspaces, "mira"), { recursive: true });
-    clientMocks.SessionRegistry.mockImplementation(() => ({
-      load: vi.fn(
-        () =>
-          new Map([
-            ["chat-active", { status: "active" }],
-            ["chat-evicted", { status: "evicted" }],
-          ]),
-      ),
-    }));
-    clientMocks.cleanWorkspaces.mockReturnValueOnce(["chat-old"]).mockReturnValueOnce([]);
+    clientMocks.cleanAgentWorkspaces.mockReturnValueOnce({
+      kind: "cleaned",
+      removed: [{ agentName: "nova", chatId: "chat-old" }],
+    });
 
     await runAgent(["workspace", "clean", "--ttl", "3"]);
-    expect(clientMocks.cleanWorkspaces).toHaveBeenCalledWith(
-      join(workspaces, "nova"),
-      new Set(["chat-active"]),
-      3 * 24 * 60 * 60 * 1000,
-    );
+    expect(clientMocks.cleanAgentWorkspaces).toHaveBeenCalledTimes(1);
+    expect(clientMocks.cleanAgentWorkspaces).toHaveBeenCalledWith({
+      agentName: undefined,
+      ttlMs: 3 * 24 * 60 * 60 * 1000,
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Removed: nova/chat-old");
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("1 workspace(s) cleaned");
 
+    clientMocks.cleanAgentWorkspaces.mockReturnValueOnce({ kind: "cleaned", removed: [] });
     await runAgent(["workspace", "clean", "missing"]);
+    expect(clientMocks.cleanAgentWorkspaces).toHaveBeenLastCalledWith({
+      agentName: "missing",
+      ttlMs: 7 * 24 * 60 * 60 * 1000,
+    });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("0 workspace(s) cleaned");
 
-    rmSync(workspaces, { recursive: true, force: true });
+    clientMocks.cleanAgentWorkspaces.mockReturnValueOnce({ kind: "missing-root" });
     await runAgent(["workspace", "clean"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No workspaces found");
   });

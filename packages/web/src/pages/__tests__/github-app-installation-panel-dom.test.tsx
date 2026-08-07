@@ -17,6 +17,11 @@ const githubMocks = vi.hoisted(() => ({
   disconnectGithubAppInstallation: vi.fn(),
 }));
 
+const providerMocks = vi.hoisted(() => ({
+  getAuthProviders: vi.fn(),
+  startProviderLink: vi.fn(),
+}));
+
 const authMock = vi.hoisted(() => ({
   value: {
     organizationId: "org-1" as string | null,
@@ -24,6 +29,7 @@ const authMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/github-app.js", () => githubMocks);
+vi.mock("../../api/user-settings.js", () => providerMocks);
 
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
@@ -110,6 +116,16 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
 }
 
+function mockInstallTab() {
+  const tab = { location: { href: "" }, close: vi.fn() };
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => {
+    // happy-dom's `window.open` type requires a complete Window, while this
+    // focused double intentionally exposes only the two properties the panel uses.
+    return tab as unknown as Window;
+  });
+  return { tab, openSpy };
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -122,6 +138,22 @@ beforeEach(() => {
   githubMocks.getGithubAppConnectPanel.mockResolvedValue({ installations: [] });
   githubMocks.connectGithubAppInstallation.mockResolvedValue(undefined);
   githubMocks.disconnectGithubAppInstallation.mockResolvedValue(undefined);
+  providerMocks.getAuthProviders.mockResolvedValue({
+    providers: [
+      {
+        provider: "github",
+        available: true,
+        connected: true,
+        accountName: "octocat",
+        email: null,
+        avatarUrl: null,
+        connectedAt: NOW,
+        canUnlink: true,
+        unlinkBlockedReason: null,
+      },
+    ],
+  });
+  providerMocks.startProviderLink.mockResolvedValue({ redirectUrl: "https://github.com/login/oauth/authorize" });
   Object.defineProperty(window, "location", {
     configurable: true,
     value: { assign: vi.fn() },
@@ -184,6 +216,210 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => root.unmount());
   });
 
+  it("requires a linked GitHub identity before exposing the install flow", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    providerMocks.getAuthProviders.mockResolvedValue({
+      providers: [
+        {
+          provider: "github",
+          available: true,
+          connected: false,
+          accountName: null,
+          email: null,
+          avatarUrl: null,
+          connectedAt: null,
+          canUnlink: false,
+          unlinkBlockedReason: null,
+        },
+      ],
+    });
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "Required before installing the First Tree GitHub App");
+    expect(container.textContent).toContain("Connect your GitHub account");
+    expect(buttonByText(container, "Install on GitHub")).toBeNull();
+    expect(githubMocks.getGithubAppInstallUrl).not.toHaveBeenCalled();
+
+    await click(buttonByText(container, "Continue with GitHub"));
+
+    expect(providerMocks.startProviderLink).toHaveBeenCalledWith("github", "/settings/github");
+    expect(window.location.assign).toHaveBeenCalledWith("https://github.com/login/oauth/authorize");
+    expect(githubMocks.getGithubAppInstallUrl).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("treats an unavailable identity-status query as neutral and retryable", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    providerMocks.getAuthProviders.mockRejectedValueOnce(new Error("status unavailable")).mockResolvedValueOnce({
+      providers: [
+        {
+          provider: "github",
+          available: true,
+          connected: true,
+          accountName: "octocat",
+          email: null,
+          avatarUrl: null,
+          connectedAt: NOW,
+          canUnlink: true,
+          unlinkBlockedReason: null,
+        },
+      ],
+    });
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "We couldn't check your GitHub connection");
+    const status = container.querySelector<HTMLElement>('[role="status"]');
+    expect(status?.style.color).toBe("var(--fg-3)");
+
+    await click(buttonByText(container, "Try again"));
+    await waitForText(container, "GitHub connected as @octocat");
+    expect(buttonByText(container, "Install on GitHub")).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows the linked GitHub login and keeps install as a second explicit action", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "GitHub connected as @octocat");
+    expect(githubMocks.getGithubAppInstallUrl).not.toHaveBeenCalled();
+    expect(buttonByText(container, "Install on GitHub")).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("recovers inline when the linked GitHub identity disappears after the panel loads", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    providerMocks.getAuthProviders
+      .mockResolvedValueOnce({
+        providers: [
+          {
+            provider: "github",
+            available: true,
+            connected: true,
+            accountName: "octocat",
+            email: null,
+            avatarUrl: null,
+            connectedAt: NOW,
+            canUnlink: true,
+            unlinkBlockedReason: null,
+          },
+        ],
+      })
+      .mockResolvedValue({
+        providers: [
+          {
+            provider: "github",
+            available: true,
+            connected: false,
+            accountName: null,
+            email: null,
+            avatarUrl: null,
+            connectedAt: null,
+            canUnlink: false,
+            unlinkBlockedReason: null,
+          },
+        ],
+      });
+    githubMocks.getGithubAppInstallUrl.mockRejectedValueOnce(
+      new ApiError(
+        409,
+        "Connect a GitHub account before installing the GitHub App",
+        undefined,
+        "github_identity_required",
+      ),
+    );
+    const { tab: fakeTab, openSpy } = mockInstallTab();
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "GitHub connected as @octocat");
+    await click(buttonByText(container, "Install on GitHub"));
+    await waitForText(container, "Connect your GitHub account");
+
+    expect(fakeTab.close).toHaveBeenCalledOnce();
+    expect(buttonByText(container, "Continue with GitHub")).not.toBeNull();
+    expect(buttonByText(container, "Install on GitHub")).toBeNull();
+
+    openSpy.mockRestore();
+    await act(async () => root.unmount());
+  });
+
+  it("keeps account-link conflicts inline with one clear retry action", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    providerMocks.getAuthProviders.mockResolvedValue({
+      providers: [
+        {
+          provider: "github",
+          available: true,
+          connected: false,
+          accountName: null,
+          email: null,
+          avatarUrl: null,
+          connectedAt: null,
+          canUnlink: false,
+          unlinkBlockedReason: null,
+        },
+      ],
+    });
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(
+      <GithubAppInstallationPanel initiallyOpen accountLinkError="identity-conflict" />,
+    );
+
+    await waitForText(container, "already connected to another First Tree user");
+    expect(buttonByText(container, "Continue with GitHub")).not.toBeNull();
+    expect(buttonByText(container, "Install on GitHub")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps install identity errors inline after a linked admin returns", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(
+      <GithubAppInstallationPanel initiallyOpen accountLinkError="install-not-verified" />,
+    );
+
+    await waitForText(container, "Use @octocat, then try again");
+    expect(buttonByText(container, "Install on GitHub")).not.toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("distinguishes provider configuration failures from user login failures", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    providerMocks.getAuthProviders.mockResolvedValue({
+      providers: [
+        {
+          provider: "github",
+          available: false,
+          connected: false,
+          accountName: null,
+          email: null,
+          avatarUrl: null,
+          connectedAt: null,
+          canUnlink: false,
+          unlinkBlockedReason: null,
+        },
+      ],
+    });
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "isn't configured on this First Tree deployment");
+    expect(buttonByText(container, "Continue with GitHub")).toBeNull();
+    expect(buttonByText(container, "Install on GitHub")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("renders the summary read-only for members", async () => {
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const bound = await renderDom(<GithubAppInstallationPanel readOnly />);
@@ -205,8 +441,7 @@ describe("GithubAppInstallationPanel", () => {
 
   it("mints a fresh install URL into a new tab, then waits without leaving this tab", async () => {
     githubMocks.getGithubAppInstallation.mockResolvedValue(null);
-    const fakeTab = { location: { href: "" }, close: vi.fn() };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
+    const { tab: fakeTab, openSpy } = mockInstallTab();
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const first = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(first.container, "Connect GitHub");
@@ -250,13 +485,26 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => root.unmount());
   });
 
+  it("does not let another Team's install attempt lock this Team's panel", async () => {
+    const { rememberGithubInstallAttempt } = await import("../../lib/github-install-attempt.js");
+    rememberGithubInstallAttempt("org-other");
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel initiallyOpen />);
+
+    await waitForText(container, "Install on GitHub");
+    expect(buttonByText(container, "Install on GitHub")?.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Waiting for GitHub");
+
+    await act(async () => root.unmount());
+  });
+
   it("surfaces missing slug and reports generic install URL errors (closing the opened tab)", async () => {
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
 
     githubMocks.getGithubAppInstallation.mockResolvedValue(null);
     githubMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "slug missing"));
-    const slugTab = { location: { href: "" }, close: vi.fn() };
-    const slugOpen = vi.spyOn(window, "open").mockReturnValue(slugTab as unknown as Window);
+    const { tab: slugTab, openSpy: slugOpen } = mockInstallTab();
     const missingSlug = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(missingSlug.container, "Connect GitHub");
     await click(buttonByText(missingSlug.container, "Connect GitHub"));
@@ -269,8 +517,7 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => missingSlug.root.unmount());
 
     githubMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new Error("oauth state failed"));
-    const genericTab = { location: { href: "" }, close: vi.fn() };
-    const genericOpen = vi.spyOn(window, "open").mockReturnValue(genericTab as unknown as Window);
+    const { tab: genericTab, openSpy: genericOpen } = mockInstallTab();
     const generic = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(generic.container, "Connect GitHub");
     await click(buttonByText(generic.container, "Connect GitHub"));
@@ -336,8 +583,7 @@ describe("GithubAppInstallationPanel", () => {
     githubMocks.getGithubAppConnectPanel.mockResolvedValue({
       installations: [panelInstallation({ installationId: 22, accountLogin: "mine-org", status: "connected-here" })],
     });
-    const fakeTab = { location: { href: "" }, close: vi.fn() };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
+    const { tab: fakeTab, openSpy } = mockInstallTab();
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const { container, root } = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(container, "Connected to");
@@ -356,6 +602,39 @@ describe("GithubAppInstallationPanel", () => {
     await waitForText(container, "Waiting for GitHub… You may need a GitHub org admin to approve.");
 
     openSpy.mockRestore();
+    await act(async () => root.unmount());
+  });
+
+  it("requires a linked GitHub identity before reinstalling a connected Team", async () => {
+    providerMocks.getAuthProviders.mockResolvedValue({
+      providers: [
+        {
+          provider: "github",
+          available: true,
+          connected: false,
+          accountName: null,
+          email: null,
+          avatarUrl: null,
+          connectedAt: null,
+          canUnlink: false,
+          unlinkBlockedReason: null,
+        },
+      ],
+    });
+    githubMocks.getGithubAppConnectPanel.mockResolvedValue({
+      installations: [panelInstallation({ installationId: 22, accountLogin: "mine-org", status: "connected-here" })],
+    });
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel />);
+    await waitForText(container, "Connected to");
+    await click(buttonByText(container, "Manage connection"));
+
+    await waitForText(container, "Required before installing the First Tree GitHub App");
+    expect(buttonByText(container, "Continue with GitHub")).not.toBeNull();
+    expect(buttonByText(container, "Reinstall")).toBeNull();
+    expect([...container.querySelectorAll("a")].some((a) => a.textContent?.includes("Manage on GitHub"))).toBe(true);
+    expect(buttonByText(container, "Disconnect")).not.toBeNull();
+
     await act(async () => root.unmount());
   });
 

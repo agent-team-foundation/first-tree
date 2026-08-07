@@ -4,7 +4,12 @@ import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import type { GithubProviderTaskContext } from "./github-audience.js";
-import { decideGithubPersonnelTargetChat, refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
+import {
+  refreshGithubChatTopic,
+  resolveGithubExistingLineChat,
+  resolveGithubPersonnelTargetChat,
+  resolveTargetChat,
+} from "./github-entity-chat.js";
 import { type EntityStateSeed, setEntityTitle } from "./github-entity-state.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 import type { ScmAudienceTarget } from "./scm-audience-composition.js";
@@ -71,10 +76,11 @@ export async function deliverGithubEvent(
   const actorHumanId = options.actorHumanId ?? null;
   const existingMappedChatIds = existingMappedChatIdsForProjection(audience);
   const entity = entityFromEvent(event);
+  const executableTargets = expandDirectedGithubTargets(audience);
 
   // Phase 1 — shared SCM planner owns echo wake policy and one-delivery-per-chat.
   const planned = await planScmChatDeliveries({
-    targets: audience,
+    targets: executableTargets,
     actorHumanId,
     resolveChat: (target) => resolveChatFor(app, event, target, options),
     onTargetError: (target, err) => {
@@ -176,7 +182,7 @@ export async function deliverGithubEvent(
       // out by the message service (the card still lands as a silent row via
       // `allowRecipientlessSend`). The unread-mention red dot stays off because
       // delegates are non-human mention targets.
-      // The task marker scopes who may execute an App-directed request; it
+      // The task marker scopes who may execute an automatically routed event; it
       // does not replace independent subscription / explicit wake lines that
       // survived into this chat delivery.
       const mentions = scmWakeAgentIds(entries);
@@ -233,6 +239,33 @@ export async function deliverGithubEvent(
   return stats;
 }
 
+/**
+ * Preserve an existing subscription route independently from fresh directed
+ * authority. The personnel half performs its own exact-line re-read and
+ * placement in one entity-locked transaction; the subscription half may be
+ * dropped if a concurrent unfollow removed it.
+ */
+function expandDirectedGithubTargets(
+  targets: ScmAudienceTarget<GithubProviderTaskContext>[],
+): ScmAudienceTarget<GithubProviderTaskContext>[] {
+  return targets.flatMap((target) => {
+    if (target.entry.kind !== "existing_line" || !target.directedContext) return [target];
+    return [
+      { entry: target.entry },
+      {
+        entry: {
+          kind: "personnel_target",
+          reason: target.directedContext.reason,
+          requiresPersistentLine: target.directedContext.requiresPersistentLine,
+          humanAgentId: target.entry.line.humanAgentId,
+          wakeAgentId: target.entry.line.wakeAgentId,
+          externalUsername: target.directedContext.externalUsername,
+        },
+      },
+    ];
+  });
+}
+
 function existingMappedChatIdsForProjection(audience: ScmAudienceTarget<GithubProviderTaskContext>[]): string[] {
   return [
     ...new Set(audience.flatMap((target) => (target.entry.kind === "existing_line" ? [target.entry.line.chatId] : []))),
@@ -248,7 +281,7 @@ function entityFromEvent(event: NormalizedScmEvent): GithubEntity {
   };
 }
 
-type ResolvedChat = { chatId: string; created: boolean };
+type ResolvedChat = { chatId: string; created: boolean; personnelLineExisted?: boolean };
 
 async function resolveChatFor(
   app: FastifyInstance,
@@ -257,36 +290,24 @@ async function resolveChatFor(
   options: DeliveryOptions,
 ): Promise<ResolvedChat | null> {
   if (target.entry.kind === "existing_line") {
-    return { chatId: target.entry.line.chatId, created: false };
+    return resolveGithubExistingLineChat(app.db, {
+      organizationId: event.source.organizationId,
+      humanAgentId: target.entry.line.humanAgentId,
+      delegateAgentId: target.entry.line.wakeAgentId,
+      entity: entityFromEvent(event),
+    });
   }
   if (target.entry.kind === "legacy_route") {
     return { chatId: target.entry.route.chatId, created: false };
   }
   const humanAgentId = target.entry.humanAgentId;
   const wakeAgentId = target.entry.wakeAgentId;
-  const entity: GithubEntity = {
-    type: event.entity.type,
-    key: event.entity.key,
-    title: event.entity.title,
-    url: event.entity.url,
-  };
-  const intent =
-    target.entry.kind === "provider_task_target"
-      ? ({ kind: "provider_task_target" } as const)
-      : await decideGithubPersonnelTargetChat(
-          app.db,
-          event.source.organizationId,
-          entity,
-          humanAgentId,
-          wakeAgentId,
-          target.entry.reason,
-        );
-
+  const entity = entityFromEvent(event);
   const relatedEntities: GithubEntity[] = event.relatedRefs.map((ref) => ({
     type: "issue",
     key: ref.key,
   }));
-  const resolved = await resolveTargetChat(app.db, {
+  const baseParams = {
     organizationId: event.source.organizationId,
     humanAgentId,
     delegateAgentId: wakeAgentId,
@@ -295,22 +316,38 @@ async function resolveChatFor(
     eventType: event.eventType,
     action: event.action ?? "",
     entityStateSeed: options.entityStateSeed ?? null,
-    // Personnel and provider-task targets come from explicit directed evidence
-    // in the event payload — the only paths allowed to mint a fresh chat for an
-    // opened creation event. Subscription targets short-circuit above; the
-    // guard is still wired so any future caller is safe by default.
+    // Personnel targets carry explicit directed evidence; provider-task
+    // targets carry repository-role authority. Those are the only paths
+    // allowed to mint a fresh chat for an opened creation event. Subscription
+    // targets short-circuit above; the guard is still wired so any future
+    // caller is safe by default. `isMentionMatched` is the historical name for
+    // that fresh-chat authority bit.
     isMentionMatched: true,
-    intent,
+  };
+  if (target.entry.kind === "provider_task_target") {
+    const resolved = await resolveTargetChat(app.db, { ...baseParams, intent: { kind: "provider_task_target" } });
+    if (!resolved) return null;
+    if (
+      target.entry.providerContext.kind === "github_app_task" &&
+      target.entry.providerContext.agentUuid === wakeAgentId
+    ) {
+      await applyMembershipWrite(app.db, resolved.chatId, [{ agentId: wakeAgentId }], {
+        upgradeWatcherToSpeaker: true,
+      });
+    }
+    return { chatId: resolved.chatId, created: resolved.created };
+  }
+
+  const resolved = await resolveGithubPersonnelTargetChat(app.db, {
+    ...baseParams,
+    requiresPersistentLine: target.entry.requiresPersistentLine,
   });
   if (!resolved) return null;
-  if (
-    target.entry.kind === "provider_task_target" &&
-    target.entry.providerContext.kind === "github_app_task" &&
-    target.entry.providerContext.agentUuid === wakeAgentId
-  ) {
-    await applyMembershipWrite(app.db, resolved.chatId, [{ agentId: wakeAgentId }], { upgradeWatcherToSpeaker: true });
-  }
-  return { chatId: resolved.chatId, created: resolved.created };
+  return {
+    chatId: resolved.chatId,
+    created: resolved.created,
+    personnelLineExisted: resolved.lineExisted,
+  };
 }
 
 /**

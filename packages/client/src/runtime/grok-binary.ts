@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { GROK_INSTALL_COMMAND, runtimeProviderLoginCommand } from "@first-tree/shared";
 import { wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 /**
  * Grok Build CLI binary resolution. Grok Build is EXTERNAL-ONLY: First Tree
@@ -73,15 +74,8 @@ export class GrokBinaryVerifyTransientError extends Error {
   }
 }
 
-const GROK_BINARY_MISSING_PATTERNS: readonly RegExp[] = [
-  /grok build cli is missing/i,
-  /grok.*not (?:found|installed)/i,
-];
-
-export function isGrokBinaryMissingError(input: unknown): boolean {
-  const text = errorSearchText(input);
-  return GROK_BINARY_MISSING_PATTERNS.some((pattern) => pattern.test(text));
-}
+/** Single-owner match rules live in provider-support; re-export for call sites. */
+export { isGrokBinaryMissingError } from "./provider-support/binary-failure.js";
 
 export function formatGrokBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();
@@ -324,6 +318,10 @@ function grokExecutableName(platform: NodeJS.Platform): string {
 }
 
 function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  // Every automatic source funnels through here, so this is the one place a
+  // candidate can be vetted before `stat` / `access` follows it into a
+  // TCC-protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     if (!statSync(filePath).isFile()) return false;
     accessSync(filePath, platform === "win32" ? constants.F_OK : constants.X_OK);
@@ -341,9 +339,4 @@ function errorText(input: unknown): string {
     if (typeof maybe.message === "string") return maybe.message;
   }
   return String(input);
-}
-
-function errorSearchText(input: unknown): string {
-  if (input instanceof Error) return `${input.name} ${input.message}`;
-  return errorText(input);
 }

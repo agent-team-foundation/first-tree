@@ -5,15 +5,21 @@ export type ScmPersonnelTarget = Extract<ScmAudienceEntry, { kind: "personnel_ta
 
 export type ScmDirectedContext = {
   reason: InvolveReason;
+  requiresPersistentLine: boolean;
   externalUsername: string;
 };
 
+/**
+ * A provider-owned automatic capability route. Deliberately carries no
+ * `reason` / `externalUsername`: the task exists because the provider decided
+ * this entity belongs to a role, not because a person was named. Personnel card
+ * context stays with real `personnel_target` evidence, so a task-only chat
+ * cannot show an invented mention or assignment.
+ */
 export type ScmProviderTaskTarget<TProviderContext> = {
   kind: "provider_task_target";
-  reason: InvolveReason;
   humanAgentId: string;
   wakeAgentId: string;
-  externalUsername: string;
   providerContext: TProviderContext;
 };
 
@@ -50,7 +56,15 @@ export function composeScmAudience<TProviderContext = never>(input: {
   for (const target of input.personnelTargets) {
     const pair = attentionPairKey(target.humanAgentId, target.wakeAgentId);
     const current = personnelByPair.get(pair);
-    if (!current || comparePersonnelTargets(target, current) < 0) personnelByPair.set(pair, target);
+    if (!current) {
+      personnelByPair.set(pair, target);
+      continue;
+    }
+    const displayTarget = comparePersonnelTargets(target, current) < 0 ? target : current;
+    personnelByPair.set(pair, {
+      ...displayTarget,
+      requiresPersistentLine: current.requiresPersistentLine || target.requiresPersistentLine,
+    });
   }
 
   for (const [pair, personnelTarget] of [...personnelByPair.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -63,6 +77,7 @@ export function composeScmAudience<TProviderContext = never>(input: {
       matched = true;
       target.directedContext = {
         reason: personnelTarget.reason,
+        requiresPersistentLine: personnelTarget.requiresPersistentLine,
         externalUsername: personnelTarget.externalUsername,
       };
     }

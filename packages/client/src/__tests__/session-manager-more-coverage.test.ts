@@ -64,8 +64,12 @@ function mockAckEntry(): (entryId: number) => Promise<void> {
 
 function createMockHandler(overrides: Partial<AgentHandler> = {}): AgentHandler {
   return {
-    start: vi.fn().mockResolvedValue("session-id-mock"),
-    resume: vi.fn().mockResolvedValue("session-id-mock"),
+    start: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
+    resume: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
     inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -99,7 +103,7 @@ function createSessionManager(opts: {
     concurrency: 5,
     subprocessProbe: opts.subprocessProbe,
     handlerFactory: opts.handlerFactory ?? (() => handler),
-    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
     agentIdentity: {
       agentId: "agent-1",
@@ -560,7 +564,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
       const handler = createMockHandler({
         start: vi.fn(async (message) => {
           capturedMessage = message;
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({ handler, sdk });
@@ -606,7 +610,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     const handler = createMockHandler({
       start: vi.fn(async (message) => {
         capturedMessage = message;
-        return "session-id-mock";
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
     });
     const sm = createSessionManager({ handler, sdk });
@@ -645,7 +649,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
         start: vi.fn(async (message, ctx) => {
           capturedMessage = message;
           renderedContent = await ctx.formatInboundContent(message);
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({ handler, sdk });
@@ -711,7 +715,7 @@ describe("SessionManager additional delivery token and payload coverage", () => 
       const handler = createMockHandler({
         start: vi.fn(async (message, ctx) => {
           renderedContent = await ctx.formatInboundContent(message);
-          return "session-id-mock";
+          return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
       });
       const sm = createSessionManager({ handler, sdk });
@@ -880,7 +884,10 @@ describe("SessionManager additional shutdown and finalization coverage", () => {
     const registryPath = join(dir, "sessions.json");
     const onStateChange = vi.fn<(chatId: string, state: SessionState) => void>();
     const handler = createMockHandler({
-      start: vi.fn(async () => "session-to-clear"),
+      start: vi.fn(async () => ({
+        sessionId: "session-to-clear",
+        route: { kind: "owned" as const, mode: "queued" as const },
+      })),
       shutdown: vi.fn().mockRejectedValue(new Error("provider already closed")),
     });
     const sm = createSessionManager({ handler, registryPath, onStateChange });

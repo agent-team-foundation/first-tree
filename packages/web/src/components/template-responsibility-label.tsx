@@ -35,12 +35,19 @@ export function activeTemplateResponsibilityLabel(
  * creation surfaces. It deliberately omits the catalog tagline and audience:
  * purpose, user value, and capability summary are the responsibility signal.
  */
-export function TemplateResponsibilityLabel({ template }: { template: TemplateResponsibilityLabelData }): ReactElement {
+export function TemplateResponsibilityLabel({
+  template,
+  variant = "catalog",
+}: {
+  template: TemplateResponsibilityLabelData;
+  variant?: "catalog" | "assigned";
+}): ReactElement {
+  const isAssigned = variant === "assigned";
   return (
     <div className="flex-1 min-w-0 space-y-0.5" data-slot="template-responsibility-label">
       <div className="flex items-baseline gap-2 min-w-0">
         <span className="text-body font-medium truncate">{template.name ?? "Unavailable template"}</span>
-        <TemplateStatusBadge status={template.status} />
+        {(!isAssigned || template.status !== "active") && <TemplateStatusBadge status={template.status} />}
         {template.status === "retired" && template.replacement && (
           <span className="text-caption text-muted-foreground truncate">Try {template.replacement.name}</span>
         )}
@@ -48,8 +55,8 @@ export function TemplateResponsibilityLabel({ template }: { template: TemplateRe
       {template.public && (
         <div className="text-caption text-muted-foreground">
           <div className="truncate">{template.public.purpose}</div>
-          <div className="truncate">{template.public.userValue}</div>
-          <div className="truncate">{template.public.toolsAndSkillsSummary}</div>
+          {!isAssigned && <div className="truncate">{template.public.userValue}</div>}
+          {!isAssigned && <div className="truncate">{template.public.toolsAndSkillsSummary}</div>}
         </div>
       )}
     </div>

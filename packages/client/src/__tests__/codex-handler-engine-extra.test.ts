@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerConfig, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 
 const trialMetadata = {
   landingCampaignTrial: true,
@@ -48,8 +49,8 @@ function context(metadata: Record<string, unknown> = {}): SessionContext {
 
 function makeMockHandler(overrides: Partial<MockHandler> = {}): MockHandler {
   return {
-    start: vi.fn(async () => ({ providerSessionId: "started" })),
-    resume: vi.fn(async () => ({ providerSessionId: "resumed" })),
+    start: vi.fn(async () => ({ sessionId: "started", route: { kind: "owned" as const, mode: "queued" as const } })),
+    resume: vi.fn(async () => ({ sessionId: "resumed", route: { kind: "owned" as const, mode: "queued" as const } })),
     inject: vi.fn(async () => undefined),
     suspend: vi.fn(async () => undefined),
     shutdown: vi.fn(async () => undefined),
@@ -60,6 +61,7 @@ function makeMockHandler(overrides: Partial<MockHandler> = {}): MockHandler {
 function handlerConfig(overrides: Partial<HandlerConfig> = {}): HandlerConfig {
   return {
     workspaceRoot: "/tmp/first-tree-codex-handler-test",
+    runtimeProvider: "codex",
     ...overrides,
   };
 }
@@ -117,15 +119,17 @@ describe("codex handler engine delegation branches", () => {
     const ctx = context();
     const handler = createCodexHandler(handlerConfig({ codexHandlerEngine: "sdk" }));
 
-    await expect(handler.start(message(), ctx)).resolves.toEqual({ providerSessionId: "started" });
-    await expect(handler.resume(message(), "session-1", ctx)).resolves.toEqual({ providerSessionId: "resumed" });
-    await handler.inject(message());
+    await expect(handler.start(message(), ctx, noopDeliveryToken())).resolves.toMatchObject({ sessionId: "started" });
+    await expect(handler.resume(message(), "session-1", ctx, noopDeliveryToken())).resolves.toMatchObject({
+      sessionId: "resumed",
+    });
+    await handler.inject(message(), noopDeliveryToken());
     await handler.suspend();
     await handler.shutdown("done");
 
-    expect(sdkHandler.start).toHaveBeenCalledWith(message(), ctx, undefined);
-    expect(sdkHandler.resume).toHaveBeenCalledWith(message(), "session-1", ctx, undefined);
-    expect(sdkHandler.inject).toHaveBeenCalledWith(message(), undefined);
+    expect(sdkHandler.start).toHaveBeenCalledWith(message(), ctx, expect.any(Object));
+    expect(sdkHandler.resume).toHaveBeenCalledWith(message(), "session-1", ctx, expect.any(Object));
+    expect(sdkHandler.inject).toHaveBeenCalledWith(message(), expect.any(Object));
     expect(sdkHandler.suspend).toHaveBeenCalledTimes(1);
     expect(sdkHandler.shutdown).toHaveBeenCalledWith("done");
   });
@@ -144,7 +148,7 @@ describe("codex handler engine delegation branches", () => {
     const ctx = context();
     const handler = createCodexHandler(handlerConfig({ codexHandlerEngine: "auto" }));
 
-    await expect(handler.start(message(), ctx)).resolves.toEqual({ providerSessionId: "started" });
+    await expect(handler.start(message(), ctx, noopDeliveryToken())).resolves.toMatchObject({ sessionId: "started" });
     await handler.suspend();
     await handler.shutdown("fallback done");
 
@@ -153,7 +157,7 @@ describe("codex handler engine delegation branches", () => {
       "codex app-server shutdown before fallback failed after launch: shutdown failed",
     );
     expect(ctx.log).toHaveBeenCalledWith("app server failed; falling back to @openai/codex-sdk handler");
-    expect(sdkHandler.start).toHaveBeenCalledWith(message(), ctx, undefined);
+    expect(sdkHandler.start).toHaveBeenCalledWith(message(), ctx, expect.any(Object));
     expect(sdkHandler.suspend).toHaveBeenCalledTimes(1);
     expect(sdkHandler.shutdown).toHaveBeenCalledWith("fallback done");
   });
@@ -168,11 +172,15 @@ describe("codex handler engine delegation branches", () => {
     });
 
     const handler = createCodexHandler(handlerConfig({ codexHandlerEngine: "auto" }));
-    await expect(handler.resume(message(), "session-1", context())).resolves.toEqual({ providerSessionId: "resumed" });
-    expect(sdkHandler.resume).toHaveBeenCalledWith(message(), "session-1", expect.any(Object), undefined);
+    await expect(handler.resume(message(), "session-1", context(), noopDeliveryToken())).resolves.toMatchObject({
+      sessionId: "resumed",
+    });
+    expect(sdkHandler.resume).toHaveBeenCalledWith(message(), "session-1", expect.any(Object), expect.any(Object));
 
     const trialHandler = createCodexHandler(handlerConfig({ codexHandlerEngine: "auto" }));
-    await expect(trialHandler.resume(message(), "session-2", context(trialMetadata))).rejects.toThrow("resume failed");
+    await expect(
+      trialHandler.resume(message(), "session-2", context(trialMetadata), noopDeliveryToken()),
+    ).rejects.toThrow("resume failed");
   });
 
   it("uses production auto mode when no explicit engine or test env fallback is present", async () => {
@@ -186,8 +194,8 @@ describe("codex handler engine delegation branches", () => {
 
     try {
       const handler = createCodexHandler(handlerConfig());
-      await handler.inject(message());
-      expect(appHandler.inject).toHaveBeenCalledWith(message(), undefined);
+      await handler.inject(message(), noopDeliveryToken());
+      expect(appHandler.inject).toHaveBeenCalledWith(message(), expect.any(Object));
     } finally {
       if (previousEngine === undefined) delete process.env.FIRST_TREE_CODEX_HANDLER_ENGINE;
       else process.env.FIRST_TREE_CODEX_HANDLER_ENGINE = previousEngine;

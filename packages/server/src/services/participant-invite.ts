@@ -55,9 +55,11 @@
  *     managerId reading after a product decision that "owner's agent
  *     acts on owner's behalf" — see that PR for the deliberation
  *     transcript.
- *   - the actual write goes through `applyMembershipWrite`, which encloses
- *     the silent-context backfill + watcher recompute invariants and the
- *     post-commit audience-cache invalidation.
+ *   - the actual write goes through `addChatParticipants`, which encloses
+ *     silent-context backfill + watcher recompute. The public service owns
+ *     the transaction and post-commit cache invalidation; transaction-aware
+ *     callers use the exported primitive and invalidate only after their
+ *     enclosing transaction commits.
  */
 
 import {
@@ -73,8 +75,16 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
-import { BadRequestError, CallerNotSpeakerError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
-import { applyMembershipWrite } from "./participant-mode.js";
+import {
+  AppError,
+  BadRequestError,
+  CallerNotSpeakerError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { addChatParticipants } from "./participant-mode.js";
 
 export type InviteParticipantsArgs = {
   chatId: string;
@@ -167,7 +177,7 @@ export function rejectedPrivateTargets(
  * contract and the rationale for which checks live here vs. in Layer-3
  * adapter shells.
  */
-export async function inviteParticipantsToChat(db: Database, args: InviteParticipantsArgs): Promise<void> {
+async function prepareParticipantInviteInTransaction(db: Database, args: InviteParticipantsArgs): Promise<string[]> {
   const { chatId, callerAgentId, targetAgentIds, errorOnAlreadySpeaker } = args;
   const distinctTargets = [...new Set(targetAgentIds)];
   if (distinctTargets.length === 0) {
@@ -295,18 +305,57 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
     // skip. No row write needed; the watcher set is already consistent with
     // the speaker set (the most recent write that put these agents in has
     // already run recompute). Skip the round-trip.
-    return;
+    return [];
   }
+
+  return toWrite;
+}
+
+/**
+ * Run the canonical invite authorization and membership writer inside the
+ * caller's transaction. The caller owns commit and post-commit audience-cache
+ * invalidation, which lets SCM persist membership and its attention line
+ * atomically without copying any admission rule.
+ */
+export async function inviteParticipantsToChatInTransaction(
+  db: Database,
+  args: InviteParticipantsArgs,
+): Promise<boolean> {
+  const toWrite = await prepareParticipantInviteInTransaction(db, args);
+  if (toWrite.length === 0) return false;
 
   // 6. Delegate to the canonical write bundle. `upgradeWatcherToSpeaker:
   //    true` lets a pre-existing watcher row be promoted in place; for
   //    brand-new targets it's a regular INSERT.
-  await applyMembershipWrite(
+  await addChatParticipants(
     db,
-    chatId,
+    args.chatId,
     toWrite.map((agentId) => ({ agentId, role: "member" as const })),
     { upgradeWatcherToSpeaker: true },
   );
+  return true;
+}
+
+/** Read-only admission probe used by target-chat candidate selection. */
+export async function canInviteParticipantsToChatInTransaction(
+  db: Database,
+  args: InviteParticipantsArgs,
+): Promise<boolean> {
+  try {
+    await prepareParticipantInviteInTransaction(db, args);
+    return true;
+  } catch (error) {
+    if (error instanceof AppError) return false;
+    throw error;
+  }
+}
+
+export async function inviteParticipantsToChat(db: Database, args: InviteParticipantsArgs): Promise<void> {
+  let changed = false;
+  await db.transaction(async (rawTx) => {
+    changed = await inviteParticipantsToChatInTransaction(rawTx as unknown as Database, args);
+  });
+  if (changed) invalidateChatAudience(args.chatId);
 }
 
 /**

@@ -28,11 +28,15 @@ import {
 import * as gitlabEntityFollowService from "../services/gitlab-entity-follow.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
+import { lockGitlabEntityAttention } from "../services/scm-entity-attention-lock.js";
 import { getTeamSetupCapabilities } from "../services/setup-capabilities.js";
 import { createTestAdmin, createTestAgent, seedHealthyAgentRuntime, useTestApp } from "./helpers.js";
 
-const { declareGitlabEntityFollow, observeGitlabEntityAndResolveFollowers, removeGitlabEntityFollow } =
-  gitlabEntityFollowService;
+const {
+  declareGitlabEntityFollow: declareGitlabEntityFollowRaw,
+  observeGitlabEntityAndResolveFollowers,
+  removeGitlabEntityFollow,
+} = gitlabEntityFollowService;
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 
@@ -149,6 +153,35 @@ async function postWebhook(
 describe("GitLab Stage 2A backend", () => {
   const getApp = useTestApp();
 
+  async function seedSameOrgAgent(app: App, organizationId: string, memberId: string, name: string): Promise<string> {
+    const agentId = randomUUID();
+    await app.db.insert(agents).values({
+      uuid: agentId,
+      name,
+      displayName: name,
+      organizationId,
+      type: "agent",
+      inboxId: `inbox_${agentId}`,
+      managerId: memberId,
+      status: "active",
+    });
+    return agentId;
+  }
+
+  async function declareGitlabEntityFollow(
+    db: Parameters<typeof declareGitlabEntityFollowRaw>[0],
+    input: Parameters<typeof declareGitlabEntityFollowRaw>[1],
+  ): ReturnType<typeof declareGitlabEntityFollowRaw> {
+    await db
+      .insert(chatMembership)
+      .values([
+        { chatId: input.chatId, agentId: input.humanAgentId, role: "owner", accessMode: "speaker" },
+        { chatId: input.chatId, agentId: input.delegateAgentId, role: "member", accessMode: "speaker" },
+      ])
+      .onConflictDoNothing();
+    return declareGitlabEntityFollowRaw(db, input);
+  }
+
   async function connection(app: App, options: { isolatedOrg?: boolean } = {}) {
     let admin = await createTestAdmin(app, { username: `gitlab-${randomUUID().slice(0, 8)}` });
     if (options.isolatedOrg) {
@@ -168,7 +201,13 @@ describe("GitLab Stage 2A backend", () => {
       displayName: "Private GitLab",
       instanceOrigin: "https://gitlab.internal",
     });
-    return { admin, ...created };
+    const followAgentId = await seedSameOrgAgent(
+      app,
+      admin.organizationId,
+      admin.memberId,
+      `gitlab-follow-${randomUUID().slice(0, 8)}`,
+    );
+    return { admin, followAgentId, ...created };
   }
 
   it("stores only one bearer hash per org and atomically replaces the binding", async () => {
@@ -249,9 +288,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId: followedChatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     const replaced = await replaceGitlabConnection(app.db, {
@@ -415,9 +454,9 @@ describe("GitLab Stage 2A backend", () => {
         organizationId: first.admin.organizationId,
         connectionId: first.connectionId,
         chatId,
-        declaredByAgentId: first.admin.humanAgentUuid,
+        declaredByAgentId: first.followAgentId,
         humanAgentId: first.admin.humanAgentUuid,
-        delegateAgentId: first.admin.humanAgentUuid,
+        delegateAgentId: first.followAgentId,
         entityUrl: `https://gitlab.internal/Acme/API/-/merge_requests/${iid}`,
       });
     }
@@ -556,9 +595,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
 
@@ -574,9 +613,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     expect(repeated?.projectId).toBe(501);
@@ -593,7 +632,7 @@ describe("GitLab Stage 2A backend", () => {
     expect(cards[0]).toMatchObject({ format: "card", senderId: first.admin.humanAgentUuid });
     expect(cards[0]?.content).toMatchObject({ type: "gitlab_event", project: "Acme/API" });
     expect(cards[0]?.metadata).toMatchObject({ source: "gitlab", systemSender: "gitlab" });
-    expect(cards[0]?.metadata).toMatchObject({ mentions: [first.admin.humanAgentUuid] });
+    expect(cards[0]?.metadata).toMatchObject({ mentions: [first.followAgentId] });
 
     const stableId = `dedup-${randomUUID()}`;
     expect((await postWebhook(app, first.bearer, mergeRequestPayload(), { stableId })).json()).toMatchObject({
@@ -626,9 +665,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     expect((await postWebhook(app, first.bearer, mergeRequestPayload())).json()).toMatchObject({
@@ -928,9 +967,9 @@ describe("GitLab Stage 2A backend", () => {
         organizationId: first.admin.organizationId,
         connectionId: first.connectionId,
         chatId,
-        declaredByAgentId: first.admin.humanAgentUuid,
+        declaredByAgentId: first.followAgentId,
         humanAgentId: first.admin.humanAgentUuid,
-        delegateAgentId: first.admin.humanAgentUuid,
+        delegateAgentId: first.followAgentId,
         entityUrl: `https://gitlab.internal/${projectPath}/-/merge_requests/42`,
       });
     }
@@ -1125,9 +1164,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
     });
     releaseFence();
@@ -1178,6 +1217,145 @@ describe("GitLab Stage 2A backend", () => {
     expect(replacement.connectionId).not.toBe(first.connectionId);
   });
 
+  it("rejects a human-issued GitLab follow when the delegate changes behind the entity fence", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const replacementAgentId = await seedSameOrgAgent(
+      app,
+      first.admin.organizationId,
+      first.admin.memberId,
+      `gitlab-replacement-${randomUUID().slice(0, 8)}`,
+    );
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: first.admin.organizationId,
+      type: "group",
+      metadata: {},
+    });
+    await app.db.insert(chatMembership).values([
+      { chatId, agentId: first.admin.humanAgentUuid, role: "owner", accessMode: "speaker" },
+      { chatId, agentId: first.followAgentId, role: "member", accessMode: "speaker" },
+      { chatId, agentId: replacementAgentId, role: "member", accessMode: "speaker" },
+    ]);
+    await app.db
+      .update(agents)
+      .set({ delegateMention: first.followAgentId })
+      .where(eq(agents.uuid, first.admin.humanAgentUuid));
+
+    let entityLocked!: () => void;
+    let releaseEntity!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      entityLocked = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseEntity = resolve;
+    });
+    const holding = app.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as typeof app.db;
+      await lockGitlabEntityAttention(tx, {
+        connectionId: first.connectionId,
+        projectPathNormalized: "acme/api",
+        entityType: "pull_request",
+        entityIid: 81,
+      });
+      entityLocked();
+      await release;
+    });
+    await locked;
+
+    const following = declareGitlabEntityFollowRaw(app.db, {
+      organizationId: first.admin.organizationId,
+      connectionId: first.connectionId,
+      chatId,
+      declaredByAgentId: first.admin.humanAgentUuid,
+      humanAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
+      boundVia: "human_declared",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/81",
+    });
+    await app.db
+      .update(agents)
+      .set({ delegateMention: replacementAgentId })
+      .where(eq(agents.uuid, first.admin.humanAgentUuid));
+    releaseEntity();
+    await holding;
+    await expect(following).rejects.toThrow("authority changed");
+    expect(
+      await app.db.select().from(gitlabEntityChatMappings).where(eq(gitlabEntityChatMappings.entityIid, 81)),
+    ).toHaveLength(0);
+  });
+
+  it("rejects GitLab rebind when the wake agent leaves the destination chat behind the entity fence", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const originalChatId = `chat_${randomUUID()}`;
+    const destinationChatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values([
+      { id: originalChatId, organizationId: first.admin.organizationId, type: "group", metadata: {} },
+      { id: destinationChatId, organizationId: first.admin.organizationId, type: "group", metadata: {} },
+    ]);
+    for (const chatId of [originalChatId, destinationChatId]) {
+      await app.db.insert(chatMembership).values([
+        { chatId, agentId: first.admin.humanAgentUuid, role: "owner", accessMode: "speaker" },
+        { chatId, agentId: first.followAgentId, role: "member", accessMode: "speaker" },
+      ]);
+    }
+    await declareGitlabEntityFollowRaw(app.db, {
+      organizationId: first.admin.organizationId,
+      connectionId: first.connectionId,
+      chatId: originalChatId,
+      declaredByAgentId: first.followAgentId,
+      humanAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/82",
+    });
+
+    let entityLocked!: () => void;
+    let releaseEntity!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      entityLocked = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseEntity = resolve;
+    });
+    const holding = app.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as typeof app.db;
+      await lockGitlabEntityAttention(tx, {
+        connectionId: first.connectionId,
+        projectPathNormalized: "acme/api",
+        entityType: "pull_request",
+        entityIid: 82,
+      });
+      entityLocked();
+      await release;
+    });
+    await locked;
+
+    const rebinding = declareGitlabEntityFollowRaw(app.db, {
+      organizationId: first.admin.organizationId,
+      connectionId: first.connectionId,
+      chatId: destinationChatId,
+      declaredByAgentId: first.followAgentId,
+      humanAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/82",
+      rebind: true,
+    });
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, destinationChatId), eq(chatMembership.agentId, first.followAgentId)));
+    releaseEntity();
+    await holding;
+    await expect(rebinding).rejects.toThrow("authority changed");
+    expect(
+      await app.db
+        .select({ chatId: gitlabEntityChatMappings.chatId })
+        .from(gitlabEntityChatMappings)
+        .where(eq(gitlabEntityChatMappings.entityIid, 82)),
+    ).toEqual([{ chatId: originalChatId }]);
+  });
+
   it("does not persist an unfollowed webhook and resolves later pending follows on the next event", async () => {
     const app = getApp();
     const first = await connection(app);
@@ -1189,7 +1367,12 @@ describe("GitLab Stage 2A backend", () => {
     expect(unseen).toHaveLength(0);
 
     for (const suffix of ["a", "b"]) {
-      const routeAgent = await createTestAgent(app, { name: `pending-${suffix}-${randomUUID().slice(0, 8)}` });
+      const routeAgentId = await seedSameOrgAgent(
+        app,
+        first.admin.organizationId,
+        first.admin.memberId,
+        `pending-${suffix}-${randomUUID().slice(0, 8)}`,
+      );
       const chatId = `chat_${suffix}_${randomUUID()}`;
       await app.db.insert(chats).values({
         id: chatId,
@@ -1207,9 +1390,9 @@ describe("GitLab Stage 2A backend", () => {
         organizationId: first.admin.organizationId,
         connectionId: first.connectionId,
         chatId,
-        declaredByAgentId: first.admin.humanAgentUuid,
+        declaredByAgentId: routeAgentId,
         humanAgentId: first.admin.humanAgentUuid,
-        delegateAgentId: routeAgent.agent.uuid,
+        delegateAgentId: routeAgentId,
         entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
       });
       expect(follow).toMatchObject({ projectId: null });
@@ -1245,9 +1428,9 @@ describe("GitLab Stage 2A backend", () => {
           organizationId: first.admin.organizationId,
           connectionId: first.connectionId,
           chatId,
-          declaredByAgentId: first.admin.humanAgentUuid,
+          declaredByAgentId: first.followAgentId,
           humanAgentId: first.admin.humanAgentUuid,
-          delegateAgentId: first.admin.humanAgentUuid,
+          delegateAgentId: first.followAgentId,
           entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
         })
       )?.projectId,
@@ -1259,9 +1442,9 @@ describe("GitLab Stage 2A backend", () => {
           organizationId: first.admin.organizationId,
           connectionId: first.connectionId,
           chatId,
-          declaredByAgentId: first.admin.humanAgentUuid,
+          declaredByAgentId: first.followAgentId,
           humanAgentId: first.admin.humanAgentUuid,
-          delegateAgentId: first.admin.humanAgentUuid,
+          delegateAgentId: first.followAgentId,
           entityUrl: "https://gitlab.internal/Acme/Renamed/-/merge_requests/52",
         })
       )?.projectId,
@@ -1277,12 +1460,105 @@ describe("GitLab Stage 2A backend", () => {
     expect(mappings[0]).toMatchObject({ projectId: 501, projectPath: "Acme/Renamed" });
   });
 
+  it("serializes old-path unfollow with a renamed observed entity by numeric project identity", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: first.admin.organizationId,
+      type: "group",
+      metadata: {},
+    });
+    await app.db.insert(chatMembership).values({
+      chatId,
+      agentId: first.admin.humanAgentUuid,
+      role: "owner",
+      accessMode: "speaker",
+    });
+    const mapping = await declareGitlabEntityFollow(app.db, {
+      organizationId: first.admin.organizationId,
+      connectionId: first.connectionId,
+      chatId,
+      declaredByAgentId: first.followAgentId,
+      humanAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/62",
+    });
+    await observeGitlabEntityAndResolveFollowers(app.db, first.connectionId, {
+      entityType: "pull_request",
+      entityIid: 62,
+      projectId: 501,
+      projectPath: "Acme/API",
+      entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/62",
+      title: "Before rename",
+      entityState: "open",
+    });
+
+    let renameLocked!: () => void;
+    let releaseRename!: () => void;
+    const renameLock = new Promise<void>((resolve) => {
+      renameLocked = resolve;
+    });
+    const renameRelease = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
+    const renaming = app.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as App["db"];
+      await lockGitlabEntityAttention(tx, {
+        connectionId: first.connectionId,
+        projectPathNormalized: "acme/renamed",
+        projectIds: [501],
+        entityType: "pull_request",
+        entityIid: 62,
+      });
+      renameLocked();
+      await renameRelease;
+      return observeGitlabEntityAndResolveFollowers(tx, first.connectionId, {
+        entityType: "pull_request",
+        entityIid: 62,
+        projectId: 501,
+        projectPath: "Acme/Renamed",
+        entityUrl: "https://gitlab.internal/Acme/Renamed/-/merge_requests/62",
+        title: "After rename",
+        entityState: "open",
+      });
+    });
+    await renameLock;
+
+    let unfollowSettled = false;
+    const unfollowing = removeGitlabEntityFollow(app.db, {
+      organizationId: first.admin.organizationId,
+      chatId,
+      mappingId: mapping.id,
+    }).finally(() => {
+      unfollowSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(unfollowSettled).toBe(false);
+
+    releaseRename();
+    await renaming;
+    await expect(unfollowing).resolves.toBe(1);
+    expect(
+      await app.db
+        .select({ id: gitlabEntityChatMappings.id })
+        .from(gitlabEntityChatMappings)
+        .where(eq(gitlabEntityChatMappings.id, mapping.id)),
+    ).toHaveLength(0);
+  });
+
   it("isolates per-chat delivery failure and retains the whole-request stable claim", async () => {
     const app = getApp();
     const first = await connection(app);
     expect((await postWebhook(app, first.bearer, mergeRequestPayload(53))).statusCode).toBe(200);
     for (const suffix of ["a", "b"]) {
-      const routeAgent = await createTestAgent(app, { name: `failure-${suffix}-${randomUUID().slice(0, 8)}` });
+      const routeAgentId = await seedSameOrgAgent(
+        app,
+        first.admin.organizationId,
+        first.admin.memberId,
+        `failure-${suffix}-${randomUUID().slice(0, 8)}`,
+      );
       const chatId = `chat_${suffix}_${randomUUID()}`;
       await app.db.insert(chats).values({
         id: chatId,
@@ -1300,9 +1576,9 @@ describe("GitLab Stage 2A backend", () => {
         organizationId: first.admin.organizationId,
         connectionId: first.connectionId,
         chatId,
-        declaredByAgentId: first.admin.humanAgentUuid,
+        declaredByAgentId: routeAgentId,
         humanAgentId: first.admin.humanAgentUuid,
-        delegateAgentId: routeAgent.agent.uuid,
+        delegateAgentId: routeAgentId,
         entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/52",
       });
     }
@@ -1636,9 +1912,9 @@ describe("GitLab Stage 2A backend", () => {
       organizationId: first.admin.organizationId,
       connectionId: first.connectionId,
       chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       entityUrl: "https://gitlab.internal/Acme/API/-/merge_requests/47",
     });
     if (!pending) throw new Error("pending GitLab mapping missing");
@@ -1659,9 +1935,9 @@ describe("GitLab Stage 2A backend", () => {
       chatId,
       boundVia: "identity_target",
       identityLinkId,
-      declaredByAgentId: first.admin.humanAgentUuid,
+      declaredByAgentId: first.followAgentId,
       humanAgentId: first.admin.humanAgentUuid,
-      delegateAgentId: first.admin.humanAgentUuid,
+      delegateAgentId: first.followAgentId,
       attentionMode: "paired",
       attentionBackfillVersion: 1,
       active: true,

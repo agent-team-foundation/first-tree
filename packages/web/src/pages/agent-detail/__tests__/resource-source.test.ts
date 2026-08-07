@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { sourceLabel, templateSourceLabel } from "../resource-source.js";
 
 describe("resource source labels", () => {
-  it("keeps ordinary source labels unchanged", () => {
-    expect(sourceLabel("agent_extra")).toBe("Added by you");
-    expect(sourceLabel("inline_prompt")).toBe("Added by you");
-    expect(sourceLabel("team_available")).toBe("From your team · optional");
-    expect(sourceLabel("team_recommended")).toBe("From your team");
+  it("describes the stable rule that makes a resource apply", () => {
+    expect(sourceLabel("agent_extra")).toBe("Added to this agent");
+    expect(sourceLabel("inline_prompt")).toBe("Custom for this agent");
+    expect(sourceLabel("team_available")).toBe("Enabled for this agent");
+    expect(sourceLabel("team_recommended")).toBe("Team default");
   });
 
   it("labels Template-imported resources with the Template name when known", () => {

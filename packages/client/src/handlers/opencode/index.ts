@@ -21,8 +21,9 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+
 import {
   isManagedSkillsUnsafeDiscoveryError,
   type ReconciledTeamSkill,
@@ -304,7 +305,7 @@ function queuedUnsafeDiscoveryRetryDelayMs(attempt: number): number {
 
 export const createOpenCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
-  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "opencode");
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -1317,8 +1318,7 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
 
   return {
     async start(message, sessionCtx, token) {
-      const explicit = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
       initialTurnPreparing = true;
       let completed = false;
       let delivered = false;
@@ -1339,12 +1339,11 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
       if (delivered) {
         writeSessionBriefingFingerprint(workspaceCwd, sessionId, computeBriefingFingerprint(briefing));
       }
-      return explicit ? { sessionId, route: { kind: "owned", mode: "processing" } } : sessionId;
+      return { sessionId, route: { kind: "owned", mode: "processing" } };
     },
 
     async resume(message, sessionId, sessionCtx, token) {
-      const explicit = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       initialTurnPreparing = true;
       let briefing: string;
       let workspaceCwd: string;
@@ -1381,14 +1380,12 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
         scheduleDrain();
       }
       const effectiveId = providerSessionId ?? pendingSyntheticId ?? sessionId;
-      return explicit
-        ? { sessionId: effectiveId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : effectiveId;
+      return { sessionId: effectiveId, route: message ? { kind: "owned", mode: "processing" } : null };
     },
 
     inject(message, token) {
       if (!ctx) return { kind: "rejected", reason: "no_active_context", retryable: true };
-      queue.push({ message, token: token ?? deliveryTokenFromSessionContext(ctx) });
+      queue.push({ message, token });
       scheduleDrain();
       return { kind: "owned", mode: "queued" };
     },

@@ -1,4 +1,9 @@
 import type { Command } from "commander";
+import {
+  assertContextMutationCanStart,
+  withAccountStateMutationLock,
+} from "../../core/context-integration/account-state-guard.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { planContextIntegrationInstall } from "../../core/context-integration/installer.js";
 import { readContextIntegrationInstallManifest } from "../../core/context-integration/manifest.js";
 import {
@@ -16,16 +21,31 @@ function configure(command: Command): void {
 export function runContextRepair(context: CommandContext): void {
   const provider = parseContextProvider(context.command.opts<{ provider?: string }>().provider ?? "");
   const driver = createContextIntegrationDriver(provider);
-  const recoveredOperation = recoverContextIntegrationOperation(driver);
-  const plan = planContextIntegrationInstall(driver);
-  if (plan.operation !== "unchanged") repairContextIntegrationOperation(driver, plan);
-  const result = {
-    manifest: readContextIntegrationInstallManifest(provider),
-    probe: driver.probe(plan.marketplaceName, "first-tree-context"),
-    repaired: recoveredOperation || plan.operation !== "unchanged",
-  };
+  const result = withAccountStateMutationLock(() => {
+    assertContextMutationCanStart();
+    const recoveredOperation = recoverContextIntegrationOperation(driver);
+    const plan = planContextIntegrationInstall(driver);
+    if (plan.operation !== "unchanged") {
+      repairContextIntegrationOperation(driver, plan, {
+        nextSessionObligationKind: provider === "claude-code" ? "standalone_repair" : undefined,
+      });
+    }
+    const nextSessionObligation = provider === "claude-code" ? inspectContextAdapterNextSessionObligation() : null;
+    return {
+      manifest: readContextIntegrationInstallManifest(provider),
+      probe: driver.probe(plan.marketplaceName, "first-tree-context"),
+      repaired: recoveredOperation || plan.operation !== "unchanged",
+      nextSessionPending: nextSessionObligation !== null,
+      nextActions: nextSessionObligation ? ["Start a new Claude session to use the repaired Context Plugin."] : [],
+    };
+  });
   if (context.options.json) print.result(result);
-  else print.status("Context Plugin", result.repaired ? "Repaired" : "Healthy");
+  else {
+    print.status("Context Plugin", result.repaired ? "Repaired" : "Healthy");
+    result.nextActions.forEach((action, index) => {
+      print.status(`Next ${index + 1}`, action);
+    });
+  }
 }
 
 export const contextRepairCommand: SubcommandModule = {

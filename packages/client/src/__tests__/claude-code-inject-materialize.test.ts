@@ -95,6 +95,7 @@ vi.mock("../runtime/source-repos.js", () => ({
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { writeAgentBriefing } from "../runtime/bootstrap.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 
 const AGENT_ID = "019e71d2-c9ec-7f11-86bf-5dfc9e873338";
 
@@ -206,11 +207,11 @@ afterEach(() => {
 describe("claude-code inject-time managed Skill reconciliation", () => {
   it("materializes a skill bound mid-session so the injected turn finds it on disk", async () => {
     cachedConfig = makeConfig(1, []);
-    const config = { workspaceRoot, agentConfigCache };
+    const config = { workspaceRoot, agentConfigCache, runtimeProvider: "claude-code" as const };
     const handler = createClaudeCodeHandler(config);
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, noopDeliveryToken());
     resolveChatContext();
     await startPromise;
     await waitFor(() => state.observedInputs.length === 1);
@@ -222,7 +223,7 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
     // reflects the newer version. An injected message drives the drain →
     // maybeSwitchConfig → materialize.
     cachedConfig = makeConfig(2, [SCAN_SKILL]);
-    handler.inject(makeMessage("m2", "run the scan"));
+    handler.inject(makeMessage("m2", "run the scan"), noopDeliveryToken());
 
     // Wait for the body to actually land — existsSync alone can race the
     // create-then-write window and observe a still-empty file.
@@ -235,11 +236,11 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
 
   it("does not prune a live skill when a refresh falls back to a lower-version empty config", async () => {
     cachedConfig = makeConfig(2, [SCAN_SKILL]);
-    const config = { workspaceRoot, agentConfigCache };
+    const config = { workspaceRoot, agentConfigCache, runtimeProvider: "claude-code" as const };
     const handler = createClaudeCodeHandler(config);
     const ctx = makeContext();
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, noopDeliveryToken());
     resolveChatContext();
     await startPromise;
     await waitFor(() => state.observedInputs.length === 1);
@@ -252,7 +253,7 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
     // cannot prune the live skill.
     vi.mocked(writeAgentBriefing).mockClear();
     cachedConfig = makeConfig(0, []);
-    handler.inject(makeMessage("m2", "another message"));
+    handler.inject(makeMessage("m2", "another message"), noopDeliveryToken());
 
     await waitFor(() => vi.mocked(writeAgentBriefing).mock.calls.length >= 1);
     expect(existsSync(skillPath())).toBe(true);
@@ -296,16 +297,20 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
       },
     };
     cachedConfig = makeConfig(1, []);
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache,
+    });
     const ctx = makeContext(fetchAttachment);
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, noopDeliveryToken());
     resolveChatContext();
     await startPromise;
     await waitFor(() => state.observedInputs.length === 1);
 
     cachedConfig = makeConfig(2, [bundledSkill]);
-    handler.inject(makeMessage("m2", "run the newly attached scan"));
+    handler.inject(makeMessage("m2", "run the newly attached scan"), noopDeliveryToken());
 
     await waitFor(() => state.observedInputs.length === 2);
     expect(fetchAttachment).toHaveBeenCalledTimes(1);
@@ -342,10 +347,14 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
     });
     const logs: string[] = [];
     cachedConfig = makeConfig(1, [bundledSkill]);
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache });
+    const handler = createClaudeCodeHandler({
+      runtimeProvider: "claude-code",
+      workspaceRoot,
+      agentConfigCache,
+    });
     const ctx = makeContext(fetchAttachment, (message) => logs.push(message));
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, noopDeliveryToken());
     resolveChatContext();
     await startPromise;
     await waitFor(() => state.observedInputs.length === 1);
@@ -356,7 +365,7 @@ describe("claude-code inject-time managed Skill reconciliation", () => {
     chmodSync(discoveryRoot, 0o500);
     try {
       cachedConfig = makeConfig(2, [bundledSkill]);
-      handler.inject(makeMessage("m2", "must not reach provider"));
+      handler.inject(makeMessage("m2", "must not reach provider"), noopDeliveryToken());
       await waitFor(() => logs.some((message) => message.includes("cannot be verified or quarantined")));
       expect(state.observedInputs).toHaveLength(1);
       expect(readFileSync(join(scriptsRoot, "scan.sh"), "utf-8")).toContain("tampered");

@@ -22,8 +22,7 @@ export function RuntimeTab() {
   const editsDisabled = ctx.agent.status !== "active" || configSave.pending;
   const canSwitchRuntime =
     !ctx.runtimeSwitchClaim &&
-    ((!!ctx.clientStatus?.clientId && ctx.agent.status === "active") ||
-      (ctx.isUnclaimed && ctx.agent.status === "suspended"));
+    ((!!ctx.agent.clientId && ctx.agent.status === "active") || (ctx.isUnclaimed && ctx.agent.status === "suspended"));
   const modelSettingsSaved =
     configSave.justSaved &&
     (configSave.savedField === "model" ||
@@ -62,8 +61,6 @@ export function RuntimeTab() {
           <RuntimeSection
             runtimeProvider={ctx.setupRuntimeProvider}
             computerLabel={ctx.boundClientLabel}
-            computerStatusLoading={ctx.clientStatusLoading}
-            computerStatusError={ctx.clientStatusError}
             canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}
             bindComputerPending={ctx.bindClientPending}
             onBindComputer={ctx.onOpenBindDialog}
@@ -76,13 +73,13 @@ export function RuntimeTab() {
 
       {config && (
         <div style={{ marginTop: "var(--sp-8)" }}>
-          <Section title={titleWithSemantics("Model settings", modelSettingsSaved)}>
+          <Section headingLevel={3} title={titleWithSemantics("Model settings", modelSettingsSaved)}>
             <ModelSection
               value={config.payload.model}
               onChange={(v) => configSave.save({ model: v }, { field: "model" })}
               disabled={editsDisabled}
               provider={ctx.setupRuntimeProvider}
-              clientId={ctx.clientStatus?.clientId ?? null}
+              clientId={ctx.agent.clientId ?? null}
             />
             {/* Cursor has no separate reasoning-effort channel — effort/fast
                 variants live in the provider-native model id, so the control

@@ -10,6 +10,7 @@ import {
 } from "../core/context-integration/context-route.js";
 
 const SESSION_RECEIPT = "server-signed-session-candidate-receipt-value";
+const ACCOUNT_CLIENT_ID = "client_1234abcd";
 
 const roots: string[] = [];
 const originalHome = process.env.FIRST_TREE_HOME;
@@ -64,6 +65,7 @@ describe("BYO SCOPE router", () => {
         sessionCandidateReceipt: SESSION_RECEIPT,
       },
       {
+        readAccountClientId: () => ACCOUNT_CLIENT_ID,
         fetchScope: () => ({
           commit: "a".repeat(40),
           scope: {
@@ -87,7 +89,8 @@ describe("BYO SCOPE router", () => {
     expect(JSON.stringify(result)).not.toContain("private-node");
     const candidateId = result.candidates[0]?.candidateId;
     if (!candidateId) throw new Error("expected session candidate");
-    expect(readContextRouteReceipt(candidateId)).toMatchObject({ organizationId: "org-session" });
+    expect(readContextRouteReceipt(candidateId, ACCOUNT_CLIENT_ID)).toMatchObject({ organizationId: "org-session" });
+    expect(() => readContextRouteReceipt(candidateId, "client_11223344")).toThrow("invalid or expired");
   });
 
   it("fails closed when the Server rejects a tampered session candidate", async () => {
@@ -107,6 +110,7 @@ describe("BYO SCOPE router", () => {
           project: { kind: "path", root: "/tmp/session" },
           sessionCandidateReceipt: `${SESSION_RECEIPT}-tampered`,
         },
+        { readAccountClientId: () => ACCOUNT_CLIENT_ID },
       ),
     ).rejects.toThrow("Invalid or expired");
     expect(authority).toHaveBeenCalledOnce();
@@ -142,6 +146,7 @@ describe("BYO SCOPE router", () => {
         sessionCandidateReceipt: SESSION_RECEIPT,
       },
       {
+        readAccountClientId: () => ACCOUNT_CLIENT_ID,
         fetchScope: () => {
           throw new Error("Root SCOPE.md is missing");
         },
@@ -204,6 +209,8 @@ describe("BYO SCOPE router", () => {
       },
       { provider: "codex", project: { kind: "path", root: "/work" } },
       {
+        readAccountClientId: () => ACCOUNT_CLIENT_ID,
+        assertAdapterReady: vi.fn(),
         fetchScope: () => ({
           commit: "a".repeat(40),
           scope: { schemaVersion: 1, relatedRepositories: [], body: "Clearly matches this task." },

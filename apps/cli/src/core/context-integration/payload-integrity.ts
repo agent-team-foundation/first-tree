@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { ContextIntegrationProvider } from "@first-tree/shared";
 import { quotePosixShellArg } from "../posix-shell.js";
 import { resolveCliInvocation } from "../supervisor/shared.js";
@@ -8,7 +8,7 @@ import type { ResolvedBinary } from "../supervisor/types.js";
 import type { ProviderPluginProbe } from "./provider-driver.js";
 import { type ContextIntegrationRelease, providerPluginRoot } from "./release.js";
 
-const LAUNCHER_PATH = "bin/context-session-start";
+const LAUNCHER_PATHS = ["bin/context-session-start"] as const;
 const HOOK_PATH = "hooks/hooks.json";
 
 export function materializeContextPluginPayload(
@@ -17,13 +17,13 @@ export function materializeContextPluginPayload(
   invocation: ResolvedBinary = resolveCliInvocation(),
 ): string {
   const renderedInvocation = renderCliInvocation(invocation);
-  const launcherPath = join(pluginRoot, LAUNCHER_PATH);
-  writeFileSync(
-    launcherPath,
-    materializedFile(LAUNCHER_PATH, readFileSync(launcherPath), adapterDigest, renderedInvocation),
-    { mode: 0o700 },
-  );
-  chmodSync(launcherPath, 0o700);
+  for (const name of LAUNCHER_PATHS) {
+    const launcherPath = join(pluginRoot, name);
+    writeFileSync(launcherPath, materializedFile(name, readFileSync(launcherPath), adapterDigest, renderedInvocation), {
+      mode: 0o700,
+    });
+    chmodSync(launcherPath, 0o700);
+  }
 
   const hookPath = join(pluginRoot, HOOK_PATH);
   const temporary = `${hookPath}.tmp`;
@@ -106,11 +106,38 @@ export function inspectContextPluginPayload(
     return ["The Context Plugin install manifest does not record its materialized CLI invocation."];
   }
   try {
+    verifyStableAdapterMarketplace(stablePluginRoot, release, provider);
     const expectedDigest = verifyMaterializedContextPlugin(stablePluginRoot, release, provider, renderedInvocation);
     verifyProviderInstalledContextPlugin(probe, expectedDigest);
     return [];
   } catch (error) {
     return [error instanceof Error ? error.message : String(error)];
+  }
+}
+
+function verifyStableAdapterMarketplace(
+  stablePluginRoot: string,
+  release: ContextIntegrationRelease,
+  provider: ContextIntegrationProvider,
+): void {
+  const stableRoot = dirname(dirname(stablePluginRoot));
+  const releaseRoot = join(release.root, provider);
+  const pluginPrefix = "plugins/first-tree-context/";
+  const releaseFiles = normalizedFiles(releaseRoot).filter(
+    (path) => !relative(releaseRoot, path).split("\\").join("/").startsWith(pluginPrefix),
+  );
+  const stableFiles = normalizedFiles(stableRoot).filter(
+    (path) => !relative(stableRoot, path).split("\\").join("/").startsWith(pluginPrefix),
+  );
+  const releaseNames = releaseFiles.map((path) => relative(releaseRoot, path).split("\\").join("/"));
+  const stableNames = stableFiles.map((path) => relative(stableRoot, path).split("\\").join("/"));
+  if (JSON.stringify(releaseNames) !== JSON.stringify(stableNames)) {
+    throw new Error("The stable Context adapter marketplace file set does not match the current release.");
+  }
+  for (let index = 0; index < releaseFiles.length; index += 1) {
+    if (!readFileSync(releaseFiles[index] ?? "").equals(readFileSync(stableFiles[index] ?? ""))) {
+      throw new Error(`The stable Context adapter marketplace differs at ${releaseNames[index] ?? "unknown"}.`);
+    }
   }
 }
 
@@ -130,15 +157,17 @@ export function contextPluginTreeDigest(root: string): string {
 }
 
 function assertLauncherExecutable(pluginRoot: string): void {
-  const launcherPath = join(pluginRoot, LAUNCHER_PATH);
-  const launcher = lstatSync(launcherPath);
-  if (!launcher.isFile() || launcher.isSymbolicLink() || (launcher.mode & 0o100) === 0) {
-    throw new Error(`Context Plugin SessionStart launcher is not an executable regular file: ${launcherPath}`);
+  for (const name of LAUNCHER_PATHS) {
+    const launcherPath = join(pluginRoot, name);
+    const launcher = lstatSync(launcherPath);
+    if (!launcher.isFile() || launcher.isSymbolicLink() || (launcher.mode & 0o100) === 0) {
+      throw new Error(`Context Plugin launcher is not an executable regular file: ${launcherPath}`);
+    }
   }
 }
 
 function materializedFile(name: string, content: Buffer, adapterDigest: string, renderedInvocation: string): Buffer {
-  if (name === LAUNCHER_PATH) {
+  if ((LAUNCHER_PATHS as readonly string[]).includes(name)) {
     const rendered = content.toString("utf8").replace("__FIRST_TREE_INVOCATION__", renderedInvocation);
     if (rendered.includes("__FIRST_TREE_INVOCATION__")) {
       throw new Error("Context integration launcher contains an unresolved CLI placeholder.");
@@ -146,9 +175,9 @@ function materializedFile(name: string, content: Buffer, adapterDigest: string, 
     return Buffer.from(rendered);
   }
   if (name === HOOK_PATH) {
-    const rendered = content.toString("utf8").replaceAll("__RELEASE_DIGEST__", adapterDigest);
-    if (rendered.includes("__RELEASE_DIGEST__")) {
-      throw new Error("Context integration hook contains an unresolved release placeholder.");
+    const rendered = content.toString("utf8").replaceAll("__ADAPTER_DIGEST__", adapterDigest);
+    if (rendered.includes("__ADAPTER_DIGEST__")) {
+      throw new Error("Context integration hook contains an unresolved adapter identity placeholder.");
     }
     return Buffer.from(rendered);
   }

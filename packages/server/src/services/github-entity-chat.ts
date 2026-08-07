@@ -7,14 +7,21 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
 import {
   canonicalizeGithubEntityKey,
   githubEntityKeyCandidates,
   githubEntityKeysEquivalent,
 } from "./github-entity-key.js";
 import type { EntityState, EntityStateSeed } from "./github-entity-state.js";
+import { inviteParticipantsToChatInTransaction } from "./participant-invite.js";
 import { resolveAgentScmBindingPair } from "./scm-attention-line.js";
-import { decideScmPersonnelTargetChat, type ScmTargetChatDecision } from "./scm-target-chat-policy.js";
+import { githubEntityAttentionLockKey, withScmEntityAttentionTransaction } from "./scm-entity-attention-lock.js";
+import {
+  decideScmPersonnelTargetChat,
+  lockAndValidateScmPersonnelPlacement,
+  type ScmTargetChatDecision,
+} from "./scm-target-chat-policy.js";
 
 const log = createLogger("GithubEntityChat");
 
@@ -35,13 +42,12 @@ const log = createLogger("GithubEntityChat");
  *   - "human_declared"  — written by an explicit follow issued by a human
  *                         (user-scoped route); the delegate side comes from
  *                         the human's `delegate_mention`.
- *   - "human_fallback"  — sibling row written by step (a.5) when an event arrives
- *                         for a `(human, delegate)` pair that has no mapping yet,
- *                         but another delegate under the same `(human, entity)`
- *                         already does. Reuses the existing chat instead of
- *                         minting a fresh one. Surfaces in telemetry so we can
- *                         observe how often the involves→delegate mismatch path
- *                         actually fires in production.
+ *   - "human_fallback"  — sibling row written either by the provider-task
+ *                         human-scoped fallback in step (a.5), or by an
+ *                         explicit `reuse_with_line` personnel decision. The
+ *                         strict personnel path never performs a human lookup.
+ *                         Surfaces in telemetry so both controlled reuse paths
+ *                         remain auditable.
  *
  * Routing logic ignores the distinction; the column exists for audit and the
  * narrow `pull_request.opened` carve-out in `github-audience.ts`.
@@ -64,50 +70,110 @@ export function isCreationEvent(eventType: string, action: string): boolean {
   return (eventType === "pull_request" && action === "opened") || (eventType === "issues" && action === "opened");
 }
 
-/**
- * Reviewer-reuse routing (S9, deliver-once-per-chat). When an involved
- * `(human, delegate)` pair is NOT yet mapped to this entity but the entity
- * already has a **single** bound chat where BOTH the human and the delegate
- * are already speakers, the event routes into that chat instead of minting a
- * sibling one — and **no mapping row is written**. The pair sees the entity's
- * events through chat membership, and `deliverGithubEvent` dedups so the
- * chat receives one card whose wake-set includes this delegate.
- *
- * Returns a discriminated policy decision so the provider executor cannot
- * collapse `strict_new_line` into a nullable chat id and accidentally re-enter
- * human-scoped fallback. Preserves S1 (the chat follows, not the person) and
- * S7 (no followed chat is dropped).
- */
-export async function decideGithubPersonnelTargetChat(
-  db: Database,
-  organizationId: string,
-  entity: GithubEntity,
-  humanAgentId: string,
-  delegateAgentId: string,
-  reason: "review_requested" | "mentioned" | "assigned",
-): Promise<ScmTargetChatDecision> {
-  const candidateKeys = githubEntityKeyCandidates(entity.type, entity.key);
-  const boundChats = await db
-    .selectDistinct({ chatId: githubEntityChatMappings.chatId })
-    .from(githubEntityChatMappings)
-    .where(
-      and(
-        eq(githubEntityChatMappings.organizationId, organizationId),
-        eq(githubEntityChatMappings.entityType, entity.type),
-        inArray(githubEntityChatMappings.entityKey, candidateKeys),
-      ),
-    );
-  if (boundChats.length === 0) return { kind: "strict_new_line" };
+export type GithubTargetChatIntent = { kind: "provider_task_target" } | ScmTargetChatDecision;
 
-  return decideScmPersonnelTargetChat(db, {
-    reason,
-    candidateChatIds: boundChats.map((row) => row.chatId),
-    humanAgentId,
-    wakeAgentId: delegateAgentId,
-  });
+type ResolveTargetChatParams = Parameters<typeof resolveTargetChatInTransaction>[1];
+
+/** Re-read a composed existing line under the same entity lock as mutations. */
+export async function resolveGithubExistingLineChat(
+  db: Database,
+  params: {
+    organizationId: string;
+    humanAgentId: string;
+    delegateAgentId: string;
+    entity: GithubEntity;
+  },
+): Promise<{ chatId: string; created: false } | null> {
+  return withScmEntityAttentionTransaction(
+    db,
+    {
+      provider: "github",
+      scopeId: params.organizationId,
+      entityKey: githubEntityAttentionLockKey(params.entity.key),
+    },
+    async (tx) => {
+      const current = await lookupMapping(
+        tx,
+        params.organizationId,
+        params.humanAgentId,
+        params.delegateAgentId,
+        params.entity,
+      );
+      return current ? { chatId: current.chatId, created: false } : null;
+    },
+  );
 }
 
-export type GithubTargetChatIntent = { kind: "provider_task_target" } | ScmTargetChatDecision;
+/**
+ * Atomically place a fresh personnel target. Candidate selection, optional
+ * canonical membership admission, and the exact sibling mapping share one
+ * provider/entity transaction and serialization lock.
+ */
+export async function resolveGithubPersonnelTargetChat(
+  db: Database,
+  params: Omit<ResolveTargetChatParams, "intent"> & { requiresPersistentLine: boolean },
+): Promise<{ chatId: string; created: boolean; boundVia: BoundVia | null; lineExisted: boolean } | null> {
+  let membershipChangedChatId: string | null = null;
+  const result = await withScmEntityAttentionTransaction(
+    db,
+    {
+      provider: "github",
+      scopeId: params.organizationId,
+      entityKey: githubEntityAttentionLockKey(params.entity.key),
+    },
+    async (tx) => {
+      const candidateKeys = githubEntityKeyCandidates(params.entity.type, params.entity.key);
+      const candidateChats = await tx
+        .selectDistinct({ chatId: githubEntityChatMappings.chatId })
+        .from(githubEntityChatMappings)
+        .where(
+          and(
+            eq(githubEntityChatMappings.organizationId, params.organizationId),
+            eq(githubEntityChatMappings.entityType, params.entity.type),
+            inArray(githubEntityChatMappings.entityKey, candidateKeys),
+          ),
+        );
+      const candidateChatIds = candidateChats.map((row) => row.chatId);
+      const placement = await lockAndValidateScmPersonnelPlacement(tx, {
+        humanAgentId: params.humanAgentId,
+        wakeAgentId: params.delegateAgentId,
+        candidateChatIds,
+      });
+      if (!placement) return null;
+
+      const direct = await lookupMapping(
+        tx,
+        params.organizationId,
+        params.humanAgentId,
+        params.delegateAgentId,
+        params.entity,
+      );
+      if (direct) return { chatId: direct.chatId, created: false, boundVia: direct.boundVia, lineExisted: true };
+
+      const decision = await decideScmPersonnelTargetChat(tx, {
+        requiresPersistentLine: params.requiresPersistentLine,
+        candidateChatIds,
+        humanAgentId: params.humanAgentId,
+        wakeAgentId: params.delegateAgentId,
+        authority: placement.authority,
+        speakerSnapshot: placement.speakerSnapshot,
+      });
+      if (decision.kind === "reuse_with_line" && decision.admitWakeAgent) {
+        const changed = await inviteParticipantsToChatInTransaction(tx, {
+          chatId: decision.chatId,
+          callerAgentId: params.humanAgentId,
+          targetAgentIds: [params.delegateAgentId],
+          errorOnAlreadySpeaker: false,
+        });
+        if (changed) membershipChangedChatId = decision.chatId;
+      }
+      const placed = await resolveTargetChatInTransaction(tx, { ...params, intent: decision });
+      return placed ? { ...placed, lineExisted: false } : null;
+    },
+  );
+  if (membershipChangedChatId) invalidateChatAudience(membershipChangedChatId);
+  return result;
+}
 
 /**
  * Resolve which chat a GitHub event for (human, delegate, entity) belongs to.
@@ -120,10 +186,8 @@ export type GithubTargetChatIntent = { kind: "provider_task_target" } | ScmTarge
  *   c. Miss — create a fresh chat via the canonical `createChat` entrypoint
  *      and write a `direct` mapping row.
  *
- * Concurrent webhook deliveries for a never-before-seen entity race on (c);
- * the composite primary key + ON CONFLICT DO NOTHING ensures only one row
- * survives. The losing caller falls back to a re-read so the chat stays
- * unique.
+ * Every caller runs under the provider/entity attention lock, so a fresh
+ * exact pair has one serialized winner even before a mapping row exists.
  */
 export async function resolveTargetChat(
   db: Database,
@@ -140,11 +204,12 @@ export async function resolveTargetChat(
     /** GitHub action on `eventType`. Same scope as `eventType`. */
     action: string;
     /**
-     * Whether the calling audience target came from an explicit mention /
-     * involve in the event payload (vs. a pre-existing subscription). Only
-     * mention-driven targets are allowed to create a fresh chat from a
-     * creation webhook (`pull_request.opened` / `issues.opened`); subscription
-     * fall-through is rejected so opened events can't proliferate chats.
+     * Historical name for fresh-chat authority. `true` means the calling
+     * audience target is either an explicit personnel involve or a
+     * provider-owned task capability (vs. a pre-existing subscription). Only
+     * those targets may create a fresh chat from a creation webhook
+     * (`pull_request.opened` / `issues.opened`); subscription fall-through is
+     * rejected so opened events cannot proliferate chats.
      *
      * Required, not optional: the guard is fail-closed by design so any
      * future caller that forgets to plumb the signal lands in the safer
@@ -164,6 +229,32 @@ export async function resolveTargetChat(
     entityStateSeed?: EntityStateSeed | null;
   },
 ): Promise<{ chatId: string; created: boolean; boundVia: BoundVia | null } | null> {
+  return withScmEntityAttentionTransaction(
+    db,
+    {
+      provider: "github",
+      scopeId: params.organizationId,
+      entityKey: githubEntityAttentionLockKey(params.entity.key),
+    },
+    (tx) => resolveTargetChatInTransaction(tx, params),
+  );
+}
+
+async function resolveTargetChatInTransaction(
+  db: Database,
+  params: {
+    organizationId: string;
+    humanAgentId: string;
+    delegateAgentId: string;
+    entity: GithubEntity;
+    relatedEntities: GithubEntity[];
+    eventType: string;
+    action: string;
+    isMentionMatched: boolean;
+    intent: GithubTargetChatIntent;
+    entityStateSeed?: EntityStateSeed | null;
+  },
+): Promise<{ chatId: string; created: boolean; boundVia: BoundVia | null } | null> {
   const {
     organizationId,
     humanAgentId,
@@ -179,14 +270,26 @@ export async function resolveTargetChat(
   const relatedEntities = rawRelatedEntities.map(normalizeGithubEntity);
   const entityState = stateSeedForEntity(params.entityStateSeed ?? null, entity);
 
-  if (intent.kind === "reuse") {
-    return { chatId: intent.chatId, created: false, boundVia: null };
-  }
-
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
   if (direct) {
     return { chatId: direct.chatId, created: false, boundVia: direct.boundVia };
+  }
+
+  if (intent.kind === "reuse_membership") {
+    return { chatId: intent.chatId, created: false, boundVia: null };
+  }
+  if (intent.kind === "reuse_with_line") {
+    const inserted = await insertMappingIfAbsent(db, {
+      organizationId,
+      humanAgentId,
+      delegateAgentId,
+      entity,
+      chatId: intent.chatId,
+      boundVia: "human_fallback",
+      entityState,
+    });
+    return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
   }
 
   // (a.5) Provider-task human-scoped fallback. Personnel
@@ -210,41 +313,41 @@ export async function resolveTargetChat(
     }
   }
 
-  // (b) Fixes-link reuse.
-  for (const ref of relatedEntities) {
-    const linked = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, ref);
-    if (!linked) continue;
-    const inserted = await insertMappingIfAbsent(db, {
-      organizationId,
-      humanAgentId,
-      delegateAgentId,
-      entity,
-      chatId: linked.chatId,
-      boundVia: "fixes_link",
-      entityState,
-    });
-    // If the insert lost a race, our re-read returns the winner's row.
-    return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
+  // (b) Fixes-link reuse remains a provider-task behavior. A strict personnel
+  // target has already failed safe co-location against its entity candidates;
+  // reusing an unrelated entity's mapping here would bypass the locked speaker
+  // snapshot and could persist a line whose wake agent is no longer a speaker.
+  if (intent.kind === "provider_task_target") {
+    for (const ref of relatedEntities) {
+      const linked = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, ref);
+      if (!linked) continue;
+      const inserted = await insertMappingIfAbsent(db, {
+        organizationId,
+        humanAgentId,
+        delegateAgentId,
+        entity,
+        chatId: linked.chatId,
+        boundVia: "fixes_link",
+        entityState,
+      });
+      // If the insert lost a race, our re-read returns the winner's row.
+      return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
+    }
   }
 
   // (b.5) Creation-event guard. `pull_request.opened` / `issues.opened` must
-  // never invent a chat for a target that didn't explicitly @-mention an
-  // agent. By the time we get here, (a) miss + (b) miss already proves the
-  // entity is brand-new from the mapping's perspective; the only legitimate
-  // reason to enter (c) is an explicit mention/involve. Subscription
-  // fall-through (or any future caller that forgets to set the flag) gets
-  // rejected with `null` so the delivery loop drops the event instead of
-  // proliferating chats. See proposals discussion: opened-webhook intercept.
+  // never invent a chat from a subscription fall-through. By the time we get
+  // here, (a) miss + (b) miss already proves the entity is brand-new from the
+  // mapping's perspective; the only legitimate reason to enter (c) is an
+  // explicit personnel involve or a provider-owned task capability. A caller
+  // without that authority gets `null` so the delivery loop drops the event
+  // instead of proliferating chats.
   if (isCreationEvent(eventType, action) && !isMentionMatched) {
     return null;
   }
 
-  // (c) Miss — create a fresh chat. Two concurrent (c)-path callers for the
-  // same (org, human, delegate, entity) tuple cause two chats; the second one
-  // is unreachable because the primary key on the mapping row points at the
-  // first chat. The orphan chat is harmless (no participants beyond the two
-  // agents, no messages — we have not yet written one) and the design accepts
-  // it as the cost of avoiding a serialisable transaction on every webhook.
+  // (c) Miss — create a fresh chat. The entity attention lock serializes this
+  // path with other target placement, follow, rebind, and unfollow mutations.
   const chat = await createEntityChat(db, humanAgentId, delegateAgentId, entity, eventType, action);
   const inserted = await insertMappingIfAbsent(db, {
     organizationId,

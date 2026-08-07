@@ -26,7 +26,7 @@ export function buildContextSetupChoices(
   location: ContextSetupLocation,
   command: ContextSetupCommandIdentity,
 ): ContextSetupChoice[] {
-  return [
+  const choices: ContextSetupChoice[] = [
     {
       kind: "global",
       label: "All sessions",
@@ -35,25 +35,26 @@ export function buildContextSetupChoices(
       description: "Make this Team eligible in every session for this provider.",
       applyCommand: renderApplyCommand(command, location.project, "global"),
     },
-    {
-      kind: "directory",
-      label: location.directory ? `This directory: ${location.directory}` : "This directory",
-      available: location.directoryAvailable,
-      recommended: location.directoryAvailable && !location.temporaryDirectory,
-      description: location.directoryAvailable
-        ? "Make this Team eligible in this directory and its descendants."
-        : "Unavailable because the provider did not expose a stable directory.",
-      applyCommand: location.directoryAvailable ? renderApplyCommand(command, location.project, "directory") : null,
-    },
-    {
-      kind: "session",
-      label: "This session only",
-      available: true,
-      recommended: location.temporaryDirectory,
-      description: "Use verified Read/Write Skills now without installing a Plugin, Hook, or persistent grant.",
-      applyCommand: renderApplyCommand(command, location.project, "session"),
-    },
   ];
+  if (location.directoryAvailable && location.directory) {
+    choices.push({
+      kind: "directory",
+      label: `This directory: ${location.directory}`,
+      available: true,
+      recommended: !location.temporaryDirectory,
+      description: "Make this Team eligible in this directory and its descendants.",
+      applyCommand: renderApplyCommand(command, location.project, "directory"),
+    });
+  }
+  choices.push({
+    kind: "session",
+    label: "This session only",
+    available: true,
+    recommended: location.temporaryDirectory,
+    description: "Use verified Read/Write Skills now without installing a Plugin, Hook, or persistent grant.",
+    applyCommand: renderApplyCommand(command, location.project, "session"),
+  });
+  return choices;
 }
 
 function renderApplyCommand(

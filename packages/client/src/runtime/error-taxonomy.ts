@@ -19,10 +19,7 @@
  * a conservative cap — see {@link UNKNOWN_FALLBACK} for the rationale.
  */
 
-import { isCodexBinaryMissingError } from "./codex-binary.js";
-import { isCursorBinaryMissingError } from "./cursor-binary.js";
-import { isGrokBinaryMissingError } from "./grok-binary.js";
-import { isPiBinaryMissingError } from "./pi-binary.js";
+import { recognizeProviderBinaryFailure } from "./provider-support/binary-failure.js";
 
 export const ERROR_KINDS = {
   TRANSIENT: "transient",
@@ -274,79 +271,26 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Claude Code CLI requires re-authentication (run /login)",
     };
   }
-  // A *present* codex binary whose `--version` smoke check flaked (spawn
-  // timeout / host pressure) is transient — retry the bring-up. This MUST win
-  // over the missing-binary check below so a busy host never masquerades as an
-  // uninstalled codex (which would terminate the session with no retry).
-  if (shape.name === "CodexBinaryVerifyTransientError") {
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_FAST,
-      reasonCode: "codex_verify_transient",
-      message: shape.message ?? "codex --version smoke check did not complete (transient)",
-    };
-  }
-  if (isCodexBinaryMissingError(err)) {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "codex_binary_missing",
-      message: shape.message ?? "Codex runtime binary missing",
-    };
-  }
-  // Same present-but-flaky vs genuinely-missing split for the external Cursor
-  // Agent CLI: a smoke-check flake retries, a resolved-nothing / clean-broken
-  // binary is a permanent capability failure.
-  if (shape.name === "CursorBinaryVerifyTransientError") {
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_FAST,
-      reasonCode: "cursor_verify_transient",
-      message: shape.message ?? "cursor-agent --version smoke check did not complete (transient)",
-    };
-  }
-  if (isCursorBinaryMissingError(err)) {
+  // Provider binary missing / verify-transient: consume the normalized signal
+  // from provider-support. That seam owns the match rules, reason codes, and
+  // the historical interleaved order (Codex→Cursor→Grok→Pi, verify-then-missing
+  // within each provider) so this generic taxonomy never imports concrete
+  // *-binary modules. Cross-provider ambiguity keeps the earlier provider.
+  const binaryFailure = recognizeProviderBinaryFailure(err);
+  if (binaryFailure) {
+    if (binaryFailure.outcome === "verify_transient") {
+      return {
+        kind: ERROR_KINDS.TRANSIENT,
+        strategy: TRANSIENT_FAST,
+        reasonCode: binaryFailure.reasonCode,
+        message: shape.message ?? binaryFailure.defaultMessage,
+      };
+    }
     return {
       kind: ERROR_KINDS.PERMANENT,
       strategy: NONE,
-      reasonCode: "cursor_binary_missing",
-      message: shape.message ?? "Cursor Agent CLI binary missing",
-    };
-  }
-  // Same present-but-flaky vs genuinely-missing split for the external Grok
-  // Build CLI: a smoke-check flake retries, a resolved-nothing / clean-broken
-  // / unsupported-version binary is a permanent capability failure.
-  if (shape.name === "GrokBinaryVerifyTransientError") {
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_FAST,
-      reasonCode: "grok_verify_transient",
-      message: shape.message ?? "grok --version smoke check did not complete (transient)",
-    };
-  }
-  if (isGrokBinaryMissingError(err)) {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "grok_binary_missing",
-      message: shape.message ?? "Grok Build CLI binary missing",
-    };
-  }
-  // Same present-but-flaky vs genuinely-missing split for the external Pi CLI.
-  if (shape.name === "PiBinaryVerifyTransientError") {
-    return {
-      kind: ERROR_KINDS.TRANSIENT,
-      strategy: TRANSIENT_FAST,
-      reasonCode: "pi_verify_transient",
-      message: shape.message ?? "pi --version smoke check did not complete (transient)",
-    };
-  }
-  if (isPiBinaryMissingError(err)) {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "pi_binary_missing",
-      message: shape.message ?? "Pi CLI binary missing",
+      reasonCode: binaryFailure.reasonCode,
+      message: shape.message ?? binaryFailure.defaultMessage,
     };
   }
   // `AbortSignal.timeout()` aborts with a `DOMException` whose `name` is

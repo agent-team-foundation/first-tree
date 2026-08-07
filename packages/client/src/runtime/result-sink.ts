@@ -1,7 +1,3 @@
-import type { FirstTreeHubSDK } from "../sdk.js";
-import type { SelfFence } from "./doc-snapshots.js";
-import type { AgentIdentity } from "./handler.js";
-
 /**
  * Turn-completion sink the runtime calls when a handler finishes a turn.
  *
@@ -13,39 +9,20 @@ import type { AgentIdentity } from "./handler.js";
  * is always an explicit `chat send` (agent or human) or `chat ask` (a human
  * decision); there is no implicit final-text delivery to fall back on.
  *
- * The sink is kept as the single hook every handler (Claude Code today,
- * Gemini / Cursor / custom tomorrow) calls at turn end; it now only clears the
- * turn trigger and never writes to chat. The enrichment deps in
- * `ResultSinkDeps` (sdk / self-fence / org / doc-snapshot inputs) are inert
- * now — they are retained to keep the wiring stable and are cleaned up
- * together with the turn-trigger machinery in a follow-up.
+ * The sink remains the single hook every built-in handler calls at turn end; it
+ * only clears the turn trigger and never writes to chat. Replacing this hook
+ * with a dedicated turn-end API (and retiring `currentTrigger` with it) is a
+ * follow-up — not this cleanup.
  */
 
 export type Trigger = { messageId: string; senderId: string };
 
 export type ResultSinkDeps = {
-  sdk: FirstTreeHubSDK;
-  agent: AgentIdentity;
-  chatId: string;
-  /** Reads the current trigger (managed by session-manager). Returning
-   *  `null` means the handler's reply is unprompted — typically on resume
-   *  with no new message, or post-shutdown. */
-  getTrigger: () => Trigger | null;
-  /** Called by the sink to clear the trigger before awaiting the transport,
-   *  so a concurrently-arriving inject() can set a fresh trigger without this
+  /** Called by the sink to clear the trigger before returning, so a
+   *  concurrently-arriving inject() can set a fresh trigger without this
    *  reply consuming it. */
   clearTrigger: () => void;
   log: (msg: string) => void;
-  /**
-   * INERT (see the module note): these fed the retired doc-capture/snapshot
-   * enrichment that ran when the sink delivered the final-text mirror. The sink
-   * no longer writes to chat, so they are never read; they are retained only to
-   * keep the wiring stable and are cleaned up with the turn-trigger machinery.
-   */
-  getSelfFence?: () => Promise<SelfFence | null>;
-  getOrgId?: () => Promise<string | null>;
-  workspacesRoot?: string;
-  selfSlug?: string;
 };
 
 export type ResultSink = (text: string) => Promise<void>;

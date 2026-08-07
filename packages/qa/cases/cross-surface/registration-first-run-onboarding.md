@@ -20,7 +20,10 @@ the admin first-run journey to a usable workspace:
 - the create-agent step binds the agent to that client and waits for it to come
   online before offering to start;
 - the kickoff chat is created once and the user lands in the workspace with
-  onboarding stamped complete.
+  onboarding stamped complete;
+- from that workspace, the current Team menu exposes the Team-scoped path for
+  using an external agent without taking configuration ownership away from
+  Settings.
 
 Deterministic tests own copy, field rendering, per-step readiness logic, and the
 kickoff contract itself. This case owns what those tests cannot prove: that the
@@ -76,11 +79,20 @@ first user, who becomes an admin and creates the team.
    the kickoff chat exists exactly once, its first message addresses the new
    agent, and the membership carries `onboarding_completed_at` with
    `onboarding_suppressed_reason='completed'`.
+8. Open the current Team menu. Verify **Use your own agent** appears in the
+   **Current team** section, **Create team** remains under **Add team**, and no
+   manual **Join with invite link** action is offered there. Activate the new
+   action and verify it lands on
+   `/settings/context#coding-agent-access`, where the Context Tree settings page
+   opens the **Coding agent setup** section and owns its setup state. This menu
+   check does not replace the
+   separate `/invite/:token` join-path contract.
 
 ## Evidence
 
 A credible result names the identity used, shows the workspace landing with the
-kickoff chat, and quotes the membership row's onboarding stamps. For any gate
+kickoff chat, quotes the membership row's onboarding stamps, and shows the
+current Team menu plus the resulting coding-agent access URL. For any gate
 claimed to have blocked, show the disabled state, not only the later success.
 
 ## Limitations
@@ -96,7 +108,7 @@ claimed to have blocked, show the disabled state, not only the later success.
 
 ## Optional executable aid
 
-`e2e/` holds a Momentic browser suite that walks steps 1–7 unattended and is
+`e2e/` holds a Momentic browser suite that walks steps 1–8 unattended and is
 useful for a quick regression pass. It is optional tooling, not a replacement for
 this case: it needs an external Momentic account, resolves steps through a hosted
 model, and covers only the happy path plus the connect-computer gate. Judgement

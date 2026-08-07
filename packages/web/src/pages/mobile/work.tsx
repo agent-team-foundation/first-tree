@@ -11,7 +11,6 @@ import { Button } from "../../components/ui/button.js";
 import { cn, formatRowTime } from "../../lib/utils.js";
 import { CenterPanel } from "../workspace/center/index.js";
 import { NeedYouEntry } from "../workspace/need-you/need-you-entry.js";
-import { NeedYouPage } from "../workspace/need-you/need-you-page.js";
 import { MobileChatActionsSheet } from "./chat-actions-sheet.js";
 import { MobilePage, MobileSystemState, mobileCardStyle } from "./components.js";
 import { mobileCardContent, mobileChatSignal, mobileRowsFromList, sortMobileChats } from "./data.js";
@@ -34,7 +33,6 @@ export function MobileWorkPage() {
   const [quickView, setQuickView] = useState<MobileWorkQuickView>("all");
   const [filters, setFilters] = useState<MobileWorkFilters>(DEFAULT_FILTERS);
   const selectedChatId = searchParams.get("c");
-  const reviewingNeedYou = searchParams.get("review") === "need-you";
 
   const selectChat = useCallback(
     (chatId: string) => {
@@ -44,6 +42,9 @@ export function MobileWorkPage() {
       next.set("c", chatId);
       next.delete("review");
       next.delete("showAsk");
+      next.delete("focus");
+      next.delete("focusMsg");
+      next.delete("nq");
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
@@ -56,32 +57,25 @@ export function MobileWorkPage() {
     next.delete("c");
     next.delete("with");
     next.delete("showAsk");
+    next.delete("focus");
+    next.delete("focusMsg");
+    next.delete("nq");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const openNeedYou = useCallback(() => {
-    // Unmounts a pending Ask agent's owning surface — refuse while locked.
-    if (isAskAgentNavLocked()) return;
-    const next = new URLSearchParams(searchParams);
-    next.set("review", "need-you");
-    next.delete("c");
-    next.delete("showAsk");
-    setSearchParams(next);
-  }, [searchParams, setSearchParams]);
-
-  const closeNeedYou = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.delete("review");
-    next.delete("showAsk");
-    setSearchParams(next);
-  }, [searchParams, setSearchParams]);
-
-  const openFullChat = useCallback(
+  // Need you entry: open the oldest open request's chat with the cross-chat
+  // queue session (`?nq=1`) active; chat-view auto-advances to the next
+  // question's chat on each resolution. Ordinary selection paths delete `nq`.
+  const openNeedYouChat = useCallback(
     (chatId: string) => {
+      if (isAskAgentNavLocked()) return;
       const next = new URLSearchParams(searchParams);
-      next.delete("review");
       next.set("c", chatId);
-      next.set("showAsk", "false");
+      next.set("nq", "1");
+      next.delete("review");
+      next.delete("showAsk");
+      next.delete("focus");
+      next.delete("focusMsg");
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
@@ -89,9 +83,7 @@ export function MobileWorkPage() {
 
   return (
     <>
-      {reviewingNeedYou ? (
-        <NeedYouPage mobile onClose={closeNeedYou} onOpenFullChat={openFullChat} />
-      ) : selectedChatId !== null ? (
+      {selectedChatId !== null ? (
         <div className="flex h-full min-h-0 overflow-hidden">
           <CenterPanel
             selectedChatId={selectedChatId}
@@ -110,7 +102,7 @@ export function MobileWorkPage() {
           onQuickViewChange={setQuickView}
           filters={filters}
           onFiltersChange={setFilters}
-          onOpenNeedYou={openNeedYou}
+          onOpenNeedYou={openNeedYouChat}
         />
       )}
       <DocPreviewDrawer />
@@ -131,7 +123,7 @@ function MobileWorkList({
   onQuickViewChange: (quickView: MobileWorkQuickView) => void;
   filters: MobileWorkFilters;
   onFiltersChange: (filters: MobileWorkFilters) => void;
-  onOpenNeedYou: () => void;
+  onOpenNeedYou: (chatId: string) => void;
 }) {
   const { agentId, organizationId } = useAuth();
   const [searchOpen, setSearchOpen] = useState(false);

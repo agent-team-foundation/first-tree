@@ -1,7 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { chatMetadataSchema, GITHUB_TASK_REPLY_RUN_MARKER_PREFIX } from "@first-tree/shared";
+import { chatMetadataSchema } from "@first-tree/shared";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
@@ -20,6 +20,7 @@ import {
   withContextReviewerDispatchAuthority,
 } from "./context-reviewer-common.js";
 import { readContextReviewerAgentReadiness } from "./context-reviewer-readiness.js";
+import { isGithubAppSelfOutput } from "./github-app-self-output.js";
 import {
   type DeferredSendMessagePostCommitEffects,
   runDeferredSendMessagePostCommitEffects,
@@ -210,6 +211,8 @@ export async function handleContextReviewerPrEvent(
     payload: unknown;
     organizationId: string;
     installationId: number;
+    /** Canonical ingress verdict; direct internal callers may omit it. */
+    appSelfOutput?: boolean;
   },
 ): Promise<ContextReviewerPrResult> {
   const action = isRecord(input.payload) ? readString(input.payload.action) : null;
@@ -232,6 +235,7 @@ async function handleContextReviewerPrEventWithInfo(
     payload: unknown;
     organizationId: string;
     installationId: number;
+    appSelfOutput?: boolean;
   },
   info: PullRequestPayloadInfo,
 ): Promise<ContextReviewerPrResult> {
@@ -264,20 +268,22 @@ async function handleContextReviewerPrEventWithInfo(
   if (!runtime.contextReviewer.enabled) {
     return { handled: false, reason: "feature_disabled" };
   }
-  if (
-    isGithubTaskReplySelfOutput({
-      info,
-      payload: input.payload,
+  const appSelfOutput =
+    input.appSelfOutput ??
+    isGithubAppSelfOutput({
       appSlug: app.config.oauth?.githubApp?.slug ?? null,
-    })
-  ) {
+      eventType: info.eventType,
+      action: info.action,
+      payload: input.payload,
+    });
+  if (appSelfOutput) {
     log.info(
       {
         organizationId: input.organizationId,
         entityKey: info.entityKey,
         commentAuthorLogin: info.commentAuthorLogin,
       },
-      "context reviewer dispatch suppressed for App-authored task reply",
+      "context reviewer dispatch suppressed for First Tree App self-output",
     );
     return { handled: false, reason: "github_task_reply_self_output" };
   }
@@ -768,43 +774,6 @@ async function findSuppressibleReviewerEchoMessageId(
 
 function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
   return info.commentAuthorType?.trim().toLowerCase() === "bot";
-}
-
-function isGithubTaskReplySelfOutput(input: {
-  info: PullRequestPayloadInfo;
-  payload: unknown;
-  appSlug: string | null;
-}): boolean {
-  if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return false;
-  if (!input.appSlug || !isRecord(input.payload) || !isRecord(input.payload.comment)) return false;
-  const commentAuthor = isRecord(input.payload.comment.user) ? input.payload.comment.user : null;
-  if (!commentAuthor) return false;
-
-  const normalizedSlug = input.appSlug
-    .trim()
-    .toLowerCase()
-    .replace(/\[bot\]$/u, "");
-  const commentAuthorLogin = readString(commentAuthor.login)?.trim().toLowerCase();
-  const commentAuthorType = readString(commentAuthor.type)?.trim().toLowerCase();
-  if (!normalizedSlug || commentAuthorLogin !== `${normalizedSlug}[bot]` || commentAuthorType !== "bot") return false;
-
-  const body = input.payload.comment.body;
-  return typeof body === "string" && hasValidGithubTaskReplyRunMarker(body);
-}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-
-function hasValidGithubTaskReplyRunMarker(body: string): boolean {
-  let markerIndex = body.indexOf(GITHUB_TASK_REPLY_RUN_MARKER_PREFIX);
-  while (markerIndex >= 0) {
-    const runIdStart = markerIndex + GITHUB_TASK_REPLY_RUN_MARKER_PREFIX.length;
-    const markerEnd = body.indexOf(" -->", runIdStart);
-    if (markerEnd >= 0 && UUID_PATTERN.test(body.slice(runIdStart, markerEnd))) {
-      return true;
-    }
-    markerIndex = body.indexOf(GITHUB_TASK_REPLY_RUN_MARKER_PREFIX, runIdStart);
-  }
-  return false;
 }
 
 export const contextReviewerPrTestInternals = {

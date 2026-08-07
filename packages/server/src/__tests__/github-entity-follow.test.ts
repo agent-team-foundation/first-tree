@@ -1,12 +1,19 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
+import postgres from "postgres";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { members } from "../db/schema/members.js";
 import { BadRequestError, NotFoundError, ServiceUnavailableError, UnprocessableError } from "../errors.js";
+import { createChat, removeParticipant } from "../services/chat.js";
+import { lockChatMembershipMutation } from "../services/chat-membership-lock.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { resolveGithubPersonnelTargetChat } from "../services/github-entity-chat.js";
 import {
   declareEntityFollow,
   type FollowDeps,
@@ -17,6 +24,33 @@ import {
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWaits(
+  observer: ReturnType<typeof postgres>,
+  applicationNames: readonly string[],
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ application_name: string; wait_event_type: string | null }[]>`
+      SELECT application_name, wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name IN ${observer(applicationNames)}
+    `;
+    const waitingNames = new Set(
+      rows.filter((row) => row.wait_event_type === "Lock").map((row) => row.application_name),
+    );
+    if (applicationNames.every((name) => waitingNames.has(name))) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock waits: ${applicationNames.join(", ")}`);
+}
 
 /**
  * Explicit follow / unfollow — the only agent-side wiring path after the
@@ -60,6 +94,16 @@ describe("github-entity-follow", () => {
     const id = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id, organizationId: orgId, type: "group", metadata: {} });
     return id;
+  }
+
+  async function seedPairMembership(app: App, chatId: string, humanAgentId: string, delegateAgentId: string) {
+    await app.db
+      .insert(chatMembership)
+      .values([
+        { chatId, agentId: humanAgentId, role: "owner", accessMode: "speaker" },
+        { chatId, agentId: delegateAgentId, role: "member", accessMode: "speaker" },
+      ])
+      .onConflictDoNothing();
   }
 
   async function seedInstallation(app: App, orgId: string): Promise<void> {
@@ -153,6 +197,7 @@ describe("github-entity-follow", () => {
     const human = await seedAgent(app, admin.organizationId, admin.memberId, "human");
     const delegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
     const chatId = await seedChat(app, admin.organizationId);
+    await seedPairMembership(app, chatId, human, delegate);
     await seedInstallation(app, admin.organizationId);
     return { admin, human, delegate, chatId };
   }
@@ -246,6 +291,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const otherChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, otherChat, s.human, s.delegate);
     await app.db.update(chats).set({ topic: "first home" }).where(eq(chats.id, s.chatId));
 
     await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
@@ -263,6 +309,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
 
     // Seed the existing row as a github-minted `direct` anchor.
     await app.db.insert(githubEntityChatMappings).values({
@@ -303,6 +350,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: s.admin.organizationId,
       humanAgentId: s.human,
@@ -723,6 +771,427 @@ describe("github-entity-follow", () => {
     });
   });
 
+  it("serializes unfollow against fresh personnel placement without resurrecting the old chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `attention-race-${randomUUID().slice(0, 8)}` });
+    const follower = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    const currentDelegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    await app.db.update(agents).set({ delegateMention: currentDelegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [follower],
+    });
+    await seedInstallation(app, admin.organizationId);
+    await declareEntityFollow(app.db, deps(prFetcher()), {
+      chatId: chat.id,
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: follower,
+      boundVia: "agent_declared",
+      entity: "acme/api#42",
+      rebind: false,
+    });
+
+    await Promise.all([
+      removeEntityFollow(app.db, { chatId: chat.id, entity: "acme/api#42" }),
+      resolveGithubPersonnelTargetChat(app.db, {
+        organizationId: admin.organizationId,
+        humanAgentId: admin.humanAgentUuid,
+        delegateAgentId: currentDelegate,
+        entity: { type: "pull_request", key: "Acme/Api#42", title: "Add follow command" },
+        relatedEntities: [],
+        eventType: "issues",
+        action: "assigned",
+        isMentionMatched: true,
+        requiresPersistentLine: true,
+      }),
+    ]);
+
+    const survivingRows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
+    expect(survivingRows.every((row) => row.chatId !== chat.id)).toBe(true);
+    expect(survivingRows.length).toBeLessThanOrEqual(1);
+    if (survivingRows[0]) {
+      expect(survivingRows[0].delegateAgentId).toBe(currentDelegate);
+      expect(survivingRows[0].boundVia).toBe("direct");
+    }
+  });
+
+  it("serializes wake removal before personnel placement and commits only a wakeable sibling line", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `speaker-race-${randomUUID().slice(0, 8)}` });
+    const follower = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    const currentDelegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    await app.db.update(agents).set({ delegateMention: currentDelegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [follower, currentDelegate],
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: follower,
+      entityType: "issue",
+      entityKey: "Acme/Api#401",
+      chatId: chat.id,
+      boundVia: "agent_declared",
+    });
+
+    let mutationLocked!: () => void;
+    let releaseMutation!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      mutationLocked = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const removing = app.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as typeof app.db;
+      await lockChatMembershipMutation(tx, [chat.id]);
+      await tx
+        .delete(chatMembership)
+        .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, currentDelegate)));
+      mutationLocked();
+      await release;
+    });
+    await locked;
+
+    const placing = resolveGithubPersonnelTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: currentDelegate,
+      entity: { type: "issue", key: "Acme/Api#401", title: "Speaker race" },
+      relatedEntities: [],
+      eventType: "issues",
+      action: "assigned",
+      isMentionMatched: true,
+      requiresPersistentLine: true,
+    });
+    releaseMutation();
+    await removing;
+    await expect(placing).resolves.toMatchObject({ chatId: chat.id, lineExisted: false });
+
+    expect(
+      await app.db
+        .select({ agentId: chatMembership.agentId })
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, currentDelegate))),
+    ).toHaveLength(1);
+    expect(
+      await app.db
+        .select({ chatId: githubEntityChatMappings.chatId })
+        .from(githubEntityChatMappings)
+        .where(
+          and(
+            eq(githubEntityChatMappings.entityKey, "Acme/Api#401"),
+            eq(githubEntityChatMappings.delegateAgentId, currentDelegate),
+          ),
+        ),
+    ).toEqual([{ chatId: chat.id }]);
+  });
+
+  it("fails owner-private reuse closed when an existing speaker changes owner before placement", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `owner-race-${randomUUID().slice(0, 8)}` });
+    const foreignOwner = await createTestAdmin(app, { username: `foreign-owner-${randomUUID().slice(0, 8)}` });
+    const follower = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    const currentDelegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    await app.db.update(agents).set({ delegateMention: currentDelegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [follower] });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: follower,
+      entityType: "issue",
+      entityKey: "Acme/Api#402",
+      chatId: chat.id,
+      boundVia: "agent_declared",
+    });
+
+    let ownerChanged!: () => void;
+    let releaseOwnerChange!: () => void;
+    const changed = new Promise<void>((resolve) => {
+      ownerChanged = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    const transferring = app.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as typeof app.db;
+      await tx.update(agents).set({ managerId: foreignOwner.memberId }).where(eq(agents.uuid, follower));
+      ownerChanged();
+      await release;
+    });
+    await changed;
+
+    const placing = resolveGithubPersonnelTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: currentDelegate,
+      entity: { type: "issue", key: "Acme/Api#402", title: "Owner race" },
+      relatedEntities: [],
+      eventType: "issues",
+      action: "assigned",
+      isMentionMatched: true,
+      requiresPersistentLine: true,
+    });
+    releaseOwnerChange();
+    await transferring;
+    const placed = await placing;
+    expect(placed?.chatId).not.toBe(chat.id);
+    expect(
+      await app.db
+        .select({ agentId: chatMembership.agentId })
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, currentDelegate))),
+    ).toHaveLength(0);
+  });
+
+  it("locks overlapping candidate speakers once so concurrent personnel placements cannot deadlock", async () => {
+    const app = getApp();
+    const firstHuman = await createTestAdmin(app, {
+      username: `overlap-first-${randomUUID().slice(0, 8)}`,
+    });
+    const secondHuman = await createTestAdmin(app, {
+      username: `overlap-second-${randomUUID().slice(0, 8)}`,
+    });
+    const firstWake = await seedAgent(app, firstHuman.organizationId, firstHuman.memberId, "agent");
+    const secondWake = await seedAgent(app, secondHuman.organizationId, secondHuman.memberId, "agent");
+    await app.db.update(agents).set({ delegateMention: firstWake }).where(eq(agents.uuid, firstHuman.humanAgentUuid));
+    await app.db.update(agents).set({ delegateMention: secondWake }).where(eq(agents.uuid, secondHuman.humanAgentUuid));
+
+    const firstChat = await seedChat(app, firstHuman.organizationId);
+    const secondChat = await seedChat(app, firstHuman.organizationId);
+    for (const chatId of [firstChat, secondChat]) {
+      await app.db.insert(chatMembership).values([
+        { chatId, agentId: firstHuman.humanAgentUuid, role: "owner", accessMode: "speaker" },
+        { chatId, agentId: firstWake, role: "member", accessMode: "speaker" },
+        { chatId, agentId: secondHuman.humanAgentUuid, role: "member", accessMode: "speaker" },
+        { chatId, agentId: secondWake, role: "member", accessMode: "speaker" },
+      ]);
+    }
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: firstHuman.organizationId,
+        humanAgentId: secondHuman.humanAgentUuid,
+        delegateAgentId: secondWake,
+        entityType: "issue",
+        entityKey: "Acme/Api#501",
+        chatId: firstChat,
+        boundVia: "agent_declared",
+      },
+      {
+        organizationId: firstHuman.organizationId,
+        humanAgentId: firstHuman.humanAgentUuid,
+        delegateAgentId: firstWake,
+        entityType: "issue",
+        entityKey: "Acme/Api#502",
+        chatId: secondChat,
+        boundVia: "agent_declared",
+      },
+    ]);
+
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const suffix = randomUUID().slice(0, 8);
+    const firstApplicationName = `scm_overlap_first_${suffix}`;
+    const secondApplicationName = `scm_overlap_second_${suffix}`;
+    const firstDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, firstApplicationName));
+    const secondDb = connectDatabase(databaseUrlWithApplicationName(databaseUrl, secondApplicationName));
+    const holder = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    let holderCommitted = false;
+    try {
+      await holder`BEGIN`;
+      await holder`
+        SELECT id
+        FROM chats
+        WHERE id IN ${holder([firstChat, secondChat])}
+        ORDER BY id
+        FOR UPDATE
+      `;
+
+      const placements = Promise.all([
+        resolveGithubPersonnelTargetChat(firstDb, {
+          organizationId: firstHuman.organizationId,
+          humanAgentId: firstHuman.humanAgentUuid,
+          delegateAgentId: firstWake,
+          entity: { type: "issue", key: "Acme/Api#501", title: "First overlap" },
+          relatedEntities: [],
+          eventType: "issues",
+          action: "assigned",
+          isMentionMatched: true,
+          requiresPersistentLine: true,
+        }),
+        resolveGithubPersonnelTargetChat(secondDb, {
+          organizationId: secondHuman.organizationId,
+          humanAgentId: secondHuman.humanAgentUuid,
+          delegateAgentId: secondWake,
+          entity: { type: "issue", key: "Acme/Api#502", title: "Second overlap" },
+          relatedEntities: [],
+          eventType: "issues",
+          action: "assigned",
+          isMentionMatched: true,
+          requiresPersistentLine: true,
+        }),
+      ]);
+      await waitForPostgresLockWaits(observer, [firstApplicationName, secondApplicationName]);
+      await holder`COMMIT`;
+      holderCommitted = true;
+
+      await expect(placements).resolves.toEqual([
+        { chatId: firstChat, created: false, boundVia: "human_fallback", lineExisted: false },
+        { chatId: secondChat, created: false, boundVia: "human_fallback", lineExisted: false },
+      ]);
+    } finally {
+      if (!holderCommitted) await holder`ROLLBACK`;
+      await firstDb.end();
+      await secondDb.end();
+      await holder.end();
+      await observer.end();
+    }
+  });
+
+  it("rejects a human-issued fresh follow when the delegate changes during GitHub resolution", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const replacement = await seedAgent(app, s.admin.organizationId, s.admin.memberId, "agent");
+    await seedPairMembership(app, s.chatId, s.human, replacement);
+    await app.db.update(agents).set({ delegateMention: s.delegate }).where(eq(agents.uuid, s.human));
+    let entityRequested!: () => void;
+    let releaseEntity!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      entityRequested = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseEntity = resolve;
+    });
+    const baseFetcher = prFetcher();
+    const delayedFetcher = (async (input: string | URL | Request) => {
+      if (String(input).toLowerCase().includes("/repos/acme/api/issues/42")) {
+        entityRequested();
+        await release;
+      }
+      return baseFetcher(input);
+    }) as typeof fetch;
+
+    const following = declareEntityFollow(app.db, deps(delayedFetcher), {
+      ...followParams(s, "acme/api#42"),
+      boundVia: "human_declared",
+    });
+    await requested;
+    await app.db.update(agents).set({ delegateMention: replacement }).where(eq(agents.uuid, s.human));
+    releaseEntity();
+    await expect(following).rejects.toThrow("authority changed");
+    expect(
+      await app.db.select().from(githubEntityChatMappings).where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42")),
+    ).toHaveLength(0);
+  });
+
+  it("rejects rebind when the wake agent leaves the destination chat during GitHub resolution", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
+    await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
+    let entityRequested!: () => void;
+    let releaseEntity!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      entityRequested = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseEntity = resolve;
+    });
+    const baseFetcher = prFetcher();
+    const delayedFetcher = (async (input: string | URL | Request) => {
+      if (String(input).toLowerCase().includes("/repos/acme/api/issues/42")) {
+        entityRequested();
+        await release;
+      }
+      return baseFetcher(input);
+    }) as typeof fetch;
+
+    const rebinding = declareEntityFollow(app.db, deps(delayedFetcher), {
+      ...followParams(s, "acme/api#42", true),
+      chatId: newChat,
+    });
+    await requested;
+    await removeParticipant(app.db, newChat, s.human, s.delegate);
+    releaseEntity();
+    await expect(rebinding).rejects.toThrow("authority changed");
+    expect(
+      await app.db
+        .select({ chatId: githubEntityChatMappings.chatId })
+        .from(githubEntityChatMappings)
+        .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42")),
+    ).toEqual([{ chatId: s.chatId }]);
+  });
+
+  it.each([
+    "delegate",
+    "human_status",
+    "wake_status",
+    "member_status",
+  ] as const)("drops stale GitHub personnel authority after %s drift before accepting a direct hit", async (drift) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `authority-drift-${drift}-${randomUUID().slice(0, 5)}` });
+    const originalDelegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    const replacementDelegate = await seedAgent(app, admin.organizationId, admin.memberId, "agent");
+    await app.db.update(agents).set({ delegateMention: originalDelegate }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [originalDelegate],
+    });
+    const entityKey = `Acme/Api#${drift === "delegate" ? 301 : drift === "human_status" ? 302 : drift === "wake_status" ? 303 : 304}`;
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: originalDelegate,
+      entityType: "issue",
+      entityKey,
+      chatId: chat.id,
+      boundVia: "direct",
+    });
+    const chatsBefore = await app.db.select({ id: chats.id }).from(chats);
+
+    if (drift === "delegate") {
+      await app.db
+        .update(agents)
+        .set({ delegateMention: replacementDelegate })
+        .where(eq(agents.uuid, admin.humanAgentUuid));
+    } else if (drift === "human_status") {
+      await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, admin.humanAgentUuid));
+    } else if (drift === "wake_status") {
+      await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, originalDelegate));
+    } else {
+      await app.db.update(members).set({ status: "left" }).where(eq(members.agentId, admin.humanAgentUuid));
+    }
+
+    await expect(
+      resolveGithubPersonnelTargetChat(app.db, {
+        organizationId: admin.organizationId,
+        humanAgentId: admin.humanAgentUuid,
+        delegateAgentId: originalDelegate,
+        entity: { type: "issue", key: entityKey, title: "Authority drift" },
+        relatedEntities: [],
+        eventType: "issues",
+        action: "assigned",
+        isMentionMatched: true,
+        requiresPersistentLine: true,
+      }),
+    ).resolves.toBeNull();
+
+    const rows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, entityKey));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ chatId: chat.id, delegateAgentId: originalDelegate });
+    expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(chatsBefore.length);
+  });
+
   it("unfollow with a /pull/ URL also removes the auto-corrected issue row (follow/unfollow symmetry)", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -817,6 +1286,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
     await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
 
     // Simulate the concurrent unfollow racing between the conflict read and
@@ -842,6 +1312,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
     await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
 
     const fnName = `test_gef_skip_update_${randomUUID().replace(/-/g, "_")}`;
@@ -896,6 +1367,8 @@ describe("github-entity-follow", () => {
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
     const thirdChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
+    await seedPairMembership(app, thirdChat, s.human, s.delegate);
     await app.db.update(chats).set({ topic: "third winner" }).where(eq(chats.id, thirdChat));
     await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
 
@@ -967,6 +1440,7 @@ describe("github-entity-follow", () => {
     const app = getApp();
     const s = await setup(app);
     const newChat = await seedChat(app, s.admin.organizationId);
+    await seedPairMembership(app, newChat, s.human, s.delegate);
     await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
     const [before] = await app.db
       .select({ boundAt: githubEntityChatMappings.boundAt })

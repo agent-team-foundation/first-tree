@@ -22,8 +22,12 @@ function mockSdk(): FirstTreeHubSDK {
 
 function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
   return {
-    start: vi.fn().mockResolvedValue("session-id-mock"),
-    resume: vi.fn().mockResolvedValue("session-id-mock"),
+    start: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
+    resume: vi
+      .fn()
+      .mockResolvedValue({ sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } }),
     inject: vi.fn(),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -39,14 +43,17 @@ function createCapturingFactory() {
       async start(message, ctx) {
         contexts.set(message.chatId, ctx);
         messages.set(message.chatId, message);
-        return `session-${message.chatId}`;
+        return { sessionId: `session-${message.chatId}`, route: { kind: "owned" as const, mode: "queued" as const } };
       },
       async resume(message, _sessionId, ctx) {
         if (message) {
           contexts.set(message.chatId, ctx);
           messages.set(message.chatId, message);
         }
-        return `session-${message?.chatId ?? "unknown"}`;
+        return {
+          sessionId: `session-${message?.chatId ?? "unknown"}`,
+          route: { kind: "owned" as const, mode: "queued" as const },
+        };
       },
     });
   };
@@ -88,7 +95,7 @@ function createSessionManager(opts: {
     },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test" },
+    handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -177,14 +184,18 @@ describe("SessionManager: state notifications", () => {
     let chatBContext: SessionContext | undefined;
     let chatBMessage: SessionMessage | undefined;
     const handlerA = createMockHandler({
-      start: vi.fn().mockResolvedValue("session-chat-a"),
-      resume: vi.fn().mockResolvedValue("session-chat-a"),
+      start: vi
+        .fn()
+        .mockResolvedValue({ sessionId: "session-chat-a", route: { kind: "owned" as const, mode: "queued" as const } }),
+      resume: vi
+        .fn()
+        .mockResolvedValue({ sessionId: "session-chat-a", route: { kind: "owned" as const, mode: "queued" as const } }),
     });
     const handlerB = createMockHandler({
       async start(message, ctx) {
         chatBMessage = message;
         chatBContext = ctx;
-        return "session-chat-b";
+        return { sessionId: "session-chat-b", route: { kind: "owned" as const, mode: "queued" as const } };
       },
     });
     const handlers = [handlerA, handlerB];
@@ -241,8 +252,11 @@ describe("SessionManager: state-before-runtime ordering (codex review P2)", () =
         // Snapshot the state emissions seen so far — if the `active`
         // notification fired before invoking start, it must already be in
         // `emissions`.
-        observedActiveBeforeHandlerCompletion = emissions.some((e) => e.kind === "state" && e.value === "active");
-        return "session-id-mock";
+        observedActiveBeforeHandlerCompletion = emissions.some((e) => ({
+          sessionId: e.kind === "state" && e.value === "active",
+          route: { kind: "owned" as const, mode: "queued" as const },
+        }));
+        return { sessionId: "session-id-mock", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
     });
 

@@ -96,6 +96,19 @@ vi.mock("@first-tree/client", () => {
       slotInstances.push(this);
     }
   }
+  const stubFactory = vi.fn(() => ({
+    start: vi.fn(),
+    resume: vi.fn(),
+    inject: vi.fn(),
+    suspend: vi.fn(),
+    shutdown: vi.fn(),
+  }));
+  // Narrow table so unsupported-runtime characterization still exercises the
+  // fail-closed path for providers this "build" does not ship (e.g. TUI).
+  const builtinTable = Object.freeze({
+    "claude-code": stubFactory,
+    codex: stubFactory,
+  });
   return {
     AgentSlot: FakeAgentSlot,
     ClientConnection: class {
@@ -124,11 +137,8 @@ vi.mock("@first-tree/client", () => {
       child: vi.fn().mockReturnThis(),
     })),
     getChildProcessRegistry: vi.fn(() => ({ killAll: killAllMock })),
-    getHandlerFactory: vi.fn(() => vi.fn()),
-    // Mirror the real registry: only the built-in providers have a handler.
-    // The unsupported-runtime guard in addAgent keys off this.
-    hasHandler: vi.fn((type: string) => type === "claude-code" || type === "codex"),
-    registerBuiltinHandlers: vi.fn(),
+    createBuiltinHandlerRegistry: vi.fn(() => builtinTable),
+    resolveAndLogClaudeExecutable: vi.fn(() => ({ path: undefined, source: "default" })),
   };
 });
 
@@ -1310,4 +1320,40 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(close).toHaveBeenCalled();
     await rt.stop();
   });
+
+  for (const prototypeKey of ["toString", "constructor", "__proto__"] as const) {
+    it(`resolveHandlerFactory rejects Object.prototype key ${prototypeKey} without constructing AgentSlot`, async () => {
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
+      const before = slotInstances.length;
+
+      expect(() =>
+        (
+          rt as unknown as {
+            resolveHandlerFactory: (type: string) => unknown;
+          }
+        ).resolveHandlerFactory(prototypeKey),
+      ).toThrow(new RegExp(`Unknown handler type "${prototypeKey}".*Available:`));
+      expect(slotInstances.length).toBe(before);
+
+      expect(() =>
+        (
+          rt as unknown as {
+            createAgentSlot: (
+              name: string,
+              config: { runtime: string; agentId: string; session: object; concurrency: number },
+            ) => unknown;
+          }
+        ).createAgentSlot("poisoned", {
+          agentId: "agent-poisoned",
+          runtime: prototypeKey,
+          session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+          concurrency: 1,
+        }),
+      ).toThrow(new RegExp(`Unknown handler type "${prototypeKey}"`));
+      expect(slotInstances.length).toBe(before);
+
+      await rt.stop();
+    });
+  }
 });

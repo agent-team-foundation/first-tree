@@ -1,10 +1,11 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare, Monitor } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
 import { type ClientStatusInfo, getAgentClientStatus, getAgentConfig } from "./../api/agent-config.js";
+import { listAgentTemplates } from "./../api/agent-templates.js";
 import {
   deleteAgent,
   getAgent,
@@ -15,9 +16,9 @@ import {
   updateAgent,
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
-import { listAgentSessions } from "./../api/sessions.js";
 import { useAuth } from "./../auth/auth-context.js";
 import { Avatar } from "./../components/avatar.js";
+import { AgentAvailability } from "./../components/ui/agent-availability.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
 import {
@@ -28,18 +29,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./../components/ui/dialog.js";
-import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
-import { Tab, TabBadge, TabBar } from "./../components/ui/tab-bar.js";
+import { LocalNavLink } from "./../components/ui/local-nav-link.js";
+import { Select } from "./../components/ui/select.js";
 import { useWorkspaceViewport } from "./../hooks/use-viewport.js";
+import { deriveAgentAvailability } from "./../lib/agent-availability.js";
 import { invalidateDisplayNameQueries } from "./../lib/identity-cache.js";
 import { cn } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { isBindableClient } from "./agent-detail/action-state.js";
-import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
+import { AgentSwitcher } from "./agent-detail/agent-switcher.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
-import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext, RuntimeSwitchClaimView } from "./agent-detail/layout-context.js";
-import { buildTabs, type TabDef } from "./agent-detail/tabs.js";
+import {
+  buildTabs,
+  responsibilitiesSideFromQuery,
+  shouldShowResponsibilitiesTab,
+  type TabDef,
+} from "./agent-detail/tabs.js";
 import { useAgentConfigSave } from "./agent-detail/use-agent-config-save.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
 import { PROVIDER_ORDER, runtimeProviderLabel } from "./clients/cards/shared/providers.js";
@@ -49,9 +55,8 @@ type RuntimeSwitchDialogStep = "target" | "confirm";
 
 export function AgentDetailPage() {
   const params = useParams<{ uuid: string }>();
-  // Remount the whole page on agent switch. The switcher navigates in place
-  // (only `:uuid` changes), so the route element stays mounted; without a key the
-  // previous agent's dialog / bind state would leak into the next agent.
+  // Remount the whole page when navigation changes only `:uuid`; without a key,
+  // the previous agent's dialog / bind state would leak into the next agent.
   return <AgentDetailPageView key={params.uuid ?? ""} />;
 }
 
@@ -62,10 +67,7 @@ function AgentDetailPageView() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const { memberId, role } = useAuth();
-  // On phones the header drops its secondary metadata line (type · visibility,
-  // offline-since) — those are all repeated on the Profile tab — so the
-  // avatar, name, presence chip, and action buttons keep their natural size
-  // instead of being shoved off the row.
+  // Narrow web viewports trade the local navigation rail for a section selector.
   const isNarrow = useWorkspaceViewport() === "narrow";
   useLegacyAnchorRedirect();
 
@@ -73,7 +75,7 @@ function AgentDetailPageView() {
     queryKey: ["agent", uuid],
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
-    // The header `<PresenceChip>` derives from `agent.runtimeState` off this
+    // The header availability presentation derives from `agent.runtimeState` off this
     // query. No admin-WS frame invalidates `["agent"]` today, so without
     // polling an agent that goes offline / reconnects while the page stays
     // open would keep showing the cached value. Match the 10s cadence the
@@ -93,18 +95,12 @@ function AgentDetailPageView() {
     queryKey: ["agent-client-status", uuid],
     queryFn: () => getAgentClientStatus(uuid),
     enabled: !!uuid && agentQuery.data?.type !== "human",
-    // Drives `isUnclaimed` (`!clientStatus?.clientId`), `isOffline`'s
-    // bound-vs-unclaimed qualifier, and the "offline since {date}"
-    // subtitle. None of those are pushed through the admin WS, so match
+    // Supplies secondary computer detail such as offlineSince. Availability
+    // itself comes from the Agent read model, shared with Team, so this query
+    // cannot create a second online/offline authority. Match
     // the 10s polling cadence that `agentQuery` above (and the legacy
     // `/activity` poll) used.
     refetchInterval: 10_000,
-  });
-
-  const sessionsQuery = useQuery({
-    queryKey: ["agent-sessions-active", uuid],
-    queryFn: () => listAgentSessions(uuid, { state: "active" }),
-    enabled: !!uuid && agentQuery.data?.type !== "human",
   });
 
   const allClientsQuery = useQuery({
@@ -114,14 +110,21 @@ function AgentDetailPageView() {
     refetchInterval: 30_000,
   });
 
-  // Shared agent-resources cache (Templates / skills / MCP / repos). Fetched
-  // here so the Tools & skills badge shows its effective count on first paint —
-  // the badge's whole point is "tell me there's something in here before I
-  // click". One light query in the same tier as agent-config / client-status;
-  // Responsibilities, Tools & skills, and Repositories then read+write this same
-  // ["agent-resources", uuid] cache, so their useAgentResources calls become
-  // cache hits.
+  // Shared agent-resources cache feeds Responsibilities visibility from the
+  // adopted template IDs. Responsibilities, Tools & skills, and Repositories
+  // reuse the same query key, so their own observers read this cache.
   const toolsResources = useAgentResources(uuid, { enabled: !!uuid && agentQuery.data?.type !== "human" });
+
+  // Public official Template catalog — same key as the Responsibilities editor
+  // so the shell and the edit dialog share one cache. Drives whether the
+  // Responsibilities exists when there are official starting points to adopt,
+  // or when this agent already has adopted Template provenance to explain.
+  const templateCatalogQuery = useQuery({
+    queryKey: ["agent-templates-catalog"],
+    queryFn: listAgentTemplates,
+    enabled: !!uuid && agentQuery.data?.type !== "human",
+    retry: 1,
+  });
 
   // Immediate-save controller for model / reasoning effort / env. Lives in the
   // shell (not the Runtime tab) so its "Saved" flash and pending state survive a
@@ -129,6 +132,15 @@ function AgentDetailPageView() {
   const configSave = useAgentConfigSave(uuid);
 
   const [dangerError, setDangerError] = useState<string | null>(null);
+  const [reactivateError, setReactivateError] = useState<string | null>(null);
+
+  const currentAgentStatus = agentQuery.data?.status;
+  const currentAgentClientId = agentQuery.data?.clientId;
+  useEffect(() => {
+    if (!currentAgentStatus || currentAgentStatus !== "suspended" || !currentAgentClientId) {
+      setReactivateError(null);
+    }
+  }, [currentAgentClientId, currentAgentStatus]);
 
   const identityUpdateMutation = useMutation({
     mutationFn: (patch: Parameters<typeof updateAgent>[1]) => updateAgent(uuid, patch),
@@ -153,12 +165,12 @@ function AgentDetailPageView() {
   });
   const reactivateMutation = useMutation({
     mutationFn: () => reactivateAgent(uuid),
-    onMutate: () => setDangerError(null),
+    onMutate: () => setReactivateError(null),
     onSuccess: () => {
-      setDangerError(null);
+      setReactivateError(null);
       queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
     },
-    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
+    onError: (err) => setReactivateError(err instanceof Error ? err.message : String(err)),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(uuid),
@@ -226,54 +238,45 @@ function AgentDetailPageView() {
 
   // Every setting saves immediately, so leaving the page is never destructive —
   // this is just `navigate`, exposed to controls that leave the current agent
-  // (switcher, Chat, Usage deep links, "Manage in Settings", "Open Computers").
+  // (chat, Usage deep links, Settings, Computers, and Team).
   const navigateAway = useCallback((to: string) => navigate(to), [navigate]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
 
-  // Sticky ContextBar visibility — sentinel right under the header.
-  const headerSentinelRef = useRef<HTMLDivElement | null>(null);
-  const [contextBarVisible, setContextBarVisible] = useState(false);
-  useEffect(() => {
-    if (isHumanLocal) return;
-    const el = headerSentinelRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry) return;
-        setContextBarVisible(!entry.isIntersecting && entry.boundingClientRect.top < 0);
-      },
-      { threshold: 0 },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [isHumanLocal]);
-
-  const tabBadges = useMemo<Record<string, number>>(() => {
-    const badges: Record<string, number> = {};
-    const d = toolsResources.data;
-    if (d) {
-      const count = d.effective.skills.length + d.effective.mcp.length;
-      // Don't badge an empty Tools & skills tab with a "0" — a count only earns
-      // its space when there's something to count.
-      if (count > 0) badges.capabilities = count;
-    }
-    return badges;
-  }, [toolsResources.data]);
-
-  const tabs = useMemo(() => buildTabs(canEditConfig, isHumanLocal), [canEditConfig, isHumanLocal]);
+  const showResponsibilities = useMemo(
+    () =>
+      shouldShowResponsibilitiesTab(isHumanLocal, {
+        catalog: responsibilitiesSideFromQuery({
+          count: templateCatalogQuery.data ? templateCatalogQuery.data.templates.length : null,
+          isFetching: templateCatalogQuery.isFetching,
+          isError: templateCatalogQuery.isError,
+        }),
+        agentResources: responsibilitiesSideFromQuery({
+          count: toolsResources.data ? toolsResources.data.templateIds.length : null,
+          isFetching: toolsResources.isFetching,
+          isError: toolsResources.isError,
+        }),
+      }),
+    [
+      isHumanLocal,
+      templateCatalogQuery.data,
+      templateCatalogQuery.isFetching,
+      templateCatalogQuery.isError,
+      toolsResources.data,
+      toolsResources.isFetching,
+      toolsResources.isError,
+    ],
+  );
+  const tabs = useMemo(
+    () => buildTabs(canEditConfig, isHumanLocal, showResponsibilities),
+    [canEditConfig, isHumanLocal, showResponsibilities],
+  );
   const currentTabKey = useMemo(() => {
     const segments = location.pathname.split("/");
     const last = segments[segments.length - 1] ?? "";
     return tabs.find((t) => t.path === last)?.key ?? "profile";
   }, [location.pathname, tabs]);
-  // The actual current tab PATH (what the switcher preserves when switching
-  // agents). Derived from the key rather than assuming key === path.
-  const currentTabPath = useMemo(
-    () => tabs.find((t) => t.key === currentTabKey)?.path ?? "profile",
-    [tabs, currentTabKey],
-  );
+  const currentTab = tabs.find((tab) => tab.key === currentTabKey) ?? tabs[0];
 
   if (agentQuery.isLoading) {
     return (
@@ -338,30 +341,25 @@ function AgentDetailPageView() {
   const runtimeSwitchClaim = readRuntimeSwitchClaim(agent.metadata);
 
   const clientStatus: ClientStatusInfo | undefined = clientStatusQuery.data;
-  const activeSessions = sessionsQuery.data?.length ?? 0;
-  const clientStatusInitialLoading = !isHuman && !clientStatus && clientStatusQuery.isLoading;
-  const clientStatusError =
-    clientStatusQuery.error instanceof Error
-      ? clientStatusQuery.error.message
-      : clientStatusQuery.error
-        ? "Unknown"
-        : null;
-  const isUnclaimed = !isHuman && clientStatusQuery.isSuccess && !clientStatus?.clientId;
-  // `isUnclaimed` is the binding-identity question ("does this agent have a
-  // computer at all"). `isOffline` is the reachability question, sourced
-  // from `runtime_state` (the M1+ authority — null means no runtime is
-  // reporting), qualified with `clientStatus?.clientId` so unclaimed agents
-  // don't double-count as "offline" (we surface those separately).
-  const isOffline = !isHuman && agent.runtimeState == null && !!clientStatus?.clientId;
+  const isUnclaimed = !isHuman && !agent.clientId;
 
   const shortId = agent.uuid.slice(0, 8);
 
-  const boundClientId = clientStatus?.clientId ?? null;
+  const boundClientId = agent.clientId ?? null;
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
     : null;
   const boundClientLabel: string | null =
     boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
+
+  const availability = deriveAgentAvailability({
+    status: agent.status,
+    clientId: agent.clientId,
+    connection: agent.runtimeState == null ? "offline" : "online",
+    clientLabel: boundClientLabel,
+    offlineSince: clientStatus?.offlineSince ?? agent.lastSeenAt,
+  });
+  const isOffline = availability.kind === "offline";
 
   const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
 
@@ -407,8 +405,6 @@ function AgentDetailPageView() {
     configError: cfgQuery.error,
     configSave,
     clientStatus,
-    clientStatusLoading: clientStatusInitialLoading,
-    clientStatusError,
     isUnclaimed,
     isOffline,
     boundClientLabel,
@@ -439,108 +435,177 @@ function AgentDetailPageView() {
     onDelete: () => deleteMutation.mutate(),
   };
 
+  const openChat = () => {
+    const search = new URLSearchParams({ c: "draft", with: agent.uuid });
+    navigateAway(`/?${search.toString()}`);
+  };
+  const canReactivateFromHeader =
+    agent.status === "suspended" && !!agent.clientId && canManageAgent && !runtimeSwitchClaim;
+  const canChooseRuntimeFromHeader =
+    agent.status === "suspended" && !agent.clientId && canManageAgent && !runtimeSwitchClaim;
+  const canConnectFromHeader = agent.status === "active" && availability.kind === "needs-setup" && canEditConfig;
+  const canStartChatFromHeader = agent.status === "active" && availability.kind !== "needs-setup" && !isHuman;
+
   return (
-    <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
-      <div style={{ padding: "var(--sp-4) 0 var(--sp-4)" }}>
-        {/* Inner content sits in the same centered rail as the tabs + tab content,
-            so the switcher and title row align with everything below. */}
-        <div
-          style={{
-            maxWidth: "var(--agent-detail-rail)",
-            marginLeft: "auto",
-            marginRight: "auto",
-            paddingLeft: "var(--sp-5)",
-            paddingRight: "var(--sp-5)",
-          }}
-        >
-          {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
-              (and back to Team) without losing the agent context. */}
-          {/* sp-3 gap to the title row: the switcher is demoted nav above the
-              page's primary identity, so it sits a touch apart rather than crowding
-              the title (part of the 16/12 top rhythm). */}
-          <div style={{ marginBottom: "var(--sp-3)" }}>
-            <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={navigateAway} />
-          </div>
-          <div className="flex w-full items-center gap-2">
-            {/* Primary identity avatar — the largest on the page (switcher nav 28,
-                sticky context bar 20), so the title row clearly owns "which agent". */}
+    <div className="flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))", gap: "var(--sp-5)" }}>
+      <header style={{ paddingBottom: "var(--sp-5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+        <Breadcrumb style={{ marginBottom: "var(--sp-4)" }}>
+          <BreadcrumbLink className="inline-flex min-h-11 items-center" onClick={() => navigateAway("/team")}>
+            Team
+          </BreadcrumbLink>
+          <BreadcrumbSep />
+          {/* Humans have no switcher: the list is agents only, so their own
+              row would never be in it. */}
+          {isHuman ? (
+            <BreadcrumbCurrent>{agent.displayName}</BreadcrumbCurrent>
+          ) : (
+            <AgentSwitcher
+              currentAgent={agent}
+              onSelect={(nextUuid) =>
+                // Keep the section the user is reading. A pushed entry (not
+                // `replace`, unlike the section links) makes Back return to
+                // the previous agent.
+                navigateAway(`/agents/${encodeURIComponent(nextUuid)}/${currentTab?.path ?? "profile"}`)
+              }
+            />
+          )}
+        </Breadcrumb>
+
+        <div className={cn("flex gap-4", isNarrow ? "flex-col items-stretch" : "items-center justify-between")}>
+          <div className="flex min-w-0 items-center gap-3">
             <Avatar
               src={agent.avatarImageUrl}
               name={agent.displayName}
-              size={36}
+              size={48}
               colorToken={agent.avatarColorToken}
               seed={agent.uuid}
             />
-            <div className="flex min-w-0 flex-1 items-baseline gap-2">
-              <h1 className="m-0 text-subtitle truncate" style={{ color: "var(--fg)" }} title={`agt_${shortId}`}>
-                {agent.displayName}
-              </h1>
-              {!isNarrow && (
-                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h1 className="m-0 text-title truncate" style={{ color: "var(--fg)" }} title={`agt_${shortId}`}>
+                  {agent.displayName}
+                </h1>
+                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-3)" }}>
                   @{agent.name ?? shortId}
                 </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {/* One status cluster: presence (with label) + active-session count
-                folded in, instead of scattered indicators. */}
-              <span className="inline-flex items-center gap-1.5">
-                <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
-                {activeSessions > 0 && (
-                  <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                    · {activeSessions} active
-                  </span>
-                )}
-              </span>
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  const search = new URLSearchParams({ c: "draft", with: agent.uuid });
-                  navigateAway(`/?${search.toString()}`);
-                }}
-                title="Start a chat with this agent"
-                aria-label="Start chat"
-                style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
-              >
-                <MessageSquare className="h-4 w-4" />
-                Chat
-              </Button>
+              </div>
+              {!isHuman ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1" style={{ marginTop: "var(--sp-1)" }}>
+                  <AgentAvailability view={availability} />
+                  {availability.detail ? (
+                    <>
+                      <span aria-hidden style={{ color: "var(--border-strong)" }}>
+                        ·
+                      </span>
+                      <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+                        {availability.detail}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
+
+          {!isHuman &&
+          (canReactivateFromHeader || canChooseRuntimeFromHeader || canConnectFromHeader || canStartChatFromHeader) ? (
+            <div className={cn("flex shrink-0 items-center gap-2", isNarrow && "w-full")}>
+              {canReactivateFromHeader ? (
+                <Button
+                  size="sm"
+                  className={cn("min-h-11", isNarrow && "w-full")}
+                  onClick={() => reactivateMutation.mutate()}
+                  disabled={reactivateMutation.isPending}
+                >
+                  {reactivateMutation.isPending ? "Reactivating…" : "Reactivate agent"}
+                </Button>
+              ) : canChooseRuntimeFromHeader ? (
+                <Button
+                  size="sm"
+                  className={cn("min-h-11", isNarrow && "w-full")}
+                  onClick={openRuntimeSwitchDialog}
+                  disabled={runtimeSwitchMutation.isPending}
+                >
+                  Choose runtime
+                </Button>
+              ) : canConnectFromHeader ? (
+                <Button
+                  size="sm"
+                  className={cn("min-h-11", isNarrow && "w-full")}
+                  onClick={() => setBindClientOpen(true)}
+                >
+                  Choose computer
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className={cn("min-h-11", isNarrow && "w-full")}
+                  onClick={openChat}
+                  title="Start a chat with this agent"
+                  aria-label="Start chat"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  Start chat
+                </Button>
+              )}
+            </div>
+          ) : null}
         </div>
-      </div>
-      <div ref={headerSentinelRef} aria-hidden style={{ height: 0 }} />
-
-      {!isHuman && (
-        <ContextBar
-          displayName={agent.displayName}
-          avatarImageUrl={agent.avatarImageUrl}
-          avatarColorToken={agent.avatarColorToken}
-          seed={agent.uuid}
-          runtimeState={agent.runtimeState}
-          visible={contextBarVisible}
-        />
-      )}
-
-      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} badges={tabBadges} />
+        {reactivateError && canReactivateFromHeader ? (
+          <div
+            className={cn("flex flex-wrap items-center gap-2", !isNarrow && "justify-end")}
+            style={{ marginTop: "var(--sp-2)" }}
+            role="alert"
+          >
+            <span className="text-caption" style={{ color: "var(--state-error)" }}>
+              Couldn’t reactivate this agent. {reactivateError}
+            </span>
+            <Button
+              size="xs"
+              className="min-h-11"
+              variant="outline"
+              onClick={() => reactivateMutation.mutate()}
+              disabled={reactivateMutation.isPending}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+      </header>
 
       <div
-        className="w-full flex-1"
+        className={cn("w-full flex-1", isNarrow || tabs.length <= 1 ? "flex flex-col" : "grid items-start")}
         style={{
-          padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--sp-5)",
-          width: "100%",
-          // One uniform rail across every tab (no per-tab width jump), centered
-          // to match the context / team / settings pages.
-          maxWidth: "var(--agent-detail-rail)",
-          marginLeft: "auto",
-          marginRight: "auto",
+          gap: isNarrow ? "var(--sp-4)" : "var(--sp-8)",
+          gridTemplateColumns:
+            !isNarrow && tabs.length > 1 ? "var(--agent-detail-local-nav) minmax(0, 1fr)" : undefined,
         }}
       >
-        <Outlet context={outletContext} />
+        <AgentSectionNavigation tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} isNarrow={isNarrow} />
+        <section
+          aria-labelledby="agent-detail-section-title"
+          className="min-w-0"
+          style={{
+            width: "100%",
+            maxWidth: "var(--agent-detail-rail)",
+            marginLeft: tabs.length <= 1 ? "auto" : undefined,
+            marginRight: tabs.length <= 1 ? "auto" : undefined,
+          }}
+        >
+          {currentTab ? (
+            <div style={{ marginBottom: "var(--sp-5)" }}>
+              <h2 id="agent-detail-section-title" className="sr-only">
+                {currentTab.label}
+              </h2>
+              <p className="m-0 text-body" style={{ color: "var(--fg-3)" }}>
+                {currentTab.description}
+              </p>
+            </div>
+          ) : null}
+          <div className="flex flex-col" style={{ gap: "var(--sp-5)", paddingBottom: "var(--sp-7)" }}>
+            <Outlet context={outletContext} />
+          </div>
+        </section>
       </div>
 
       <Dialog
@@ -556,8 +621,10 @@ function AgentDetailPageView() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Bind computer</DialogTitle>
-            <DialogDescription>Pin this agent to a connected computer. The bind applies immediately.</DialogDescription>
+            <DialogTitle>Choose a computer</DialogTitle>
+            <DialogDescription>
+              Assign this agent to a connected computer. The change applies immediately.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {clientsQuery.isLoading ? (
@@ -593,7 +660,7 @@ function AgentDetailPageView() {
                 bindClientMutation.mutate(bindClientSelected);
               }}
             >
-              {bindClientMutation.isPending ? "Binding…" : "Bind"}
+              {bindClientMutation.isPending ? "Assigning…" : "Assign"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -725,142 +792,61 @@ function AgentDetailPageView() {
   );
 }
 
-function TabsNav({
+function AgentSectionNavigation({
   tabs,
   agentUuid,
   currentTabKey,
-  badges,
+  isNarrow,
 }: {
   tabs: TabDef[];
   agentUuid: string;
   currentTabKey: string;
-  badges: Record<string, number>;
+  isNarrow: boolean;
 }) {
   const navigate = useNavigate();
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [edges, setEdges] = useState({ left: false, right: false });
+  if (tabs.length <= 1) return null;
 
-  // A single-tab agent (e.g. a human, who only has Profile) doesn't need a tab
-  // bar at all — rendering one lone underlined tab reads like chrome with no
-  // purpose.
-  const showBar = tabs.length > 1;
-
-  const updateEdges = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const maxScroll = el.scrollWidth - el.clientWidth;
-    setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft < maxScroll - 1 });
-  }, []);
-
-  // Keep the active tab in view when the route changes (e.g. a deep link to a
-  // tab that sits off the right edge on a narrow screen) and recompute the
-  // overflow fades.
-  // `currentTabKey`, `tabs` and `badges` are intentional dependencies even though
-  // the body reads the active tab from the DOM rather than these variables:
-  //  - currentTabKey: programmatic route changes (a deep link to an off-screen
-  //    tab) must re-scroll the active tab into view.
-  //  - tabs / badges: changing the tab set or a tab's badge changes the row's
-  //    scrollWidth, which ResizeObserver (it watches the box, not scrollWidth)
-  //    doesn't catch — so recompute the edge fades when they change.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: these deps drive the re-run; see comment above.
-  useEffect(() => {
-    if (!showBar) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
-    updateEdges();
-  }, [showBar, currentTabKey, tabs, badges, updateEdges]);
-
-  useEffect(() => {
-    if (!showBar) return;
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(updateEdges);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [showBar, updateEdges]);
-
-  if (!showBar) return null;
+  if (isNarrow) {
+    return (
+      <div className="w-full">
+        <label
+          htmlFor="agent-configuration-section"
+          className="text-label block"
+          style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}
+        >
+          Section
+        </label>
+        <Select
+          id="agent-configuration-section"
+          aria-label="Agent section"
+          value={currentTabKey}
+          options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+          onChange={(key) => {
+            const next = tabs.find((tab) => tab.key === key);
+            if (next) navigate(`/agents/${agentUuid}/${next.path}`, { replace: true });
+          }}
+          className="w-full"
+          triggerClassName="w-full"
+        />
+      </div>
+    );
+  }
 
   return (
-    // The full tab set can overflow a phone-width row, so the bar scrolls
-    // horizontally instead of wrapping; `shrink-0 whitespace-nowrap` on each Tab
-    // keeps labels at natural width and swipeable. Edge fades hint at content
-    // scrolled out of view; they sit above the bar and ignore pointer events.
-    <div style={{ position: "relative" }}>
-      <TabBar
-        ref={scrollRef}
-        role="tablist"
-        aria-label="Agent configuration sections"
-        // The bar's bottom border + background stay FULL-BLEED (the horizontal
-        // rule reads cleaner edge-to-edge); only the tab labels are constrained
-        // to the centered rail by the inner wrapper below. So drop the baked-in
-        // `padding: 0 var(--sp-5)` here and re-apply it on the rail wrapper.
-        //
-        // overflowY:hidden (not just minHeight): the active Tab's marginBottom:-1
-        // makes its border-box one pixel taller than the bar, and overflowX:auto
-        // coerces overflow-y from visible to auto → a spurious VERTICAL scrollbar
-        // over that extra pixel. Hiding overflow-y suppresses the scrollbar while
-        // keeping the active underline on the baseline and the focus ring intact
-        // (verified visually).
-        style={{ overflowX: "auto", overflowY: "hidden", padding: 0 }}
-        onScroll={updateEdges}
-      >
-        {/* Centered rail for the tab labels: caps the labels to the same width as
-            the header + content, while the TabBar (scroll container) and its
-            border stay full-width. */}
-        <div
-          className="flex items-end"
-          style={{
-            gap: "var(--sp-0_5)",
-            width: "100%",
-            maxWidth: "var(--agent-detail-rail)",
-            marginLeft: "auto",
-            marginRight: "auto",
-            paddingLeft: "var(--sp-5)",
-            paddingRight: "var(--sp-5)",
-          }}
-        >
-          {tabs.map((t) => {
-            const active = currentTabKey === t.key;
-            const badge = badges[t.key];
+    <aside style={{ position: "sticky", top: "var(--sp-4)", alignSelf: "start" }}>
+      <nav aria-label="Agent sections">
+        <ul className="m-0 flex list-none flex-col p-0" style={{ gap: "var(--sp-0_5)" }}>
+          {tabs.map((tab) => {
+            const active = currentTabKey === tab.key;
             return (
-              <Tab
-                key={t.key}
-                role="tab"
-                aria-selected={active}
-                active={active}
-                onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
-                className="shrink-0 whitespace-nowrap"
-              >
-                {t.label}
-                {badge != null ? <TabBadge>{badge}</TabBadge> : null}
-              </Tab>
+              <li key={tab.key}>
+                <LocalNavLink to={`/agents/${agentUuid}/${tab.path}`} label={tab.label} active={active} replace />
+              </li>
             );
           })}
-        </div>
-      </TabBar>
-      {edges.left ? <TabEdgeFade side="left" /> : null}
-      {edges.right ? <TabEdgeFade side="right" /> : null}
-    </div>
-  );
-}
-
-function TabEdgeFade({ side }: { side: "left" | "right" }) {
-  return (
-    <div
-      aria-hidden
-      style={{
-        position: "absolute",
-        top: 0,
-        bottom: 0,
-        left: side === "left" ? 0 : undefined,
-        right: side === "right" ? 0 : undefined,
-        width: "var(--sp-6)",
-        pointerEvents: "none",
-        background: `linear-gradient(to ${side === "left" ? "right" : "left"}, var(--bg-raised), transparent)`,
-      }}
-    />
+        </ul>
+      </nav>
+    </aside>
   );
 }
 
@@ -899,7 +885,7 @@ function BindClientList({
               No connected computers
             </p>
             <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
-              Connect a computer first, then return here to bind this agent.
+              Connect a computer first, then return here to assign this agent.
             </p>
           </div>
           <Button type="button" variant="outline" size="xs" onClick={onOpenComputers}>
@@ -920,10 +906,10 @@ function BindClientList({
         listStyle: "none",
       }}
     >
-      {bindable.map((c) => {
+      {bindable.map((c, index) => {
         const picked = c.id === selected;
         return (
-          <li key={c.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
+          <li key={c.id} style={index > 0 ? { borderTop: "var(--hairline) solid var(--border-faint)" } : undefined}>
             <button
               type="button"
               onClick={() => onSelect(c.id)}
@@ -1090,12 +1076,15 @@ function RuntimeSwitchControls({
             listStyle: "none",
           }}
         >
-          {clients.map((client) => {
+          {clients.map((client, index) => {
             const picked = client.id === selectedClientId;
             const blocker = runtimeSwitchClientBlocker(client);
             const disabled = blocker !== null;
             return (
-              <li key={client.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
+              <li
+                key={client.id}
+                style={index > 0 ? { borderTop: "var(--hairline) solid var(--border-faint)" } : undefined}
+              >
                 <button
                   type="button"
                   onClick={() => {
@@ -1110,6 +1099,7 @@ function RuntimeSwitchControls({
                     opacity: disabled ? 0.62 : 1,
                   }}
                   disabled={disabled}
+                  aria-pressed={picked}
                   title={blocker ?? undefined}
                 >
                   <span
@@ -1166,6 +1156,7 @@ function RuntimeSwitchControls({
                   key={provider}
                   type="button"
                   onClick={() => onSelectProvider(provider)}
+                  aria-pressed={picked}
                   className="text-body"
                   style={{
                     border: "var(--hairline) solid var(--border)",

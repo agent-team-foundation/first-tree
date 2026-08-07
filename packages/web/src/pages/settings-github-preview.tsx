@@ -20,7 +20,7 @@ import { Select } from "../components/ui/select.js";
  *   - **Not installed**         — the "Install on GitHub" CTA.
  *   - **Loading**               — the initial fetch state.
  *
- * Connection and task routing are separate provider-owned sections. The
+ * Connection and automatic handling are separate provider-owned sections. The
  * markup here mirrors the real page closely enough to review their hierarchy
  * without a live GitHub installation.
  */
@@ -144,7 +144,7 @@ function ConnectionDetails({ defaultOpen = false }: { defaultOpen?: boolean }) {
   );
 }
 
-function TaskRoutingPreview() {
+function AutomaticHandlingPreview() {
   const [agentUuid, setAgentUuid] = useState("dev-agent");
   const agentName = agentUuid === "release-agent" ? "Release Agent" : "Dev Assistant";
 
@@ -153,10 +153,7 @@ function TaskRoutingPreview() {
       className="flex flex-col"
       style={{
         gap: "var(--sp-3)",
-        padding: "var(--sp-4)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        background: "var(--bg-sunken)",
+        padding: "var(--sp-3) 0",
       }}
     >
       <div>
@@ -164,7 +161,8 @@ function TaskRoutingPreview() {
           GitHub Task Agent
         </span>
         <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
-          {agentName} handles GitHub App mentions and assignments outside the Context Tree repository.
+          {agentName} automatically handles Issue and pull request activity outside the Context Tree repository and
+          posts final replies as the First Tree GitHub App.
         </div>
       </div>
       <Select
@@ -177,8 +175,7 @@ function TaskRoutingPreview() {
         ]}
       />
       <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-        The GitHub Task Agent and Context Reviewer must be different Agents. Automatic Review does not control this
-        delegation.
+        Context Tree activity uses Context Reviewer. These roles must use different Agents.
       </div>
     </div>
   );
@@ -192,10 +189,10 @@ function PageShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         <Section title="Connection">{children}</Section>
         <Section
-          title="Task routing"
-          description="Choose who handles requests sent directly to the First Tree GitHub App."
+          title="Automatic handling"
+          description="Choose an Agent to handle Issue and pull request activity from connected GitHub repositories."
         >
-          <TaskRoutingPreview />
+          <AutomaticHandlingPreview />
         </Section>
       </div>
     </div>
@@ -377,7 +374,7 @@ export function SettingsGithubPreviewPage() {
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Lean default: who's connected + Manage on GitHub. Permissions, subscribed events, and the installation id sit
           behind a collapsed "Connection details" disclosure (click to toggle). GitHub Task Agent lives in the adjacent
-          Task routing section instead of appearing as a standalone Setup capability.
+          Automatic handling section instead of appearing as a standalone Setup capability.
         </p>
       </div>
 
@@ -393,7 +390,7 @@ export function SettingsGithubPreviewPage() {
         <InstalledCard suspended />
       </Frame>
 
-      <Frame label="Not installed" note="the Install on GitHub CTA alongside provider-owned task routing">
+      <Frame label="Not installed" note="the Install on GitHub CTA alongside provider-owned automatic handling">
         <NotInstalledCard />
       </Frame>
 
@@ -404,7 +401,7 @@ export function SettingsGithubPreviewPage() {
         <NotInstalledCard waiting />
       </Frame>
 
-      <Frame label="Loading" note="initial connection fetch with task routing retained below">
+      <Frame label="Loading" note="initial connection fetch with automatic handling retained below">
         <LoadingCard />
       </Frame>
     </div>

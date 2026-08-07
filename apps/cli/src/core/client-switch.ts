@@ -73,12 +73,14 @@ type SwitchMoveKind =
   | "park-agents"
   | "park-sessions"
   | "park-workspaces"
+  | "park-byo"
   | "restore-client-yaml"
   | "restore-context-yaml"
   | "restore-context-v1-backup"
   | "restore-agents"
   | "restore-sessions"
-  | "restore-workspaces";
+  | "restore-workspaces"
+  | "restore-byo";
 
 type SwitchJournalMove = {
   kind: SwitchMoveKind;
@@ -460,6 +462,7 @@ async function switchLocalClientForLoginLocked(opts: {
 
     executeSwitchMoves(home, journal, "restore");
     updateJournal(home, journal, "restored-target-client");
+    clearAccountBoundContextReceipts(home);
 
     rmSync(join(configDir, "credentials.json"), { force: true });
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -552,6 +555,7 @@ async function completePendingSwitchForLogin(opts: {
     updateJournal(home, journal, "parked-old-client");
     executeSwitchMoves(home, journal, "restore");
     updateJournal(home, journal, "restored-target-client");
+    clearAccountBoundContextReceipts(home);
 
     rmSync(join(configDir, "credentials.json"), { force: true });
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -980,6 +984,17 @@ function throwSwitchFailure(code: string, message: string): never {
   throw new ClientSwitchCommandError(code, message);
 }
 
+function clearAccountBoundContextReceipts(home: string): void {
+  rmSync(join(home, "state", "context", "route-receipts"), { recursive: true, force: true });
+  for (const provider of ["claude-code", "codex"]) {
+    for (const entry of ["adapter-sync", "compatible-sessions", "reload-pending", "reload-consumed"]) {
+      rmSync(join(home, "state", "context", "providers", provider, entry), { recursive: true, force: true });
+    }
+    rmSync(join(home, "state", "context", "providers", provider, "reload-required.json"), { force: true });
+    rmSync(join(home, "state", "context", "providers", provider, "next-session-required.json"), { force: true });
+  }
+}
+
 function buildSwitchMoves(opts: {
   home: string;
   configDir: string;
@@ -1019,6 +1034,7 @@ function buildSwitchMoves(opts: {
       join(fromParkedRoot, "data", "workspaces"),
       false,
     ),
+    move("park-byo", "park", join(opts.dataDir, "byo"), join(fromParkedRoot, "data", "byo"), false),
   ];
 
   if (!opts.toClientId) {
@@ -1066,6 +1082,7 @@ function buildSwitchMoves(opts: {
       join(opts.dataDir, "workspaces"),
       false,
     ),
+    move("restore-byo", "restore", join(toParkedRoot, "data", "byo"), join(opts.dataDir, "byo"), false),
   );
   return moves;
 }

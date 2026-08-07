@@ -37,8 +37,6 @@ export type AgentDetailContext = {
 
   // Computer binding (Runtime tab "Computer" panel)
   clientStatus: ClientStatusInfo | undefined;
-  clientStatusLoading: boolean;
-  clientStatusError: string | null;
   isUnclaimed: boolean;
   isOffline: boolean;
   boundClientLabel: string | null;

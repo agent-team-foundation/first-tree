@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, NotFoundError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
+import { invalidateChatAudience } from "../../services/chat-audience-cache.js";
 import { handleContextReviewerMrEvent } from "../../services/context-reviewer-mr.js";
 import {
   findActiveGitlabEndpoint,
@@ -20,6 +21,7 @@ import {
   withGitlabCrossHookDedupFence,
 } from "../../services/gitlab-cross-hook-dedup.js";
 import {
+  normalizeGitlabProjectPath,
   observeGitlabEntityAndResolveFollowers,
   refreshGitlabChatTopics,
 } from "../../services/gitlab-entity-follow.js";
@@ -34,6 +36,7 @@ import {
 import { runDeferredSendMessagePostCommitEffects } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { runDeferredScmCardPostCommitEffects } from "../../services/scm-card-delivery.js";
+import { lockGitlabEntityAttention } from "../../services/scm-entity-attention-lock.js";
 import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
 
 const MAX_GITLAB_WEBHOOK_BYTES = 512 * 1024;
@@ -134,6 +137,15 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
             endpoint.connection.id,
             endpoint.connection.tokenHash,
             async (tx, fencedConnection) => {
+              if (normalized.entityIdentity) {
+                await lockGitlabEntityAttention(tx, {
+                  connectionId: fencedConnection.id,
+                  projectPathNormalized: normalizeGitlabProjectPath(normalized.entityIdentity.projectPath),
+                  projectIds: [normalized.entityIdentity.projectId],
+                  entityType: normalized.entityIdentity.entityType,
+                  entityIid: normalized.entityIdentity.entityIid,
+                });
+              }
               if (normalized.crossHookFingerprint) {
                 crossHookDuplicate = isGitlabCrossHookDuplicate({
                   fingerprint: normalized.crossHookFingerprint,
@@ -222,7 +234,14 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                   });
                 },
                 deliver: async (event, audience) => {
-                  if (!normalized.entityIdentity) return { delivered: 0, failed: 0, postCommitEffects: [] };
+                  if (!normalized.entityIdentity) {
+                    return {
+                      delivered: 0,
+                      failed: 0,
+                      postCommitEffects: [],
+                      audienceCacheInvalidationChatIds: [],
+                    };
+                  }
                   return deliverGitlabCards(app, {
                     event,
                     identity: normalized.entityIdentity,
@@ -284,6 +303,9 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           );
 
           if (processed.outcome === "delivered") {
+            for (const chatId of processed.deliveryStats.audienceCacheInvalidationChatIds) {
+              invalidateChatAudience(chatId);
+            }
             for (const effects of processed.deliveryStats.postCommitEffects) {
               await runDeferredScmCardPostCommitEffects(app, effects);
             }

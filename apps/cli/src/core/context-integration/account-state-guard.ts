@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   contextIntegrationConfigSchema,
@@ -12,6 +12,13 @@ import { defaultHome, readConfigFile } from "@first-tree/shared/config";
 import { contextRepairCommand } from "./repair-guidance.js";
 
 const heldAccountLocks = new Set<string>();
+
+export class AccountStateMutationBusyError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Another First Tree account or Context state change is already running.", options);
+    this.name = "AccountStateMutationBusyError";
+  }
+}
 
 export function withAccountStateMutationLock<T>(action: () => T, home = defaultHome()): T {
   const release = acquireAccountStateMutationLock(home);
@@ -57,6 +64,35 @@ export function assertClientSwitchCanStart(home = defaultHome()): void {
       "A First Tree Context Plugin/binding operation is still active. Wait for it to finish before switching accounts.",
     );
   }
+  const byoState = join(home, "state", "context", "byo");
+  if (existsSync(byoState)) {
+    for (const organizationId of readdirSync(byoState)) {
+      const organizationState = join(byoState, organizationId);
+      const mutationLock = join(organizationState, "mutation.lock");
+      if (existsSync(mutationLock)) {
+        removeStalePidLock(mutationLock);
+        if (existsSync(mutationLock)) {
+          throw new Error("A BYO Context Tree repository mutation is active. Wait for it before switching accounts.");
+        }
+      }
+      if (existsSync(join(organizationState, "rebind-journal.json"))) {
+        throw new Error("A BYO Context Tree repository rebind is incomplete. Recover it before switching accounts.");
+      }
+      const writes = join(organizationState, "writes");
+      if (existsSync(writes) && readdirSync(writes).some((entry) => entry.endsWith(".json"))) {
+        throw new Error("A BYO Context Tree write is active. Finish or recover it before switching accounts.");
+      }
+    }
+  }
+  const byoData = join(home, "data", "byo");
+  if (existsSync(byoData)) {
+    for (const organizationId of readdirSync(byoData)) {
+      const worktrees = join(byoData, organizationId, "worktrees");
+      if (existsSync(worktrees) && readdirSync(worktrees).length > 0) {
+        throw new Error("A BYO Context Tree worktree is active. Finish or recover it before switching accounts.");
+      }
+    }
+  }
 }
 
 export function readActiveContextAccountClientId(home = defaultHome()): string {
@@ -78,7 +114,8 @@ function acquireAccountStateMutationLock(home: string): () => void {
   try {
     descriptor = openSync(path, "wx", 0o600);
   } catch (error) {
-    throw new Error("Another First Tree account or Context state change is already running.", { cause: error });
+    if (errorCode(error) === "EEXIST") throw new AccountStateMutationBusyError({ cause: error });
+    throw error;
   }
   heldAccountLocks.add(path);
   writeFileSync(descriptor, `${process.pid}\n`, "utf8");
@@ -106,7 +143,11 @@ function removeStalePidLock(path: string): void {
 }
 
 function isMissing(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && Reflect.get(error, "code") === "ENOENT";
+  return errorCode(error) === "ENOENT";
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? Reflect.get(error, "code") : undefined;
 }
 
 function readBlockingJournalProvider(path: string) {
@@ -129,7 +170,7 @@ function readBlockingJournalProvider(path: string) {
       Array.isArray(Reflect.get(previousConfig, "grants"));
     const legacyBindingsShapeValid = Array.isArray(journal.previousBindings);
     const configValid =
-      (journal.schemaVersion === 2 &&
+      ((journal.schemaVersion === 2 || journal.schemaVersion === 3) &&
         currentConfigShapeValid &&
         contextIntegrationConfigSchema.safeParse(previousConfig).success) ||
       (journal.schemaVersion === 1 &&
@@ -142,7 +183,7 @@ function readBlockingJournalProvider(path: string) {
       journal.previousInstallManifest === null ||
       contextIntegrationInstallManifestSchema.safeParse(journal.previousInstallManifest).success;
     if (
-      ![1, 2].includes(Number(journal.schemaVersion)) ||
+      ![1, 2, 3].includes(Number(journal.schemaVersion)) ||
       !operationIdValid ||
       typeof journal.accountClientId !== "string" ||
       !/^client_[a-f0-9]{8}$/u.test(journal.accountClientId) ||
@@ -156,6 +197,11 @@ function readBlockingJournalProvider(path: string) {
       typeof journal.providerEnabled !== "boolean" ||
       typeof journal.marketplaceSourceExisted !== "boolean" ||
       (journal.recoveryMarketplaceRoot !== null && typeof journal.recoveryMarketplaceRoot !== "string") ||
+      (journal.schemaVersion === 3 &&
+        journal.recoveryObservationRoot !==
+          join(dirname(path), "operation-recovery", String(journal.operationId), "observation")) ||
+      (journal.schemaVersion === 3 &&
+        !/^sha256:[0-9a-f]{64}$/u.test(String(journal.recoveryObservationDigest ?? ""))) ||
       typeof journal.startedAt !== "string" ||
       !Number.isFinite(Date.parse(journal.startedAt)) ||
       journal.providerInstalled !== journal.providerEnabled ||

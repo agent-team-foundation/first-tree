@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude-code.js";
+import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude/tool-call-processor.js";
 import type { ContextTreeGitWriteTracker } from "../runtime/context-tree-git-status.js";
 import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.js";
 
@@ -19,9 +19,9 @@ import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.
  *   4. tool_result with an array-shaped `content` (mixed blocks) ⇒ text blocks
  *      are concatenated into `resultPreview`.
  *
- * The processor is extracted from the for-await consumer loop in
- * `claude-code.ts`, so these fixtures lock its behavior down without
- * needing to boot the whole handler + SDK + workspace.
+ * The processor lives in `handlers/claude/tool-call-processor.ts`, shared by
+ * the SDK stream handler and the Claude TUI handler, so these fixtures lock
+ * its behavior down without needing to boot either handler + SDK + workspace.
  */
 
 function assistantToolUse(id: string, name: string, input: unknown) {

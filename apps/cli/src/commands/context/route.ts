@@ -1,4 +1,9 @@
 import type { Command } from "commander";
+import {
+  assertContextMutationCanStart,
+  withAccountStateMutationLockAsync,
+} from "../../core/context-integration/account-state-guard.js";
+import { ContextPluginReloadRequiredError } from "../../core/context-integration/adapter-observation.js";
 import { inspectContextClientPreflight } from "../../core/context-integration/client-preflight.js";
 import { resolveContextRoute } from "../../core/context-integration/context-route.js";
 import { print } from "../../core/output.js";
@@ -29,28 +34,43 @@ export async function runContextRoute(context: CommandContext): Promise<void> {
     pathless: options.pathless,
   }).project;
   const sdk = createMemberSdk();
-  const result = await resolveContextRoute(
-    {
-      validateMemberContextRouteCandidates(request, callOptions): Promise<unknown> {
-        return sdk.validateMemberContextRouteCandidates(request, callOptions);
-      },
-      validateMemberContextSessionCandidate(request, callOptions): Promise<unknown> {
-        return sdk.validateMemberContextSessionCandidate(request, callOptions);
-      },
-      validateMemberContextActivation(teamId, request, callOptions): Promise<unknown> {
-        return sdk.validateMemberContextActivation(teamId, request, callOptions);
-      },
-      getMemberContextTreeSetting(teamId, callOptions): Promise<unknown> {
-        return sdk.getMemberContextTreeSetting(teamId, callOptions);
-      },
-    },
-    {
-      provider,
-      project,
-      ...(options.sessionCandidate ? { sessionCandidateReceipt: options.sessionCandidate } : {}),
-    },
-  );
-  print.result(result);
+  try {
+    const result = await withAccountStateMutationLockAsync(async () => {
+      assertContextMutationCanStart();
+      return resolveContextRoute(
+        {
+          validateMemberContextRouteCandidates(request, callOptions): Promise<unknown> {
+            return sdk.validateMemberContextRouteCandidates(request, callOptions);
+          },
+          validateMemberContextSessionCandidate(request, callOptions): Promise<unknown> {
+            return sdk.validateMemberContextSessionCandidate(request, callOptions);
+          },
+          validateMemberContextActivation(teamId, request, callOptions): Promise<unknown> {
+            return sdk.validateMemberContextActivation(teamId, request, callOptions);
+          },
+          getMemberContextTreeSetting(teamId, callOptions): Promise<unknown> {
+            return sdk.getMemberContextTreeSetting(teamId, callOptions);
+          },
+        },
+        {
+          provider,
+          project,
+          ...(options.sessionCandidate ? { sessionCandidateReceipt: options.sessionCandidate } : {}),
+        },
+      );
+    });
+    print.result(result);
+  } catch (error) {
+    if (error instanceof ContextPluginReloadRequiredError) {
+      print.fail(error.code, error.message, 2, {
+        nextActions:
+          provider === "claude-code"
+            ? ["Start a new Claude session, then retry the same route command."]
+            : ["Repair the Codex Context Plugin, then retry the same route command."],
+      });
+    }
+    throw error;
+  }
 }
 
 export const contextRouteCommand: SubcommandModule = {

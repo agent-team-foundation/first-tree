@@ -6,6 +6,7 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:pat
 import { runtimeProviderInstallCommand, runtimeProviderLoginCommand } from "@first-tree/shared";
 import { codexDesktopAppBinDirs, wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
+import { automaticCandidateAllowed } from "./protected-paths.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
 
@@ -90,17 +91,10 @@ export class CodexBinaryVerifyTransientError extends Error {
   }
 }
 
-const CODEX_BINARY_MISSING_PATTERNS: readonly RegExp[] = [
-  /codex runtime binary is missing/i,
-  /unable to locate codex cli binaries/i,
-  /findCodexPath/,
-  /missing optional dependency\s+@openai\/codex[-\w]*/i,
-];
+import { isCodexBinaryMissingError } from "./provider-support/binary-failure.js";
 
-export function isCodexBinaryMissingError(input: unknown): boolean {
-  const text = errorSearchText(input);
-  return CODEX_BINARY_MISSING_PATTERNS.some((pattern) => pattern.test(text));
-}
+/** Single-owner match rules live in provider-support; re-export for call sites. */
+export { isCodexBinaryMissingError };
 
 export function formatCodexBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();
@@ -269,11 +263,6 @@ function errorText(input: unknown): string {
   return String(input);
 }
 
-function errorSearchText(input: unknown): string {
-  if (input instanceof Error) return [input.message, input.stack].filter(Boolean).join("\n");
-  return errorText(input);
-}
-
 function readPathValue(env: Record<string, string | undefined>, platform = process.platform): string | undefined {
   if (platform !== "win32") return env.PATH;
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === "path");
@@ -364,6 +353,10 @@ function resolveWindowsNativeCodexFromNpmShim(
 }
 
 function isExecutable(filePath: string): boolean {
+  // Vet the complete candidate before `access` follows it — the directory it
+  // came from having been vetted says nothing about the leaf, which can itself
+  // be a symlink into a protected folder. See `automaticCandidateAllowed`.
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
     return true;
@@ -373,6 +366,7 @@ function isExecutable(filePath: string): boolean {
 }
 
 function fileExists(filePath: string): boolean {
+  if (!automaticCandidateAllowed(filePath)) return false;
   try {
     accessSync(filePath, constants.F_OK);
     return true;

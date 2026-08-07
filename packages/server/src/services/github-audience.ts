@@ -13,6 +13,7 @@ import { agents } from "../db/schema/agents.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { loadValidContextReviewerAgent } from "./context-reviewer-common.js";
 import { normalizeGithubRepo } from "./context-reviewer-pr.js";
+import { isGithubAppTargetLogin } from "./github-app-self-output.js";
 import { githubEntityKeyCandidates } from "./github-entity-key.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 import {
@@ -22,6 +23,9 @@ import {
   type ScmProviderTaskTarget,
 } from "./scm-audience-composition.js";
 import { getTeamAgentUuid } from "./team-agent-settings.js";
+
+/** Preserve the existing internal import surface while identity logic stays canonical. */
+export { isGithubAppTargetLogin } from "./github-app-self-output.js";
 
 /**
  * Why a delegate-target lookup did or didn't qualify. Hoisted to a discrete
@@ -91,25 +95,13 @@ export type AudienceResolution = {
 export type GithubAudienceOptions = {
   appSlug?: string | null;
   appPermissions?: GithubAppInstallationPermissions;
+  /**
+   * Canonical `isGithubAppSelfOutput` verdict for this webhook. When set, the
+   * event only reports First Tree's own App output, so it keeps its ordinary
+   * subscription routes but must not mint another provider task.
+   */
+  appSelfOutput?: boolean;
 };
-
-const AUTHORIZED_TEXT_TASK_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-function normalizeGithubAppLogin(login: string): string {
-  return login
-    .trim()
-    .toLowerCase()
-    .replace(/\[bot\]$/u, "");
-}
-
-export function isGithubAppTargetLogin(login: string, appSlug: string | null | undefined): boolean {
-  if (!appSlug?.trim()) return false;
-  return normalizeGithubAppLogin(login) === normalizeGithubAppLogin(appSlug);
-}
-
-export function isAuthorizedGithubTextTaskRequester(authorAssociation: string | null | undefined): boolean {
-  return authorAssociation ? AUTHORIZED_TEXT_TASK_ASSOCIATIONS.has(authorAssociation.trim().toUpperCase()) : false;
-}
 
 export function isGithubTaskReplySupported(
   entityType: NormalizedScmEvent["entity"]["type"],
@@ -120,22 +112,31 @@ export function isGithubTaskReplySupported(
   return false;
 }
 
-function githubTaskEntityNumber(event: NormalizedScmEvent): number | null {
-  const match = /#([1-9]\d*)$/u.exec(event.entity.key);
-  if (!match?.[1]) return null;
-  const value = Number(match[1]);
-  return Number.isSafeInteger(value) ? value : null;
+/**
+ * Entity types an automatic provider task may cover. Discussion and commit
+ * events are out of scope: the App has no safe terminal comment publisher for
+ * them, so routing one would create work an Agent cannot finish.
+ */
+function isGithubTaskEntityType(event: NormalizedScmEvent): boolean {
+  return event.entity.type === "issue" || event.entity.type === "pull_request";
 }
 
-function hasGithubTaskEntityUrl(event: NormalizedScmEvent): boolean {
-  const value = event.entity.url ?? event.surface.url;
+/** The immutable Issue / PR identity the App reply publisher is bound to. */
+function hasGithubTaskEntityIdentity(event: NormalizedScmEvent): boolean {
+  const match = /#([1-9]\d*)$/u.exec(event.entity.key);
+  if (!match?.[1] || !Number.isSafeInteger(Number(match[1]))) return false;
   try {
-    return new URL(value).protocol === "https:";
+    return new URL(event.entity.url ?? event.surface.url).protocol === "https:";
   } catch {
     return false;
   }
 }
 
+/**
+ * Pick the repository's task role. The bound GitHub Context Tree repository
+ * keeps its dedicated Context Reviewer; every other connected repository goes
+ * to the team's GitHub Task Agent.
+ */
 async function resolveGithubAppTaskAgent(
   db: Database,
   event: NormalizedScmEvent,
@@ -159,10 +160,13 @@ async function resolveGithubAppTaskAgent(
 /**
  * Compute the Stage 2 audience for a normalized event.
  *
- *   audience = follow mappings ∪ target deliveries
+ *   audience = follow mappings ∪ personnel deliveries ∪ automatic provider task
  *
  * Provider code resolves rows and external identities; shared SCM composition
- * owns exact-pair target matching and preserves every distinct route.
+ * owns exact-pair target matching and preserves every distinct route. The
+ * automatic provider task is a repository-scoped capability, not a personnel
+ * route: it carries no involve reason and no external login, so a chat reached
+ * only by it renders as `subscribed` with the event's real kind.
  */
 export async function resolveGithubAudience(
   db: Database,
@@ -172,12 +176,9 @@ export async function resolveGithubAudience(
   const organizationId = event.source.organizationId;
   const entityKeys = githubEntityKeyCandidates(event.entity.type, event.entity.key);
   const actorHumanId = await resolveGithubActorHumanId(db, organizationId, event.actor);
-  const teamAgentTaskTarget = event.targets.find(
-    (target) =>
-      (target.reason === "mentioned" || target.reason === "assigned") &&
-      isGithubAppTargetLogin(target.externalUsername, options.appSlug) &&
-      (target.reason === "assigned" || isAuthorizedGithubTextTaskRequester(event.actor.authorAssociation)),
-  );
+  // The App login can still appear as a payload mention or assignee. It is
+  // never a personnel target: no First Tree human carries it, and provider-task
+  // routing no longer reads it.
   const humanTargets = event.targets.filter(
     (target) => !isGithubAppTargetLogin(target.externalUsername, options.appSlug),
   );
@@ -333,6 +334,7 @@ export async function resolveGithubAudience(
         personnelTargets.push({
           kind: "personnel_target",
           reason: target.reason,
+          requiresPersistentLine: target.reason === "assigned" || target.reason === "mentioned",
           humanAgentId: c.id,
           wakeAgentId: c.delegateMention,
           externalUsername: candidateLogin,
@@ -341,25 +343,25 @@ export async function resolveGithubAudience(
     }
   }
 
+  // Automatic event routing. Every normalizer-accepted Issue / pull request
+  // event is repository-scoped work for that repository's task role — no
+  // `@app-slug` text, assignee, or `author_association` is consulted, because
+  // an ordinary App bot isn't even selectable in GitHub's mention/assignee
+  // pickers. The three skip conditions below drop only the automatic task and
+  // never touch independent personnel targets or subscriptions.
   const providerTaskTargets: ScmProviderTaskTarget<GithubProviderTaskContext>[] = [];
-  if (teamAgentTaskTarget) {
-    const supportedEntity =
-      (event.entity.type === "issue" || event.entity.type === "pull_request") &&
-      githubTaskEntityNumber(event) !== null &&
-      hasGithubTaskEntityUrl(event);
-    if (!supportedEntity) {
-      appTaskBlocker = "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED";
-    } else if (!isGithubTaskReplySupported(event.entity.type, options.appPermissions)) {
-      appTaskBlocker = "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED";
-    } else {
-      const taskAgent = await resolveGithubAppTaskAgent(db, event);
-      if (taskAgent) {
+  if (options.appSlug?.trim() && !options.appSelfOutput && isGithubTaskEntityType(event)) {
+    const taskAgent = await resolveGithubAppTaskAgent(db, event);
+    if (taskAgent) {
+      if (!hasGithubTaskEntityIdentity(event)) {
+        appTaskBlocker = "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED";
+      } else if (!isGithubTaskReplySupported(event.entity.type, options.appPermissions)) {
+        appTaskBlocker = "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED";
+      } else {
         providerTaskTargets.push({
           kind: "provider_task_target",
-          reason: teamAgentTaskTarget.reason,
           humanAgentId: taskAgent.managerHumanAgentId,
           wakeAgentId: taskAgent.uuid,
-          externalUsername: teamAgentTaskTarget.externalUsername.toLowerCase(),
           providerContext: { kind: "github_app_task", agentUuid: taskAgent.uuid },
         });
       }

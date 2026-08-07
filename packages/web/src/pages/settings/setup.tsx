@@ -615,7 +615,7 @@ export function buildSetupRows(facts: SetupFacts): SetupRowModel[] {
     {
       key: "repository-automation",
       title: "GitHub & GitLab",
-      description: "Repository events, identity, and GitHub task routing.",
+      description: "Repository events, identity, and automatic GitHub handling.",
       icon: Webhook,
       status: repositoryAutomationStatus,
       action: capabilities ? providerAction(capabilities.repositoryAutomation.providers, isAdmin) : undefined,

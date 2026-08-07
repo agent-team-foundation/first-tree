@@ -5,7 +5,7 @@ description: A first-run user reviews one pending Need you request, chooses an
 defaultEnv: local
 steps:
   - module:
-      path: ../modules/complete-first-run.module.yaml
+      path: ../modules/complete-first-run-onboarding.module.yaml
 
   # Establish only the external precondition (an agent-authored open request).
   # Selection, submission, authorization, persistence, and queue refresh all

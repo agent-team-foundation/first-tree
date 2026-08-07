@@ -57,9 +57,9 @@ export const githubTaskReplySubmissionStateSchema = z.discriminatedUnion("state"
 export type GithubTaskReplySubmissionState = z.infer<typeof githubTaskReplySubmissionStateSchema>;
 
 /**
- * Server-authored metadata persisted with a publishable App-directed task
- * card. Ordinary message writes cannot set the reserved `githubTask*`
- * namespace.
+ * Server-authored metadata persisted with a publishable, automatically routed
+ * GitHub task card. Ordinary message writes cannot set the reserved
+ * `githubTask*` namespace.
  */
 export const githubTaskRunMessageMetadataSchema = z
   .object({

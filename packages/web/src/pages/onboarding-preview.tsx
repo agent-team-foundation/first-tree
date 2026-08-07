@@ -1,28 +1,24 @@
 import type { AgentVisibility, GithubAppInstallationOutput, RuntimeProvider } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Bot, CircleCheck, MessageSquare, Plus, SendHorizontal } from "lucide-react";
+import { CircleCheck, MessageSquare, Plus, SendHorizontal } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import { getApiSelectedOrganizationId, setApiSelectedOrganizationId } from "../api/client.js";
 import type { GithubRepo } from "../api/github.js";
 import { Avatar } from "../components/avatar.js";
+import { OnboardingOrientation } from "../components/chat/onboarding-orientation.js";
 import type { ComputerConnection } from "../features/agent-setup/use-computer-connection.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
-import { COPY } from "./onboarding/copy.js";
-import { FlowHint, StepHeading, WorkingState } from "./onboarding/flow-ui.js";
+import { FlowHint, StepHeading } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeBindingPlan } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
 import { StepGetStarted } from "./onboarding/steps/step-get-started.js";
-import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
+import { AgentArrival, StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
-import {
-  buildInviteeReadyBootstrap,
-  buildTeamAgentStartBootstrap,
-} from "./workspace/center/onboarding/bootstrap-prose.js";
 
 /**
  * DEV-only gallery of every onboarding screen + state, mounted at
@@ -155,6 +151,25 @@ const INSTALLATION_USER: GithubAppInstallationOutput = {
 
 const NOOP = (): void => {};
 const ASYNC_NOOP = async (): Promise<void> => {};
+const PREVIEW_ARRIVAL_AGENT = {
+  uuid: "01920000-0000-7000-8000-00000000000b",
+  name: "gandy-assistant",
+  displayName: "Gandy's assistant",
+  type: "agent",
+  organizationId: ORG_ID,
+  inboxId: "inbox-1",
+  visibility: "organization",
+  runtimeProvider: "claude-code",
+  status: "active",
+  clientId: HOST.id,
+  avatarImageUrl: null,
+};
+const PREVIEW_LONG_NAME_AGENT = {
+  ...PREVIEW_ARRIVAL_AGENT,
+  uuid: "01920000-0000-7000-8000-00000000000c",
+  name: "customer-platform-reliability-assistant",
+  displayName: "Customer Platform Reliability and Release Coordination Assistant",
+};
 
 // ── Computer-connection fixtures (drive the connect-computer + create-agent steps) ──
 // `selectedRuntime` / `setSelectedRuntime` are made interactive per-scenario in
@@ -837,7 +852,17 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     wizard: {
       step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB] },
-      body: <WorkingState label={COPY.startChat.starting} />,
+      body: <AgentArrival agent={PREVIEW_ARRIVAL_AGENT} error={null} onStart={NOOP} phase="starting" />,
+    },
+  },
+  {
+    id: "admin-ko-long-name",
+    label: "Long agent name",
+    group: "Meet-your-agent states",
+    role: "admin",
+    wizard: {
+      step: "start-chat",
+      body: <AgentArrival agent={PREVIEW_LONG_NAME_AGENT} error={null} onStart={NOOP} phase="idle" />,
     },
   },
 
@@ -1319,22 +1344,24 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Starting…",
     group: "Meet-your-agent states",
     role: "invitee",
-    wizard: { step: "start-chat", body: <WorkingState label={COPY.startChat.starting} /> },
+    wizard: {
+      step: "start-chat",
+      body: <AgentArrival agent={PREVIEW_ARRIVAL_AGENT} error={null} onStart={NOOP} phase="starting" />,
+    },
   },
 ];
 
 /**
  * The onboarding step components redirect into the normal chat route after
  * kickoff, so the gallery needs an explicit destination frame to make the
- * member journey reviewable end to end. This deliberately shows the stable
- * first-chat contract (selected chat, visible bootstrap, agent working state,
- * composer) without pretending to be a second interactive Chat implementation.
+ * member journey reviewable end to end. It uses the real senderless Orientation
+ * component plus a static composer without pretending to be a second
+ * interactive Chat implementation.
  */
 function MemberChatDestination({ mode }: { mode: "team-agent" | "personal-agent" }) {
   const teamAgent = mode === "team-agent";
   const agentName = teamAgent ? "Dev Assistant" : "Gandy's assistant";
   const agentHandle = teamAgent ? "@dev-assistant" : "@gandy-assistant";
-  const bootstrap = teamAgent ? buildTeamAgentStartBootstrap(agentName) : buildInviteeReadyBootstrap(agentName);
 
   return (
     <div className="flex h-full" style={{ background: "var(--bg)" }}>
@@ -1433,34 +1460,13 @@ function MemberChatDestination({ mode }: { mode: "team-agent" | "personal-agent"
           style={{ width: "min(48rem, 100%)", margin: "0 auto", padding: "var(--sp-7) var(--sp-6)" }}
         >
           <div className="flex-1 overflow-y-auto">
-            <div className="flex justify-end">
-              <div
-                className="text-label"
-                style={{
-                  maxWidth: "78%",
-                  whiteSpace: "pre-wrap",
-                  padding: "var(--sp-3) var(--sp-4)",
-                  borderRadius: "var(--radius-panel)",
-                  background: "var(--fg)",
-                  color: "var(--bg)",
-                }}
-              >
-                {bootstrap}
-              </div>
-            </div>
-
-            <div className="flex items-start" style={{ gap: "var(--sp-3)", marginTop: "var(--sp-6)" }}>
-              <Avatar name={agentName} seed={agentHandle} size={30} />
-              <div className="min-w-0">
-                <div className="text-label font-medium">{agentName}</div>
-                <div
-                  className="text-label inline-flex items-center"
-                  style={{ gap: "var(--sp-2)", marginTop: "var(--sp-2)", color: "var(--fg-3)" }}
-                >
-                  <Bot className="h-4 w-4" aria-hidden />
-                  {teamAgent ? "Starting your first Team-agent conversation…" : "Getting your first Agent Chat ready…"}
-                </div>
-              </div>
+            <div className="[&>section]:mt-0">
+              <OnboardingOrientation
+                completed={false}
+                continuing={false}
+                targetAgentName={agentName}
+                onContinue={NOOP}
+              />
             </div>
           </div>
 

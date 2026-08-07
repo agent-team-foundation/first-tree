@@ -1,6 +1,6 @@
 import type { SessionEvent } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import { createToolCallProcessor } from "../handlers/claude-code.js";
+import { createToolCallProcessor } from "../handlers/claude/tool-call-processor.js";
 
 function assistantToolUse(id: string, name: string, input: unknown) {
   return {

@@ -214,11 +214,13 @@ export const updateChatSchema = z
   .object({
     topic: z.string().trim().max(500).nullable().optional(),
     // Description carries two duties at once: the agent's / a teammate's
-    // self-location summary (what this task is + where it stands) AND a
-    // status report aimed at the human. It holds task background + plan +
-    // progress and renders as Markdown, so the cap is wider than the topic's
-    // — 1500 chars gives room for that without becoming a log (blockers /
-    // decisions belong in a `--request`, not here).
+    // self-location summary AND a current-state brief aimed at the human
+    // switching between chats. It is rewritten in place from blank on each
+    // write and leads with the current result plus what it means for the
+    // reader, so the cap is wider than the topic's — 1500 chars is a ceiling
+    // that keeps a summary from becoming a log, not a target length (the
+    // authoring contract defaults to 2–4 short sentences; human decisions
+    // belong in a `--request`, not here).
     description: z.string().trim().max(1500).nullable().optional(),
   })
   .refine((v) => v.topic !== undefined || v.description !== undefined, {

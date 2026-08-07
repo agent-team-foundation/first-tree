@@ -86,13 +86,17 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     environment: production
     steps:
-      - name: Deploy to CapRover
-        uses: caprover/deploy-from-github@d76580d79952f6841c453bb3ed37ef452b19752c
+      - uses: actions/setup-node@v4
         with:
-          server: ${{ secrets.CAPROVER_HOST }}
-          app: ${{ vars.CAPROVER_APP }}
-          token: ${{ secrets.CAPROVER_APP_TOKEN }}
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          node-version: "22.13"
+
+      - name: Deploy to CapRover
+        env:
+          CAPROVER_URL: ${{ secrets.CAPROVER_HOST }}
+          CAPROVER_APP: ${{ vars.CAPROVER_APP }}
+          CAPROVER_APP_TOKEN: ${{ secrets.CAPROVER_APP_TOKEN }}
+          CAPROVER_IMAGE_NAME: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: npx --yes caprover@2.3.1 deploy
 
       - name: Send feishu message
         env:

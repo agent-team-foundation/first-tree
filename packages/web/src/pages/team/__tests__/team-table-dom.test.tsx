@@ -62,9 +62,9 @@ function agent(overrides: Partial<Agent> = {}): Agent {
     inboxId: overrides.inboxId ?? `${overrides.uuid ?? "agent-1"}-inbox`,
     metadata: overrides.metadata ?? {},
     source: overrides.source ?? "portal",
-    clientId: overrides.clientId ?? "client-1",
+    clientId: overrides.clientId === undefined ? "client-1" : overrides.clientId,
     runtimeProvider: overrides.runtimeProvider ?? "claude-code",
-    runtimeState: overrides.runtimeState ?? "idle",
+    runtimeState: overrides.runtimeState === undefined ? "idle" : overrides.runtimeState,
     createdAt: overrides.createdAt ?? "2026-05-28T12:00:00.000Z",
     updatedAt: overrides.updatedAt ?? "2026-05-28T12:00:00.000Z",
   };
@@ -209,6 +209,57 @@ afterEach(() => {
 });
 
 describe("TeamTable", () => {
+  it("projects the same four availability labels and hides Chat when work cannot be routed", async () => {
+    const { TeamTable } = await import("../team-table.js");
+    const rows: AgentRow[] = [
+      {
+        kind: "agent",
+        agent: agent({ uuid: "agent-online", displayName: "Online agent", runtimeState: "idle" }),
+        managerLabel: "Gandy",
+        managerAvatarUrl: null,
+        isOwnedBySelf: true,
+      },
+      {
+        kind: "agent",
+        agent: agent({ uuid: "agent-offline", displayName: "Offline agent", runtimeState: null }),
+        managerLabel: "Gandy",
+        managerAvatarUrl: null,
+        isOwnedBySelf: true,
+      },
+      {
+        kind: "agent",
+        agent: agent({ uuid: "agent-setup", displayName: "Setup agent", clientId: null, runtimeState: null }),
+        managerLabel: "Gandy",
+        managerAvatarUrl: null,
+        isOwnedBySelf: true,
+      },
+      {
+        kind: "agent",
+        agent: agent({ uuid: "agent-suspended", displayName: "Suspended agent", status: "suspended" }),
+        managerLabel: "Gandy",
+        managerAvatarUrl: null,
+        isOwnedBySelf: true,
+      },
+    ];
+    const props = createProps({
+      publicAgents: rows,
+      privateAgents: [],
+      agentCount: rows.length,
+      humans: [],
+      getAgentMenuActions: () => [{ key: "details", label: "Details", onSelect: vi.fn() }],
+    });
+
+    const { container, root } = await renderDom(<TeamTable {...props} />);
+    expect(container.textContent).toContain("Online");
+    expect(container.textContent).toContain("Offline");
+    expect(container.textContent).toContain("Needs setup");
+    expect(container.textContent).toContain("Suspended");
+
+    await click(container.querySelector('button[aria-label="Actions for Suspended agent"]'));
+    expect(document.body.textContent).not.toContain("Chat");
+    await act(async () => root.unmount());
+  });
+
   it("renders desktop rows, actions, delegate selector, and row open handlers", async () => {
     const { TeamTable } = await import("../team-table.js");
     const props = createProps();

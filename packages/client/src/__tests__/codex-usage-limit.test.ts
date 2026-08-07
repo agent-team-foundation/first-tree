@@ -101,6 +101,7 @@ vi.mock("../runtime/chat-context.js", () => ({
 
 import { createCodexHandler, createCodexSdkHandler } from "../handlers/codex/index.js";
 import { LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED } from "../handlers/codex/turn-completion.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 
@@ -200,14 +201,17 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), {
       sendMessage,
       emitEvent,
       log: (message) => logs.push(message),
     });
 
-    await handler.start(makeMessage("m1", "hello"), ctx);
+    await handler.start(makeMessage("m1", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
 
@@ -258,14 +262,17 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), {
       sendMessage,
       emitEvent,
       log: (message) => logs.push(message),
     });
 
-    await handler.start(makeMessage("m1", "hello"), ctx);
+    await handler.start(makeMessage("m1", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
 
@@ -299,10 +306,13 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
 
-    await handler.start(makeMessage("m1", "hello"), ctx);
+    await handler.start(makeMessage("m1", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     const events = emitEvent.mock.calls.map(([event]) => event);
     // The final text is the agent's output stream, not a chat message — it is
@@ -333,10 +343,13 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     const emitEventConfirmed = vi
       .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
       .mockRejectedValue(new Error("session event persist failed"));
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), { emitEvent, emitEventConfirmed });
 
-    await handler.start(makeMessage("m1", "hello"), ctx);
+    await handler.start(makeMessage("m1", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(emitEventConfirmed).not.toHaveBeenCalled();
     expect(emitEvent).toHaveBeenCalledWith({
@@ -365,7 +378,10 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     const emitEventConfirmed = vi
       .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
       .mockRejectedValue(new Error("session event persist failed"));
-    const handler = createCodexSdkHandler({ workspaceRoot });
+    const handler = createCodexSdkHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const message = makeMessage("m1", "hello", 101);
     const ctx = makeContext((count) => completedCounts.push(count), {
       emitEventConfirmed,
@@ -374,7 +390,7 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
       agentMetadata: trialAgentMetadata,
     });
 
-    await handler.start(message, ctx);
+    await handler.start(message, ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(emitEventConfirmed).toHaveBeenCalledWith({
       kind: "turn_end",
@@ -396,13 +412,16 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     const completed: Array<{ count?: number; reason?: string }> = [];
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count, outcome) => completed.push({ count, reason: outcome?.reason }), {
       emitEvent,
       retryTurn,
     });
 
-    await handler.start(makeMessage("m1", "hello"), ctx);
+    await handler.start(makeMessage("m1", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(retryTurn).not.toHaveBeenCalled();
     expect(completed).toEqual([{ count: 1, reason: "capacity_wait_required" }]);
@@ -424,13 +443,16 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     const completedCounts: Array<number | undefined> = [];
     const retryReasons: string[] = [];
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), {
       emitEvent,
       retryTurn: (_messages, reason) => retryReasons.push(reason),
     });
 
-    await handler.start(makeMessage("m-pre-provider", "hello"), ctx);
+    await handler.start(makeMessage("m-pre-provider", "hello"), ctx, deliveryTokenFromSessionContext(ctx));
 
     expect(state.runInputs).toHaveLength(3);
     expect(completedCounts).toEqual([]);

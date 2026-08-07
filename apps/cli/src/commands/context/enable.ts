@@ -6,6 +6,7 @@ import {
   readActiveContextAccountClientId,
   withAccountStateMutationLockAsync,
 } from "../../core/context-integration/account-state-guard.js";
+import { inspectContextAdapterNextSessionObligation } from "../../core/context-integration/adapter-observation.js";
 import { inspectContextSetupLocation } from "../../core/context-integration/client-preflight.js";
 import {
   assertContextGrantStoreFingerprint,
@@ -56,13 +57,17 @@ type SetupPlanToken = {
   beforeFingerprint: string;
   globalAfterFingerprint: string;
   directoryAfterFingerprint: string | null;
+  planChallenge: string;
 };
 
 function configure(command: Command): void {
   command
     .requiredOption("--provider <provider>", "claude-code or codex")
     .requiredOption("--team <team-id>", "Team from the server-authored Setup handoff")
-    .option("--plan", "inspect the provider location and return the three activation choices without mutating state")
+    .option(
+      "--plan",
+      "inspect the provider location and return the available activation choices without mutating state",
+    )
     .option("--scope <scope>", "apply global, directory, or session activation")
     .option("--plan-id <plan-id>", "exact plan id returned by --plan")
     .option("--project-root <directory>", "explicit provider directory")
@@ -162,9 +167,10 @@ async function buildSetupPlan(
   if (activation.outcome !== "connected") {
     print.fail(activation.reasonCode, activation.nextAction.message, 1);
   }
-  // Verify the release payload during planning. This is read-only and ensures
-  // session-only never exposes an unchecked Skill bundle.
-  resolveContextIntegrationRelease();
+  // Verify the exact immutable Core root during planning. Every apply rebuilds
+  // this plan, so an unusable loader is rejected before setup mutates state or
+  // returns a handoff that cannot load its canonical workflow.
+  resolvePinnedContextCoreRelease();
   const planIdentity = {
     schemaVersion: 1,
     provider,
@@ -172,6 +178,7 @@ async function buildSetupPlan(
     accountClientId,
     project: location.project,
     directory: location.directory,
+    directoryAvailable: location.directoryAvailable,
     temporaryDirectory: location.temporaryDirectory,
   };
   const grantStore = inspectContextGrantStore();
@@ -180,20 +187,25 @@ async function buildSetupPlan(
     organizationId: activation.team.organizationId,
     activationScope: { kind: "global" },
   };
-  const directoryGrant: ContextIntegrationGrant | null = location.directory
-    ? {
-        provider,
-        organizationId: activation.team.organizationId,
-        activationScope: { kind: "directory", root: location.directory },
-      }
-    : null;
-  const token: SetupPlanToken = {
+  const directoryGrant: ContextIntegrationGrant | null =
+    location.directoryAvailable && location.directory
+      ? {
+          provider,
+          organizationId: activation.team.organizationId,
+          activationScope: { kind: "directory", root: location.directory },
+        }
+      : null;
+  const tokenWithoutChallenge = {
     identityFingerprint: createHash("sha256").update(JSON.stringify(planIdentity)).digest("hex"),
     beforeFingerprint: grantStore.fingerprint,
     globalAfterFingerprint: contextGrantStoreFingerprintAfterGrant(grantStore, globalGrant),
     directoryAfterFingerprint: directoryGrant
       ? contextGrantStoreFingerprintAfterGrant(grantStore, directoryGrant)
       : null,
+  };
+  const token: SetupPlanToken = {
+    ...tokenWithoutChallenge,
+    planChallenge: computePlanChallenge(tokenWithoutChallenge),
   };
   const planId = renderSetupPlanToken(token);
   return {
@@ -237,7 +249,7 @@ async function applySessionOnly(
     assertPlannedAccount(plan);
     assertContextGrantStoreFingerprint(expectedGrantStoreFingerprint);
     const finalActivation = await validateExactTeam(plan);
-    const release = resolveContextIntegrationRelease();
+    const release = resolvePinnedContextCoreRelease();
     const sessionCandidate = await createMemberSdk().issueMemberContextSessionCandidate(
       {
         schemaVersion: 1,
@@ -270,6 +282,23 @@ async function applySessionOnly(
   });
 }
 
+function resolvePinnedContextCoreRelease() {
+  try {
+    return resolveContextIntegrationRelease(undefined, { requirePinnedCoreRoot: true });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      Reflect.get(error, "code") === "CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED"
+    ) {
+      print.fail("CONTEXT_SKILL_RELEASE_ROOT_UNTRUSTED", error instanceof Error ? error.message : String(error), 2, {
+        nextActions: ["Install or use a version-pinned First Tree CLI release, then retry Context setup."],
+      });
+    }
+    throw error;
+  }
+}
+
 async function applyPersistent(
   provider: ContextIntegrationProvider,
   plan: SetupPlan,
@@ -285,7 +314,10 @@ async function applyPersistent(
       organizationId: plan.team.organizationId,
       activationScope,
     };
-    enableContextIntegrationOperation(driver, installPlan, grant, expectedStore, plan[setupPlanAccountClientId]);
+    enableContextIntegrationOperation(driver, installPlan, grant, expectedStore, plan[setupPlanAccountClientId], {
+      nextSessionObligationKind:
+        provider === "claude-code" && installPlan.operation !== "unchanged" ? "setup" : undefined,
+    });
     const health = inspectContextIntegrationRuntime(driver);
     const grantReady = readContextIntegrationConfig().grants.some(
       (candidate) =>
@@ -312,6 +344,10 @@ async function applyPersistent(
     }));
     assertPlannedAccount(plan);
     const pluginMissing = !health.healthy;
+    const claudeNextSessionRequired =
+      provider === "claude-code" && health.release !== null
+        ? inspectContextAdapterNextSessionObligation() !== null
+        : false;
     const authorityMissing = finalActivation.outcome !== "connected";
     const missingLayers = [
       ...(pluginMissing ? health.issues.map((issue) => `Plugin: ${issue}`) : []),
@@ -328,7 +364,7 @@ async function applyPersistent(
       ...(authorityMissing ? [`Team authority: ${finalActivation.message}`] : []),
     ];
     let currentSessionHandoff: CurrentSessionHandoff | null = null;
-    if (missingLayers.length === 0 && health.probe.installedPath) {
+    if (missingLayers.length === 0 && health.probe.installedPath && !claudeNextSessionRequired) {
       currentSessionHandoff = buildCurrentSessionHandoff({
         provider,
         project: plan.location.project,
@@ -338,9 +374,13 @@ async function applyPersistent(
       });
     }
     assertPlannedAccount(plan);
-    const setupComplete = missingLayers.length === 0 && currentSessionHandoff !== null;
+    const setupComplete = missingLayers.length === 0 && (currentSessionHandoff !== null || claudeNextSessionRequired);
     const nextActions = setupComplete
-      ? ["Adopt the verified handoff in this session. Future sessions will load the neutral Team router automatically."]
+      ? [
+          claudeNextSessionRequired
+            ? "Start a new Claude session for persistent auto-activation. This setup does not activate Context in the current Claude session."
+            : "Adopt the verified handoff in this session. Future sessions will load the neutral Team router automatically.",
+        ]
       : [
           ...(pluginMissing ? ["Repair the reported Plugin payload/state, then rerun the exact apply command."] : []),
           ...(grantReady
@@ -420,26 +460,37 @@ function renderScope(scope: ContextActivationScope): string {
 
 function renderSetupPlanToken(token: SetupPlanToken): string {
   return [
-    "v1",
+    "v2",
     token.identityFingerprint,
     token.beforeFingerprint,
     token.globalAfterFingerprint,
     token.directoryAfterFingerprint ?? "-",
+    token.planChallenge,
   ].join(".");
 }
 
 function parseSetupPlanToken(value: string): SetupPlanToken | null {
-  const [version, identityFingerprint, beforeFingerprint, globalAfterFingerprint, directoryAfter] = value.split(".");
+  const [version, identityFingerprint, beforeFingerprint, globalAfterFingerprint, directoryAfter, planChallenge] =
+    value.split(".");
   const digest = /^[0-9a-f]{64}$/u;
   if (
-    version !== "v1" ||
+    version !== "v2" ||
     !identityFingerprint ||
     !beforeFingerprint ||
     !globalAfterFingerprint ||
     !digest.test(identityFingerprint) ||
     !digest.test(beforeFingerprint) ||
     !digest.test(globalAfterFingerprint) ||
-    (directoryAfter !== "-" && (!directoryAfter || !digest.test(directoryAfter)))
+    (directoryAfter !== "-" && (!directoryAfter || !digest.test(directoryAfter))) ||
+    !planChallenge ||
+    !digest.test(planChallenge) ||
+    planChallenge !==
+      computePlanChallenge({
+        identityFingerprint,
+        beforeFingerprint,
+        globalAfterFingerprint,
+        directoryAfterFingerprint: directoryAfter === "-" ? null : directoryAfter,
+      })
   ) {
     return null;
   }
@@ -448,7 +499,14 @@ function parseSetupPlanToken(value: string): SetupPlanToken | null {
     beforeFingerprint,
     globalAfterFingerprint,
     directoryAfterFingerprint: directoryAfter === "-" ? null : directoryAfter,
+    planChallenge,
   };
+}
+
+function computePlanChallenge(token: Omit<SetupPlanToken, "planChallenge">): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ ...token, purpose: "reload" }))
+    .digest("hex");
 }
 
 function requireAfterFingerprint(value: string | null | undefined): string {

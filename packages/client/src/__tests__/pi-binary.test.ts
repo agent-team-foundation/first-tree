@@ -92,8 +92,13 @@ describe("Pi binary resolution", () => {
     expect(isPiBinaryMissingError("pi: command not found")).toBe(true);
     expect(isPiBinaryMissingError("pi is not installed")).toBe(true);
     expect(isPiBinaryMissingError(new Error("ENOENT: pi binary not found"))).toBe(true);
+    expect(isPiBinaryMissingError("no pi binary resolved")).toBe(true);
     expect(isPiBinaryMissingError("python: command not found")).toBe(false);
     expect(isPiBinaryMissingError("network timeout")).toBe(false);
+    // Generic taxonomy matcher requires a Pi subject — bare absence phrases
+    // stay unmatched (Pi-scoped sanitizer uses a broader seam entry instead).
+    expect(isPiBinaryMissingError("file not found")).toBe(false);
+    expect(isPiBinaryMissingError("package not installed")).toBe(false);
   });
 
   it("rejects adversarial repeated-pi strings in linear time (no catastrophic backtracking)", () => {

@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
+import { registerChatAudienceDispatcher, resetChatAudienceDispatcher } from "../services/chat-audience-cache.js";
 import * as memberService from "../services/member.js";
 import { sendMessage } from "../services/message.js";
-import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "../services/participant-invite.js";
+import {
+  assertChatVisibleInOrgOrNotFound,
+  inviteParticipantsToChat,
+  inviteParticipantsToChatInTransaction,
+} from "../services/participant-invite.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -295,6 +301,71 @@ describe("inviteParticipantsToChat", () => {
         ),
       );
     expect(silentRows.length).toBe(6);
+  });
+
+  it("rolls membership back with the caller transaction and emits no pre-commit cache invalidation", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app, { username: `atomic-owner-${randomUUID().slice(0, 8)}` });
+    const target = await createAgent(app.db, {
+      name: `atomic-target-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Atomic Target",
+      managerId: owner.memberId,
+      organizationId: owner.organizationId,
+    });
+    const chat = await createChat(app.db, owner.humanAgentUuid, { type: "group", participantIds: [] });
+    const invalidations = vi.fn();
+    registerChatAudienceDispatcher(invalidations);
+    try {
+      await expect(
+        app.db.transaction(async (tx) => {
+          await inviteParticipantsToChatInTransaction(tx as unknown as typeof app.db, {
+            chatId: chat.id,
+            callerAgentId: owner.humanAgentUuid,
+            targetAgentIds: [target.uuid],
+            errorOnAlreadySpeaker: false,
+          });
+          expect(invalidations).not.toHaveBeenCalled();
+          throw new Error("roll back the enclosing attention-line write");
+        }),
+      ).rejects.toThrow("roll back the enclosing attention-line write");
+      expect(invalidations).not.toHaveBeenCalled();
+    } finally {
+      resetChatAudienceDispatcher();
+    }
+
+    const membership = await app.db
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, target.uuid)));
+    expect(membership).toHaveLength(0);
+  });
+
+  it("invalidates the audience cache once after the public invite commits", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app, { username: `cache-owner-${randomUUID().slice(0, 8)}` });
+    const target = await createAgent(app.db, {
+      name: `cache-target-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Cache Target",
+      managerId: owner.memberId,
+      organizationId: owner.organizationId,
+    });
+    const chat = await createChat(app.db, owner.humanAgentUuid, { type: "group", participantIds: [] });
+    const invalidations = vi.fn();
+    registerChatAudienceDispatcher(invalidations);
+    try {
+      await inviteParticipantsToChat(app.db, {
+        chatId: chat.id,
+        callerAgentId: owner.humanAgentUuid,
+        targetAgentIds: [target.uuid],
+        errorOnAlreadySpeaker: false,
+      });
+      expect(invalidations).toHaveBeenCalledOnce();
+      expect(invalidations).toHaveBeenCalledWith(chat.id);
+    } finally {
+      resetChatAudienceDispatcher();
+    }
   });
 
   it("self-add of a private agent is permitted (owner-exclusive carve-out)", async () => {

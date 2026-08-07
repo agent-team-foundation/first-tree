@@ -179,11 +179,10 @@ describe("githubEventCardSchema", () => {
     expect(githubEventCardSchema.safeParse(baseCard).success).toBe(true);
   });
 
-  it("accepts an involves-driven card carrying a recipient-scoped task marker", () => {
+  it("accepts an automatically routed card carrying a recipient-scoped task marker without personnel context", () => {
     const res = githubEventCardSchema.safeParse({
       ...baseCard,
-      reason: "mentioned" as const,
-      mentionedUser: "bob",
+      reason: "subscribed" as const,
       teamAgentTask: { agentUuid: "agent-uuid", runId: "01900000-0000-7000-8000-000000000042" },
     });
     expect(res.success).toBe(true);

@@ -44,7 +44,7 @@ function makeManager(opts: {
     session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
-    handlerConfig: { workspaceRoot: "/tmp/test-retry" },
+    handlerConfig: { workspaceRoot: "/tmp/test-retry", runtimeProvider: "codex" },
     agentIdentity: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
@@ -72,7 +72,10 @@ describe("SessionManager: transient session retry", () => {
   it("keeps the entry alive and schedules a retry on RateLimitError", async () => {
     const handler: AgentHandler = {
       start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),
-      resume: vi.fn().mockResolvedValue("session-after-retry"),
+      resume: vi.fn().mockResolvedValue({
+        sessionId: "session-after-retry",
+        route: { kind: "owned" as const, mode: "queued" as const },
+      }),
       inject: vi.fn(),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
@@ -225,8 +228,14 @@ describe("SessionManager: transient session retry", () => {
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
     const recovered: AgentHandler = {
-      start: vi.fn().mockResolvedValue("session-after-retry"),
-      resume: vi.fn().mockResolvedValue("session-after-retry"),
+      start: vi.fn().mockResolvedValue({
+        sessionId: "session-after-retry",
+        route: { kind: "owned" as const, mode: "queued" as const },
+      }),
+      resume: vi.fn().mockResolvedValue({
+        sessionId: "session-after-retry",
+        route: { kind: "owned" as const, mode: "queued" as const },
+      }),
       inject: vi.fn(),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
@@ -264,7 +273,7 @@ describe("SessionManager: transient session retry", () => {
         start: vi.fn(async (message, ctx) => {
           initialMessage = message;
           initialCtx = ctx;
-          return "existing-opencode-session";
+          return { sessionId: "existing-opencode-session", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
         resume: vi.fn().mockRejectedValue(new ManagedSkillsUnsafeDiscoveryError("unsafe discovery on resume")),
         inject: vi.fn(),
@@ -286,7 +295,7 @@ describe("SessionManager: transient session retry", () => {
         resume: vi.fn(async (message, sessionId, ctx) => {
           recoveredHead = message;
           recoveredCtx = ctx;
-          return sessionId;
+          return { sessionId: sessionId, route: { kind: "owned" as const, mode: "queued" as const } };
         }),
         inject: vi.fn((message) => {
           recoveredTail.push(message);
@@ -447,8 +456,14 @@ describe("SessionManager: transient session retry", () => {
         shutdown: vi.fn().mockResolvedValue(undefined),
       };
       const recovered: AgentHandler = {
-        start: vi.fn().mockResolvedValue("session-after-retry"),
-        resume: vi.fn().mockResolvedValue("session-after-retry"),
+        start: vi.fn().mockResolvedValue({
+          sessionId: "session-after-retry",
+          route: { kind: "owned" as const, mode: "queued" as const },
+        }),
+        resume: vi.fn().mockResolvedValue({
+          sessionId: "session-after-retry",
+          route: { kind: "owned" as const, mode: "queued" as const },
+        }),
         inject: vi.fn(),
         suspend: vi.fn().mockResolvedValue(undefined),
         shutdown: vi.fn().mockResolvedValue(undefined),
@@ -490,9 +505,12 @@ describe("SessionManager: transient session retry", () => {
       start: vi.fn(async (message, ctx) => {
         startedMessages.push(message);
         capturedCtx.push(ctx);
-        return "session-after-retry";
+        return { sessionId: "session-after-retry", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
-      resume: vi.fn().mockResolvedValue("session-after-retry"),
+      resume: vi.fn().mockResolvedValue({
+        sessionId: "session-after-retry",
+        route: { kind: "owned" as const, mode: "queued" as const },
+      }),
       inject: vi.fn((message) => {
         injected.push(message);
         return { kind: "owned", mode: "queued" } as const;
@@ -531,7 +549,7 @@ describe("SessionManager: transient session retry", () => {
       start: vi.fn(async (message, ctx) => {
         initialMessage = message;
         initialCtx = ctx;
-        return "established-session";
+        return { sessionId: "established-session", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
       resume: vi.fn().mockRejectedValue(new FakeRateLimit("resume transport failed")),
       inject: vi.fn(),
@@ -543,7 +561,7 @@ describe("SessionManager: transient session retry", () => {
       resume: vi.fn(async (message, _sessionId, ctx) => {
         retryMessage = message;
         retryCtx = ctx;
-        return "resumed-session";
+        return { sessionId: "resumed-session", route: { kind: "owned" as const, mode: "queued" as const } };
       }),
       inject: vi.fn((message) => {
         injected.push(message);
@@ -602,11 +620,14 @@ describe("SessionManager: transient session retry", () => {
         start: vi.fn(async (message, ctx) => {
           initialMessage = message;
           initialCtx = ctx;
-          return "deferred-resume-session";
+          return { sessionId: "deferred-resume-session", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
         resume: vi.fn(() => {
           signalResumeStarted?.();
-          return pendingResume;
+          return pendingResume.then((sessionId) => ({
+            sessionId,
+            route: { kind: "owned" as const, mode: "queued" as const },
+          }));
         }),
         inject: vi.fn(),
         suspend: vi.fn().mockResolvedValue(undefined),
@@ -617,7 +638,7 @@ describe("SessionManager: transient session retry", () => {
         resume: vi.fn(async (message, _sessionId, ctx) => {
           retryMessage = message;
           retryCtx = ctx;
-          return "deferred-resume-recovered";
+          return { sessionId: "deferred-resume-recovered", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
         inject: vi.fn((message) => {
           injected.push(message);
@@ -669,7 +690,7 @@ describe("SessionManager: transient session retry", () => {
         start: vi.fn(async (message, ctx) => {
           initialMessage = message;
           initialCtx = ctx;
-          return "control-session";
+          return { sessionId: "control-session", route: { kind: "owned" as const, mode: "queued" as const } };
         }),
         resume: vi.fn().mockRejectedValue(new FakeRateLimit("control resume transport failed")),
         inject: vi.fn(),
@@ -678,7 +699,10 @@ describe("SessionManager: transient session retry", () => {
       };
       const recovered: AgentHandler = {
         start: vi.fn(),
-        resume: vi.fn().mockResolvedValue("control-session-resumed"),
+        resume: vi.fn().mockResolvedValue({
+          sessionId: "control-session-resumed",
+          route: { kind: "owned" as const, mode: "queued" as const },
+        }),
         inject: vi.fn(),
         suspend: vi.fn().mockResolvedValue(undefined),
         shutdown: vi.fn().mockResolvedValue(undefined),

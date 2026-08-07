@@ -24,11 +24,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../../runtime/context-tree-git-status.js";
-import {
-  formatGrokBinaryMissingMessage,
-  GrokBinaryVerifyTransientError,
-  resolveGrokRuntimeBinary,
-} from "../../runtime/grok-binary.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -36,8 +31,14 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+} from "../../runtime/contracts.js";
+import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
+import {
+  formatGrokBinaryMissingMessage,
+  GrokBinaryVerifyTransientError,
+  resolveGrokRuntimeBinary,
+} from "../../runtime/grok-binary.js";
+
 import {
   isManagedSkillsUnsafeDiscoveryError,
   type ReconciledTeamSkill,
@@ -179,7 +180,7 @@ type TurnAcpState = {
 
 export const createGrokHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
-  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "grok");
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider);
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
@@ -1088,8 +1089,7 @@ export const createGrokHandler: HandlerFactory = (config) => {
 
   return {
     async start(message, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = token;
 
       // Guard the whole bring-up: an inject landing while prepareSession is
       // awaiting must queue, not race ahead of the session's first turn.
@@ -1118,12 +1118,11 @@ export const createGrokHandler: HandlerFactory = (config) => {
       const sessionId = providerSessionId ?? pendingSyntheticId;
       if (!sessionId) throw new Error("grok session id unresolved after first turn");
       writeSessionBriefingFingerprint(workspaceCwd, sessionId, computeBriefingFingerprint(briefing));
-      return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "processing" } } : sessionId;
+      return { sessionId, route: { kind: "owned", mode: "processing" } };
     },
 
     async resume(message, sessionId, sessionCtx, token) {
-      const hasExplicitDeliveryToken = token !== undefined;
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
+      const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
 
       // Guard the whole bring-up (see start()).
       initialTurnPreparing = true;
@@ -1183,9 +1182,7 @@ export const createGrokHandler: HandlerFactory = (config) => {
       }
 
       const effectiveId = providerSessionId ?? pendingSyntheticId ?? sessionId;
-      return hasExplicitDeliveryToken
-        ? { sessionId: effectiveId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : effectiveId;
+      return { sessionId: effectiveId, route: message ? { kind: "owned", mode: "processing" } : null };
     },
 
     inject(message, token) {
@@ -1193,7 +1190,7 @@ export const createGrokHandler: HandlerFactory = (config) => {
       // v1. Every inject queues and drains as an ordered fused batch after
       // the active turn settles.
       if (!ctx) return { kind: "rejected", reason: "no_active_context", retryable: true };
-      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      const deliveryToken = token;
       queuedMessages.push({ message, token: deliveryToken });
       scheduleQueuedMessagesDrain();
       return { kind: "owned", mode: "queued" };

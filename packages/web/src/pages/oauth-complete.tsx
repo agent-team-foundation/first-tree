@@ -8,6 +8,8 @@ import {
   normalizeAuthJoinPath,
 } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
+import { githubSettingsErrorReturnPath, readGithubAccountLinkReturn } from "../lib/github-account-link-return.js";
+import { readGithubInstallAttempt } from "../lib/github-install-attempt.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
@@ -77,6 +79,7 @@ export function OAuthCompletePage() {
     const org = params.get("org");
     const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
+    const expectedGithubLogin = params.get("expectedGithubLogin");
     const provider = authProviderForCallbackPath(window.location.pathname);
     const accountCreatedRaw = params.get("accountCreated");
     const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
@@ -96,8 +99,27 @@ export function OAuthCompletePage() {
           reasonCode: normalizeAuthFailureReason(errorCode),
           accountCreated,
         });
-      setError(CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again.");
-      setErrorNext(next);
+      setError(
+        errorCode === "install-not-verified" && expectedGithubLogin
+          ? `You selected a different GitHub account. Use @${expectedGithubLogin}, then try again.`
+          : (CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again."),
+      );
+      // A link-state nonce can expire before the server can trust its signed
+      // `next`. The browser marker is non-authoritative but is enough to give
+      // the already-authenticated user a friendly route back to the stable
+      // Settings panel; all Team actions there are authorized again server-side.
+      const accountLinkReturn = readGithubAccountLinkReturn();
+      const installReturn = readGithubInstallAttempt();
+      const returningFromInstall =
+        callbackIntent === "install" ||
+        (callbackIntent === null && errorCode === "state-expired" && installReturn !== null);
+      setErrorNext(
+        returningFromInstall
+          ? githubSettingsErrorReturnPath(errorCode, "install")
+          : callbackIntent === "link" || (callbackIntent === null && errorCode === "state-expired" && accountLinkReturn)
+            ? githubSettingsErrorReturnPath(errorCode, "link")
+            : next,
+      );
       return;
     }
 

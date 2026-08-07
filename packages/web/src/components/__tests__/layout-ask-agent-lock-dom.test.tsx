@@ -357,12 +357,12 @@ describe("Layout Ask agent navigation lock", () => {
     expect(trigger()?.disabled).toBe(true);
 
     // Every surface-leaving row is VISIBLY inert — not only handler-guarded:
-    // the other-team switch row, Leave, Create, Join, Invite.
+    // the other-team switch row, Leave, Create, own-agent setup, and Invite.
     const teamTwoRow = menuItemByText(container, "Team Two");
     expect(teamTwoRow?.disabled).toBe(true);
     const createRow = menuItemByText(container, "Create team");
     expect(createRow?.disabled).toBe(true);
-    expect(menuItemByText(container, "Join with invite link")?.disabled).toBe(true);
+    expect(menuItemByText(container, "Use your own agent")?.disabled).toBe(true);
     expect(menuItemByText(container, "Leave team")?.disabled).toBe(true);
     expect(menuItemByText(container, "Invite teammates")?.disabled).toBe(true);
 
@@ -373,11 +373,12 @@ describe("Layout Ask agent navigation lock", () => {
     expect(locationText(container)).toBe("/?review=need-you");
     expect(container.querySelector('[data-testid="workspace-surface"]')).not.toBeNull();
 
-    // Create/Join cannot reach the setup modal (whose success path calls
-    // selectOrganization and navigates to /onboarding).
+    // Create cannot reach the setup modal (whose success path calls
+    // selectOrganization and navigates to /onboarding), and own-agent setup
+    // cannot leave the current work surface.
     await click(createRow);
     expect(document.body.textContent).not.toContain("Create a new team");
-    expect(document.body.textContent).not.toContain("Join a team");
+    await click(menuItemByText(container, "Use your own agent"));
     expect(authMock.value.selectOrganization).not.toHaveBeenCalled();
     expect(locationText(container)).toBe("/?review=need-you");
 

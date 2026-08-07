@@ -23,6 +23,7 @@ import {
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { noopDeliveryToken } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 vi.mock("../runtime/bootstrap.js", () => ({
@@ -283,6 +284,7 @@ function makeContext(
 
 function makeHandler(fake: FakeAppServerClient, extraConfig: Record<string, unknown> = {}) {
   return createCodexAppServerHandler({
+    runtimeProvider: "codex",
     workspaceRoot,
     codexRuntimeBinaryResolver: async () => ({
       ok: true,
@@ -514,7 +516,9 @@ describe("codex app-server handler extra branches", () => {
         throw new Error("resolver exploded");
       },
     });
-    await expect(thrownResolve.start(makeMessage("m0", "first"), makeContext())).rejects.toMatchObject({
+    await expect(
+      thrownResolve.start(makeMessage("m0", "first"), makeContext(), noopDeliveryToken()),
+    ).rejects.toMatchObject({
       stage: "resolve-binary",
       message: expect.stringContaining("resolver exploded"),
     });
@@ -522,7 +526,9 @@ describe("codex app-server handler extra branches", () => {
     const resolveFailure = makeHandler(new FakeAppServerClient(), {
       codexRuntimeBinaryResolver: async () => ({ ok: false, error: "missing codex binary" }),
     });
-    await expect(resolveFailure.start(makeMessage("m1", "first"), makeContext())).rejects.toMatchObject({
+    await expect(
+      resolveFailure.start(makeMessage("m1", "first"), makeContext(), noopDeliveryToken()),
+    ).rejects.toMatchObject({
       stage: "resolve-binary",
       message: expect.stringContaining("missing codex binary"),
     });
@@ -532,7 +538,9 @@ describe("codex app-server handler extra branches", () => {
         throw new Error("initialize rpc failed");
       },
     });
-    await expect(initializeFailure.start(makeMessage("m2", "first"), makeContext())).rejects.toMatchObject({
+    await expect(
+      initializeFailure.start(makeMessage("m2", "first"), makeContext(), noopDeliveryToken()),
+    ).rejects.toMatchObject({
       stage: "initialize",
       message: expect.stringContaining("initialize rpc failed"),
     });
@@ -540,7 +548,9 @@ describe("codex app-server handler extra branches", () => {
     const malformedThread = new FakeAppServerClient();
     malformedThread.threadStartResult = { thread: {} };
     const malformedHandler = makeHandler(malformedThread);
-    await expect(malformedHandler.start(makeMessage("m3", "first"), makeContext())).rejects.toMatchObject({
+    await expect(
+      malformedHandler.start(makeMessage("m3", "first"), makeContext(), noopDeliveryToken()),
+    ).rejects.toMatchObject({
       stage: "thread-start",
       message: expect.stringContaining("missing thread id"),
     });
@@ -550,7 +560,7 @@ describe("codex app-server handler extra branches", () => {
     failedThread.errors.set("thread/start", new Error("thread start rpc failed"));
     const failedThreadHandler = makeHandler(failedThread);
     const failedThreadError = await failedThreadHandler
-      .start(makeMessage("m4", "first"), makeContext())
+      .start(makeMessage("m4", "first"), makeContext(), noopDeliveryToken())
       .catch((err) => err);
     expect(failedThreadError).toBeInstanceOf(CodexAppServerStartupError);
     expect(failedThreadError).toMatchObject({
@@ -587,6 +597,7 @@ describe("codex app-server handler extra branches", () => {
       get: vi.fn(() => cachedConfig),
     } as unknown as AgentConfigCache;
     const handler = createCodexAppServerHandler({
+      runtimeProvider: "codex",
       workspaceRoot,
       agentConfigCache,
       codexRuntimeBinaryResolver: async () => ({
@@ -608,7 +619,7 @@ describe("codex app-server handler extra branches", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), makeContext({ log }));
+    const startPromise = handler.start(makeMessage("m1", "first"), makeContext({ log }), noopDeliveryToken());
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "cached config turn/start");
     fake.emit("turn/completed", {
       threadId: "thread-app-server",
@@ -659,6 +670,7 @@ describe("codex app-server handler extra branches", () => {
       get: vi.fn(() => cachedConfig),
     } as unknown as AgentConfigCache;
     const handler = createCodexAppServerHandler({
+      runtimeProvider: "codex",
       workspaceRoot,
       agentConfigCache,
       codexRuntimeBinaryResolver: async () => ({
@@ -678,7 +690,7 @@ describe("codex app-server handler extra branches", () => {
       },
     });
 
-    const startPromise = handler.start(makeMessage("m-effort", "run"), makeContext());
+    const startPromise = handler.start(makeMessage("m-effort", "run"), makeContext(), noopDeliveryToken());
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "effort turn/start");
     const turnStart = fake.requests.find((request) => request.method === "turn/start");
     expect(asRecord(turnStart?.params)?.effort).toBe(reasoningEffort);
@@ -1335,7 +1347,7 @@ describe("codex app-server handler extra branches", () => {
     });
     expect(log.mock.calls.some(([entry]) => entry.includes("turn interrupt failed: interrupt rpc failed"))).toBe(true);
     expect(fake.shutdownCalls).toBe(1);
-    expect(handler.inject(makeMessage("m3", "late"))).toEqual({
+    expect(handler.inject(makeMessage("m3", "late"), noopDeliveryToken())).toEqual({
       kind: "rejected",
       reason: "no_active_context",
       retryable: true,

@@ -111,6 +111,7 @@ vi.mock("../runtime/chat-context.js", () => ({
 }));
 
 import { createCodexHandler } from "../handlers/codex/index.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 
@@ -192,14 +193,17 @@ describe("codex handler retry abort cleanup", () => {
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
-    const handler = createCodexHandler({ workspaceRoot });
+    const handler = createCodexHandler({
+      runtimeProvider: "codex",
+      workspaceRoot,
+    });
     const ctx = makeContext((count) => completedCounts.push(count), {
       sendMessage,
       emitEvent,
       log: (message) => logs.push(message),
     });
 
-    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
     await waitForMicrotasks(
       () => state.streamClosedByAttempt[0] === true && logs.some((message) => message.includes("codex turn retry")),
