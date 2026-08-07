@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { protectOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { oidcRoutes } from "../api/auth/oidc.js";
+import { signOAuthState } from "../services/oauth-state.js";
 
 describe("OIDC callback security", () => {
   let originalEnv: string | undefined;
@@ -15,7 +17,10 @@ describe("OIDC callback security", () => {
     vi.restoreAllMocks();
   });
 
-  it("clears cookies on provider error", async () => {
+  it("clears cookies on provider error with valid state", async () => {
+    const jwtSecret = "test-jwt-secret-key-for-vitest";
+    const encryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     const app = Object.assign(Fastify({ logger: false }), {
       config: {
         authMode: "oidc-required",
@@ -25,8 +30,8 @@ describe("OIDC callback security", () => {
           clientSecret: "test-secret",
         },
         secrets: {
-          jwtSecret: "test-jwt-secret-key-for-vitest",
-          encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          jwtSecret,
+          encryptionKey,
         },
       },
     });
@@ -34,9 +39,20 @@ describe("OIDC callback security", () => {
     await app.ready();
 
     try {
+      // Create valid OAuth state
+      const { token, nonce } = await signOAuthState(jwtSecret, "/", {
+        provider: "oidc",
+        intent: "sign-in",
+        oidcNonce: "test-oidc-nonce",
+      });
+      const stateCookie = `oauth_state_nonce=${encodeURIComponent(protectOAuthStateNonce(nonce, encryptionKey))}`;
+      const pkcePayload = JSON.stringify({ nonce, verifier: "test-verifier" });
+      const pkceCookie = `oidc_pkce=${encodeURIComponent(protectOAuthStateNonce(pkcePayload, encryptionKey))}`;
+
       const callback = await app.inject({
         method: "GET",
-        url: "/callback?error=access_denied",
+        url: `/callback?error=access_denied&state=${encodeURIComponent(token)}`,
+        headers: { cookie: `${stateCookie}; ${pkceCookie}` },
       });
       expect(callback.statusCode).toBe(302);
 
@@ -44,7 +60,7 @@ describe("OIDC callback security", () => {
       expect(setCookieHeaders).toBeDefined();
       const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
 
-      // Both state and PKCE cookies should be cleared (Max-Age=0)
+      // Both state and PKCE cookies should be cleared (Max-Age=0) when state is valid
       expect(
         cookies.some((c) => typeof c === "string" && c.includes("oauth_state_nonce") && c.includes("Max-Age=0")),
       ).toBe(true);

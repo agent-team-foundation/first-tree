@@ -165,10 +165,7 @@ describe("OIDC validation", () => {
     const discovery = await fetchDiscovery("https://idp.test/");
     expect(discovery.issuer).toBe("https://idp.test/");
     // Verify the discovery URL was constructed correctly (without double slash)
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://idp.test/.well-known/openid-configuration",
-      expect.any(Object),
-    );
+    expect(mockFetch).toHaveBeenCalledWith("https://idp.test/.well-known/openid-configuration", expect.any(Object));
   });
 
   it("handles issuer with path and trailing slash correctly", async () => {

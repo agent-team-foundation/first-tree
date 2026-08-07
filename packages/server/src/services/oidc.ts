@@ -7,7 +7,7 @@ export type OidcDiscovery = {
   token_endpoint: string;
   jwks_uri: string;
   userinfo_endpoint?: string;
-  id_token_signing_alg_values_supported: string[];  // Required, validated intersection with local supported algorithms
+  id_token_signing_alg_values_supported: string[]; // Required, validated intersection with local supported algorithms
 };
 
 export type OidcTokenSet = {
@@ -94,7 +94,7 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
     const advertisedAlgs = json.id_token_signing_alg_values_supported.filter(
       (alg): alg is string => typeof alg === "string" && alg.length > 0,
     );
-    const signingAlgs = advertisedAlgs.filter(alg => SUPPORTED_ALGORITHMS.includes(alg));
+    const signingAlgs = advertisedAlgs.filter((alg) => SUPPORTED_ALGORITHMS.includes(alg));
 
     if (signingAlgs.length === 0) {
       // Do not log provider-controlled algorithm list to prevent log injection
@@ -122,9 +122,8 @@ export async function fetchDiscovery(issuer: string): Promise<OidcDiscovery> {
     parseAndValidateUrl(json.token_endpoint, "token_endpoint");
     parseAndValidateUrl(json.jwks_uri, "jwks_uri");
 
-    const userInfoEndpoint = typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint
-      ? json.userinfo_endpoint
-      : undefined;
+    const userInfoEndpoint =
+      typeof json.userinfo_endpoint === "string" && json.userinfo_endpoint ? json.userinfo_endpoint : undefined;
     if (userInfoEndpoint) {
       parseAndValidateUrl(userInfoEndpoint, "userinfo_endpoint");
     }
@@ -211,7 +210,7 @@ export async function verifyIdToken(opts: {
   issuer: string;
   clientId: string;
   nonce: string;
-  algorithms: string[];  // Required, not optional - must come from validated discovery
+  algorithms: string[]; // Required, not optional - must come from validated discovery
 }): Promise<OidcIdTokenClaims> {
   const jwks = jose.createRemoteJWKSet(new URL(opts.jwksUri));
   // Use only the algorithms from validated discovery (no fallback)

@@ -3,13 +3,11 @@ import { success } from "../../cli/output.js";
 import { createSdk } from "../_shared/local-agent.js";
 import { handleCronSdkError, requireCronChatId } from "./_shared.js";
 
-type ResumeOptions = {};
-
 export function registerCronResumeCommand(cron: Command): void {
   cron
     .command("resume <jobId>")
     .description("Resume a paused scheduled job from the next future occurrence.")
-    .action(async (jobId: string, options: ResumeOptions) => {
+    .action(async (jobId: string) => {
       try {
         const chatId = requireCronChatId();
         const sdk = createSdk();

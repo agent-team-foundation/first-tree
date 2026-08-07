@@ -1,22 +1,26 @@
+import { createServer, type Server } from "node:http";
 import * as jose from "jose";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { verifyIdToken } from "../services/oidc.js";
 
 /**
- * ID token security boundary tests using real signed JWTs.
- * Tests the custom First Tree checks in services/oidc.ts:verifyIdToken
- * (sub, iat, nonce, azp, etc.) with deterministic signed tokens instead of mocking.
+ * ID token security boundary tests using real signed JWTs and the actual
+ * verifyIdToken() function from services/oidc.ts.
  *
- * Strategy: Generate real RSA keys, sign JWTs with jose, and verify them using
- * a local JWKSet (bypassing the HTTP remote fetch since we control the keys).
+ * Strategy: Create a local HTTP server serving JWKS, generate real RSA keys,
+ * sign JWTs with jose, and call verifyIdToken() which will fetch the JWKS
+ * and perform all First Tree's custom checks (sub, iat, nonce, azp, etc.)
  */
 
 const ISSUER = "https://idp.test";
 const CLIENT_ID = "test-client-id";
+const NONCE = "test-nonce-12345";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let privateKey: any;
-let publicJWKS: jose.JWTVerifyGetKey;
+let privateKey: Awaited<ReturnType<typeof jose.generateKeyPair>>["privateKey"];
+let publicJWK: jose.JWK;
 let kid: string;
+let jwksServer: Server;
+let jwksUri: string;
 
 beforeAll(async () => {
   // Generate RSA key pair for signing/verifying test tokens
@@ -24,166 +28,146 @@ beforeAll(async () => {
   privateKey = priv;
   kid = "test-key-id";
 
-  // Create a local JWKSet from the public key (simulates JWKS endpoint without HTTP)
-  const publicJWK = await jose.exportJWK(publicKey);
+  // Export public key as JWK for JWKS endpoint
+  publicJWK = await jose.exportJWK(publicKey);
   publicJWK.kid = kid;
   publicJWK.alg = "RS256";
   publicJWK.use = "sig";
-  const jwks = { keys: [publicJWK] };
-  publicJWKS = jose.createLocalJWKSet(jwks);
+
+  // Create HTTP server to serve JWKS
+  jwksServer = createServer((req, res) => {
+    if (req.url === "/.well-known/jwks.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ keys: [publicJWK] }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  // Start server on random port
+  await new Promise<void>((resolve) => {
+    jwksServer.listen(0, () => {
+      const addr = jwksServer.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      jwksUri = `http://localhost:${port}/.well-known/jwks.json`;
+      resolve();
+    });
+  });
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) => {
+    jwksServer.close((err) => (err ? reject(err) : resolve()));
+  });
 });
 
 /**
- * Sign a JWT with the test private key. Claims should include at minimum:
- * iss, sub, aud, exp, iat, nonce.
+ * Sign a JWT with the test private key.
  */
 async function signToken(claims: Record<string, unknown>): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
     sub: "test-subject",
-    nonce: "test-nonce",
+    nonce: NONCE,
     ...claims,
   })
     .setProtectedHeader({ alg: "RS256", kid })
-    .setIssuedAt(claims.iat as number | undefined ?? now)
-    .setIssuer(claims.iss as string | undefined ?? ISSUER)
-    .setAudience(claims.aud as string | string[] | undefined ?? CLIENT_ID)
-    .setExpirationTime(claims.exp as number | undefined ?? now + 3600)
+    .setIssuedAt((claims.iat as number | undefined) ?? now)
+    .setIssuer((claims.iss as string | undefined) ?? ISSUER)
+    .setAudience((claims.aud as string | string[] | undefined) ?? CLIENT_ID)
+    .setExpirationTime((claims.exp as number | undefined) ?? now + 3600)
     .sign(privateKey);
 }
 
 /**
- * Verify a token using jose directly (simulating the verifyIdToken logic
- * but with our local JWKSet instead of a remote fetch).
+ * Call the real verifyIdToken() from services/oidc.ts
  */
-async function verifyToken(
-  idToken: string,
-  opts: { issuer?: string; audience?: string; nonce?: string; algorithms?: string[] } = {},
-): Promise<jose.JWTVerifyResult> {
-  return jose.jwtVerify(idToken, publicJWKS, {
-    issuer: opts.issuer ?? ISSUER,
-    audience: opts.audience ?? CLIENT_ID,
-    algorithms: opts.algorithms ?? ["RS256"],
+async function callVerifyIdToken(idToken: string): Promise<ReturnType<typeof verifyIdToken>> {
+  return verifyIdToken({
+    idToken,
+    jwksUri,
+    issuer: ISSUER,
+    clientId: CLIENT_ID,
+    nonce: NONCE,
+    algorithms: ["RS256"],
   });
 }
 
-describe("ID token security boundary — required claims", () => {
-  it("accepts a valid token with all required claims", async () => {
-    const token = await signToken({
-      sub: "user-123",
-      nonce: "valid-nonce",
-    });
-
-    const result = await verifyToken(token, { nonce: "valid-nonce" });
-    expect(result.payload.sub).toBe("user-123");
-    expect(result.payload.nonce).toBe("valid-nonce");
-  });
-
-  it("rejects token without sub claim", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    // Manually construct token without sub
-    const token = await new jose.SignJWT({ nonce: "test-nonce" })
-      .setProtectedHeader({ alg: "RS256", kid })
-      .setIssuedAt(now)
-      .setIssuer(ISSUER)
-      .setAudience(CLIENT_ID)
-      .setExpirationTime(now + 3600)
-      .sign(privateKey);
-
-    // jose.jwtVerify doesn't enforce sub, so we expect this to pass jose
-    // but First Tree's verifyIdToken would reject it
-    const result = await verifyToken(token);
-    expect(result.payload.sub).toBeUndefined();
-    // This demonstrates that jose alone doesn't validate sub, confirming
-    // First Tree's custom check at oidc.ts:228-230 is necessary.
+describe("verifyIdToken security boundaries", () => {
+  it("accepts valid token with all required claims", async () => {
+    const token = await signToken({});
+    const claims = await callVerifyIdToken(token);
+    expect(claims.sub).toBe("test-subject");
+    expect(claims.iss).toBe(ISSUER);
+    expect(claims.aud).toBe(CLIENT_ID);
+    expect(claims.nonce).toBe(NONCE);
   });
 
   it("rejects token with empty sub", async () => {
-    const token = await signToken({ sub: "", nonce: "test-nonce" });
-    const result = await verifyToken(token);
-    expect(result.payload.sub).toBe("");
-    // First Tree would reject this at oidc.ts:228-230
+    const token = await signToken({ sub: "" });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("sub");
+  });
+
+  it("rejects token with missing sub", async () => {
+    const jwt = new jose.SignJWT({ nonce: NONCE })
+      .setProtectedHeader({ alg: "RS256", kid })
+      .setIssuedAt()
+      .setIssuer(ISSUER)
+      .setAudience(CLIENT_ID)
+      .setExpirationTime("1h");
+    const token = await jwt.sign(privateKey);
+    await expect(callVerifyIdToken(token)).rejects.toThrow("sub");
   });
 
   it("rejects token with non-string sub", async () => {
-    const token = await signToken({ sub: 12345, nonce: "test-nonce" });
-    const result = await verifyToken(token);
-    expect(typeof result.payload.sub).toBe("number");
-    // First Tree would reject this at oidc.ts:228-230
-  });
-});
-
-describe("ID token security boundary — iat freshness", () => {
-  it("accepts token with recent iat", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const token = await signToken({ iat: now - 10 });
-    const result = await verifyToken(token);
-    expect(result.payload.iat).toBe(now - 10);
+    const token = await signToken({ sub: 12345 });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("sub");
   });
 
-  it("rejects token with iat too far in the past", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const oldIat = now - 400; // More than 5 minutes (300s) old
-    const token = await signToken({ iat: oldIat, exp: now + 3600 });
-    const result = await verifyToken(token);
-    expect(result.payload.iat).toBe(oldIat);
-    // First Tree would reject this at oidc.ts:233-237 if iat > 300s old
-  });
-
-  it("rejects token without iat claim", async () => {
-    // Manually build without iat
-    const now = Math.floor(Date.now() / 1000);
-    const token = await new jose.SignJWT({ sub: "test", nonce: "test" })
+  it("rejects token with missing iat", async () => {
+    const jwt = new jose.SignJWT({ sub: "test-subject", nonce: NONCE })
       .setProtectedHeader({ alg: "RS256", kid })
       .setIssuer(ISSUER)
       .setAudience(CLIENT_ID)
-      .setExpirationTime(now + 3600)
-      .sign(privateKey);
-
-    const result = await verifyToken(token);
-    expect(result.payload.iat).toBeUndefined();
-    // First Tree would reject at oidc.ts:231-232
-  });
-});
-
-describe("ID token security boundary — nonce", () => {
-  it("accepts token with matching nonce", async () => {
-    const token = await signToken({ nonce: "expected-nonce" });
-    // Note: jose.jwtVerify doesn't validate nonce, so we can't test mismatch here
-    const result = await verifyToken(token);
-    expect(result.payload.nonce).toBe("expected-nonce");
-    // First Tree checks nonce at oidc.ts:238-240
+      .setExpirationTime("1h");
+    const token = await jwt.sign(privateKey);
+    await expect(callVerifyIdToken(token)).rejects.toThrow("iat");
   });
 
-  it("rejects token without nonce", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const token = await new jose.SignJWT({ sub: "test" })
+  it("rejects token with future iat", async () => {
+    const futureIat = Math.floor(Date.now() / 1000) + 120;
+    const token = await signToken({ iat: futureIat });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("future");
+  });
+
+  it("rejects token with old iat (>10 minutes)", async () => {
+    const oldIat = Math.floor(Date.now() / 1000) - 650;
+    const token = await signToken({ iat: oldIat });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("too old");
+  });
+
+  it("rejects token with nonce mismatch", async () => {
+    const token = await signToken({ nonce: "wrong-nonce" });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("nonce");
+  });
+
+  it("rejects token with missing nonce", async () => {
+    const jwt = new jose.SignJWT({ sub: "test-subject" })
       .setProtectedHeader({ alg: "RS256", kid })
-      .setIssuedAt(now)
+      .setIssuedAt()
       .setIssuer(ISSUER)
       .setAudience(CLIENT_ID)
-      .setExpirationTime(now + 3600)
-      .sign(privateKey);
-
-    const result = await verifyToken(token);
-    expect(result.payload.nonce).toBeUndefined();
-    // First Tree would reject at oidc.ts:238-240
+      .setExpirationTime("1h");
+    const token = await jwt.sign(privateKey);
+    await expect(callVerifyIdToken(token)).rejects.toThrow("nonce");
   });
 
-  it("rejects token with non-string nonce", async () => {
-    const token = await signToken({ nonce: 12345 });
-    const result = await verifyToken(token);
-    expect(typeof result.payload.nonce).toBe("number");
-    // First Tree would reject at oidc.ts:238-240
-  });
-});
-
-describe("ID token security boundary — multi-audience azp", () => {
   it("accepts single-audience token without azp", async () => {
     const token = await signToken({ aud: CLIENT_ID });
-    const result = await verifyToken(token);
-    expect(result.payload.aud).toBe(CLIENT_ID);
-    expect(result.payload.azp).toBeUndefined();
+    const claims = await callVerifyIdToken(token);
+    expect(claims.aud).toBe(CLIENT_ID);
+    expect(claims.azp).toBeUndefined();
   });
 
   it("accepts multi-audience token with matching azp", async () => {
@@ -191,10 +175,9 @@ describe("ID token security boundary — multi-audience azp", () => {
       aud: [CLIENT_ID, "other-client"],
       azp: CLIENT_ID,
     });
-    // jose validates aud includes CLIENT_ID
-    const result = await verifyToken(token);
-    expect(result.payload.aud).toEqual([CLIENT_ID, "other-client"]);
-    expect(result.payload.azp).toBe(CLIENT_ID);
+    const claims = await callVerifyIdToken(token);
+    expect(claims.aud).toEqual([CLIENT_ID, "other-client"]);
+    expect(claims.azp).toBe(CLIENT_ID);
   });
 
   it("rejects multi-audience token with mismatched azp", async () => {
@@ -202,71 +185,69 @@ describe("ID token security boundary — multi-audience azp", () => {
       aud: [CLIENT_ID, "other-client"],
       azp: "wrong-client",
     });
-    const result = await verifyToken(token);
-    expect(result.payload.azp).toBe("wrong-client");
-    // First Tree would reject at oidc.ts:248-250
+    await expect(callVerifyIdToken(token)).rejects.toThrow("azp");
   });
 
   it("rejects multi-audience token without azp", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const token = await new jose.SignJWT({ sub: "test", nonce: "test" })
+    const jwt = new jose.SignJWT({
+      sub: "test-subject",
+      nonce: NONCE,
+    })
       .setProtectedHeader({ alg: "RS256", kid })
-      .setIssuedAt(now)
+      .setIssuedAt()
       .setIssuer(ISSUER)
       .setAudience([CLIENT_ID, "other-client"])
-      .setExpirationTime(now + 3600)
-      .sign(privateKey);
-
-    const result = await verifyToken(token);
-    expect(Array.isArray(result.payload.aud)).toBe(true);
-    expect(result.payload.azp).toBeUndefined();
-    // First Tree would reject at oidc.ts:244-246
-  });
-});
-
-describe("ID token security boundary — algorithm policy", () => {
-  it("accepts RS256 (allowed algorithm)", async () => {
-    const token = await signToken({});
-    const result = await verifyToken(token, { algorithms: ["RS256"] });
-    expect(result.protectedHeader.alg).toBe("RS256");
+      .setExpirationTime("1h");
+    const token = await jwt.sign(privateKey);
+    await expect(callVerifyIdToken(token)).rejects.toThrow("azp");
   });
 
-  it("rejects token signed with non-allowed algorithm", async () => {
-    // This test is conceptual: if we tried to verify with algorithms: ["RS384"],
-    // it would fail unless we had an RS384 key.
-    await expect(verifyToken(await signToken({}), { algorithms: ["RS384"] })).rejects.toThrow();
-  });
-});
+  it("rejects unsigned token", async () => {
+    // Create an unsigned JWT (alg: none)
+    const unsignedPayload = {
+      iss: ISSUER,
+      sub: "test-subject",
+      aud: CLIENT_ID,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      iat: Math.floor(Date.now() / 1000),
+      nonce: NONCE,
+    };
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify(unsignedPayload)).toString("base64url");
+    const unsignedToken = `${header}.${payload}.`;
 
-describe("ID token security boundary — optional profile claims", () => {
-  it("accepts token with optional string profile claims", async () => {
-    const token = await signToken({
-      email: "user@example.com",
-      email_verified: true,
-      name: "Test User",
-      nickname: "testy",
-      preferred_username: "testuser",
-      picture: "https://example.com/pic.jpg",
-    });
-
-    const result = await verifyToken(token);
-    expect(result.payload.email).toBe("user@example.com");
-    expect(result.payload.email_verified).toBe(true);
-    expect(result.payload.name).toBe("Test User");
+    await expect(callVerifyIdToken(unsignedToken)).rejects.toThrow();
   });
 
-  it("rejects token with non-string email", async () => {
+  it("rejects token with HS256 when only RS256 is allowed", async () => {
+    // Generate HS256 key and sign token
+    const hmacSecret = new Uint8Array(32);
+    const hsToken = await new jose.SignJWT({
+      sub: "test-subject",
+      nonce: NONCE,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setIssuer(ISSUER)
+      .setAudience(CLIENT_ID)
+      .setExpirationTime("1h")
+      .sign(hmacSecret);
+
+    await expect(callVerifyIdToken(hsToken)).rejects.toThrow();
+  });
+
+  it("rejects token with invalid email type", async () => {
     const token = await signToken({ email: 12345 });
-    const result = await verifyToken(token);
-    expect(typeof result.payload.email).toBe("number");
-    // First Tree would reject at oidc.ts:265-267
+    await expect(callVerifyIdToken(token)).rejects.toThrow("email");
   });
 
-  it("rejects token with non-boolean email_verified", async () => {
-    const token = await signToken({ email: "user@example.com", email_verified: "yes" });
-    const result = await verifyToken(token);
-    expect(typeof result.payload.email_verified).toBe("string");
-    // First Tree would reject at oidc.ts:268-270
+  it("rejects token with invalid email_verified type", async () => {
+    const token = await signToken({ email_verified: "true" });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("email_verified");
+  });
+
+  it("rejects token with invalid name type", async () => {
+    const token = await signToken({ name: 12345 });
+    await expect(callVerifyIdToken(token)).rejects.toThrow("name");
   });
 });
-

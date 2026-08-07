@@ -2116,7 +2116,9 @@ describe("Pi handler → SessionManager custody", () => {
 
     const firstDispatch = sm1.dispatch(entry);
     await vi.waitFor(() => expect(rpcSessionIds(specs)).toHaveLength(1), { timeout: 10_000 });
-    const oldId = rpcSessionIds(specs)[0]!;
+    const sessionIds = rpcSessionIds(specs);
+    expect(sessionIds).toHaveLength(1);
+    const oldId = sessionIds[0];
     expect(oldId).toBe(freshStartPiSessionId("agent-1", chatId, messageId));
     // Turn settled under ACK failure — coordinator keeps the uncommitted row.
     await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(entryId), { timeout: 10_000 });

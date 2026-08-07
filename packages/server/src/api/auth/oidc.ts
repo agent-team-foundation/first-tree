@@ -87,11 +87,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
 
     const { code, state } = query;
     if (!code && !query.error) {
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
     if (!state) {
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
 
@@ -106,14 +104,18 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
     } catch (error) {
       app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "oidc" }, "OAuth state rejected");
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      // Do not clear cookies on state verification failure - a forged callback
+      // must not be able to invalidate an unrelated active authorization flow.
       return redirectError(reply, "state-expired");
     }
 
     if (verified.provider !== "oidc") {
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      // State is valid but for wrong provider - still should not clear OIDC cookies
       return redirectError(reply, "state-expired");
     }
+
+    // State is now verified - we can safely clear cookies for this flow
+    clearOidcCookies(reply, app.config.secrets.encryptionKey);
 
     // Handle provider-reported errors AFTER state validation to ensure the
     // error callback belongs to an active authorization request and preserve
@@ -124,13 +126,11 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         { event: "oauth.callback_rejected", provider: "oidc", reason: "provider-error" },
         "OIDC provider error",
       );
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
     // After handling error, code must be present
     if (!code) {
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
 
@@ -203,6 +203,12 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
+    // OIDC state must contain a nonce
+    if (!verified.oidcNonce) {
+      app.log.error({ event: "oauth.state_missing_nonce", provider: "oidc" }, "OIDC state missing nonce");
+      return redirectError(reply, "state-expired");
+    }
+
     let claims: Awaited<ReturnType<typeof verifyIdToken>>;
     try {
       claims = await verifyIdToken({
@@ -210,7 +216,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         jwksUri: discovery.jwks_uri,
         issuer: app.config.oidc.issuer,
         clientId: app.config.oidc.clientId,
-        nonce: verified.oidcNonce!,
+        nonce: verified.oidcNonce,
         algorithms: discovery.id_token_signing_alg_values_supported,
       });
     } catch {

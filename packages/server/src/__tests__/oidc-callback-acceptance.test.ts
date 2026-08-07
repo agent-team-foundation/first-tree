@@ -302,6 +302,17 @@ describe("OIDC callback — acceptance", () => {
     // The signed deep-link destination is preserved.
     expect(fragment.get("next")).toBe("/teams/invite/abc");
     expect(await oidcIdentityRows(app)).toHaveLength(0);
+
+    // Valid state means cookies should be cleared
+    const setCookieHeaders = res.headers["set-cookie"];
+    expect(setCookieHeaders).toBeDefined();
+    const cookieStrings = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+    expect(
+      cookieStrings.some((c) => typeof c === "string" && c.includes("oauth_state_nonce") && c.includes("Max-Age=0")),
+    ).toBe(true);
+    expect(cookieStrings.some((c) => typeof c === "string" && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(
+      true,
+    );
   });
 
   it("rejects provider error with invalid state before exchange", async () => {
@@ -317,6 +328,18 @@ describe("OIDC callback — acceptance", () => {
     expect(fragment.get("error")).toBe("state-expired");
     // No verified next available, falls back to root.
     expect(fragment.get("next")).toBe("/");
+
+    // Critical: invalid state must NOT clear cookies (to prevent forged callbacks
+    // from invalidating unrelated active flows)
+    const setCookieHeaders = res.headers["set-cookie"];
+    if (setCookieHeaders) {
+      const cookieStrings = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+      // Should not set cookies to expire/delete them
+      for (const cookie of cookieStrings) {
+        expect(cookie).not.toContain("Max-Age=0");
+        expect(cookie).not.toContain("Expires=Thu, 01 Jan 1970");
+      }
+    }
   });
 
   it("rejects provider error without state", async () => {
@@ -330,21 +353,21 @@ describe("OIDC callback — acceptance", () => {
   });
 
   // TODO: Fix concurrent collision test - currently creates 0 identities
-  it.skip("handles concurrent first-sign-in collision fail-closed (only one user created)", async () => {
+  it("handles concurrent first-sign-in collision fail-closed (only one user created)", async () => {
     // Two concurrent callbacks for the same (issuer, sub) must result in exactly
     // one user creation. The database UNIQUE constraint on (provider, issuer, identifier)
     // ensures atomicity.
 
     // Set up mocks to return the SAME subject for both requests
+    // Use callsFake to handle multiple concurrent calls properly
     mockVerifyIdToken.mockImplementation(async (opts) => {
-      // Return same subject but match the nonce from the request
       return baseClaims("concurrent-subject", {
         email: "concurrent@example.com",
         email_verified: true,
-        nonce: opts.nonce,
+        nonce: opts.nonce, // Match the nonce from each request
       });
     });
-    // Match the mockFetchUserInfo signature from beforeEach
+
     mockFetchUserInfo.mockImplementation(async () => ({
       sub: "concurrent-subject",
       email: "concurrent@example.com",
@@ -361,24 +384,26 @@ describe("OIDC callback — acceptance", () => {
       app.inject({ method: "GET", url: req2.url, headers: { cookie: req2.cookie } }),
     ]);
 
-    // Debug: check responses
+    // Debug: check if either failed
     const frag1 = parseFragment(res1.headers.location as string);
     const frag2 = parseFragment(res2.headers.location as string);
-    if (frag1.get("error") || frag2.get("error")) {
-      console.log("res1 error:", frag1.get("error"), "res2 error:", frag2.get("error"));
-    }
 
-    // Both should get 302 redirects
+    // Both should get 302 redirects (one success, one may fail due to collision)
     expect(res1.statusCode).toBe(302);
     expect(res2.statusCode).toBe(302);
 
+    // At least one should succeed (no error)
+    const hasSuccess = !frag1.get("error") || !frag2.get("error");
+    expect(hasSuccess).toBe(true);
+
     // Verify exactly one OIDC identity was created for this subject
     const identities = await oidcIdentityRows(app);
-    const concurrentIdentities = identities.filter((id) => id.identifier === "concurrent-subject");
-    expect(concurrentIdentities.length).toBeGreaterThan(0); // At least one created
-    expect(concurrentIdentities).toHaveLength(1); // But exactly one
+    const concurrentIdentities = identities.filter(
+      (id) => id.identifier === JSON.stringify([ISSUER, "concurrent-subject"]),
+    );
+    expect(concurrentIdentities).toHaveLength(1); // Exactly one identity created
 
-    // Verify only one user was created (all identities with this subject point to same user)
+    // Verify only one user was created
     const uniqueUserIds = new Set(concurrentIdentities.map((id) => id.userId));
     expect(uniqueUserIds.size).toBe(1);
   });
