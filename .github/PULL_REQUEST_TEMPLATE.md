@@ -14,6 +14,7 @@
 - [ ] `apps/cli` public CLI or help output
 - [ ] tree onboarding / binding / inspection behavior
 - [ ] shipped or planned skill topology
+- [ ] new or materially changed Momentic case (human-reviewed and revised before merge)
 - [ ] docs or contributor-facing repository metadata
 - [ ] CI / packaging / release plumbing
 
