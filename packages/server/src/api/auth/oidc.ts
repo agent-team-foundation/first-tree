@@ -72,49 +72,74 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "OIDC is not enabled" });
     }
 
-    // Runtime validation of callback query boundary
-    let query: OidcCallbackQuery;
-    try {
-      query = oidcCallbackQuerySchema.parse(request.query);
-    } catch {
-      app.log.warn(
-        { event: "oauth.callback_rejected", provider: "oidc", reason: "malformed-query" },
-        "OIDC callback rejected",
-      );
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
-      return redirectError(reply, "provider-exchange-failed");
-    }
+    // Runtime validation of callback query boundary.
+    // We attempt to parse the query with the bounded schema, but regardless of whether
+    // parsing succeeds or fails, we must validate the state cookie before clearing cookies.
+    // This prevents a forged/malformed request from clearing an unrelated active OIDC flow.
+    const rawQuery = request.query as Record<string, unknown>;
+    const rawState = typeof rawQuery.state === "string" ? rawQuery.state : null;
 
-    const { code, state } = query;
-    if (!code && !query.error) {
-      return redirectError(reply, "provider-exchange-failed");
-    }
-    if (!state) {
-      return redirectError(reply, "provider-exchange-failed");
-    }
-
+    // Read the state nonce cookie early so we can validate ownership
+    // before deciding whether to clear any cookies.
     const cookieNonce = readOAuthStateNonce(
       request.headers.cookie,
       STATE_NONCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
 
-    let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
+    // Attempt to verify state ownership (if a state is present).
+    // We use this result to decide whether clearing cookies is safe.
+    let verified: Awaited<ReturnType<typeof verifyOAuthState>> | null = null;
+    if (rawState) {
+      try {
+        const maybeVerified = await verifyOAuthState(app.config.secrets.jwtSecret, rawState, cookieNonce);
+        if (maybeVerified.provider === "oidc") {
+          verified = maybeVerified;
+        }
+      } catch {
+        // State verification failed — do not clear cookies (not our flow)
+      }
+    }
+
+    // Now parse the full query with the bounded schema.
+    let query: OidcCallbackQuery;
     try {
-      verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
-    } catch (error) {
-      app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "oidc" }, "OAuth state rejected");
-      // Do not clear cookies on state verification failure - a forged callback
-      // must not be able to invalidate an unrelated active authorization flow.
-      return redirectError(reply, "state-expired");
+      query = oidcCallbackQuerySchema.parse(rawQuery);
+    } catch {
+      app.log.warn(
+        { event: "oauth.callback_rejected", provider: "oidc", reason: "malformed-query" },
+        "OIDC callback rejected",
+      );
+      // Only clear cookies if we proved state ownership above
+      if (verified) clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed", verified?.next ?? null);
     }
 
-    if (verified.provider !== "oidc") {
-      // State is valid but for wrong provider - still should not clear OIDC cookies
-      return redirectError(reply, "state-expired");
+    const { code, state } = query;
+    if (!code && !query.error) {
+      if (verified) clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed", verified?.next ?? null);
+    }
+    if (!state) {
+      return redirectError(reply, "provider-exchange-failed");
     }
 
-    // State is now verified - we can safely clear cookies for this flow
+    // If we haven't verified state yet (state wasn't pre-extracted or verification failed earlier),
+    // do it now with the validated state from the schema-parsed query.
+    if (!verified) {
+      try {
+        const maybeVerified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
+        if (maybeVerified.provider !== "oidc") {
+          return redirectError(reply, "state-expired");
+        }
+        verified = maybeVerified;
+      } catch (error) {
+        app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "oidc" }, "OAuth state rejected");
+        return redirectError(reply, "state-expired");
+      }
+    }
+
+    // State is verified - we can safely clear cookies for this flow
     clearOidcCookies(reply, app.config.secrets.encryptionKey);
 
     // Handle provider-reported errors AFTER state validation to ensure the
@@ -141,7 +166,6 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.encryptionKey,
     );
     if (!pkceCookieValue) {
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "state-expired", verified.next);
     }
 
@@ -161,20 +185,14 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       const pkcePayload = parsed as { nonce: string; verifier: string };
       if (pkcePayload.nonce !== cookieNonce) {
         app.log.warn({ event: "oidc.pkce_nonce_mismatch" }, "PKCE cookie nonce does not match state nonce");
-        clearOidcCookies(reply, app.config.secrets.encryptionKey);
         return redirectError(reply, "state-expired", verified.next);
       }
       codeVerifier = pkcePayload.verifier;
     } catch {
       // Do not log cookie parse errors to prevent exposing malformed data
       app.log.warn({ event: "oidc.pkce_parse_failed" }, "Failed to parse PKCE cookie");
-      clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "state-expired", verified.next);
     }
-
-    // Clear cookies
-    reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
-    reply.header("Set-Cookie", pkceCookie("", 0, app.config.secrets.encryptionKey));
 
     let discovery: Awaited<ReturnType<typeof fetchDiscovery>>;
     try {

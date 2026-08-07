@@ -3,11 +3,13 @@ import { success } from "../../cli/output.js";
 import { createSdk } from "../_shared/local-agent.js";
 import { handleCronSdkError, requireCronChatId } from "./_shared.js";
 
+type DeleteOptions = {};
+
 export function registerCronDeleteCommand(cron: Command): void {
   cron
     .command("delete <jobId>")
     .description("Hard-delete a scheduled job configuration (does not cancel in-flight triggers).")
-    .action(async (jobId: string) => {
+    .action(async (jobId: string, options: DeleteOptions) => {
       try {
         const chatId = requireCronChatId();
         const sdk = createSdk();

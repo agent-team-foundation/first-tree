@@ -53,8 +53,7 @@ describe("cron-schedule", () => {
     // 2026-03-08 local 02:00 does not exist. Must NOT shift to 03:00 EDT.
     const next = firstOccurrenceStrictlyAfter("0 2 8 3 *", "America/New_York", new Date("2026-03-07T00:00:00.000Z"));
     expect(next?.toISOString()).toBe("2027-03-08T07:00:00.000Z");
-    expect(next).toBeDefined();
-    expect(matchesScheduledWallTime("0 2 8 3 *", "America/New_York", next)).toBe(true);
+    expect(matchesScheduledWallTime("0 2 8 3 *", "America/New_York", next!)).toBe(true);
   });
 
   it("skips the nonexistent Europe/London spring-forward wall time", () => {
@@ -67,11 +66,9 @@ describe("cron-schedule", () => {
     const after = new Date("2026-10-24T23:00:00.000Z");
     const first = firstOccurrenceStrictlyAfter("30 1 * * *", "Europe/London", after);
     expect(first?.toISOString()).toBe("2026-10-25T00:30:00.000Z");
-    expect(first).toBeDefined();
-    const second = firstOccurrenceStrictlyAfter("30 1 * * *", "Europe/London", first);
+    const second = firstOccurrenceStrictlyAfter("30 1 * * *", "Europe/London", first!);
     expect(second?.toISOString()).toBe("2026-10-26T01:30:00.000Z");
-    expect(second).toBeDefined();
-    expect(second.getTime() - first.getTime()).toBeGreaterThanOrEqual(20 * 60 * 60 * 1000);
+    expect(second!.getTime() - first!.getTime()).toBeGreaterThanOrEqual(20 * 60 * 60 * 1000);
   });
 
   it("rejects impossible schedules and exposes the 30s grace constant", () => {

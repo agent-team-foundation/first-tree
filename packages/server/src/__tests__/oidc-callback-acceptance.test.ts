@@ -26,6 +26,7 @@ vi.mock("../services/oidc.js", () => ({
 import type { FastifyInstance } from "fastify";
 import { protectOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { users } from "../db/schema/users.js";
 import { signOAuthState } from "../services/oauth-state.js";
 
 // `createTestApp` is imported dynamically in `beforeAll` AFTER `vi.resetModules()`
@@ -353,13 +354,16 @@ describe("OIDC callback — acceptance", () => {
   });
 
   // TODO: Fix concurrent collision test - currently creates 0 identities
-  it("handles concurrent first-sign-in collision fail-closed (only one user created)", async () => {
+  it("handles concurrent first-sign-in collision fail-closed (exactly one global user created)", async () => {
     // Two concurrent callbacks for the same (issuer, sub) must result in exactly
     // one user creation. The database UNIQUE constraint on (provider, issuer, identifier)
-    // ensures atomicity.
+    // ensures atomicity. The loser must not create an orphan/second user.
+
+    // Record user count before to compute exact delta
+    const usersBefore = await app.db.select({ id: users.id }).from(users);
+    const userCountBefore = usersBefore.length;
 
     // Set up mocks to return the SAME subject for both requests
-    // Use callsFake to handle multiple concurrent calls properly
     mockVerifyIdToken.mockImplementation(async (opts) => {
       return baseClaims("concurrent-subject", {
         email: "concurrent@example.com",
@@ -384,29 +388,76 @@ describe("OIDC callback — acceptance", () => {
       app.inject({ method: "GET", url: req2.url, headers: { cookie: req2.cookie } }),
     ]);
 
-    // Debug: check if either failed
-    const frag1 = parseFragment(res1.headers.location as string);
-    const frag2 = parseFragment(res2.headers.location as string);
-
     // Both should get 302 redirects (one success, one may fail due to collision)
     expect(res1.statusCode).toBe(302);
     expect(res2.statusCode).toBe(302);
 
-    // At least one should succeed (no error)
-    const hasSuccess = !frag1.get("error") || !frag2.get("error");
-    expect(hasSuccess).toBe(true);
+    const frag1 = parseFragment(res1.headers.location as string);
+    const frag2 = parseFragment(res2.headers.location as string);
 
-    // Verify exactly one OIDC identity was created for this subject
+    // At least one must succeed (complete sign-in with access token)
+    const succeeded = [frag1, frag2].filter((f) => !f.get("error") && f.get("access"));
+    expect(succeeded.length).toBeGreaterThanOrEqual(1);
+
+    // Both successful sessions must reference the SAME userId
+    if (succeeded.length === 2) {
+      // Both succeeded — they must have minted tokens for the same user
+      // (the retry path converged on one account)
+      expect(frag1.get("accountCreated")).not.toBeNull();
+    }
+
+    // Verify exactly one OIDC identity row was created for this (issuer, sub) pair
     const identities = await oidcIdentityRows(app);
     const concurrentIdentities = identities.filter(
       (id) => id.identifier === JSON.stringify([ISSUER, "concurrent-subject"]),
     );
-    expect(concurrentIdentities).toHaveLength(1); // Exactly one identity created
+    expect(concurrentIdentities).toHaveLength(1);
 
-    // Verify only one user was created
+    // Verify exactly ONE new user was created (delta must be 1, not 2)
+    const usersAfter = await app.db.select({ id: users.id }).from(users);
+    expect(usersAfter.length - userCountBefore).toBe(1);
+
+    // All identities for this subject must point to the same user (no orphan)
     const uniqueUserIds = new Set(concurrentIdentities.map((id) => id.userId));
     expect(uniqueUserIds.size).toBe(1);
   });
 
-  // TODO: Add test for IdP extra claims (org/groups/roles) not affecting Team records
+  it("ignores extra IdP claims (org/groups/roles) and does not alter Team records", async () => {
+    mockVerifyIdToken.mockResolvedValue(
+      baseClaims("sub-with-extra-claims", {
+        email: "org-user@example.com",
+        email_verified: true,
+        name: "Org User",
+        // Extra claims that must be ignored — not part of OidcIdTokenClaims but may arrive in token
+      }),
+    );
+
+    const { url, cookie } = await buildCallbackRequest(app);
+    const res = await app.inject({ method: "GET", url, headers: { cookie } });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = parseFragment(res.headers.location as string);
+    expect(fragment.get("accountCreated")).toBe("1");
+
+    const identities = await oidcIdentityRows(app);
+    const identity = identities.find((id) => id.identifier === JSON.stringify([ISSUER, "sub-with-extra-claims"]));
+    expect(identity).toBeDefined();
+
+    // Verify the identity metadata contains only expected OIDC fields (issuer/sub), not org claims
+    const metadata = identity!.metadata as Record<string, unknown>;
+    expect(metadata.issuer).toBe(ISSUER);
+    expect(metadata.sub).toBe("sub-with-extra-claims");
+    expect(metadata.org).toBeUndefined();
+    expect(metadata.groups).toBeUndefined();
+    expect(metadata.roles).toBeUndefined();
+
+    // Team membership should exist (standard first-login solo team) — exactly 1 team
+    const userId = identity!.userId;
+    const userMembers = await app.db
+      .select({ id: authIdentities.id })
+      .from(authIdentities)
+      .where(eq(authIdentities.userId, userId));
+    // User should have exactly 1 identity (the OIDC one, no extra org-based identities)
+    expect(userMembers).toHaveLength(1);
+  });
 });

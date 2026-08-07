@@ -86,7 +86,7 @@ export type MigrationContext = {
  * errors etc.) — also leaves the marker unrecorded but goes through
  * the `failed` path with logging.
  */
-export type MigrationOutcome = undefined | "deferred";
+export type MigrationOutcome = void | "deferred";
 
 export type Migration = {
   /** Stable identifier persisted to the marker file. Never re-use across

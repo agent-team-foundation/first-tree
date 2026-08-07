@@ -72,7 +72,10 @@ describe("OIDC callback security", () => {
     }
   });
 
-  it("clears cookies on malformed callback (missing code)", async () => {
+  it("does NOT clear cookies on malformed callback without valid state (prevents attack)", async () => {
+    // A request with no code (malformed) and invalid/missing state must NOT clear cookies.
+    // Clearing cookies without proven state ownership would allow an attacker to
+    // terminate an unrelated active OIDC flow.
     const app = Object.assign(Fastify({ logger: false }), {
       config: {
         authMode: "oidc-required",
@@ -100,8 +103,9 @@ describe("OIDC callback security", () => {
       const setCookieHeaders = callback.headers["set-cookie"];
       const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : setCookieHeaders ? [setCookieHeaders] : [];
 
-      expect(cookies.some((c) => c && c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(true);
-      expect(cookies.some((c) => c && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(true);
+      // With invalid state, cookies must NOT be expired — the request doesn't own them
+      expect(cookies.some((c) => c && c.includes("oauth_state_nonce") && c.includes("Max-Age=0"))).toBe(false);
+      expect(cookies.some((c) => c && c.includes("oidc_pkce") && c.includes("Max-Age=0"))).toBe(false);
     } finally {
       await app.close();
     }

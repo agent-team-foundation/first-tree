@@ -147,8 +147,7 @@ describe("splitPiJsonlBuffer", () => {
     const buffer = `${JSON.stringify(payload)}\nrest`;
     const { frames, rest } = splitPiJsonlBuffer(buffer);
     expect(frames).toHaveLength(1);
-    expect(frames[0]).toBeDefined();
-    expect(JSON.parse(frames[0])).toEqual(payload);
+    expect(JSON.parse(frames[0]!)).toEqual(payload);
     expect(rest).toBe("rest");
   });
 
