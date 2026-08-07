@@ -160,6 +160,12 @@ type CurrentTurn = {
    * generation and gives the still-ordered pending prefix one fresh attempt.
    */
   appendRejectedInputGeneration: number | null;
+  /**
+   * An exact active-turn ownership mismatch means Codex rejected the pending
+   * batch before custody. Keep the complete batch until the provider's active
+   * turn or this turn settles. New input must not reopen turn/steer early.
+   */
+  appendDeferredActiveTurnId: string | null;
   inFlightAppend: Promise<void> | null;
   finalAgentText: string;
   completedItemIds: Set<string>;
@@ -811,6 +817,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       const error = params ? parseTurnError(params.error) : null;
       if (error) recordAppServerFailureSignal(turnStartAttempt, error);
     }
+    if (turn && notification.method === "turn/completed" && notificationTurnId === turn.appendDeferredActiveTurnId) {
+      turn.appendDeferredActiveTurnId = null;
+      sessionCtx.log(
+        `codex app-server prior active turn ${notificationTurnId} settled; pending input can retry turn/steer`,
+      );
+      schedulePendingDrain();
+      return;
+    }
     if (notificationTurnId && (!turn || turn.turnId !== notificationTurnId)) {
       const historicalTokenUsageRecorded = !turnStartInProgress && recordHistoricalTokenUsage(notification);
       if (!historicalTokenUsageRecorded) bufferNotification(notificationTurnId, notification);
@@ -1283,6 +1297,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       primaryToken: token,
       acceptedMessages: [...messages],
       appendRejectedInputGeneration: null,
+      appendDeferredActiveTurnId: null,
       inFlightAppend: null,
       finalAgentText: "",
       completedItemIds: new Set(),
@@ -1585,6 +1600,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     if (turn) {
       if (
         turn.status !== "inProgress" ||
+        turn.appendDeferredActiveTurnId !== null ||
         turn.appendRejectedInputGeneration === pendingInputGeneration ||
         turn.inFlightAppend
       ) {
@@ -1611,7 +1627,12 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     pendingDrainInProgress = true;
     try {
       const turn = currentTurn;
-      if (turn && turn.status === "inProgress" && turn.appendRejectedInputGeneration !== pendingInputGeneration) {
+      if (
+        turn &&
+        turn.status === "inProgress" &&
+        turn.appendDeferredActiveTurnId === null &&
+        turn.appendRejectedInputGeneration !== pendingInputGeneration
+      ) {
         await appendPendingInputsToTurn(turn, sessionCtx);
         return;
       }
@@ -1663,7 +1684,11 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     if (currentTurn !== turn || turn.stopRequested || shutdownRequested) return;
-    if (turn.status !== "inProgress" || turn.appendRejectedInputGeneration === pendingInputGeneration) {
+    if (
+      turn.status !== "inProgress" ||
+      turn.appendDeferredActiveTurnId !== null ||
+      turn.appendRejectedInputGeneration === pendingInputGeneration
+    ) {
       return;
     }
 
@@ -1684,7 +1709,21 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       for (const entry of batch) entry.token.processingStarted(entry.message);
       turn.acceptedMessages.push(...batch.map((entry) => entry.message));
     } catch (err) {
-      if (shouldFallbackSteerToNextTurn(err)) {
+      const ownershipMismatch = activeTurnOwnershipMismatch(err);
+      if (ownershipMismatch?.expectedTurnId === turn.turnId) {
+        if (consumeBufferedTurnCompletion(pendingNotificationsByTurn, ownershipMismatch.foundTurnId)) {
+          sessionCtx.log(
+            `codex app-server turn/steer rejected active-turn ownership after active turn ` +
+              `${ownershipMismatch.foundTurnId} settled; pending generation ${inputGeneration} can retry`,
+          );
+        } else {
+          turn.appendDeferredActiveTurnId = ownershipMismatch.foundTurnId;
+          sessionCtx.log(
+            `codex app-server turn/steer rejected active-turn ownership; pending generation ${inputGeneration} ` +
+              `will wait for active turn ${ownershipMismatch.foundTurnId} or turn ${turn.turnId} to settle`,
+          );
+        }
+      } else if (shouldFallbackSteerToNextTurn(err)) {
         // The provider definitively did not accept this batch. Block only the
         // queue generation that was attempted: a later input (including one
         // that arrived while this request was in flight) re-opens one ordered
@@ -2248,6 +2287,33 @@ function isTransientErrorInfo(value: unknown): boolean {
     "responseStreamConnectionFailed" in record ||
     "responseStreamDisconnected" in record
   );
+}
+
+type ActiveTurnOwnershipMismatch = {
+  expectedTurnId: string;
+  foundTurnId: string;
+};
+
+const ACTIVE_TURN_OWNERSHIP_MISMATCH_PATTERN = /^expected active turn id `([^`\s]+)` but found `([^`\s]+)`$/iu;
+
+function activeTurnOwnershipMismatch(err: unknown): ActiveTurnOwnershipMismatch | null {
+  if (!(err instanceof CodexAppServerRpcError) || err.code !== -32602) return null;
+  const match = ACTIVE_TURN_OWNERSHIP_MISMATCH_PATTERN.exec(err.message.trim());
+  if (!match?.[1] || !match[2] || match[1] === match[2]) return null;
+  return { expectedTurnId: match[1], foundTurnId: match[2] };
+}
+
+function consumeBufferedTurnCompletion(
+  pendingNotifications: Map<string, CodexAppServerNotification[]>,
+  turnId: string,
+): boolean {
+  const buffered = pendingNotifications.get(turnId);
+  if (!buffered) return false;
+  const completionIndex = buffered.findIndex((notification) => notification.method === "turn/completed");
+  if (completionIndex < 0) return false;
+  buffered.splice(completionIndex, 1);
+  if (buffered.length === 0) pendingNotifications.delete(turnId);
+  return true;
 }
 
 function shouldFallbackSteerToNextTurn(err: unknown): boolean {
