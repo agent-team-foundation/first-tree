@@ -14,6 +14,10 @@ The journeys these tests walk are owned by the cases
 [`registration-first-run-onboarding`](../packages/qa/cases/cross-surface/registration-first-run-onboarding.md)
 and
 [`external-context-current-session-handoff`](../packages/qa/cases/cross-surface/external-context-current-session-handoff.md).
+The P0 workspace and request journeys are owned by
+[`workspace-chat-lifecycle`](../packages/qa/cases/web/workspace-chat-lifecycle.md)
+and
+[`need-you-request-review-journey`](../packages/qa/cases/cross-surface/need-you-request-review-journey.md).
 The Agent Detail journey is owned by
 [`agent-detail-availability-and-capabilities`](../packages/qa/cases/cross-surface/agent-detail-availability-and-capabilities.md).
 The Chat Summary switching journey is owned by
@@ -32,9 +36,10 @@ Two limits follow from that and are deliberate:
   natural-language descriptions through a hosted model and some assertions are
   model-evaluated, so a red run is a signal to investigate, not a merge blocker.
 - It covers selected visible journeys: registration, the connect-computer gate,
-  the Web setup-prompt dialog, and the GitHub install identity gate before and
-  after account linking. It does not drive real provider OAuth, GitHub App
-  installation or owner approval, degraded provider states, or the evidence
+  the Web setup-prompt dialog, the GitHub install identity gate, a fresh-account
+  workspace chat lifecycle, and basic Need you resolution. It does not drive
+  real provider OAuth, GitHub App installation or owner approval, agent-runtime
+  delivery, cross-device synchronization, degraded states, or the full evidence
   judgement the cases ask for.
 
 A stable invariant that Vitest could assert still belongs in Vitest. Do not move
@@ -42,7 +47,9 @@ a check here to escape a flaky product test.
 
 Run determinism is maximised where the tool allows: `momentic.config.yaml`
 disables assertion memory and beta failure recovery, so a run executes only the
-steps committed in this directory, and pins the agent versions.
+steps committed in this directory, and pins the agent versions. Local tests also
+create a fresh user for every test, so the P0 suite can run repeatedly against
+the same disposable database without reusing browser identities or chat state.
 
 ## Prerequisites
 
@@ -99,6 +106,29 @@ npx momentic@3.42.0 lint                                  # schema + file refere
 Each test carries its own `defaultEnv`, so the staging smoke check does not need
 the local stack and the local tests do not touch staging.
 
+### P0 local regression
+
+Run the activation checks plus the two daily-work journeys with an explicit
+local target. `--upload-results` creates a shared Momentic run for QA handoff;
+omit it during private authoring when dashboard evidence is not needed.
+
+```bash
+npx momentic@3.42.0 run --env local --upload-results \
+  e2e/registration-new-user.test.yaml \
+  e2e/onboarding-complete-setup.test.yaml \
+  e2e/p0/
+```
+
+For a repeatability qualification, invoke that exact command twice without
+resetting the database between runs. Both runs should pass independently. Each
+test gets a distinct `e2e-user-<ms>` account and its own onboarding chat; rows
+accumulate intentionally, so use a disposable local database and apply the
+team's normal reset procedure when it is safe to discard that data.
+
+The suite remains a team-invoked QA aid: it is deliberately not exposed as a
+package test script and is not a CI merge gate. Keep the pinned Momentic version
+in commands and review runner upgrades separately from product changes.
+
 ## Tests
 
 | Test | Env | Covers |
@@ -109,18 +139,22 @@ the local stack and the local tests do not touch staging.
 | `agent-detail-configuration.test.yaml` | local | A Team admin follows one agent from the directory through its availability and effective tools into shared resource Settings |
 | `chat-summary-current-state.test.yaml` | local | Two real Workspace chats switch their readable current-state hierarchy and collapse back to a one-line preview |
 | `github-install-identity-gate.test.yaml` | local | A Google/OIDC-style admin is gated from install until GitHub is linked, then returns to the same Team with Install as a separate action |
+| `p0/workspace-chat-lifecycle.test.yaml` | local | Start a new workspace chat, then pin, archive, find and restore that same conversation |
+| `p0/need-you-basic-review.test.yaml` | local | Review one pending request, choose an option and submit its resolution through Need you |
 | `dev-cloud-sign-in-available.test.yaml` | first-tree-dev-cloud | Staging serves the landing page and offers Google + GitHub sign-in |
 
-`modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow. Each run
-registers a **new** user (`e2e-user-<ms>`); reusing an identity would sign in as
-the previous run's user instead of registering, so the tests are not idempotent
-by design — they accumulate rows in the local dev database.
+`modules/sign-up-fresh-user.module.yaml` holds the shared sign-up flow, and
+`modules/complete-first-run-onboarding.module.yaml` extends it through onboarding
+to a ready workspace. Each test registers a **new** user (`e2e-user-<ms>`);
+reusing an identity would sign in as the previous run's user instead of
+registering, so the tests are repeatable but not cleanup-idempotent — they
+accumulate rows in the local dev database.
 
 ## Which environment runs what
 
 | Environment | Target | Runs |
 | --- | --- | --- |
-| `local` | `http://127.0.0.1:5173` | Registration + onboarding (needs the dev sign-in stub and database fixtures) |
+| `local` | `http://127.0.0.1:5173` | Local browser journeys that use the dev sign-in stub and documented fixtures |
 | `first-tree-dev-cloud` | `https://dev.cloud.first-tree.ai` | Deployment smoke check only |
 
 The registration and onboarding tests **cannot** run against a deployed
@@ -169,12 +203,23 @@ never reach. `seed-agent-online.js` therefore writes `runtime_state = 'idle'` an
 `runtime_updated_at`, matching `publishAgentPresence` in
 `packages/server/src/services/presence.ts`.
 
-Both fixtures write `last_seen_at` ahead of now on purpose. The server sweeps
+Both presence fixtures write `last_seen_at` ahead of now on purpose. The server sweeps
 connected clients and agents whose heartbeat is older than
 `presenceCleanupSeconds` (60s by default — see `cleanupStaleClients` in
 `packages/server/src/services/client.ts`). Without a heartbeat loop a plain
 `NOW()` would decay mid-run and the flow would regress to "Your computer isn't
 connected".
+
+`scripts/seed-need-you-request.js` replaces a different missing process: the
+online-looking fixture agent has no real runtime to author a question. The
+script mirrors the durable request message plus its per-user list projection,
+then stops. The behaviour under test starts after that boundary: the Web app
+loads the FIFO queue, the human chooses an option, the server authorizes and
+persists the resolving message, and the queue session ends in place on the
+owning chat with the Need you count cleared.
+It does **not** validate agent request authoring, daemon delivery, attachments,
+Ask agent clarification, version skew, or failure recovery; those branches stay
+in the full `need-you-request-review-journey` case.
 
 `set-test-user-provider-mode.js` substitutes only the external provider callback
 for the GitHub install identity-gate journey. It keeps the existing First Tree

@@ -1,0 +1,29 @@
+fileType: momentic/test/v2
+id: p0-need-you-basic-review
+description: A first-run user reviews one pending Need you request, chooses an
+  option, and submits a durable resolution
+defaultEnv: local
+steps:
+  - module:
+      path: ../modules/complete-first-run-onboarding.module.yaml
+
+  # Establish only the external precondition (an agent-authored open request).
+  # Selection, submission, authorization, persistence, and queue refresh all
+  # run through the real web and server paths below.
+  - javascript:
+      code: ../scripts/seed-need-you-request.js
+      environment: node
+      saveAs: P0_REQUEST_ID
+  - refresh
+
+  - assert: the conversation list shows Need you with exactly 1 question
+  - click: Need you button with 1 question
+  - assert: the owning chat shows the Need you question takeover for "Which P0
+      flow should the team validate next?" with Workspace flow and Onboarding
+      flow options
+  - click: Workspace flow option
+  - click: Submit button in the question footer
+  - waitForUrlNotToMatch: nq=1
+  - assert: the same owning chat remains open, the Need you question takeover
+      is closed, the submitted answer "Workspace flow" appears exactly once,
+      and Need you no longer shows a pending question count

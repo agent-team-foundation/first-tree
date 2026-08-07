@@ -1,0 +1,51 @@
+fileType: momentic/test/v2
+id: p0-workspace-chat-lifecycle
+description: A first-run user starts a workspace conversation, then pins,
+  archives, finds, and restores that same chat
+defaultEnv: local
+steps:
+  - module:
+      path: ../modules/complete-first-run-onboarding.module.yaml
+
+  - click: New chat button in the conversation list
+  - assert: a new-chat draft titled What's the task is open, one assistant is
+      already selected, and the task composer is ready
+  - type:
+      text: "P0 workspace task {{env.GH_ID}}"
+      into: task composer with the Describe the task placeholder
+  - click: Send button in the task composer
+  - waitForUrlNotToMatch: c=draft
+  - assert: the newly created chat is open, shows the message "P0 workspace
+      task {{env.GH_ID}}", and has a composer addressed to the selected agent
+
+  - hover: selected conversation row in the active conversation list
+  - click: Manage chat button for the selected conversation row
+  - click: Pin menu item
+  - assert: the currently open conversation appears as the only row in the
+      Pinned section of the active conversation list
+
+  - hover: the only conversation row in the Pinned section
+  - click: Manage chat button for the conversation in the Pinned section
+  - click: Archive menu item
+  - assert: the newly created conversation is no longer visible in the active
+      conversation list
+
+  - click: Filter button in the conversation list
+  # Target the visible label row, not its screen-reader-only native input.
+  - click: visible Archived label row under Status
+  - click: Done button in the open filter panel
+  - assert: the archived view lists exactly one conversation
+
+  - hover: the only conversation row in the archived view
+  - click: Manage chat button for the only conversation in the archived view
+  - click: Unarchive menu item
+  - assert: the archived view no longer lists a conversation
+
+  - click: Filter button in the conversation list
+  - click: visible Active label row under Status
+  - click: Done button in the open filter panel
+  - assert: the restored conversation is the only row in the Pinned section of
+      the active conversation list
+  - click: the only conversation row in the Pinned section
+  - assert: the restored chat is open and still shows the message "P0 workspace
+      task {{env.GH_ID}}"
