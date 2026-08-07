@@ -215,7 +215,8 @@ online-looking fixture agent has no real runtime to author a question. The
 script mirrors the durable request message plus its per-user list projection,
 then stops. The behaviour under test starts after that boundary: the Web app
 loads the FIFO queue, the human chooses an option, the server authorizes and
-persists the resolving message, and Need you refreshes to the caught-up state.
+persists the resolving message, and the queue session ends in place on the
+owning chat with the Need you count cleared.
 It does **not** validate agent request authoring, daemon delivery, attachments,
 Ask agent clarification, version skew, or failure recovery; those branches stay
 in the full `need-you-request-review-journey` case.

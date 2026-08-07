@@ -18,9 +18,12 @@ steps:
 
   - assert: the conversation list shows Need you with exactly 1 question
   - click: Need you button with 1 question
-  - assert: the Need you review page shows the question "Which P0 flow should
-      the team validate next?" with Workspace flow and Onboarding flow options
+  - assert: the owning chat shows the Need you question takeover for "Which P0
+      flow should the team validate next?" with Workspace flow and Onboarding
+      flow options
   - click: Workspace flow option
   - click: Submit button in the question footer
-  - assert: the Need you review page says You're all caught up and explains
-      that new questions will appear here
+  - waitForUrlNotToMatch: nq=1
+  - assert: the same owning chat remains open, the Need you question takeover
+      is closed, the submitted answer "Workspace flow" appears exactly once,
+      and Need you no longer shows a pending question count
