@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { oauthStartQuerySchema, safeRedirectPath } from "@first-tree/shared";
+import type { OidcCallbackQuery } from "@first-tree/shared";
+import { oauthStartQuerySchema, oidcCallbackQuerySchema, safeRedirectPath } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import { findOrCreateUserFromExternalAccount } from "../../services/auth-identity.js";
@@ -39,10 +40,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       discovery = await fetchDiscovery(app.config.oidc.issuer);
     } catch (error) {
       // Do not log provider-controlled error details to prevent log injection
-      app.log.error(
-        { event: "oauth.discovery_failed", provider: "oidc" },
-        "OIDC discovery failed at start",
-      );
+      app.log.error({ event: "oauth.discovery_failed", provider: "oidc" }, "OIDC discovery failed at start");
       // Redirect through /auth/complete with bounded error instead of returning raw 503 JSON
       return redirectError(reply, "provider-unavailable", safeNext);
     }
@@ -74,10 +72,25 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "OIDC is not enabled" });
     }
 
-    const query = request.query as Record<string, string>;
+    // Runtime validation of callback query boundary
+    let query: OidcCallbackQuery;
+    try {
+      query = oidcCallbackQuerySchema.parse(request.query);
+    } catch {
+      app.log.warn(
+        { event: "oauth.callback_rejected", provider: "oidc", reason: "malformed-query" },
+        "OIDC callback rejected",
+      );
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed");
+    }
+
     if (query.error) {
       // Do not log provider-controlled error value to prevent log injection
-      app.log.warn({ event: "oauth.callback_rejected", provider: "oidc" }, "OIDC provider error");
+      app.log.warn(
+        { event: "oauth.callback_rejected", provider: "oidc", reason: "provider-error" },
+        "OIDC provider error",
+      );
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
@@ -139,7 +152,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         return redirectError(reply, "state-expired", verified.next);
       }
       codeVerifier = pkcePayload.verifier;
-    } catch (error) {
+    } catch {
       // Do not log cookie parse errors to prevent exposing malformed data
       app.log.warn({ event: "oidc.pkce_parse_failed" }, "Failed to parse PKCE cookie");
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
@@ -153,12 +166,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     let discovery: Awaited<ReturnType<typeof fetchDiscovery>>;
     try {
       discovery = await fetchDiscovery(app.config.oidc.issuer);
-    } catch (error) {
+    } catch {
       // Do not log provider-controlled error details
-      app.log.error(
-        { event: "oidc.discovery_failed", provider: "oidc" },
-        "OIDC discovery failed at callback",
-      );
+      app.log.error({ event: "oidc.discovery_failed", provider: "oidc" }, "OIDC discovery failed at callback");
       return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
@@ -174,12 +184,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         clientSecret: app.config.oidc.clientSecret,
         codeVerifier,
       });
-    } catch (error) {
+    } catch {
       // Do not log provider-controlled token exchange errors
-      app.log.error(
-        { event: "oauth.token_exchange_failed", provider: "oidc" },
-        "OIDC token exchange failed",
-      );
+      app.log.error({ event: "oauth.token_exchange_failed", provider: "oidc" }, "OIDC token exchange failed");
       return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 
@@ -193,12 +200,9 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
         nonce: verified.oidcNonce!,
         algorithms: discovery.id_token_signing_alg_values_supported,
       });
-    } catch (error) {
+    } catch {
       // Do not log provider-controlled ID token verification errors
-      app.log.error(
-        { event: "oauth.id_token_invalid", provider: "oidc" },
-        "OIDC id_token verification failed",
-      );
+      app.log.error({ event: "oauth.id_token_invalid", provider: "oidc" }, "OIDC id_token verification failed");
       return redirectError(reply, "provider-exchange-failed", verified.next);
     }
 

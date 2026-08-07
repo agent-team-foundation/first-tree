@@ -174,3 +174,28 @@ export const githubDevCallbackQuerySchema = z.object({
   installationAccountGithubId: z.string().regex(/^\d+$/).optional(),
 });
 export type GithubDevCallbackQuery = z.infer<typeof githubDevCallbackQuerySchema>;
+
+/**
+ * OIDC callback query schema — validates the OAuth callback from the identity provider.
+ * Either a provider error or both code and state must be present.
+ */
+export const oidcCallbackQuerySchema = z
+  .object({
+    /**
+     * OAuth authorization code from the IdP.
+     */
+    code: z.string().min(1).max(2048).optional(),
+    /**
+     * Signed First Tree state JWT.
+     */
+    state: z.string().min(1).max(4096).optional(),
+    /**
+     * Provider-side error. Bounded to prevent log injection — the route
+     * logs only a fixed internal reason, not this raw provider value.
+     */
+    error: z.string().min(1).max(128).optional(),
+  })
+  .refine(({ code, state, error }) => Boolean(error || (code && state)), {
+    message: "OIDC callback must include an error or both code and state",
+  });
+export type OidcCallbackQuery = z.infer<typeof oidcCallbackQuerySchema>;
