@@ -85,18 +85,12 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "provider-exchange-failed");
     }
 
-    if (query.error) {
-      // Do not log provider-controlled error value to prevent log injection
-      app.log.warn(
-        { event: "oauth.callback_rejected", provider: "oidc", reason: "provider-error" },
-        "OIDC provider error",
-      );
+    const { code, state } = query;
+    if (!code && !query.error) {
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
-
-    const { code, state } = query;
-    if (!code || !state) {
+    if (!state) {
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "provider-exchange-failed");
     }
@@ -119,6 +113,25 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     if (verified.provider !== "oidc") {
       clearOidcCookies(reply, app.config.secrets.encryptionKey);
       return redirectError(reply, "state-expired");
+    }
+
+    // Handle provider-reported errors AFTER state validation to ensure the
+    // error callback belongs to an active authorization request and preserve
+    // the verified deep-link destination.
+    if (query.error) {
+      // Do not log provider-controlled error value to prevent log injection
+      app.log.warn(
+        { event: "oauth.callback_rejected", provider: "oidc", reason: "provider-error" },
+        "OIDC provider error",
+      );
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed", verified.next);
+    }
+
+    // After handling error, code must be present
+    if (!code) {
+      clearOidcCookies(reply, app.config.secrets.encryptionKey);
+      return redirectError(reply, "provider-exchange-failed");
     }
 
     // Read and validate PKCE cookie (bound to state nonce)

@@ -73,6 +73,41 @@ describe("standard mode — bootstrap keeps OIDC dormant", () => {
   });
 });
 
+describe("standard mode with dormant OIDC config — complete dormancy", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    // Configure OIDC but keep authMode=standard, proving dormant OIDC makes no network calls
+    app = await createTestApp({
+      authMode: "standard",
+      googleOAuth: true,
+      oidc: { issuer: ISSUER, clientId: "dormant-client-id", clientSecret: "dormant-secret" },
+    });
+  });
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  it("returns 404 for OIDC start route when dormant", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/auth/oidc/start" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 404 for OIDC callback route when dormant", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/oidc/callback?code=test&state=test",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("does not advertise OIDC in bootstrap even with config present", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.authProviders.oidc).toBe(false);
+  });
+});
+
 describe("oidc-required mode — Account Settings capability split", () => {
   let app: FastifyInstance;
   beforeAll(async () => {
