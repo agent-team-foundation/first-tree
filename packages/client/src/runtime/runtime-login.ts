@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { redactErrorPreview } from "./redact-error-preview.js";
+import { redactErrorPreview } from "./provider-support/index.js";
 
 /**
  * Provider-agnostic plumbing for driving an official CLI login on the daemon

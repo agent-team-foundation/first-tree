@@ -7,9 +7,7 @@ import {
   runtimeProviderLoginCommand,
 } from "@first-tree/shared";
 import { prerelease, satisfies, valid } from "semver";
-import { wellKnownBinDirs } from "./install-locations.js";
-import { getLoginShellPathDirs } from "./login-shell-path.js";
-import { automaticCandidateAllowed } from "./protected-paths.js";
+import { automaticCandidateAllowed, getLoginShellPathDirs, wellKnownBinDirs } from "./provider-support/index.js";
 
 /** Lowest published compatible CLI validated by the runtime contract. */
 export const PI_MINIMUM_VERSION = "0.80.5";
@@ -31,7 +29,7 @@ export function formatPiBinaryMissingMessage(input: unknown): string {
 }
 
 /** Single-owner match rules live in provider-support; re-export for call sites. */
-export { isPiBinaryMissingError } from "./provider-support/binary-failure.js";
+export { isPiBinaryMissingError } from "./provider-support/index.js";
 
 export type FindPiExecutableDeps = {
   loginShellPathDirs?: () => string[];

@@ -16,7 +16,18 @@ type NativeFileLockApi = Readonly<{
 // inlined into the published ESM CLI, while this dependency and its platform
 // prebuilds are shipped beside that bundle. Bundling the addon's CommonJS
 // loader would make `__filename` unavailable and omit the loadable binary.
-const { tryLock, unlock } = createRequire(import.meta.url)("fs-native-extensions") as NativeFileLockApi;
+//
+// Load lazily: `provider-support/index` re-exports this module for transitional
+// provider-family callers, and binary/capability import graphs must stay able
+// to resolve without forcing the native addon (tests also mock `createRequire`).
+let nativeFileLockApi: NativeFileLockApi | null = null;
+
+function getNativeFileLockApi(): NativeFileLockApi {
+  if (!nativeFileLockApi) {
+    nativeFileLockApi = createRequire(import.meta.url)("fs-native-extensions") as NativeFileLockApi;
+  }
+  return nativeFileLockApi;
+}
 
 export type WorkspaceFileLock = Readonly<{
   release: () => Promise<void>;
@@ -49,7 +60,7 @@ export async function acquireWorkspaceFileLock(
 
   try {
     while (true) {
-      if (tryLock(handle.fd)) {
+      if (getNativeFileLockApi().tryLock(handle.fd)) {
         acquired = true;
         await assertStableLockFile(lockPath, handle);
         break;
@@ -65,7 +76,7 @@ export async function acquireWorkspaceFileLock(
   } catch (error) {
     if (acquired) {
       try {
-        unlock(handle.fd);
+        getNativeFileLockApi().unlock(handle.fd);
       } catch {
         // Closing the descriptor below also releases any held kernel lock.
       }
@@ -81,7 +92,7 @@ export async function acquireWorkspaceFileLock(
       released = true;
       let unlockError: unknown;
       try {
-        unlock(handle.fd);
+        getNativeFileLockApi().unlock(handle.fd);
       } catch (error) {
         unlockError = error;
       }

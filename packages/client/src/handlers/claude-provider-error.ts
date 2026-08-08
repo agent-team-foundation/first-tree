@@ -1,8 +1,7 @@
 import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
 import type { ReplaySafety } from "@first-tree/shared";
-import type { ProviderAttemptSignal } from "../runtime/provider-attempt.js";
-import type { ProviderFailureClassification } from "../runtime/provider-retry-policy.js";
-import { formatProviderFailureRuntimeNotice, isEgressForbiddenText } from "../runtime/runtime-notice.js";
+import type { ProviderAttemptSignal, ProviderFailureClassification } from "../runtime/provider-support/index.js";
+import { formatProviderFailureRuntimeNotice, isEgressForbiddenText } from "../runtime/provider-support/index.js";
 
 type ClaudeProviderErrorShape = {
   name: "ClaudeSdkProviderError";

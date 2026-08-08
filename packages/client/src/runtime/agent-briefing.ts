@@ -11,10 +11,18 @@ import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 
-const require = createRequire(import.meta.url);
 // EJS is published as CommonJS at runtime even though its types expose named
-// exports, so native ESM cannot import `render` directly.
-const ejsRuntime: typeof ejs = require("ejs");
+// exports, so native ESM cannot import `render` directly. Load lazily so
+// `provider-support/index` can re-export preparation without forcing EJS (and
+// so capability tests that mock `createRequire` can still import binaries).
+let ejsRuntime: typeof ejs | null = null;
+
+function getEjsRuntime(): typeof ejs {
+  if (!ejsRuntime) {
+    ejsRuntime = createRequire(import.meta.url)("ejs") as typeof ejs;
+  }
+  return ejsRuntime;
+}
 const AGENT_BRIEFING_TEMPLATE_FILENAME = "agent-briefing.ejs";
 const TEMPLATE_CANDIDATE_URLS = [
   // Source execution and root-level client/CLI chunks keep templates beside
@@ -240,7 +248,7 @@ function buildContextTreeRenderModel(
 
 function renderAgentBriefingTemplate(model: AgentBriefingRenderModel): string {
   const template = readAgentBriefingTemplate();
-  return ejsRuntime.render(template.source, model, { filename: template.filename });
+  return getEjsRuntime().render(template.source, model, { filename: template.filename });
 }
 
 function readAgentBriefingTemplate(): CachedTemplate {

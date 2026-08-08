@@ -1,12 +1,12 @@
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { SessionEvent, ToolFileRef } from "@first-tree/shared";
+import type { ContextTreeGitWriteTracker } from "../../runtime/provider-support/index.js";
 import {
   resolveContextTreeRelativePath,
   toolFileRefsFromShellCommand,
   withContextTreeRepoHeadCommit,
-} from "../../runtime/context-tree-file-refs.js";
-import type { ContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
+} from "../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../assistant-text.js";
 
 /**

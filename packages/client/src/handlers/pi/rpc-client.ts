@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
-import type { ProviderProcessSupervisor } from "../../runtime/provider-process-supervisor.js";
-import { redactErrorPreview } from "../../runtime/redact-error-preview.js";
+import type { ProviderProcessSupervisor } from "../../runtime/provider-support/index.js";
+import { redactErrorPreview } from "../../runtime/provider-support/index.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SETTLEMENT_TIMEOUT_MS = 20 * 60_000;

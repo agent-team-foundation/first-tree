@@ -47,7 +47,7 @@ import { Readable, Writable } from "node:stream";
 import type { InitializeResponse, McpServer, NewSessionResponse } from "@agentclientprotocol/sdk";
 import { client, ndJsonStream } from "@agentclientprotocol/sdk";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
-import type { ProviderProcessSupervisor } from "../../runtime/provider-process-supervisor.js";
+import type { ProviderProcessSupervisor } from "../../runtime/provider-support/index.js";
 import {
   grokNotificationIsReplay,
   grokNotificationSessionId,

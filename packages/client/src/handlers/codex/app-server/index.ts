@@ -9,22 +9,7 @@ import {
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
-import { type PredeclaredSourceRepo, writeAgentBriefing } from "../../../runtime/bootstrap.js";
 import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
-import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../../runtime/chat-context-section.js";
-import {
-  type ContextTreeAttribution,
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-} from "../../../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -36,21 +21,32 @@ import type {
 } from "../../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../../runtime/contracts.js";
 
+import type {
+  AgentConfigCache,
+  ContextTreeAttribution,
+  ContextTreeGitWriteTracker,
+  PredeclaredSourceRepo,
+  ProviderAttemptSettlement,
+  ReconciledTeamSkill,
+} from "../../../runtime/provider-support/index.js";
 import {
-  isManagedSkillsUnsafeDiscoveryError,
-  type ReconciledTeamSkill,
-  reconcileManagedSkillsForConfig,
-} from "../../../runtime/managed-skills.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../../../runtime/provider-attempt.js";
-import {
+  buildAgentBriefing,
   buildBriefingUpdateNotice,
   computeBriefingFingerprint,
+  createContextTreeGitWriteTracker,
+  isManagedSkillsUnsafeDiscoveryError,
+  ProviderAttempt,
+  prepareManagedSession,
   readSessionBriefingFingerprint,
+  reconcileManagedSkillsForConfig,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  teamSkillBundleResolverFromSdk,
+  toolFileRefsFromShellCommand,
+  writeAgentBriefing,
   writeSessionBriefingFingerprint,
-} from "../../../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
+} from "../../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../../auth-error-hint.js";
 import { consumedErrorOutcome, resolveTurnSettlement } from "../../turn-settlement.js";
@@ -229,7 +225,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let pendingInputGeneration = 0;
   let shutdownRequested = false;
   let pendingChatContextPrompt: string | null = null;
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  let sourceReposForPrompt: readonly PredeclaredSourceRepo[] = [];
   let latestThreadUsageTotal: TokenUsageBreakdown | null = null;
   let latestCurrentSessionUsageTurnId: string | null = null;
   let workspaceOnly = false;
@@ -393,35 +389,6 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     });
   }
 
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
-  }
-
-  function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {
-    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
-  }
-
-  function ensureCodexBootstrap(
-    workspace: string,
-    sessionCtx: SessionContext,
-    briefing: string,
-    payload: AgentRuntimeConfigPayload,
-    payloadResolved: boolean,
-  ): void {
-    ensureAgentBootstrapShared({
-      workspace,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
-    });
-  }
-
   async function resolvePayload(sessionCtx: SessionContext): Promise<{
     payload: AgentRuntimeConfigPayload;
     resolved: boolean;
@@ -453,50 +420,58 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     env: NodeJS.ProcessEnv;
     briefingFingerprint: string;
   }> {
-    cwd = acquireAgentHome(workspaceRoot);
     workspaceOnly = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
     const { payload, resolved, runtimeConfig } = await resolvePayload(sessionCtx);
-    const chatContext = await fetchChatContextOrLog(sessionCtx);
-    pendingChatContextPrompt = renderChatContextPrompt(chatContext);
-    declareSourceRepos(payload, cwd);
-    reconciledTeamSkills = (
-      await reconcileManagedSkillsForConfig(
-        cwd,
-        runtimeProvider,
-        runtimeConfig,
-        sessionCtx.log,
-        teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-      )
-    ).teamSkills;
-    let env = buildEnv(sessionCtx);
-    if (workspaceOnly) {
-      const { accessToken } = await sessionCtx.sdk.createAgentOutboxToken(sessionCtx.chatId);
-      const outboxEnv = prepareWorkspaceOnlyOutboxHome({
-        parentEnv: env,
-        workspaceRoot: cwd,
-        agentId: sessionCtx.agent.agentId,
-        runtimeProvider: payload.kind,
-        accessToken,
-        serverUrl: env.FIRST_TREE_SERVER_URL ?? sessionCtx.sdk.serverUrl,
-      }).env;
-      try {
-        const appServerEnv = buildWorkspaceOnlyAppServerEnvironment(outboxEnv, cwd);
-        env = appServerEnv.env;
-        workspaceOnlyCodexHome = appServerEnv.codexHome;
-        workspaceOnlyHostHome = appServerEnv.hostHome;
-      } catch (err) {
-        throw new CodexAppServerStartupError("workspace-sandbox", err);
-      }
-    } else {
-      workspaceOnlyCodexHome = null;
-      workspaceOnlyHostHome = null;
-    }
-    const briefing = buildBriefing(sessionCtx, payload, cwd);
-    ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resolved);
-    markWorkspaceInitComplete(cwd);
+
+    // Landing-campaign workspace-only env setup sits between skills and
+    // briefing so a sandbox failure leaves no sentinel and no provider
+    // admission (prepareManagedSession's beforeBriefing hook).
+    let env: NodeJS.ProcessEnv = {};
+    const prepared = await prepareManagedSession({
+      sessionCtx,
+      workspaceRoot,
+      runtimeProvider,
+      runtimeConfig,
+      payload,
+      payloadResolved: resolved,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      beforeBriefing: async ({ workspace }) => {
+        env = buildEnv(sessionCtx);
+        if (workspaceOnly) {
+          const { accessToken } = await sessionCtx.sdk.createAgentOutboxToken(sessionCtx.chatId);
+          const outboxEnv = prepareWorkspaceOnlyOutboxHome({
+            parentEnv: env,
+            workspaceRoot: workspace,
+            agentId: sessionCtx.agent.agentId,
+            runtimeProvider: payload.kind,
+            accessToken,
+            serverUrl: env.FIRST_TREE_SERVER_URL ?? sessionCtx.sdk.serverUrl,
+          }).env;
+          try {
+            const appServerEnv = buildWorkspaceOnlyAppServerEnvironment(outboxEnv, workspace);
+            env = appServerEnv.env;
+            workspaceOnlyCodexHome = appServerEnv.codexHome;
+            workspaceOnlyHostHome = appServerEnv.hostHome;
+          } catch (err) {
+            throw new CodexAppServerStartupError("workspace-sandbox", err);
+          }
+        } else {
+          workspaceOnlyCodexHome = null;
+          workspaceOnlyHostHome = null;
+        }
+      },
+    });
+    cwd = prepared.workspace;
+    pendingChatContextPrompt = renderChatContextPrompt(prepared.chatContext);
+    sourceReposForPrompt = prepared.sourceRepos;
+    reconciledTeamSkills = prepared.teamSkills;
     currentModel = payload.model || "";
     currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
-    return { payload, env, briefingFingerprint: computeBriefingFingerprint(briefing) };
+    return { payload, env, briefingFingerprint: computeBriefingFingerprint(prepared.briefing) };
   }
 
   async function startAppServer(sessionCtx: SessionContext, env: NodeJS.ProcessEnv): Promise<void> {

@@ -8,12 +8,6 @@ import {
   runtimeProviderSchema,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
-import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../../runtime/context-tree-file-refs.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -23,12 +17,6 @@ import type {
   TurnConsumedErrorReason,
 } from "../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
-
-import {
-  isManagedSkillsUnsafeDiscoveryError,
-  type ReconciledTeamSkill,
-  reconcileManagedSkillsForConfig,
-} from "../../runtime/managed-skills.js";
 import {
   isSupportedOpenCodeVersion,
   OPENCODE_SUPPORTED_VERSION_RANGE,
@@ -39,22 +27,29 @@ import {
   acquireOpenCodePrivateConfigLease,
   type OpenCodePrivateConfigLease,
 } from "../../runtime/opencode-private-config.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../../runtime/provider-attempt.js";
-import {
-  createDefaultProviderProcessSupervisor,
-  type ProviderProcessSupervisor,
-} from "../../runtime/provider-process-supervisor.js";
-import { buildProviderRetryEvent, classifyProviderFailure } from "../../runtime/provider-retry-policy.js";
-import { redactErrorPreview } from "../../runtime/redact-error-preview.js";
+import type {
+  AgentConfigCache,
+  ProviderAttemptSettlement,
+  ProviderProcessSupervisor,
+} from "../../runtime/provider-support/index.js";
 import {
   buildBriefingUpdateNotice,
+  buildProviderRetryEvent,
+  classifyProviderFailure,
   computeBriefingFingerprint,
+  createDefaultProviderProcessSupervisor,
+  isManagedSkillsUnsafeDiscoveryError,
+  ProviderAttempt,
+  prepareManagedSession,
+  projectManagedWorkspace,
   readSessionBriefingFingerprint,
+  redactErrorPreview,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  toolFileRefsFromShellCommand,
   writeSessionBriefingFingerprint,
-} from "../../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+} from "../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isOpenCodeAuthError } from "../auth-error-hint.js";
 import { consumedErrorOutcome } from "../turn-settlement.js";
@@ -327,7 +322,6 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let ctx: SessionContext | null = null;
   let activeConfig: AgentRuntimeConfig | null = null;
-  let teamSkills: readonly ReconciledTeamSkill[] = [];
   let binary: string | null = null;
   let providerSessionId: string | null = null;
   let pendingSyntheticId: string | null = null;
@@ -412,28 +406,6 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
     return env;
   }
 
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (error) {
-      sessionCtx.log(`OpenCode chat-context fetch failed: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    }
-  }
-
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      workspacePath: workspaceCwd,
-      sourceRepos: declaredSourceRepos(workspaceCwd, payload),
-      contextTreePath,
-      contextTreeRepoUrl,
-      contextTreeBranch,
-      teamSkills,
-    });
-  }
-
   async function refreshProjection(sessionCtx: SessionContext): Promise<{
     payload: AgentRuntimeConfigPayload;
     briefing: string;
@@ -457,26 +429,22 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
     if (payload.kind !== "opencode") {
       throw new Error(`OpenCode handler received ${payload.kind} runtime config`);
     }
-    teamSkills = (
-      await reconcileManagedSkillsForConfig(
-        cwd,
-        runtimeProvider,
-        runtimeConfig,
-        sessionCtx.log,
-        teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-      )
-    ).teamSkills;
-    const briefing = buildBriefing(sessionCtx, payload, cwd);
-    ensureAgentBootstrap({
-      workspace: cwd,
+    const projected = await projectManagedWorkspace({
       sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, runtimeConfig !== null),
+      workspace: cwd,
+      runtimeProvider,
+      runtimeConfig,
+      payload,
+      payloadResolved: runtimeConfig !== null,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      markInitComplete: true,
     });
-    markWorkspaceInitComplete(cwd);
     activeConfig = runtimeConfig;
-    return { payload, briefing };
+    return { payload, briefing: projected.briefing };
   }
 
   function runProcess(input: {
@@ -1168,7 +1136,6 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
       throw new Error("landing campaign trial agents require the codex app-server runtime");
     }
     ctx = sessionCtx;
-    cwd = acquireAgentHome(workspaceRoot);
     projectionScope = stableOpenCodeScope(sessionCtx.agent.agentId);
     managedAgentName = `first-tree-${projectionScope}`;
     const resolution = resolveBinary(process.env);
@@ -1177,9 +1144,42 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
     }
     binary = resolution.binary;
     sessionCtx.log(`OpenCode binary: ${resolution.binary}`);
-    const { briefing } = await refreshProjection(sessionCtx);
-    const chatContext = await fetchChatContextOrLog(sessionCtx);
-    pendingChatContextPrompt = [renderRuntimeOutputContract(), renderChatContextPrompt(chatContext)]
+
+    let runtimeConfig = activeConfig;
+    if (agentConfigCache) {
+      runtimeConfig = await agentConfigCache.refresh(sessionCtx.agent.agentId);
+    }
+    const payload: AgentRuntimeConfigPayload =
+      runtimeConfig?.payload ??
+      ({
+        kind: "opencode",
+        prompt: { append: "" },
+        model: "",
+        mcpServers: [],
+        env: [],
+        gitRepos: [],
+        resourceSkills: [],
+      } satisfies AgentRuntimeConfigPayload);
+    if (payload.kind !== "opencode") {
+      throw new Error(`OpenCode handler received ${payload.kind} runtime config`);
+    }
+
+    const prepared = await prepareManagedSession({
+      sessionCtx,
+      workspaceRoot,
+      runtimeProvider,
+      runtimeConfig,
+      payload,
+      payloadResolved: runtimeConfig !== null,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+    });
+    cwd = prepared.workspace;
+    activeConfig = runtimeConfig;
+    pendingChatContextPrompt = [renderRuntimeOutputContract(), renderChatContextPrompt(prepared.chatContext)]
       .filter(Boolean)
       .join("\n\n");
     privateConfigLease ??= await acquireOpenCodePrivateConfigLease({
@@ -1188,7 +1188,7 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
       handlerId: handlerGenerationId,
     });
     sessionActive = true;
-    return { briefing, workspaceCwd: cwd };
+    return { briefing: prepared.briefing, workspaceCwd: cwd };
   }
 
   function finishDrainingBatch(batch: QueuedDelivery[]): void {
@@ -1424,7 +1424,6 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
       cwd = null;
       ctx = null;
       activeConfig = null;
-      teamSkills = [];
       binary = null;
       providerSessionId = null;
       pendingSyntheticId = null;

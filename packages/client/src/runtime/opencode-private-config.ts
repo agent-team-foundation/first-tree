@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { acquireWorkspaceFileLock } from "./workspace-file-lock.js";
+import { acquireWorkspaceFileLock } from "./provider-support/index.js";
 
 const PRIVATE_CONFIG_RELATIVE_ROOT = [".first-tree-workspace", "opencode-config"] as const;
 const JOURNAL_FILENAME = "handler-generations.json";

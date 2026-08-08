@@ -1,8 +1,13 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUNTIME_PROVIDER_IDS, runtimeAuthProviderSchema } from "@first-tree/shared";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import {
+  PROVIDER_SUPPORT_EXPORT_ALLOWLISTS,
+  TRANSITIONAL_PROVIDER_FAMILY_FILES,
+} from "./provider-support-export-allowlists.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const clientSrc = join(here, "..");
@@ -210,13 +215,15 @@ describe("runtime provider architecture guard", () => {
       ["runtime/pi-binary.ts", "isPiBinaryMissingError"],
     ] as const) {
       const source = readFileSync(join(clientSrc, file), "utf8");
-      expect(source, `${file} must re-export ${symbol} from provider-support`).toContain(
-        'from "./provider-support/binary-failure.js"',
+      expect(source, `${file} must re-export ${symbol} from provider-support index`).toContain(
+        'from "./provider-support/index.js"',
       );
       expect(source).toContain(symbol);
       // No second owner of the match tables / regexes.
       expect(source).not.toMatch(/BINARY_MISSING_PATTERNS/);
       expect(source).not.toMatch(/function is(?:Codex|Cursor|Grok|Pi)BinaryMissingError/);
+      // Fail closed: no deep provider-support group import.
+      expect(source).not.toMatch(/provider-support\/binary-failure\.js/);
     }
   });
 
@@ -261,7 +268,7 @@ describe("runtime provider architecture guard", () => {
     // Pi sanitizer must consume the Pi-detail seam entry (not a local table).
     const piHandler = readFileSync(join(clientSrc, "handlers/pi/index.ts"), "utf8");
     expect(piHandler).toContain("piProviderDetailBinaryMissingReasonCode");
-    expect(piHandler).toContain("provider-support/binary-failure");
+    expect(piHandler).toMatch(/runtime\/provider-support\/(?:index|binary-failure)/);
     expect(piHandler).not.toContain("isPiBinaryMissingError");
     expect(piHandler).not.toContain("PROVIDER_BINARY_FAILURE_REASON_CODES");
   });
@@ -677,5 +684,867 @@ describe("runtime provider architecture guard", () => {
     const activityTs = readFileSync(join(repoRoot, "packages/web/src/api/activity.ts"), "utf8");
     expect(activityTs).toContain("RuntimeAuthStartRequest");
     expect(activityTs).not.toMatch(/provider:\s*RuntimeProvider/);
+  });
+
+  it("fail-closes provider-side Runtime imports to contracts or provider-support/index only", () => {
+    /**
+     * Fail-closed classification for provider-side production code.
+     *
+     * Provider-side files: handlers/**, providers/**, and the exact
+     * transitional provider-family modules listed in
+     * TRANSITIONAL_PROVIDER_FAMILY_FILES. For any import that resolves into
+     * `runtime/`, the only legal targets are:
+     *   - runtime/contracts.js
+     *   - runtime/provider-support/index.js
+     *   - an exact transitional provider-owned module from that list
+     * Every other runtime path — including provider-support/<group>.js and
+     * newly named `*-login` / `*-binary` files — fails closed because it is
+     * absent from the explicit allowlist.
+     */
+    const transitionalTargets = new Set(TRANSITIONAL_PROVIDER_FAMILY_FILES.map((rel) => rel.replace(/\.ts$/, ".js")));
+
+    // Explicit list must stay in sync with on-disk transitional modules.
+    for (const rel of TRANSITIONAL_PROVIDER_FAMILY_FILES) {
+      expect(existsSync(join(clientSrc, rel)), `missing transitional file ${rel}`).toBe(true);
+    }
+    // Pattern-shaped newcomers are NOT automatically trusted.
+    expect(transitionalTargets.has("runtime/brand-new-login.js")).toBe(false);
+    expect(transitionalTargets.has("runtime/brand-new-binary.js")).toBe(false);
+
+    function listProviderSideFiles(): string[] {
+      return [
+        ...listFilesRecursive(join(clientSrc, "handlers"), (p) => p.endsWith(".ts") && !p.includes("__tests__")),
+        ...listFilesRecursive(join(clientSrc, "providers"), (p) => p.endsWith(".ts") && !p.includes("__tests__")),
+        ...TRANSITIONAL_PROVIDER_FAMILY_FILES.map((rel) => join(clientSrc, rel)),
+      ];
+    }
+
+    /** Resolve an import specifier from `fromFile` into a runtime/*.js path, or null. */
+    function resolveRuntimeImport(fromFile: string, specifier: string): string | null {
+      if (!specifier.endsWith(".js")) return null;
+      if (specifier.startsWith("@") || specifier.startsWith("node:")) return null;
+      const fromDir = dirname(fromFile);
+      let absolute: string;
+      if (specifier.startsWith(".")) {
+        absolute = join(fromDir, specifier);
+      } else if (specifier.includes("/runtime/")) {
+        // unusual but tolerate
+        absolute = join(clientSrc, specifier.slice(specifier.indexOf("runtime/")));
+      } else {
+        return null;
+      }
+      const rel = relative(clientSrc, absolute).replaceAll("\\", "/");
+      if (!rel.startsWith("runtime/") || rel.includes("..")) return null;
+      return rel;
+    }
+
+    /**
+     * `ts.isImportCall` is @internal; a dynamic import is a CallExpression whose
+     * callee is the bare `import` keyword.
+     */
+    function isDynamicImportCall(node: ts.Node): node is ts.CallExpression {
+      return ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword;
+    }
+
+    /** String / no-substitution template literal module specifier, or null. */
+    function literalModuleSpecifierText(node: ts.Expression | ts.LiteralTypeNode["literal"]): string | null {
+      return ts.isStringLiteralLike(node) ? node.text : null;
+    }
+
+    /**
+     * AST-level module references: ImportDeclaration (including bare
+     * side-effect), ExportDeclaration re-exports, dynamic `import()`,
+     * `import("…")` type queries (`ImportTypeNode`), external
+     * `import x = require("…")` (`ImportEqualsDeclaration`), and executable
+     * CommonJS loader calls — `require("…")`, immediate
+     * `createRequire(…)("…")`, namespace `module.createRequire(…)("…")`,
+     * aliased binders, and simple binder propagation (`const load = req`).
+     * Direct binder calls are classified; `req.resolve(…)` package lookups are
+     * not treated as module-edge loads. Unsupported createRequire shapes /
+     * non-literal / unclassifiable forms are recorded so the production scan
+     * fails closed instead of silently skipping them.
+     */
+    function extractModuleReferences(source: string): {
+      literalSpecifiers: string[];
+      hasUnresolvableModuleReference: boolean;
+    } {
+      const sourceFile = ts.createSourceFile("source.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const literalSpecifiers: string[] = [];
+      let hasUnresolvableModuleReference = false;
+
+      // Names that bind `createRequire` (import rename / local alias).
+      const createRequireNames = new Set<string>(["createRequire"]);
+      // `import * as ns from "node:module"` — `ns.createRequire` is supported.
+      const nodeModuleNamespaces = new Set<string>();
+      // Identifiers holding the function returned by `createRequire(...)`.
+      // Free `require` is a binder source so `const load = require` propagates.
+      const requireBinders = new Set<string>(["require"]);
+
+      function isNodeModuleSpecifier(spec: string): boolean {
+        return spec === "node:module" || spec === "module";
+      }
+
+      function recordLoaderSpecifier(arg: ts.Expression | undefined): void {
+        if (!arg) {
+          hasUnresolvableModuleReference = true;
+          return;
+        }
+        const text = literalModuleSpecifierText(arg);
+        if (text !== null) literalSpecifiers.push(text);
+        else hasUnresolvableModuleReference = true;
+      }
+
+      function isNamespaceCreateRequireProp(expr: ts.Expression): boolean {
+        if (ts.isPropertyAccessExpression(expr) && expr.name.text === "createRequire") {
+          return ts.isIdentifier(expr.expression) && nodeModuleNamespaces.has(expr.expression.text);
+        }
+        if (
+          ts.isElementAccessExpression(expr) &&
+          expr.argumentExpression &&
+          ts.isStringLiteralLike(expr.argumentExpression) &&
+          expr.argumentExpression.text === "createRequire"
+        ) {
+          return ts.isIdentifier(expr.expression) && nodeModuleNamespaces.has(expr.expression.text);
+        }
+        return false;
+      }
+
+      /** Any `*.createRequire` / `*["createRequire"]` access, tracked or not. */
+      function isCreateRequirePropertyAccess(expr: ts.Expression): boolean {
+        if (ts.isPropertyAccessExpression(expr) && expr.name.text === "createRequire") return true;
+        if (
+          ts.isElementAccessExpression(expr) &&
+          expr.argumentExpression &&
+          ts.isStringLiteralLike(expr.argumentExpression) &&
+          expr.argumentExpression.text === "createRequire"
+        ) {
+          return true;
+        }
+        return false;
+      }
+
+      /**
+       * Classify a `*.createRequire` property/element access:
+       * - tracked `import * as ns from "node:module"` receiver → supported
+       * - any other receiver → unsupported escape (fail closed)
+       */
+      function classifyCreateRequirePropertyAccess(expr: ts.Expression): "tracked" | "untracked" | false {
+        if (!isCreateRequirePropertyAccess(expr)) return false;
+        return isNamespaceCreateRequireProp(expr) ? "tracked" : "untracked";
+      }
+
+      /**
+       * `true` = known createRequire callee; `"unresolvable"` = `*.createRequire`
+       * form that is not a tracked node:module namespace (fail closed);
+       * `false` = not a createRequire callee.
+       */
+      function classifyCreateRequireCallee(expr: ts.Expression): true | false | "unresolvable" {
+        if (ts.isIdentifier(expr) && createRequireNames.has(expr.text)) return true;
+        const prop = classifyCreateRequirePropertyAccess(expr);
+        if (prop === "tracked") return true;
+        if (prop === "untracked") return "unresolvable";
+        return false;
+      }
+
+      function isCreateRequireCall(expr: ts.Expression): boolean {
+        return ts.isCallExpression(expr) && classifyCreateRequireCallee(expr.expression) === true;
+      }
+
+      function isRequireBinderAlias(expr: ts.Expression): boolean {
+        return ts.isIdentifier(expr) && requireBinders.has(expr.text);
+      }
+
+      function isKnownBinderOrFactoryName(name: string): boolean {
+        return requireBinders.has(name) || createRequireNames.has(name);
+      }
+
+      /**
+       * Allowed uses of a known binder/factory identifier: direct call,
+       * simple `const x = id` / `x = id` aliasing, and binder `.resolve` package
+       * lookup. Any other reference (argument, property storage, destructure)
+       * is an unsupported escape → fail closed.
+       */
+      function isAllowedBinderOrFactoryUse(id: ts.Identifier): boolean {
+        const parent = id.parent;
+        if (!parent) return false;
+        // `import { createRequire }` / `import { createRequire as cr }`
+        if (ts.isImportSpecifier(parent) && (parent.name === id || parent.propertyName === id)) return true;
+        // Binding site: `const req = …` / `load = …` — the name itself is not an escape.
+        if (ts.isVariableDeclaration(parent) && parent.name === id) return true;
+        if (
+          ts.isBinaryExpression(parent) &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          parent.left === id &&
+          ts.isIdentifier(parent.left)
+        ) {
+          return true;
+        }
+        if (ts.isCallExpression(parent) && parent.expression === id) return true;
+        if (ts.isVariableDeclaration(parent) && parent.initializer === id && ts.isIdentifier(parent.name)) return true;
+        if (
+          ts.isBinaryExpression(parent) &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          parent.right === id &&
+          ts.isIdentifier(parent.left)
+        ) {
+          return true;
+        }
+        if (
+          ts.isPropertyAccessExpression(parent) &&
+          parent.expression === id &&
+          parent.name.text === "resolve" &&
+          requireBinders.has(id.text)
+        ) {
+          return true;
+        }
+        // Property-name token (`obj.createRequire`) is not a value reference to
+        // the `createRequire` binding; namespace forms are handled separately.
+        if (ts.isPropertyAccessExpression(parent) && parent.name === id) return true;
+        return false;
+      }
+
+      function isAllowedNamespaceCreateRequireUse(prop: ts.Expression): boolean {
+        const parent = prop.parent;
+        if (!parent) return false;
+        if (ts.isCallExpression(parent) && parent.expression === prop) return true;
+        if (ts.isVariableDeclaration(parent) && parent.initializer === prop && ts.isIdentifier(parent.name))
+          return true;
+        if (
+          ts.isBinaryExpression(parent) &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          parent.right === prop &&
+          ts.isIdentifier(parent.left)
+        ) {
+          return true;
+        }
+        return false;
+      }
+
+      // Pass 1: collect namespaces, createRequire aliases, binders, and binder aliases.
+      // Fixed-point so `const load = req` after `const req = createRequire(...)` propagates.
+      function collectOnce(node: ts.Node): void {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+          const spec = node.moduleSpecifier.text;
+          if (node.importClause?.namedBindings) {
+            if (ts.isNamedImports(node.importClause.namedBindings)) {
+              for (const el of node.importClause.namedBindings.elements) {
+                if ((el.propertyName?.text ?? el.name.text) === "createRequire") {
+                  createRequireNames.add(el.name.text);
+                }
+              }
+            } else if (ts.isNamespaceImport(node.importClause.namedBindings) && isNodeModuleSpecifier(spec)) {
+              nodeModuleNamespaces.add(node.importClause.namedBindings.name.text);
+            }
+          }
+        }
+
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+          const name = node.name.text;
+          const init = node.initializer;
+          if (isCreateRequireCall(init) || isRequireBinderAlias(init)) {
+            requireBinders.add(name);
+          } else if (ts.isIdentifier(init) && createRequireNames.has(init.text)) {
+            createRequireNames.add(name);
+          } else if (isNamespaceCreateRequireProp(init)) {
+            // Tracked namespace factory property alias: `const cr = ns.createRequire`
+            createRequireNames.add(name);
+          } else if (isCreateRequirePropertyAccess(init)) {
+            // Untracked receiver property alias (default import / dynamic import / unknown)
+            hasUnresolvableModuleReference = true;
+          } else if (ts.isCallExpression(init) && classifyCreateRequireCallee(init.expression) === "unresolvable") {
+            hasUnresolvableModuleReference = true;
+          }
+        } else if (
+          ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isIdentifier(node.left)
+        ) {
+          const name = node.left.text;
+          const init = node.right;
+          if (isCreateRequireCall(init) || isRequireBinderAlias(init)) {
+            requireBinders.add(name);
+          } else if (ts.isIdentifier(init) && createRequireNames.has(init.text)) {
+            createRequireNames.add(name);
+          } else if (isNamespaceCreateRequireProp(init)) {
+            createRequireNames.add(name);
+          } else if (isCreateRequirePropertyAccess(init)) {
+            hasUnresolvableModuleReference = true;
+          } else if (ts.isCallExpression(init) && classifyCreateRequireCallee(init.expression) === "unresolvable") {
+            hasUnresolvableModuleReference = true;
+          }
+        }
+        ts.forEachChild(node, collectOnce);
+      }
+
+      let prevBinderCount = -1;
+      let prevFactoryCount = -1;
+      let prevNsCount = -1;
+      while (
+        requireBinders.size !== prevBinderCount ||
+        createRequireNames.size !== prevFactoryCount ||
+        nodeModuleNamespaces.size !== prevNsCount
+      ) {
+        prevBinderCount = requireBinders.size;
+        prevFactoryCount = createRequireNames.size;
+        prevNsCount = nodeModuleNamespaces.size;
+        collectOnce(sourceFile);
+      }
+
+      function visit(node: ts.Node): void {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+          literalSpecifiers.push(node.moduleSpecifier.text);
+        } else if (
+          ts.isExportDeclaration(node) &&
+          node.moduleSpecifier &&
+          ts.isStringLiteralLike(node.moduleSpecifier)
+        ) {
+          literalSpecifiers.push(node.moduleSpecifier.text);
+        } else if (isDynamicImportCall(node)) {
+          const [arg] = node.arguments;
+          const text = arg ? literalModuleSpecifierText(arg) : null;
+          if (text !== null) literalSpecifiers.push(text);
+          else hasUnresolvableModuleReference = true;
+        } else if (ts.isImportTypeNode(node)) {
+          if (ts.isLiteralTypeNode(node.argument)) {
+            const text = literalModuleSpecifierText(node.argument.literal);
+            if (text !== null) literalSpecifiers.push(text);
+            else hasUnresolvableModuleReference = true;
+          } else {
+            hasUnresolvableModuleReference = true;
+          }
+        } else if (ts.isImportEqualsDeclaration(node)) {
+          if (ts.isExternalModuleReference(node.moduleReference)) {
+            const text = literalModuleSpecifierText(node.moduleReference.expression);
+            if (text !== null) literalSpecifiers.push(text);
+            else hasUnresolvableModuleReference = true;
+          }
+        } else if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          if (ts.isCallExpression(callee)) {
+            const kind = classifyCreateRequireCallee(callee.expression);
+            if (kind === true) {
+              recordLoaderSpecifier(node.arguments[0]);
+            } else if (kind === "unresolvable") {
+              hasUnresolvableModuleReference = true;
+            }
+          } else if (ts.isIdentifier(callee) && requireBinders.has(callee.text)) {
+            recordLoaderSpecifier(node.arguments[0]);
+          } else if (ts.isIdentifier(callee) && createRequireNames.has(callee.text)) {
+            // Bare `createRequire(url)` factory call — not a module load by itself.
+          } else {
+            const kind = classifyCreateRequireCallee(callee);
+            if (kind === "unresolvable") hasUnresolvableModuleReference = true;
+          }
+          for (const arg of node.arguments) {
+            if (ts.isIdentifier(arg) && isKnownBinderOrFactoryName(arg.text)) {
+              hasUnresolvableModuleReference = true;
+            }
+          }
+        } else if (ts.isIdentifier(node) && isKnownBinderOrFactoryName(node.text)) {
+          if (!isAllowedBinderOrFactoryUse(node)) {
+            hasUnresolvableModuleReference = true;
+          }
+        } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+          const prop = classifyCreateRequirePropertyAccess(node);
+          if (prop === "tracked") {
+            if (!isAllowedNamespaceCreateRequireUse(node)) {
+              hasUnresolvableModuleReference = true;
+            }
+          } else if (prop === "untracked") {
+            // Untracked receiver `*.createRequire` — direct call or property alias.
+            hasUnresolvableModuleReference = true;
+          }
+        }
+        ts.forEachChild(node, visit);
+      }
+
+      visit(sourceFile);
+      return { literalSpecifiers, hasUnresolvableModuleReference };
+    }
+
+    function classifyRuntimeImport(runtimeRel: string): "ok" | "forbidden" {
+      if (runtimeRel === "runtime/contracts.js") return "ok";
+      if (runtimeRel === "runtime/provider-support/index.js") return "ok";
+      if (transitionalTargets.has(runtimeRel)) return "ok";
+      return "forbidden";
+    }
+
+    const violations: string[] = [];
+    const residualByClass = {
+      contracts: [] as string[],
+      providerSupportIndex: [] as string[],
+      transitionalTarget: [] as string[],
+      forbiddenRuntime: [] as string[],
+    };
+
+    for (const file of listProviderSideFiles()) {
+      const source = readFileSync(file, "utf8");
+      const rel = relative(clientSrc, file).replaceAll("\\", "/");
+      const refs = extractModuleReferences(source);
+      if (refs.hasUnresolvableModuleReference) {
+        violations.push(
+          `${rel} has a non-literal / unclassifiable module reference; provider-side Runtime edges must be statically classifiable (fail-closed)`,
+        );
+      }
+      for (const spec of refs.literalSpecifiers) {
+        const runtimeRel = resolveRuntimeImport(file, spec);
+        if (!runtimeRel) continue;
+        const verdict = classifyRuntimeImport(runtimeRel);
+        if (verdict === "ok") {
+          if (runtimeRel === "runtime/contracts.js") residualByClass.contracts.push(`${rel} -> ${runtimeRel}`);
+          else if (runtimeRel === "runtime/provider-support/index.js")
+            residualByClass.providerSupportIndex.push(`${rel} -> ${runtimeRel}`);
+          else residualByClass.transitionalTarget.push(`${rel} -> ${runtimeRel}`);
+        } else {
+          residualByClass.forbiddenRuntime.push(`${rel} -> ${runtimeRel} (via ${spec})`);
+          violations.push(`${rel} imports forbidden Runtime module ${runtimeRel} (specifier ${spec})`);
+        }
+      }
+    }
+
+    expect(violations, violations.join("\n")).toEqual([]);
+    // Mechanically supported residual report for the review freeze note.
+    expect(residualByClass.forbiddenRuntime).toEqual([]);
+    expect(residualByClass.providerSupportIndex.length).toBeGreaterThan(0);
+
+    // Negative fixtures: newly introduced Runtime owners / deep support paths fail closed.
+    expect(classifyRuntimeImport("runtime/brand-new-owner.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/provider-support/preparation.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/provider-support/binary-failure.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/agent-io.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/install-locations.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/brand-new-login.js")).toBe("forbidden");
+    expect(classifyRuntimeImport("runtime/brand-new-binary.js")).toBe("forbidden");
+
+    const cursorHandler = join(clientSrc, "handlers/cursor/index.ts");
+    function expectForbiddenRuntimeSpec(source: string, expectedSpec: string): void {
+      const refs = extractModuleReferences(source);
+      expect(refs.hasUnresolvableModuleReference).toBe(false);
+      expect(refs.literalSpecifiers).toContain(expectedSpec);
+      const resolved = resolveRuntimeImport(cursorHandler, expectedSpec);
+      expect(resolved).toBe("runtime/brand-new-owner.js");
+      expect(classifyRuntimeImport(resolved ?? "")).toBe("forbidden");
+    }
+
+    // Bare side-effect import (no bindings) must still be classified.
+    expectForbiddenRuntimeSpec(`import "../../runtime/brand-new-owner.js";`, "../../runtime/brand-new-owner.js");
+
+    // Literal dynamic import must still be classified.
+    expectForbiddenRuntimeSpec(`await import("../../runtime/brand-new-owner.js");`, "../../runtime/brand-new-owner.js");
+
+    // Import type query (`ImportTypeNode`) must still be classified.
+    expectForbiddenRuntimeSpec(
+      `type Hidden = import("../../runtime/brand-new-owner.js").Hidden;`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // External import-equals (`import x = require("…")`) must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import Owner = require("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Immediate createRequire(…)("…") CommonJS load must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import { createRequire } from "node:module";
+       createRequire(import.meta.url)("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Aliased createRequire binder call must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import { createRequire } from "node:module";
+       const req = createRequire(import.meta.url);
+       req("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Renamed createRequire import + binder call must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import { createRequire as cr } from "node:module";
+       const load = cr(import.meta.url);
+       load("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Namespace import `import * as module from "node:module"` must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import * as module from "node:module";
+       const req = module.createRequire(import.meta.url);
+       req("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Namespace import under a non-`module` local name (yzw-codex fixture).
+    expectForbiddenRuntimeSpec(
+      `import * as moduleApi from "node:module";
+       const load = moduleApi.createRequire(import.meta.url);
+       load("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Simple binder propagation (`const load = req`) must still be classified.
+    expectForbiddenRuntimeSpec(
+      `import { createRequire } from "node:module";
+       const req = createRequire(import.meta.url);
+       const load = req;
+       load("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Free require("…") CommonJS load must still be classified.
+    expectForbiddenRuntimeSpec(`require("../../runtime/brand-new-owner.js");`, "../../runtime/brand-new-owner.js");
+
+    // Aliased / multiline static import continues to fail closed.
+    const multilineFixture = `
+      import {
+        prepareManagedSession as prep,
+        type ChatContext as Ctx,
+      } from "../../runtime/agent-bootstrap.js";
+    `;
+    const multilineRefs = extractModuleReferences(multilineFixture);
+    expect(multilineRefs.literalSpecifiers).toEqual(["../../runtime/agent-bootstrap.js"]);
+    const resolvedMultiline = resolveRuntimeImport(cursorHandler, multilineRefs.literalSpecifiers[0] ?? "");
+    expect(resolvedMultiline).toBe("runtime/agent-bootstrap.js");
+    expect(classifyRuntimeImport(resolvedMultiline ?? "")).toBe("forbidden");
+
+    // Non-literal dynamic import cannot be classified → fail closed.
+    const unresolvableDynamic = extractModuleReferences(`const p = "./x.js"; await import(p);`);
+    expect(unresolvableDynamic.hasUnresolvableModuleReference).toBe(true);
+    expect(unresolvableDynamic.literalSpecifiers).toEqual([]);
+
+    // Non-literal import-equals require() → fail closed.
+    const unresolvableEquals = extractModuleReferences(`import Owner = require(someVar);`);
+    expect(unresolvableEquals.hasUnresolvableModuleReference).toBe(true);
+    expect(unresolvableEquals.literalSpecifiers).toEqual([]);
+
+    // Non-literal createRequire binder call → fail closed.
+    const unresolvableCjs = extractModuleReferences(`
+      import { createRequire } from "node:module";
+      const req = createRequire(import.meta.url);
+      req(someVar);
+    `);
+    expect(unresolvableCjs.hasUnresolvableModuleReference).toBe(true);
+    expect(unresolvableCjs.literalSpecifiers).toEqual(["node:module"]);
+
+    // Unsupported `*.createRequire` (not a tracked node:module namespace) → fail closed.
+    const unresolvableNsCreateRequire = extractModuleReferences(`
+      const req = someApi.createRequire(import.meta.url);
+      req("../../runtime/brand-new-owner.js");
+    `);
+    expect(unresolvableNsCreateRequire.hasUnresolvableModuleReference).toBe(true);
+
+    // Default-import property alias is untracked → fail closed (not namespace import).
+    const defaultImportPropAlias = extractModuleReferences(`
+      import moduleApi from "node:module";
+      const cr = moduleApi.createRequire;
+      const load = cr(import.meta.url);
+      load("../../runtime/brand-new-owner.js");
+    `);
+    expect(defaultImportPropAlias.hasUnresolvableModuleReference).toBe(true);
+    expect(defaultImportPropAlias.literalSpecifiers).toEqual(["node:module"]);
+
+    // Dynamic-import namespace property alias is untracked → fail closed.
+    const dynamicImportPropAlias = extractModuleReferences(`
+      const moduleApi = await import("node:module");
+      const cr = moduleApi.createRequire;
+      const load = cr(import.meta.url);
+      load("../../runtime/brand-new-owner.js");
+    `);
+    expect(dynamicImportPropAlias.hasUnresolvableModuleReference).toBe(true);
+    expect(dynamicImportPropAlias.literalSpecifiers).toEqual(["node:module"]);
+
+    // Free `require` alias must still classify the literal load.
+    expectForbiddenRuntimeSpec(
+      `const load = require;
+       load("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Namespace factory property alias must still classify the binder load.
+    expectForbiddenRuntimeSpec(
+      `import * as moduleApi from "node:module";
+       const cr = moduleApi.createRequire;
+       const load = cr(import.meta.url);
+       load("../../runtime/brand-new-owner.js");`,
+      "../../runtime/brand-new-owner.js",
+    );
+
+    // Property storage of a known binder → fail closed (unsupported escape).
+    const propEscape = extractModuleReferences(`
+      import { createRequire } from "node:module";
+      const req = createRequire(import.meta.url);
+      const box = { load: req };
+      box.load("../../runtime/brand-new-owner.js");
+    `);
+    expect(propEscape.hasUnresolvableModuleReference).toBe(true);
+
+    // Passing a known binder as a call argument → fail closed.
+    const argEscape = extractModuleReferences(`
+      import { createRequire } from "node:module";
+      const req = createRequire(import.meta.url);
+      consume(req);
+    `);
+    expect(argEscape.hasUnresolvableModuleReference).toBe(true);
+
+    // Package-resolution `.resolve(...)` is not a direct module-edge load.
+    const resolveOnly = extractModuleReferences(`
+      import { createRequire } from "node:module";
+      const req = createRequire(import.meta.url);
+      req.resolve("../../runtime/brand-new-owner.js");
+    `);
+    expect(resolveOnly.hasUnresolvableModuleReference).toBe(false);
+    expect(resolveOnly.literalSpecifiers).toEqual(["node:module"]);
+
+    const mustUseProviderSupport = [
+      "handlers/claude-code.ts",
+      "handlers/claude-code-tui/index.ts",
+      "handlers/codex/sdk.ts",
+      "handlers/codex/app-server/index.ts",
+      "handlers/cursor/index.ts",
+      "handlers/grok/index.ts",
+      "handlers/kimi-code.ts",
+      "handlers/opencode/index.ts",
+      "handlers/pi/index.ts",
+    ] as const;
+    for (const rel of mustUseProviderSupport) {
+      const source = readFileSync(join(clientSrc, rel), "utf8");
+      expect(source, `${rel} must import provider-support/index.js`).toMatch(/runtime\/provider-support\/index\.js/);
+      expect(source, `${rel} must call prepareManagedSession`).toMatch(/\bprepareManagedSession\b/);
+      expect(source, `${rel} must not call acquireAgentHome directly`).not.toMatch(/\bacquireAgentHome\s*\(/);
+      expect(source, `${rel} must not call markWorkspaceInitComplete directly`).not.toMatch(
+        /\bmarkWorkspaceInitComplete\s*\(/,
+      );
+      expect(source, `${rel} must not call ensureAgentBootstrap directly`).not.toMatch(/\bensureAgentBootstrap\s*\(/);
+      expect(source, `${rel} must not deep-import provider-support groups`).not.toMatch(
+        /provider-support\/(?!index\.js)[\w-]+\.js/,
+      );
+    }
+  });
+
+  it("pins provider-support entry and group modules to exact AST export allowlists", () => {
+    /**
+     * Exact `(kind, exportedName, originalName, sourceModule)` tuples — not
+     * substring / banned-name predicates. Adding any seam symbol requires an
+     * explicit allowlist edit in provider-support-export-allowlists.ts.
+     */
+    function hasExportKeyword(node: ts.Node): boolean {
+      return ts.canHaveModifiers(node) && !!ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    }
+
+    function hasDefaultKeyword(node: ts.Node): boolean {
+      return ts.canHaveModifiers(node) && !!ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+    }
+
+    function extractExportTuples(source: string): {
+      tuples: string[];
+      violations: string[];
+    } {
+      const sourceFile = ts.createSourceFile("exports.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const tuples: string[] = [];
+      const violations: string[] = [];
+
+      for (const node of sourceFile.statements) {
+        let handled = false;
+
+        if (ts.isExportDeclaration(node)) {
+          handled = true;
+          if (node.moduleSpecifier && !ts.isStringLiteralLike(node.moduleSpecifier)) {
+            violations.push("non-literal export module specifier");
+          } else if (!node.exportClause && node.moduleSpecifier) {
+            violations.push(
+              `export * from ${ts.isStringLiteralLike(node.moduleSpecifier) ? node.moduleSpecifier.text : "?"}`,
+            );
+          } else if (node.exportClause && ts.isNamespaceExport(node.exportClause)) {
+            violations.push("export * as namespace");
+          } else if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+            const sourceModule =
+              node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)
+                ? node.moduleSpecifier.text
+                : "<local>";
+            for (const el of node.exportClause.elements) {
+              const kind = node.isTypeOnly || el.isTypeOnly ? "type" : "value";
+              const exportedName = el.name.text;
+              const originalName = el.propertyName ? el.propertyName.text : exportedName;
+              tuples.push(`${kind}|${exportedName}|${originalName}|${sourceModule}`);
+            }
+          } else {
+            violations.push("unsupported ExportDeclaration shape");
+          }
+        } else if (ts.isExportAssignment(node)) {
+          handled = true;
+          violations.push(node.isExportEquals ? "export =" : "export default");
+        } else if (ts.isFunctionDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default function");
+          } else if (!node.name) {
+            violations.push("unnamed exported function");
+          } else {
+            tuples.push(`value|${node.name.text}|${node.name.text}|<local>`);
+          }
+        } else if (ts.isClassDeclaration(node) && hasExportKeyword(node)) {
+          // Local class exports are unused on the seam today — fail closed rather
+          // than inventing an undocumented tuple kind.
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default class");
+          } else {
+            violations.push("unsupported exported local class");
+          }
+        } else if (ts.isInterfaceDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default interface");
+          } else {
+            tuples.push(`type|${node.name.text}|${node.name.text}|<local>`);
+          }
+        } else if (ts.isTypeAliasDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default type alias");
+          } else {
+            tuples.push(`type|${node.name.text}|${node.name.text}|<local>`);
+          }
+        } else if (ts.isEnumDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default enum");
+          } else {
+            violations.push("unsupported exported local enum");
+          }
+        } else if (ts.isVariableStatement(node) && hasExportKeyword(node)) {
+          handled = true;
+          if (hasDefaultKeyword(node)) {
+            violations.push("export default variable");
+          } else {
+            for (const decl of node.declarationList.declarations) {
+              if (ts.isIdentifier(decl.name)) {
+                tuples.push(`value|${decl.name.text}|${decl.name.text}|<local>`);
+              } else {
+                violations.push("exported binding pattern");
+              }
+            }
+          }
+        } else if (ts.isModuleDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          violations.push("exported namespace/module");
+        } else if (ts.isImportEqualsDeclaration(node) && hasExportKeyword(node)) {
+          handled = true;
+          violations.push("unsupported export import equals");
+        } else if (ts.isNamespaceExportDeclaration(node)) {
+          // `export as namespace Foo;` — canHaveModifiers is false, so the
+          // ExportKeyword catch-all would miss it.
+          handled = true;
+          violations.push("unsupported export as namespace");
+        }
+
+        // Catch-all: any ExportKeyword statement that no supported branch owned.
+        if (!handled && hasExportKeyword(node)) {
+          violations.push(`unsupported exported declaration ${ts.SyntaxKind[node.kind]}`);
+        }
+      }
+
+      return { tuples: [...tuples].sort(), violations };
+    }
+
+    const supportDir = join(clientSrc, "runtime/provider-support");
+    let totalTuples = 0;
+    for (const [relKey, expected] of Object.entries(PROVIDER_SUPPORT_EXPORT_ALLOWLISTS)) {
+      const fileRel = `runtime/provider-support/${relKey}.ts`;
+      const absolute = join(supportDir, `${relKey}.ts`);
+      expect(existsSync(absolute), `missing support module ${fileRel}`).toBe(true);
+      const source = readFileSync(absolute, "utf8");
+      const { tuples, violations } = extractExportTuples(source);
+      expect(violations, `${fileRel} export-shape violations:\n${violations.join("\n")}`).toEqual([]);
+      expect(tuples, `${fileRel} export tuple mismatch`).toEqual([...expected]);
+      totalTuples += tuples.length;
+    }
+    expect(totalTuples).toBeGreaterThan(100);
+
+    // Negative: registry owner named re-export on the entry must diverge.
+    const entrySource = readFileSync(join(supportDir, "index.ts"), "utf8");
+    const registryInjection = `${entrySource}\nexport { getChildProcessRegistry } from "../child-process-registry.js";\n`;
+    const injected = extractExportTuples(registryInjection);
+    expect(injected.violations).toEqual([]);
+    expect(injected.tuples).not.toEqual([...PROVIDER_SUPPORT_EXPORT_ALLOWLISTS.index]);
+    expect(injected.tuples).toContain(
+      "value|getChildProcessRegistry|getChildProcessRegistry|../child-process-registry.js",
+    );
+
+    // Negative: extra local symbol on a group module must diverge.
+    const prepSource = readFileSync(join(supportDir, "preparation.ts"), "utf8");
+    const sneakyLocal = `${prepSource}\nexport function sneakyExtraHelper(): void {}\n`;
+    const sneaky = extractExportTuples(sneakyLocal);
+    expect(sneaky.violations).toEqual([]);
+    expect(sneaky.tuples).not.toEqual([...PROVIDER_SUPPORT_EXPORT_ALLOWLISTS.preparation]);
+    expect(sneaky.tuples).toContain("value|sneakyExtraHelper|sneakyExtraHelper|<local>");
+
+    // Negative: export * fail-closed.
+    const starExport = extractExportTuples(`export * from "../child-process-registry.js";`);
+    expect(starExport.violations).toContain("export * from ../child-process-registry.js");
+
+    // Negative: default exports must not be mistaken for named local tuples.
+    expect(extractExportTuples(`export default function namedDefault() {}`).violations).toContain(
+      "export default function",
+    );
+    expect(extractExportTuples(`export default class NamedDefault {}`).violations).toContain("export default class");
+
+    // Negative: export import equals is unsupported (catch-all / dedicated branch).
+    expect(extractExportTuples(`export import Owner = require("../child-process-registry.js");`).violations).toContain(
+      "unsupported export import equals",
+    );
+
+    // Negative: unsupported local class/enum fail closed (not silently tupled).
+    expect(extractExportTuples(`export class LocalOwner {}`).violations).toContain("unsupported exported local class");
+    expect(extractExportTuples(`export enum LocalKind { A }`).violations).toContain("unsupported exported local enum");
+
+    // Negative: `export as namespace` is NamespaceExportDeclaration (no modifiers).
+    expect(extractExportTuples(`export as namespace Sneaky;`).violations).toContain("unsupported export as namespace");
+  });
+
+  it("keeps provider-support value re-exports identical to their owning group modules", async () => {
+    const entry = await import("../runtime/provider-support/index.js");
+    const preparation = await import("../runtime/provider-support/preparation.js");
+    const hostRuntime = await import("../runtime/provider-support/host-runtime.js");
+    const turnInput = await import("../runtime/provider-support/turn-input.js");
+    const failurePolicy = await import("../runtime/provider-support/failure-policy.js");
+
+    expect(entry.prepareManagedSession).toBe(preparation.prepareManagedSession);
+    expect(entry.projectManagedWorkspace).toBe(preparation.projectManagedWorkspace);
+    expect(entry.wellKnownBinDirs).toBe(hostRuntime.wellKnownBinDirs);
+    expect(entry.acquireWorkspaceFileLock).toBe(hostRuntime.acquireWorkspaceFileLock);
+    expect(entry.InputController).toBe(turnInput.InputController);
+    expect(entry.recognizeProviderBinaryFailure).toBe(failurePolicy.recognizeProviderBinaryFailure);
+  });
+
+  it("keeps generic Runtime free of handler and concrete provider implementation imports", () => {
+    const runtimeRoot = join(clientSrc, "runtime");
+    // Scan the full runtime tree, including capabilities/; only exact
+    // transitional paths are exempt — basename / directory patterns are not.
+    const runtimeFiles = listFilesRecursive(runtimeRoot, (p) => p.endsWith(".ts") && !p.includes("__tests__"));
+    const transitionalRelPaths = new Set<string>(TRANSITIONAL_PROVIDER_FAMILY_FILES);
+
+    function isExplicitTransitionalProviderFamilyPath(rel: string): boolean {
+      return transitionalRelPaths.has(rel);
+    }
+
+    expect(isExplicitTransitionalProviderFamilyPath("runtime/capabilities/index.ts")).toBe(true);
+    expect(isExplicitTransitionalProviderFamilyPath("runtime/brand-new/index.ts")).toBe(false);
+    expect(isExplicitTransitionalProviderFamilyPath("runtime/capabilities/brand-new.ts")).toBe(false);
+
+    for (const file of runtimeFiles) {
+      const rel = relative(clientSrc, file).replaceAll("\\", "/");
+      if (isExplicitTransitionalProviderFamilyPath(rel)) continue;
+      const source = readFileSync(file, "utf8");
+      expect(source, `${rel} must not import handlers/**`).not.toMatch(CONCRETE_PROVIDER_HANDLER_IMPORT);
+      if (!rel.includes("provider-support/binary-failure")) {
+        // Generic runtime (except the binary-failure seam's reason-code tables)
+        // must not deep-import concrete provider binary modules.
+        expect(source, `${rel} must not import concrete provider binaries`).not.toMatch(
+          CONCRETE_PROVIDER_BINARY_IMPORT,
+        );
+      }
+    }
   });
 });

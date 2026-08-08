@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { getCliBinding } from "../../../runtime/cli-binding.js";
+import { getCliBinding } from "../../../runtime/provider-support/index.js";
 import type { SpawnProcess } from "./client.js";
 
 type BuildBubblewrapArgsOptions = {

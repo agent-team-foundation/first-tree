@@ -19,30 +19,11 @@ import {
   type ThreadOptions,
   type Usage,
 } from "@openai/codex-sdk";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import {
-  FIRST_TREE_WORKSPACE_MARKER,
-  type PredeclaredSourceRepo,
-  writeAgentBriefing,
-} from "../../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
 import {
   createCodexClientWithBinaryFallback,
   formatCodexBinaryMissingMessage,
   isCodexBinaryMissingError,
 } from "../../runtime/codex-binary.js";
-import {
-  type ContextTreeAttribution,
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-} from "../../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -53,24 +34,38 @@ import type {
   TurnConsumedErrorReason,
 } from "../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
-import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 
+import type {
+  AgentConfigCache,
+  ChatContext,
+  ContextTreeAttribution,
+  ContextTreeGitWriteTracker,
+  PredeclaredSourceRepo,
+  ProviderAttemptSettlement,
+  ReconciledTeamSkill,
+} from "../../runtime/provider-support/index.js";
 import {
-  isManagedSkillsUnsafeDiscoveryError,
-  type ReconciledTeamSkill,
-  reconcileManagedSkillsForConfig,
-} from "../../runtime/managed-skills.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../../runtime/provider-attempt.js";
-import { classifyProviderFailure, maxProviderTurnRetryAttempts } from "../../runtime/provider-retry-policy.js";
-import {
+  buildAgentBriefing,
   buildBriefingUpdateNotice,
+  classifyProviderFailure,
   computeBriefingFingerprint,
+  createContextTreeGitWriteTracker,
+  FIRST_TREE_WORKSPACE_MARKER,
+  isManagedSkillsUnsafeDiscoveryError,
+  maxProviderTurnRetryAttempts,
+  ProviderAttempt,
+  prepareManagedSession,
   readSessionBriefingFingerprint,
+  reconcileManagedSkillsForConfig,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  resolveGitRepoTargetPath,
+  teamSkillBundleResolverFromSdk,
+  toolFileRefsFromShellCommand,
+  writeAgentBriefing,
   writeSessionBriefingFingerprint,
-} from "../../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+} from "../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
@@ -561,7 +556,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
    * so the LLM knows the absolute paths and upstream coordinates.
    */
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  let sourceReposForPrompt: readonly PredeclaredSourceRepo[] = [];
 
   function emitProviderTurnSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
     sessionCtx.emitEvent({
@@ -623,20 +618,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     });
   }
 
-  /**
-   * Best-effort chat-context fetch for the provider/session injection path.
-   * Failures are logged but never bubble — bootstrap continues with no
-   * Current Chat Context prompt for this session/resume boundary.
-   */
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
-  }
-
   function toCodexInput(message: SessionMessage, sessionCtx: SessionContext): Promise<Input> {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
@@ -653,17 +634,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     const prefix = chatPrompt ? `${contract}\n\n${chatPrompt}` : contract;
     if (typeof input === "string") return `${prefix}\n\n${input}`;
     return [{ type: "text", text: prefix }, ...input];
-  }
-
-  /**
-   * Derive the prompt-facing source-repo list from the runtime config's
-   * `gitRepos` — pure declaration, no git. The agent itself clones and
-   * refreshes `<workspaceCwd>/source-repos/<localPath>/` per the protocol in
-   * its briefing. The list feeds the per-session AGENTS.md "Source
-   * Repositories" block on the next `buildAgentBriefing` call.
-   */
-  function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {
-    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
   }
 
   function emitToolCall(
@@ -1534,32 +1504,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
   }
 
-  function ensureCodexBootstrap(
-    workspace: string,
-    sessionCtx: SessionContext,
-    briefing: string,
-    payload: AgentRuntimeConfigPayload,
-    payloadResolved: boolean,
-  ): void {
-    ensureAgentBootstrapShared({
-      workspace,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      // PR #869 baixiaohang round-3 P0: thread the authoritative current
-      // source-repo set into migrations so `v1-orphan-ft-clones` can defer
-      // when the live config is unresolved.
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
-    });
-  }
-
   return {
     async start(message, sessionCtx, token) {
       const deliveryToken = token;
       ctx = sessionCtx;
-      // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
-      // by every chat session for this agent.
-      cwd = acquireAgentHome(workspaceRoot);
 
       let runtimeConfig: AgentRuntimeConfig | null = null;
       let payload: AgentRuntimeConfigPayload | null = null;
@@ -1586,26 +1534,29 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         };
       }
 
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
-
-      // gitRepos first so the shared briefing can list the predeclared
-      // source-repo paths the agent should know about.
-      declareSourceRepos(payload, cwd);
-      reconciledTeamSkills = (
-        await reconcileManagedSkillsForConfig(
-          cwd,
-          runtimeProvider,
-          runtimeConfig,
-          sessionCtx.log,
-          teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-        )
-      ).teamSkills;
+      // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
+      // by every chat session for this agent. prepareManagedSession acquires
+      // it and runs chat-context → skills → briefing → bootstrap → sentinel.
+      const prepared = await prepareManagedSession({
+        sessionCtx,
+        workspaceRoot,
+        runtimeProvider,
+        runtimeConfig,
+        payload,
+        payloadResolved,
+        contextTree: {
+          path: contextTreePath,
+          repoUrl: contextTreeRepoUrl,
+          branch: contextTreeBranch,
+        },
+      });
+      cwd = prepared.workspace;
+      pendingChatContextPrompt = renderChatContextPrompt(prepared.chatContext);
+      sourceReposForPrompt = prepared.sourceRepos;
+      reconciledTeamSkills = prepared.teamSkills;
+      const briefing = prepared.briefing;
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = buildBriefing(sessionCtx, payload, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
-      markWorkspaceInitComplete(cwd);
 
       codex = createCodexClient({ env: providerEnv, config: buildCodexConfig(payload) }, sessionCtx);
       activeProviderEnv = providerEnv;
@@ -1648,7 +1599,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     async resume(message, sessionId, sessionCtx, token) {
       const deliveryToken = message ? requireDeliveryToken(token, "messageful resume") : noopDeliveryToken();
       ctx = sessionCtx;
-      cwd = acquireAgentHome(workspaceRoot);
 
       let runtimeConfig: AgentRuntimeConfig | null = null;
       let payload: AgentRuntimeConfigPayload | null = null;
@@ -1673,24 +1623,26 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
       // Re-fetch chat-context every resume so newly-joined participants
       // surface at the next session/resume provider turn.
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
-
-      declareSourceRepos(payload, cwd);
-      reconciledTeamSkills = (
-        await reconcileManagedSkillsForConfig(
-          cwd,
-          runtimeProvider,
-          runtimeConfig,
-          sessionCtx.log,
-          teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-        )
-      ).teamSkills;
+      const prepared = await prepareManagedSession({
+        sessionCtx,
+        workspaceRoot,
+        runtimeProvider,
+        runtimeConfig,
+        payload,
+        payloadResolved: resumePayloadResolved,
+        contextTree: {
+          path: contextTreePath,
+          repoUrl: contextTreeRepoUrl,
+          branch: contextTreeBranch,
+        },
+      });
+      cwd = prepared.workspace;
+      pendingChatContextPrompt = renderChatContextPrompt(prepared.chatContext);
+      sourceReposForPrompt = prepared.sourceRepos;
+      reconciledTeamSkills = prepared.teamSkills;
+      const briefing = prepared.briefing;
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = buildBriefing(sessionCtx, payload, cwd);
-      ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
-      markWorkspaceInitComplete(cwd);
 
       // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once at
       // thread init and never re-reads it, so a briefing rewritten by a runtime

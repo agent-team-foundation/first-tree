@@ -1,9 +1,11 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { wellKnownBinDirs } from "../runtime/install-locations.js";
-import { getLoginShellPathDirs } from "../runtime/login-shell-path.js";
-import { automaticCandidateAllowed } from "../runtime/protected-paths.js";
+import {
+  automaticCandidateAllowed,
+  getLoginShellPathDirs,
+  wellKnownBinDirs,
+} from "../runtime/provider-support/index.js";
 
 /**
  * A resolved `claude` candidate is usable only if it is a regular file that is

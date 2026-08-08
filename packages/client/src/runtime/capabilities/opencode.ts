@@ -1,6 +1,6 @@
 import type { CapabilityEntry } from "@first-tree/shared";
 import { findOpenCodeExecutableOnPath, formatOpenCodeBinaryMissingMessage } from "../opencode-binary.js";
-import { supportsDefaultProviderProcessSupervision } from "../provider-process-supervisor.js";
+import { supportsDefaultProviderProcessSupervision } from "../provider-support/index.js";
 import { type DetectOutcome, runDetect } from "./detect.js";
 
 export type OpenCodeProbeDeps = {

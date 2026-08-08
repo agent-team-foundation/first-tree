@@ -1,7 +1,7 @@
 import type { EffortLevel, McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
-import type { ChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
+import type { ChatContext } from "../../runtime/provider-support/index.js";
+import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/provider-support/index.js";
 import { mapMcpServers } from "./mcp-config.js";
 
 /** Payload-derived slice of the Claude Code SDK query options. */

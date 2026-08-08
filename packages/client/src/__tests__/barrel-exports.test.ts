@@ -25,13 +25,17 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(api).not.toHaveProperty("registerHandler");
     expect(api).not.toHaveProperty("getHandlerFactory");
     expect(api).not.toHaveProperty("hasHandler");
-    // S1d contracts entry is not a package public API / temporary subpath export.
+    // S1d/S2 contracts + provider-support entries are not package public APIs /
+    // temporary subpath exports.
     expect(api).not.toHaveProperty("contracts");
+    expect(api).not.toHaveProperty("provider-support");
+    expect(api).not.toHaveProperty("prepareManagedSession");
     const publicKeys = Object.keys(api).sort();
     expect(publicKeys).not.toContain("SessionManager");
     expect(publicKeys).not.toContain("SessionRegistry");
     expect(publicKeys).not.toContain("noopDeliveryToken");
     expect(publicKeys).not.toContain("requireDeliveryToken");
+    expect(publicKeys).not.toContain("prepareManagedSession");
 
     const pkg = JSON.parse(readFileSync(join(clientPkgRoot, "package.json"), "utf8")) as {
       exports?: Record<string, unknown>;
@@ -39,10 +43,13 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     const exportPaths = Object.keys(pkg.exports ?? {}).sort();
     expect(exportPaths).toEqual([".", "./observability"]);
     expect(exportPaths).not.toContain("./contracts");
+    expect(exportPaths).not.toContain("./provider-support");
     expect(pkg.exports).not.toHaveProperty("./contracts");
+    expect(pkg.exports).not.toHaveProperty("./provider-support");
 
     const rootIndex = readFileSync(join(clientSrc, "index.ts"), "utf8");
     expect(rootIndex).not.toMatch(/runtime\/contracts|from ["']\.\/runtime\/contracts\.js["']/);
+    expect(rootIndex).not.toMatch(/provider-support|prepareManagedSession/);
   });
 
   it("loads runtime barrel exports", async () => {
@@ -55,11 +62,14 @@ describe("public barrel exports", { timeout: 30_000 }, () => {
     expect(runtime).not.toHaveProperty("SessionManager");
     expect(runtime).not.toHaveProperty("SessionRegistry");
     expect(runtime).not.toHaveProperty("contracts");
+    expect(runtime).not.toHaveProperty("prepareManagedSession");
+    expect(runtime).not.toHaveProperty("providerSupport");
     expect(runtime.resolveAgentContextTreeBinding).toBeDefined();
     expect(runtime.registerShutdownHook).toBeDefined();
 
     const runtimeIndex = readFileSync(join(clientSrc, "runtime/index.ts"), "utf8");
     expect(runtimeIndex).not.toMatch(/from ["']\.\/contracts\.js["']/);
+    expect(runtimeIndex).not.toMatch(/provider-support|prepareManagedSession/);
   });
 
   it("loads observability barrel exports", async () => {

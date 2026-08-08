@@ -3,9 +3,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { CURSOR_INSTALL_COMMAND, runtimeProviderLoginCommand } from "@first-tree/shared";
-import { wellKnownBinDirs } from "./install-locations.js";
-import { getLoginShellPathDirs } from "./login-shell-path.js";
-import { automaticCandidateAllowed } from "./protected-paths.js";
+import { automaticCandidateAllowed, getLoginShellPathDirs, wellKnownBinDirs } from "./provider-support/index.js";
 
 /**
  * Cursor Agent CLI binary resolution. Cursor is EXTERNAL-ONLY: First Tree never
@@ -70,7 +68,7 @@ export class CursorBinaryVerifyTransientError extends Error {
 }
 
 /** Single-owner match rules live in provider-support; re-export for call sites. */
-export { isCursorBinaryMissingError } from "./provider-support/binary-failure.js";
+export { isCursorBinaryMissingError } from "./provider-support/index.js";
 
 export function formatCursorBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();

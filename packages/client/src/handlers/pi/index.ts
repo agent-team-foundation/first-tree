@@ -10,21 +10,6 @@ import {
   runtimeProviderSchema,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
-import {
-  type ContextTreeAttribution,
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-  withContextTreeRepoHeadCommit,
-} from "../../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -34,31 +19,40 @@ import type {
   SessionMessage,
 } from "../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
-
-import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../../runtime/managed-skills.js";
 import {
   isSupportedPiVersion,
   PI_SUPPORTED_VERSION_RANGE,
   parsePiVersionOutput,
   resolvePiRuntimeBinary,
 } from "../../runtime/pi-binary.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../../runtime/provider-attempt.js";
-import {
-  createDefaultProviderProcessSupervisor,
-  type ProviderProcessSupervisor,
-  supportsDefaultProviderProcessSupervision,
-} from "../../runtime/provider-process-supervisor.js";
-import { isExhaustedCapacityPhrasing, maxProviderTurnRetryAttempts } from "../../runtime/provider-retry-policy.js";
-import { piProviderDetailBinaryMissingReasonCode } from "../../runtime/provider-support/binary-failure.js";
+import type {
+  AgentConfigCache,
+  ContextTreeAttribution,
+  ContextTreeGitWriteTracker,
+  ProviderAttemptSettlement,
+  ProviderProcessSupervisor,
+  ReconciledTeamSkill,
+} from "../../runtime/provider-support/index.js";
 import {
   buildBriefingUpdateNotice,
   computeBriefingFingerprint,
+  createContextTreeGitWriteTracker,
+  createDefaultProviderProcessSupervisor,
+  isExhaustedCapacityPhrasing,
+  maxProviderTurnRetryAttempts,
+  ProviderAttempt,
+  piProviderDetailBinaryMissingReasonCode,
+  prepareManagedSession,
+  projectManagedWorkspace,
   readSessionBriefingFingerprint,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  supportsDefaultProviderProcessSupervision,
+  toolFileRefsFromShellCommand,
+  withContextTreeRepoHeadCommit,
   writeSessionBriefingFingerprint,
-} from "../../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+} from "../../runtime/provider-support/index.js";
 import { formatAuthHint, isPiAuthError } from "../auth-error-hint.js";
 import {
   applyPiChildEnvControls,
@@ -479,7 +473,6 @@ export const createPiHandler: HandlerFactory = (config) => {
   let sessionId: string | null = null;
   let activePayload: AgentRuntimeConfigPayload | null = null;
   let reconciledTeamSkills: readonly ReconciledTeamSkill[] = [];
-  let sourceReposForPrompt: ReturnType<typeof declaredSourceRepos> = [];
   let sessionActive = false;
   let initialTurnPreparing = false;
   let currentTurnPromise: Promise<boolean> | null = null;
@@ -630,28 +623,6 @@ export const createPiHandler: HandlerFactory = (config) => {
     // Forced after host/payload/identity merge so agent env cannot re-enable
     // version checks or install telemetry. Does not inject or clear PI_OFFLINE.
     return applyPiChildEnvControls(out);
-  }
-
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      workspacePath: workspaceCwd,
-      sourceRepos: sourceReposForPrompt,
-      contextTreePath,
-      contextTreeRepoUrl,
-      contextTreeBranch,
-      teamSkills: reconciledTeamSkills,
-    });
-  }
-
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<string | null> {
-    try {
-      return renderChatContextPrompt(await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent));
-    } catch (error) {
-      sessionCtx.log(`fetchChatContext failed: ${error instanceof Error ? error.message : String(error)}`);
-      return renderChatContextPrompt(undefined);
-    }
   }
 
   function nativeToolRefs(name: string, args: unknown, workspaceCwd: string): ToolFileRef[] {
@@ -1496,26 +1467,32 @@ export const createPiHandler: HandlerFactory = (config) => {
       throw new Error(`runtime provider mismatch: expected pi, got ${payload.kind}`);
     }
     rejectMcpConfiguration(payload);
-    sourceReposForPrompt = declaredSourceRepos(cwd, payload);
-    const reconcile = await reconcileManagedSkillsForConfig(
-      cwd,
+    const projected = await projectManagedWorkspace({
+      sessionCtx,
+      workspace: cwd,
       runtimeProvider,
       runtimeConfig,
-      sessionCtx.log,
-      teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-    );
-    reconciledTeamSkills = reconcile.teamSkills;
-    activeResourceConfigVersion = reconcile.resourceConfigVersion;
-    activeSkillsDigest = skillsContentDigest(reconciledTeamSkills, activeResourceConfigVersion);
-    const briefing = buildBriefing(sessionCtx, payload, cwd);
-    ensureAgentBootstrap({
-      workspace: cwd,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
+      payload,
+      payloadResolved,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      markInitComplete: false,
+      atProjectionEntry: (): undefined => {
+        assertLifecycleGeneration(generation, "prepared_refresh_projection");
+        return undefined;
+      },
+      beforeBriefing: () => {
+        assertLifecycleGeneration(generation, "prepared_refresh_skills");
+      },
     });
-    activeBriefingText = briefing;
+    assertLifecycleGeneration(generation, "prepared_refresh_activate");
+    reconciledTeamSkills = projected.teamSkills;
+    activeResourceConfigVersion = projected.resourceConfigVersion;
+    activeSkillsDigest = skillsContentDigest(reconciledTeamSkills, activeResourceConfigVersion);
+    activeBriefingText = projected.briefing;
     activePayload = payload;
     return {
       payload,
@@ -1523,7 +1500,7 @@ export const createPiHandler: HandlerFactory = (config) => {
       sessionId,
       sessionDir: join(cwd, PI_SESSIONS_DIR),
       skillsDir: join(cwd, PI_SKILLS_DIR),
-      briefing,
+      briefing: projected.briefing,
     };
   }
 
@@ -1823,8 +1800,6 @@ export const createPiHandler: HandlerFactory = (config) => {
       );
     }
     ctx = sessionCtx;
-    const workspaceCwd = acquireAgentHome(workspaceRoot);
-    cwd = workspaceCwd;
     // The caller owns identity selection: `start` mints a fresh-start id from
     // the first inbound message; `resume` passes the persisted mapping id.
     sessionId = resolvedSessionId;
@@ -1850,31 +1825,46 @@ export const createPiHandler: HandlerFactory = (config) => {
     binary = resolution.binary;
     sessionCtx.log(`Pi binary: ${resolution.binary}`);
 
-    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
-    const reconcile = await reconcileManagedSkillsForConfig(
-      workspaceCwd,
+    const prepared = await prepareManagedSession({
+      sessionCtx,
+      workspaceRoot,
       runtimeProvider,
       runtimeConfig,
-      sessionCtx.log,
-      teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-    );
-    assertLifecycleGeneration(generation, "prepare_skills");
-    reconciledTeamSkills = reconcile.teamSkills;
-    activeResourceConfigVersion = reconcile.resourceConfigVersion;
-    activeSkillsDigest = skillsContentDigest(reconciledTeamSkills, activeResourceConfigVersion);
-    const briefing = buildBriefing(sessionCtx, payload, workspaceCwd);
-    ensureAgentBootstrap({
-      workspace: workspaceCwd,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
+      payload,
+      payloadResolved,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
+      atProjectionEntry: (): undefined => {
+        // Sync fence at projection entry (first statement of
+        // projectManagedWorkspace, before any await) — closes the microtask
+        // window after chat-context fetch where suspend could otherwise advance
+        // generation before reconcile. Must stay synchronous (no async/await).
+        // Return type is `undefined` (not `void`) so async callbacks are a type error.
+        assertLifecycleGeneration(generation, "prepare_before_projection");
+        return undefined;
+      },
+      beforeBriefing: () => {
+        // Sync lifecycle fence after Managed Skills and before briefing/bootstrap/
+        // init sentinel — must return void (not async) so the helper does not
+        // unconditionally await a microtask window. Cancellation here is
+        // pre-provider and creates no ACK authority.
+        assertLifecycleGeneration(generation, "prepare_skills");
+      },
     });
-    markWorkspaceInitComplete(workspaceCwd);
+    const workspaceCwd = prepared.workspace;
+    cwd = workspaceCwd;
+    reconciledTeamSkills = prepared.teamSkills;
+    activeResourceConfigVersion = prepared.resourceConfigVersion;
+    activeSkillsDigest = skillsContentDigest(reconciledTeamSkills, activeResourceConfigVersion);
+    const briefing = prepared.briefing;
 
-    const chatContext = await fetchChatContextOrLog(sessionCtx);
     assertLifecycleGeneration(generation, "prepare_chat_context");
-    pendingChatContextPrompt = [renderRuntimeOutputContract(), chatContext].filter(Boolean).join("\n\n");
+    pendingChatContextPrompt = [renderRuntimeOutputContract(), renderChatContextPrompt(prepared.chatContext)]
+      .filter(Boolean)
+      .join("\n\n");
     oneShotConsumed = false;
     activeBriefingText = briefing;
     activePayload = payload;
@@ -1915,7 +1905,6 @@ export const createPiHandler: HandlerFactory = (config) => {
     ctx = null;
     sessionId = null;
     activePayload = null;
-    sourceReposForPrompt = [];
     initialTurnPreparing = false;
     activeTools.clear();
     streaming = false;

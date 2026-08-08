@@ -13,19 +13,13 @@ import type {
   SupportedImageMime,
 } from "@first-tree/shared";
 import {
+  DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
   runtimeProviderSchema,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { renderDocumentAttachmentsForLLM } from "../runtime/agent-io.js";
-import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { createContextTreeGitWriteTracker } from "../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -34,29 +28,37 @@ import type {
   SessionMessage,
 } from "../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
-
-import { findImagePath } from "../runtime/image-store.js";
-import { InputController } from "../runtime/input-controller.js";
-import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../runtime/managed-skills.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../runtime/provider-attempt.js";
+import type {
+  AgentConfigCache,
+  ChatContext,
+  PredeclaredSourceRepo,
+  ProviderAttemptSettlement,
+  ProviderFailureClassification,
+  ProviderRetryDecision,
+  ReconciledTeamSkill,
+} from "../runtime/provider-support/index.js";
 import {
+  buildAgentBriefing,
+  buildBriefingUpdateNotice,
   buildProviderRetryEvent,
   classifyProviderFailure,
-  decideProviderRetry,
-  maxProviderTurnRetryAttempts,
-  type ProviderFailureClassification,
-  type ProviderRetryDecision,
-} from "../runtime/provider-retry-policy.js";
-import { redactErrorPreview } from "../runtime/redact-error-preview.js";
-import {
-  buildBriefingUpdateNotice,
   computeBriefingFingerprint,
+  createContextTreeGitWriteTracker,
+  decideProviderRetry,
+  fetchChatContextOrLog,
+  findImagePath,
+  InputController,
+  maxProviderTurnRetryAttempts,
+  ProviderAttempt,
+  prepareManagedSession,
   readSessionBriefingFingerprint,
+  reconcileManagedSkillsForConfig,
+  redactErrorPreview,
+  renderDocumentAttachmentsForLLM,
+  teamSkillBundleResolverFromSdk,
+  writeAgentBriefing,
   writeSessionBriefingFingerprint,
-} from "../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+} from "../runtime/provider-support/index.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { mapMcpServers } from "./claude/mcp-config.js";
 import {
@@ -453,7 +455,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * agent creates under `<agentHome>/worktrees/<name>/` — those are
    * runtime-opaque (created and cleaned up by the agent, not by First Tree).
    */
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  let sourceReposForPrompt: readonly PredeclaredSourceRepo[] = [];
   /**
    * SDK inputs pushed into the active query that have not reached a terminal
    * turn boundary yet. Transient retry must replay the whole unclosed pushed
@@ -1629,31 +1631,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
 
   /**
-   * Derive the prompt-facing source-repo list from the runtime config's
-   * `gitRepos` — pure declaration, no git. The agent itself clones and
-   * refreshes `<cwd>/source-repos/<localPath>/` per the protocol in its
-   * briefing; the `worktrees/` subdirectory stays reserved for the per-task worktrees the
-   * agent creates and cleans up on its own.
-   */
-  function declareSourceRepos(workspace: string, payload: AgentRuntimeConfigPayload | undefined): void {
-    sourceReposForPrompt = declaredSourceRepos(workspace, payload);
-  }
-
-  /**
-   * Best-effort chat-context fetch for the provider prompt path. Failures
-   * are logged but never bubble — bootstrap continues with `undefined` and
-   * the agent simply loses the "Current Chat Context" block for this session.
-   */
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
-  }
-
-  /**
    * Probe whether the Claude Code SDK can resume the given session at the
    * current cwd. The SDK stores per-project transcripts at
    * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, where
@@ -1713,83 +1690,43 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
   }
 
-  /**
-   * Run the expensive first-time bootstrap (full stable layout + `first-tree
-   * tree skill install` shell-out). Gated by the stage-2 sentinel + Context-Tree
-   * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
-   *
-   *   - Sentinel absent → full bootstrap.
-   *   - Sentinel present + Tree HEAD unchanged → cheap identity refresh only.
-   *   - Sentinel present + Tree HEAD drifted → full bootstrap re-runs so the
-   *     stable `.first-tree-workspace/` layout and first-tree skill pick up
-   *     the new tree state.
-   *
-   * The unified briefing is rewritten on every call regardless of the drift
-   * decision — the agent payload may have changed between sessions for the
-   * same agent home.
-   *
-   * `workspaceId` for the integrate shell-out is the agent name — the home
-   * directory is per-agent, so the skill identity stays stable across chats.
-   */
-  function ensureAgentBootstrap(
-    workspace: string,
-    sessionCtx: SessionContext,
-    briefing: string,
-    payload: AgentRuntimeConfigPayload | undefined,
-  ): void {
-    // Delegates to the shared helper (runtime/agent-bootstrap.ts) so the SDK
-    // and TUI handlers share one briefing / core-skill / drift-pin contract
-    // rather than each maintaining a partial copy.
-    //
-    // `currentSourceRepoNames` is threaded through to the migration applier
-    // so `v1-orphan-ft-clones` can defer when the live config is unresolved
-    // (cache miss). See PR #869 baixiaohang round-3 P0.
-    ensureAgentBootstrapShared({
-      workspace,
-      sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payload !== undefined),
-    });
-  }
-
   const handler: AgentHandler = {
     async start(message, sessionCtx, token) {
       const deliveryToken = token;
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
-      // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
-      // chat session. acquireAgentHome creates the directory and writes the
-      // boundary marker on first call; afterwards it is a no-op.
-      cwd = acquireAgentHome(workspaceRoot);
 
       // Resolve chat-context and source repos before spawning the SDK:
       // source repos are rendered into the shared briefing, while chat-context
       // is appended through the SDK system prompt channel in buildQuery().
-      const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId);
-      const payload = runtimeConfig?.payload;
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
-      // Declare gitRepos coordinates before computing the briefing so the
-      // source-repo list names the paths + upstreams the agent manages.
-      declareSourceRepos(cwd, payload);
-      reconciledTeamSkills = (
-        await reconcileManagedSkillsForConfig(
-          cwd,
-          runtimeProvider,
-          runtimeConfig,
-          sessionCtx.log,
-          teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-        )
-      ).teamSkills;
+      const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId) ?? null;
+      let payload = runtimeConfig?.payload ?? null;
+      const payloadResolved = payload !== null;
+      payload ??= { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
+
+      const prepared = await prepareManagedSession({
+        sessionCtx,
+        workspaceRoot,
+        runtimeProvider,
+        runtimeConfig,
+        payload,
+        payloadResolved,
+        contextTree: {
+          path: contextTreePath,
+          repoUrl: contextTreeRepoUrl,
+          branch: contextTreeBranch,
+        },
+      });
+      // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
+      // chat session. prepareManagedSession acquires the home (and writes the
+      // boundary marker on first call; afterwards acquire is a no-op).
+      cwd = prepared.workspace;
+      chatContextForPrompt = prepared.chatContext;
+      sourceReposForPrompt = prepared.sourceRepos;
+      reconciledTeamSkills = prepared.teamSkills;
+      const briefing = prepared.briefing;
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
-
-      // Stage-2 sentinel: written once per agent home. Future starts short-
-      // circuit the heavier stable workspace bootstrap on its presence.
-      markWorkspaceInitComplete(cwd);
 
       // Seed the briefing baseline: a fresh session starts in sync with the
       // briefing it was built under, so its first turn carries no notice. The
@@ -1891,32 +1828,35 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       // Normal new-design resume path: cwd is the agent home.
-      cwd = acquireAgentHome(workspaceRoot);
-
-      // Identical control flow to start(): bootstrap is idempotent and the
-      // The sentinel gates the heavier stable workspace bootstrap. The cheap
+      // Identical control flow to start(): prepareManagedSession is idempotent
+      // and the sentinel gates the heavier stable workspace bootstrap. The cheap
       // identity hash check still runs so agent rename / inboxId changes
       // propagate after initialization.
-      const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId);
-      const payload = runtimeConfig?.payload;
-      const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
-      declareSourceRepos(cwd, payload);
-      reconciledTeamSkills = (
-        await reconcileManagedSkillsForConfig(
-          cwd,
-          runtimeProvider,
-          runtimeConfig,
-          sessionCtx.log,
-          teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-        )
-      ).teamSkills;
+      const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId) ?? null;
+      let payload = runtimeConfig?.payload ?? null;
+      const payloadResolved = payload !== null;
+      payload ??= { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
+
+      const prepared = await prepareManagedSession({
+        sessionCtx,
+        workspaceRoot,
+        runtimeProvider,
+        runtimeConfig,
+        payload,
+        payloadResolved,
+        contextTree: {
+          path: contextTreePath,
+          repoUrl: contextTreeRepoUrl,
+          branch: contextTreeBranch,
+        },
+      });
+      cwd = prepared.workspace;
+      chatContextForPrompt = prepared.chatContext;
+      sourceReposForPrompt = prepared.sourceRepos;
+      reconciledTeamSkills = prepared.teamSkills;
+      const briefing = prepared.briefing;
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
-      ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
-
-      markWorkspaceInitComplete(cwd);
 
       // Defensive fallback: sessionId isn't recognised at EITHER cwd (likely
       // a stale registry entry from machine swap / fs cleanup / tampering).

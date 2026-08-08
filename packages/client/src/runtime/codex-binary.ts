@@ -4,9 +4,12 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { runtimeProviderInstallCommand, runtimeProviderLoginCommand } from "@first-tree/shared";
-import { codexDesktopAppBinDirs, wellKnownBinDirs } from "./install-locations.js";
-import { getLoginShellPathDirs } from "./login-shell-path.js";
-import { automaticCandidateAllowed } from "./protected-paths.js";
+import {
+  automaticCandidateAllowed,
+  codexDesktopAppBinDirs,
+  getLoginShellPathDirs,
+  wellKnownBinDirs,
+} from "./provider-support/index.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
 
@@ -91,7 +94,7 @@ export class CodexBinaryVerifyTransientError extends Error {
   }
 }
 
-import { isCodexBinaryMissingError } from "./provider-support/binary-failure.js";
+import { isCodexBinaryMissingError } from "./provider-support/index.js";
 
 /** Single-owner match rules live in provider-support; re-export for call sites. */
 export { isCodexBinaryMissingError };

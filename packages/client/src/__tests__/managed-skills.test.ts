@@ -206,19 +206,23 @@ describe("managed Skill reconciler", () => {
       "src/handlers/opencode/index.ts",
       "src/handlers/pi/index.ts",
     ].map((path) => readFileSync(join(process.cwd(), path), "utf-8"));
-    expect(
-      handlerSources.reduce(
-        (count, source) => count + (source.match(/reconcileManagedSkillsForConfig\(/g)?.length ?? 0),
-        0,
-      ),
-    ).toBe(17);
+    // Normal start/resume admission owns reconcile inside prepareManagedSession;
+    // remaining direct handler calls are hot-switch / legacy compatibility only.
+    const directReconcileCalls = handlerSources.reduce(
+      (count, source) => count + (source.match(/reconcileManagedSkillsForConfig\(/g)?.length ?? 0),
+      0,
+    );
+    expect(directReconcileCalls).toBe(5);
+    expect(handlerSources.every((source) => source.includes("prepareManagedSession("))).toBe(true);
     expect(handlerSources.every((source) => !source.includes("reconcileManagedSkills({"))).toBe(true);
+    const preparation = readFileSync(join(process.cwd(), "src/runtime/provider-support/preparation.ts"), "utf-8");
+    expect(preparation).toContain("reconcileManagedSkillsForConfig(");
+    expect(preparation).toContain("teamSkillBundleResolverFromSdk(sessionCtx.sdk)");
     for (const source of [handlerSources[2] ?? "", handlerSources[3] ?? "", handlerSources[4] ?? ""]) {
       expect(source).toContain("if (isManagedSkillsUnsafeDiscoveryError(err)) throw err;");
     }
     expect(handlerSources[0]).toContain('failFatalSessionForRecovery(sessionCtx, "claude_config_restart_failed")');
     expect(handlerSources[3]).toContain('retryBatch(batch, "codex_managed_skills_unsafe")');
-    expect(handlerSources[6]).toContain("teamSkillBundleResolverFromSdk(sessionCtx.sdk)");
     expect(handlerSources[6]).toContain('token.retry(messages, "opencode_managed_skills_unsafe")');
     expect(handlerSources[6]).toContain("if (isManagedSkillsUnsafeDiscoveryError(error))");
   });

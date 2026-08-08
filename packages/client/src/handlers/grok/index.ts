@@ -9,21 +9,6 @@ import {
   runtimeProviderSchema,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { writeAgentBriefing } from "../../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
-import {
-  type ContextTreeAttribution,
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-} from "../../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -38,27 +23,36 @@ import {
   GrokBinaryVerifyTransientError,
   resolveGrokRuntimeBinary,
 } from "../../runtime/grok-binary.js";
-
+import type {
+  AgentConfigCache,
+  ContextTreeAttribution,
+  ContextTreeGitWriteTracker,
+  PredeclaredSourceRepo,
+  ProviderAttemptSettlement,
+  ProviderProcessSupervisor,
+  ReconciledTeamSkill,
+} from "../../runtime/provider-support/index.js";
 import {
-  isManagedSkillsUnsafeDiscoveryError,
-  type ReconciledTeamSkill,
-  reconcileManagedSkillsForConfig,
-} from "../../runtime/managed-skills.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../../runtime/provider-attempt.js";
-import {
-  createDefaultProviderProcessSupervisor,
-  type ProviderProcessSupervisor,
-} from "../../runtime/provider-process-supervisor.js";
-import { maxProviderTurnRetryAttempts } from "../../runtime/provider-retry-policy.js";
-import {
+  buildAgentBriefing,
   buildBriefingUpdateNotice,
   computeBriefingFingerprint,
+  createContextTreeGitWriteTracker,
+  createDefaultProviderProcessSupervisor,
+  isManagedSkillsUnsafeDiscoveryError,
+  maxProviderTurnRetryAttempts,
+  ProviderAttempt,
+  prepareManagedSession,
   readSessionBriefingFingerprint,
+  reconcileManagedSkillsForConfig,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  teamSkillBundleResolverFromSdk,
+  toolFileRefsFromShellCommand,
+  writeAgentBriefing,
   writeSessionBriefingFingerprint,
-} from "../../runtime/session-briefing-fingerprint.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+} from "../../runtime/provider-support/index.js";
+
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isGrokAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
@@ -244,7 +238,7 @@ export const createGrokHandler: HandlerFactory = (config) => {
    * it before a turn actually enters the provider.
    */
   let pendingChatContextPrompt: string | null = null;
-  let sourceReposForPrompt: ReturnType<typeof declaredSourceRepos> = [];
+  let sourceReposForPrompt: readonly PredeclaredSourceRepo[] = [];
   const gitWriteTracker: ContextTreeGitWriteTracker = createContextTreeGitWriteTracker({
     contextTreePath,
     contextTreeRepoUrl,
@@ -296,15 +290,6 @@ export const createGrokHandler: HandlerFactory = (config) => {
     });
   }
 
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
-  }
-
   function consumePendingChatContext(input: string): string {
     const chatPrompt = pendingChatContextPrompt;
     pendingChatContextPrompt = null;
@@ -316,10 +301,6 @@ export const createGrokHandler: HandlerFactory = (config) => {
     const contract = renderRuntimeOutputContract();
     const prefix = chatPrompt ? `${contract}\n\n${chatPrompt}` : contract;
     return `${prefix}\n\n${input}`;
-  }
-
-  function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {
-    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
   }
 
   function grokNativePathRefs(filePath: string, origin: "tool_arg" | "file_change"): ToolFileRef[] {
@@ -1027,8 +1008,6 @@ export const createGrokHandler: HandlerFactory = (config) => {
       );
     }
     ctx = sessionCtx;
-    const workspaceCwd = acquireAgentHome(workspaceRoot);
-    cwd = workspaceCwd;
 
     let runtimeConfig: AgentRuntimeConfig | null = null;
     let payload: AgentRuntimeConfigPayload | null = null;
@@ -1050,29 +1029,25 @@ export const createGrokHandler: HandlerFactory = (config) => {
       };
     }
 
-    const chatContext = await fetchChatContextOrLog(sessionCtx);
-    pendingChatContextPrompt = renderChatContextPrompt(chatContext);
-
-    declareSourceRepos(payload, workspaceCwd);
-    reconciledTeamSkills = (
-      await reconcileManagedSkillsForConfig(
-        workspaceCwd,
-        runtimeProvider,
-        runtimeConfig,
-        sessionCtx.log,
-        teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-      )
-    ).teamSkills;
-
-    const briefing = buildBriefing(sessionCtx, payload, workspaceCwd);
-    ensureAgentBootstrap({
-      workspace: workspaceCwd,
+    const prepared = await prepareManagedSession({
       sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
+      workspaceRoot,
+      runtimeProvider,
+      runtimeConfig,
+      payload,
+      payloadResolved,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
     });
-    markWorkspaceInitComplete(workspaceCwd);
+    const workspaceCwd = prepared.workspace;
+    cwd = workspaceCwd;
+    pendingChatContextPrompt = renderChatContextPrompt(prepared.chatContext);
+    sourceReposForPrompt = prepared.sourceRepos;
+    reconciledTeamSkills = prepared.teamSkills;
+    const briefing = prepared.briefing;
 
     const resolution = resolveBinary(process.env);
     if (!resolution.ok) {

@@ -22,22 +22,6 @@ import {
   runtimeProviderSchema,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import type { PredeclaredSourceRepo } from "../runtime/bootstrap.js";
-import { fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../runtime/chat-context-section.js";
-import {
-  type ContextTreeAttribution,
-  resolveContextTreeRelativePath,
-  toolFileRefsFromShellCommand,
-  withContextTreeRepoHeadCommit,
-} from "../runtime/context-tree-file-refs.js";
-import {
-  type ContextTreeGitWriteTracker,
-  createContextTreeGitWriteTracker,
-} from "../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -48,12 +32,23 @@ import type {
 } from "../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../runtime/contracts.js";
 
-import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../runtime/managed-skills.js";
-import { ProviderAttempt, type ProviderAttemptSettlement } from "../runtime/provider-attempt.js";
-import { maxProviderTurnRetryAttempts } from "../runtime/provider-retry-policy.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import type {
+  AgentConfigCache,
+  ContextTreeAttribution,
+  ContextTreeGitWriteTracker,
+  ProviderAttemptSettlement,
+} from "../runtime/provider-support/index.js";
+import {
+  createContextTreeGitWriteTracker,
+  maxProviderTurnRetryAttempts,
+  ProviderAttempt,
+  prepareManagedSession,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+  resolveContextTreeRelativePath,
+  toolFileRefsFromShellCommand,
+  withContextTreeRepoHeadCommit,
+} from "../runtime/provider-support/index.js";
 import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isKimiCodeAuthError } from "./auth-error-hint.js";
 
@@ -329,8 +324,6 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
   let session: Session | null = null;
   let sessionId: string | null = null;
   let activePayload: AgentRuntimeConfigPayload | null = null;
-  let reconciledTeamSkills: readonly ReconciledTeamSkill[] = [];
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   let sessionActive = false;
   let initialTurnPreparing = false;
   let currentTurnPromise: Promise<boolean> | null = null;
@@ -364,28 +357,6 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       if (typeof value === "string") out[key] = value;
     }
     return out;
-  }
-
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      workspacePath: workspaceCwd,
-      sourceRepos: sourceReposForPrompt,
-      contextTreePath,
-      contextTreeRepoUrl,
-      contextTreeBranch,
-      teamSkills: reconciledTeamSkills,
-    });
-  }
-
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<string | null> {
-    try {
-      return renderChatContextPrompt(await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent));
-    } catch (error) {
-      sessionCtx.log(`fetchChatContext failed: ${error instanceof Error ? error.message : String(error)}`);
-      return renderChatContextPrompt(undefined);
-    }
   }
 
   function nativeToolRefs(name: string, args: unknown, workspaceCwd: string): ToolFileRef[] {
@@ -875,8 +846,6 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       );
     }
     ctx = sessionCtx;
-    const workspaceCwd = acquireAgentHome(workspaceRoot);
-    cwd = workspaceCwd;
 
     let runtimeConfig: AgentRuntimeConfig | null = null;
     let payload: AgentRuntimeConfigPayload | null = null;
@@ -890,27 +859,23 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       throw new Error(`runtime provider mismatch: expected kimi-code, got ${payload.kind}`);
     }
 
-    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
-    reconciledTeamSkills = (
-      await reconcileManagedSkillsForConfig(
-        workspaceCwd,
-        runtimeProvider,
-        runtimeConfig,
-        sessionCtx.log,
-        teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-      )
-    ).teamSkills;
-    const briefing = buildBriefing(sessionCtx, payload, workspaceCwd);
-    ensureAgentBootstrap({
-      workspace: workspaceCwd,
+    const prepared = await prepareManagedSession({
       sessionCtx,
-      contextTreePath,
-      briefing,
-      currentSourceRepoNames: currentSourceRepoNamesFromPayload(payload, payloadResolved),
+      workspaceRoot,
+      runtimeProvider,
+      runtimeConfig,
+      payload,
+      payloadResolved,
+      contextTree: {
+        path: contextTreePath,
+        repoUrl: contextTreeRepoUrl,
+        branch: contextTreeBranch,
+      },
     });
-    markWorkspaceInitComplete(workspaceCwd);
+    const workspaceCwd = prepared.workspace;
+    cwd = workspaceCwd;
 
-    const chatContext = await fetchChatContextOrLog(sessionCtx);
+    const chatContext = renderChatContextPrompt(prepared.chatContext);
     const roleAdditional = [renderRuntimeOutputContract(), chatContext].filter(Boolean).join("\n\n");
     const providerEnv = buildEnv(sessionCtx, payload);
     const localKaos = await kaosFactory();
@@ -973,7 +938,6 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
     ctx = null;
     sessionId = null;
     activePayload = null;
-    sourceReposForPrompt = [];
     initialTurnPreparing = false;
     activeTools.clear();
   }
@@ -1098,7 +1062,6 @@ export const createKimiCodeHandler: HandlerFactory = (config) => {
       ctx = null;
       sessionId = null;
       activePayload = null;
-      sourceReposForPrompt = [];
       initialTurnPreparing = false;
       activeTools.clear();
     },

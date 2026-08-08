@@ -6,13 +6,6 @@ import {
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   runtimeProviderSchema,
 } from "@first-tree/shared";
-import { ensureAgentBootstrap } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
-import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -22,10 +15,13 @@ import type {
 } from "../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
 
-import { type ReconciledTeamSkill, reconcileManagedSkillsForConfig } from "../../runtime/managed-skills.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { teamSkillBundleResolverFromSdk } from "../../runtime/team-skill-bundle-resolver.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import type { AgentConfigCache, ChatContext } from "../../runtime/provider-support/index.js";
+import {
+  createContextTreeGitWriteTracker,
+  prepareManagedSession,
+  renderChatContextPrompt,
+  renderRuntimeOutputContract,
+} from "../../runtime/provider-support/index.js";
 import { mapMcpServers } from "../claude/mcp-config.js";
 import { createToolCallProcessor } from "../claude/tool-call-processor.js";
 import { resolveClaudeCodeExecutable } from "../claude-executable.js";
@@ -172,8 +168,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   // handler can't update system prompt mid-thread (claude is a persistent
   // process), so we snapshot once per startClaude().
   let chatContextForPrompt: ChatContext | undefined;
-  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
-  let reconciledTeamSkills: readonly ReconciledTeamSkill[] = [];
 
   function buildEnv(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload): Record<string, string> {
     const env: Record<string, string> = {};
@@ -187,35 +181,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       if (typeof v === "string") out[k] = v;
     }
     return out;
-  }
-
-  /**
-   * Build the shared briefing for the current session — agent identity,
-   * payload.prompt.append, source-repo list, and the Context Tree / runtime
-   * sections. Materialised by {@link ensureAgentBootstrap} as `<cwd>/AGENTS.md`
-   * (with `<cwd>/CLAUDE.md` symlinked to it) before claude spawns; per-chat
-   * context is appended through the CLI system prompt file.
-   */
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
-    return buildAgentBriefing({
-      identity: sessionCtx.agent,
-      payload,
-      workspacePath: workspaceCwd,
-      sourceRepos: sourceReposForPrompt,
-      contextTreePath,
-      contextTreeRepoUrl,
-      contextTreeBranch,
-      teamSkills: reconciledTeamSkills,
-    });
-  }
-
-  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
-    try {
-      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
-    } catch (err) {
-      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
   }
 
   function ensureConfigTempDir(workspaceCwd: string, sessionId: string): string {
@@ -667,43 +632,34 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         try {
           await orphanSweep(clientId);
           ctx = sessionCtx;
-          cwd = acquireAgentHome(workspaceRoot);
 
           const resolvedPayload = await loadPayload(sessionCtx);
           const payload = resolvedPayload ?? defaultPayload();
+          const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId) ?? null;
 
           // Resolve chat-context and source repos before spawning claude:
           // source repos are rendered into the shared briefing, while
           // chat-context is written to the per-session append-system-prompt
           // file consumed by startClaude().
-          chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-          // Pure declaration — the agent itself clones/refreshes the repos per
-          // its briefing protocol; the listed paths may not exist yet.
-          sourceReposForPrompt = declaredSourceRepos(cwd, payload);
-          reconciledTeamSkills = (
-            await reconcileManagedSkillsForConfig(
-              cwd,
-              runtimeProvider,
-              agentConfigCache?.get(sessionCtx.agent.agentId),
-              sessionCtx.log,
-              teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-            )
-          ).teamSkills;
-          const providerEnv = buildEnv(sessionCtx, payload);
-          ensureAgentBootstrap({
-            workspace: cwd,
+          const prepared = await prepareManagedSession({
             sessionCtx,
-            contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd),
-            // `null` when we fell back to `defaultPayload()` — the empty
+            workspaceRoot,
+            runtimeProvider,
+            runtimeConfig,
+            payload,
+            // `false` when we fell back to `defaultPayload()` — the empty
             // `gitRepos: []` is then NOT authoritative, and the workspace
             // manifest write is deferred for this session.
-            currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-              payload,
-              resolvedPayload !== null && resolvedPayload !== undefined,
-            ),
+            payloadResolved: resolvedPayload !== null && resolvedPayload !== undefined,
+            contextTree: {
+              path: contextTreePath,
+              repoUrl: contextTreeRepoUrl,
+              branch: contextTreeBranch,
+            },
           });
-          markWorkspaceInitComplete(cwd);
+          cwd = prepared.workspace;
+          chatContextForPrompt = prepared.chatContext;
+          const providerEnv = buildEnv(sessionCtx, payload);
 
           const sessionId = await startClaude({ sessionCtx, resumeSessionId: null, payload, providerEnv });
           if (lifecycleFence.stopRequested) {
@@ -738,39 +694,31 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         try {
           await orphanSweep(clientId);
           ctx = sessionCtx;
-          cwd = acquireAgentHome(workspaceRoot);
 
           const resumePayloadResolved = await loadPayload(sessionCtx);
           const payload = resumePayloadResolved ?? defaultPayload();
+          const runtimeConfig = agentConfigCache?.get(sessionCtx.agent.agentId) ?? null;
 
-          chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
-          // Pure declaration — same as the start() path.
-          sourceReposForPrompt = declaredSourceRepos(cwd, payload);
-          reconciledTeamSkills = (
-            await reconcileManagedSkillsForConfig(
-              cwd,
-              runtimeProvider,
-              agentConfigCache?.get(sessionCtx.agent.agentId),
-              sessionCtx.log,
-              teamSkillBundleResolverFromSdk(sessionCtx.sdk),
-            )
-          ).teamSkills;
-          const providerEnv = buildEnv(sessionCtx, payload);
-          // Same shared bootstrap as start(): ensureAgentBootstrap handles the
-          // stable workspace sentinel internally, so a stale or failed
+          // Same shared preparation as start(): prepareManagedSession handles
+          // the stable workspace sentinel internally, so a stale or failed
           // integration is re-run on resume instead of being skipped.
-          ensureAgentBootstrap({
-            workspace: cwd,
+          const prepared = await prepareManagedSession({
             sessionCtx,
-            contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd),
+            workspaceRoot,
+            runtimeProvider,
+            runtimeConfig,
+            payload,
             // See PR #869 baixiaohang round-3 P0 — same gate as start().
-            currentSourceRepoNames: currentSourceRepoNamesFromPayload(
-              payload,
-              resumePayloadResolved !== null && resumePayloadResolved !== undefined,
-            ),
+            payloadResolved: resumePayloadResolved !== null && resumePayloadResolved !== undefined,
+            contextTree: {
+              path: contextTreePath,
+              repoUrl: contextTreeRepoUrl,
+              branch: contextTreeBranch,
+            },
           });
-          markWorkspaceInitComplete(cwd);
+          cwd = prepared.workspace;
+          chatContextForPrompt = prepared.chatContext;
+          const providerEnv = buildEnv(sessionCtx, payload);
 
           const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId, payload, providerEnv });
 
