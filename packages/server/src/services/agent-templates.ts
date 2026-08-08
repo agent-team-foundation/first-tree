@@ -407,6 +407,12 @@ export async function publishAgentTemplate(
     // projection still matches its real bundle before the Template becomes
     // adoptable.
     const payload = agentTemplatePayloadSchema.parse(row.payload);
+    // A component-less draft is legal while drafting but can never be
+    // adopted, so publish rejects it here instead of letting it reach the
+    // public catalog and fail in adoption (see lockAndVerifyTemplate).
+    if (payload.components.length === 0) {
+      throw new ConflictError(`Agent Template "${templateId}" has no components and cannot be published.`);
+    }
     await lockBundleAttachments(targetDb, skillBundleIds(payload.components));
     for (const component of payload.components) {
       if (component.type !== "skill") continue;
