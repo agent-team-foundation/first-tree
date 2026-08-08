@@ -52,6 +52,39 @@ export const githubAppInstallationPermissionsSchema = z.record(z.string(), githu
 export type GithubAppInstallationPermissions = z.infer<typeof githubAppInstallationPermissionsSchema>;
 
 /**
+ * The permission levels an installation must grant before First Tree can act
+ * as the App on it — `permission name -> minimum level`.
+ *
+ * This is the one definition of "is this installation good enough". The server
+ * gates the GitHub Task Agent on it (`taskReplyInstallationBlocker`) and the
+ * Settings → GitHub readout renders it, so an admin is never told the
+ * installation is fine while the server refuses to publish (or the reverse).
+ *
+ * `metadata: read` is deliberately absent: GitHub grants it to every App
+ * install and it cannot be withheld, so listing it would only ever render a
+ * tautological ✓. The reply publisher still requests it when minting a scoped
+ * token — that is a token scope, not a gate.
+ */
+export const GITHUB_APP_REQUIRED_PERMISSIONS = {
+  issues: "write",
+  pull_requests: "write",
+} as const satisfies Record<string, GithubPermissionLevel>;
+
+/**
+ * True when `permissions` grants at least every level in
+ * `GITHUB_APP_REQUIRED_PERMISSIONS`. `write` satisfies a `read` requirement
+ * (GitHub's write implies read); `admin` satisfies both.
+ */
+export function githubPermissionSatisfies(
+  granted: GithubPermissionLevel | undefined,
+  required: GithubPermissionLevel,
+): boolean {
+  if (granted === undefined) return false;
+  const rank: Record<GithubPermissionLevel, number> = { read: 0, write: 1, admin: 2 };
+  return rank[granted] >= rank[required];
+}
+
+/**
  * Subscribed event-name list, e.g. `["issues", "pull_request", "push"]`.
  * Free-form for the same forward-compat reason as `permissions`.
  */

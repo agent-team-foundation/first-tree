@@ -349,15 +349,21 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("waiting");
     expect(text(rendered.container)).toContain("Loading");
     expect(text(rendered.container)).toContain("Waiting for GitHub");
+    // The two states that exist to review the shortfall readout.
+    expect(text(rendered.container)).toContain("a required scope is missing");
+    expect(text(rendered.container)).toContain("Missing scope — collapsed");
+    expect(text(rendered.container)).toContain("Agents can't post replies on pull requests.");
+    expect(text(rendered.container)).toContain("Pull requests access is missing");
 
     const detailsButtons = [...rendered.container.querySelectorAll("button")].filter((button) =>
       button.textContent?.includes("Connection details"),
     );
-    expect(detailsButtons.length).toBe(3);
+    expect(detailsButtons.length).toBe(5);
     expect(detailsButtons[0]?.getAttribute("aria-expanded")).toBe("false");
     await click(detailsButtons[0] ?? detailsButtons[1] ?? buttonByText(rendered.container, "Connection details"));
     expect(detailsButtons[0]?.getAttribute("aria-expanded")).toBe("true");
-    expect(text(rendered.container)).toContain("Installation #131952074");
+    expect(text(rendered.container)).toContain("131952074");
+    expect(text(rendered.container)).toContain("Required by First Tree");
 
     await cleanupRendered(rendered);
   });

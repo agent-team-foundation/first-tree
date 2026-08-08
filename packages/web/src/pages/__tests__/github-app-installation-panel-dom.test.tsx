@@ -174,6 +174,8 @@ describe("GithubAppInstallationPanel", () => {
     const { container, root } = await renderDom(<GithubAppInstallationPanel />);
 
     await waitForText(container, "Connected to");
+    // The connection reads as one row: what it is, then who it's bound to.
+    expect(container.textContent).toContain("GitHub App");
     // GitHub accounts render as the full github.com path so a GitHub org is
     // never confusable with a First Tree team name.
     expect(container.textContent).toContain("github.com/octocat");
@@ -190,16 +192,15 @@ describe("GithubAppInstallationPanel", () => {
     // the admin opens it.
     const detailsToggle = buttonByText(container, "Connection details");
     expect(detailsToggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.textContent).not.toContain("contents:");
-    expect(container.textContent).not.toContain(`Installation ${"#"}123`);
+    expect(container.textContent).not.toContain("Also granted");
 
     await click(detailsToggle);
 
     expect(detailsToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("contents:");
-    expect(container.textContent).toContain("issues:");
-    expect(container.textContent).toContain("pull_request");
-    expect(container.textContent).toContain(`Installation ${"#"}123`);
+    expect(container.textContent).toContain("Required by First Tree");
+    expect(container.textContent).toContain("Also granted");
+    expect(container.textContent).toContain("Contents");
+    expect(container.textContent).toContain("Issues");
 
     await act(async () => root.unmount());
   });

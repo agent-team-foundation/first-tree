@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, FolderGit2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 import { getGithubAppInstallation } from "../../api/github-app.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
+import { SettingRow } from "../../components/ui/setting-row.js";
 import { clearGithubAccountLinkReturn, readGithubAccountLinkReturn } from "../../lib/github-account-link-return.js";
 import { clearGithubInstallAttempt, readGithubInstallAttempt } from "../../lib/github-install-attempt.js";
 import { GithubAppInstallationPanel } from "../github-app-installation-panel.js";
@@ -198,7 +199,34 @@ export function SettingsGithubPage() {
           <GithubTaskAgentControls />
         </Section>
       </section>
+      <RepositoriesPointer />
     </div>
+  );
+}
+
+/**
+ * Connecting GitHub is the moment people go looking for "where do I add my
+ * repos" — but the code catalog is provider-neutral and lives on Settings →
+ * Repositories (this page used to host it under `#code-access`). Close the loop
+ * with an explicit hand-off instead of letting the page dead-end.
+ */
+function RepositoriesPointer() {
+  return (
+    <Section title="Repositories">
+      <SettingRow
+        icon={<FolderGit2 className="h-4 w-4" />}
+        title="Team code repositories"
+        description="Repository URLs and the agents that may clone them live in the Repositories tab — they apply to GitLab too, so they aren't tied to this connection."
+        control={
+          <Button asChild variant="outline" size="sm">
+            <Link to="/settings/repositories#code-repositories">
+              Manage repositories
+              <ArrowRight className="h-3 w-3" aria-hidden />
+            </Link>
+          </Button>
+        }
+      />
+    </Section>
   );
 }
 

@@ -777,6 +777,7 @@ export {
 export {
   GITHUB_ACCOUNT_TYPES,
   GITHUB_APP_CONNECT_STATUSES,
+  GITHUB_APP_REQUIRED_PERMISSIONS,
   GITHUB_PERMISSION_LEVELS,
   type GithubAccountType,
   type GithubAppConnectBody,
@@ -798,6 +799,7 @@ export {
   githubAppInstallationPermissionsSchema,
   githubAppUserTokenMetadataSchema,
   githubPermissionLevelSchema,
+  githubPermissionSatisfies,
 } from "./schemas/github-app.js";
 export {
   GITHUB_TASK_REPLY_BODY_MAX_BYTES,

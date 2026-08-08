@@ -1,4 +1,6 @@
 import {
+  GITHUB_APP_REQUIRED_PERMISSIONS,
+  githubPermissionSatisfies,
   ORG_SETTINGS_NAMESPACES,
   type OrgGithubFeaturesOutput,
   type OrgGithubFeaturesStorage,
@@ -74,7 +76,12 @@ async function readContextReviewerAgentUuid(db: Database, organizationId: string
 function taskReplyInstallationBlocker(installation: InstallationRow | null): SetupBlocker | null {
   if (!installation) return null;
   if (installation.suspendedAt) return blocker("github_app_suspended", "manage_github_installation");
-  if (installation.permissions.issues !== "write" || installation.permissions.pull_requests !== "write") {
+  // Same requirement set the Settings → GitHub readout renders, so an admin is
+  // never shown a healthy connection while this gate refuses the assignment.
+  const unsatisfied = Object.entries(GITHUB_APP_REQUIRED_PERMISSIONS).some(
+    ([permission, level]) => !githubPermissionSatisfies(installation.permissions[permission], level),
+  );
+  if (unsatisfied) {
     return blocker("github_app_task_reply_permission_required", "manage_github_installation");
   }
   return null;
