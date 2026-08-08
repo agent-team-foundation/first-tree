@@ -1,0 +1,4 @@
+interface:
+  display_name: "Meeting to Tree"
+  short_description: "Turn meeting records into reviewed Tree changes"
+  default_prompt: "Use $meeting-to-tree to sync durable context from the meeting records I supplied into the team's Context Tree."
