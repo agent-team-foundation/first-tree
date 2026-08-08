@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { protectOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { signOAuthState } from "../services/oauth-state.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
@@ -105,6 +105,36 @@ describe("standard mode with dormant OIDC config — complete dormancy", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.authProviders.oidc).toBe(false);
+  });
+
+  it("makes zero OIDC network calls (discovery/JWKS/userinfo) when dormant", async () => {
+    // Spy on global.fetch so we can assert that no OIDC discovery, JWKS, or
+    // userinfo requests are issued while the OIDC block is dormant in standard mode.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      // Exercise all standard-mode auth routes that are still active
+      await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
+      await app.inject({ method: "GET", url: "/api/v1/auth/oidc/start" });
+      await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/oidc/callback?code=test&state=test",
+      });
+
+      // None of these requests should have triggered any OIDC network call
+      // (discovery, JWKS fetch, UserInfo endpoint, etc.)
+      const oidcFetchCalls = fetchSpy.mock.calls.filter((args: unknown[]) => {
+        const url = args[0];
+        return (
+          typeof url === "string" &&
+          (url.includes("/.well-known") || url.includes("/jwks") || url.includes("/userinfo"))
+        );
+      });
+      expect(oidcFetchCalls).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
