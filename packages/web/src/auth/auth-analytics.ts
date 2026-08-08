@@ -67,12 +67,11 @@ export function authEntryPoint(next: string): AuthEntryPoint {
 }
 
 export function authProviderForCallbackPath(pathname: string): AuthProvider {
-  // /auth/complete is shared by Google and OIDC; use the stored attempt to
-  // distinguish them. All other paths (e.g. /auth/github/complete) are
-  // unambiguous — the pathname is authoritative and stored state is ignored.
+  // /auth/complete is shared by Google and OIDC (never GitHub); only a stored
+  // oidc attempt overrides the Google default. All other paths are unambiguous.
   if (pathname === "/auth/complete") {
     const stored = readAttempt();
-    if (stored) return stored.provider;
+    if (stored?.provider === "oidc") return "oidc";
     return "google";
   }
   return "github";

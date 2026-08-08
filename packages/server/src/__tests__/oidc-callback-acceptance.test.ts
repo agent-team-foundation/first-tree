@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoist mock service functions so the OIDC route module resolves to these
@@ -27,6 +27,7 @@ import type { FastifyInstance } from "fastify";
 import { protectOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { signOAuthState } from "../services/oauth-state.js";
 
@@ -388,9 +389,11 @@ describe("OIDC callback — acceptance", () => {
     const frag1 = parseFragment(res1.headers.location as string);
     const frag2 = parseFragment(res2.headers.location as string);
 
-    // At least one must produce a session (access+refresh).
+    // Both must produce a session (access+refresh) — the unique-constraint retry
+    // path in findOrCreateUserFromExternalAccount ensures the loser converges
+    // rather than fails, so both callbacks must complete successfully.
     const sessioned = [frag1, frag2].filter((f) => !f.get("error") && f.get("access"));
-    expect(sessioned.length).toBeGreaterThanOrEqual(1);
+    expect(sessioned.length).toBe(2);
 
     // Exactly one new global user must have been created (delta = 1, not 2).
     const usersAfter = await app.db.select({ id: users.id }).from(users);
@@ -466,6 +469,68 @@ describe("OIDC callback — acceptance", () => {
     expect(payload.sub).toBe(userAId);
   });
 
+  it("identity-service collision: attaching an owned identity to a different user throws and leaves both users unchanged", async () => {
+    const { findOrCreateUserFromExternalAccount, linkExternalIdentity, IdentityConflictError } = await import(
+      "../services/auth-identity.js"
+    );
+
+    // Create User A and attach the target OIDC identity.
+    const userA = await findOrCreateUserFromExternalAccount(app.db, {
+      provider: "oidc",
+      subject: JSON.stringify([ISSUER, "collision-link-sub"]),
+      usernameCandidates: ["collision-link-a"],
+      displayName: "Collision A",
+      email: null,
+      avatarUrl: null,
+      metadata: { issuer: ISSUER, sub: "collision-link-sub" },
+    });
+    expect(userA.created).toBe(true);
+
+    // Create User B with a different identity.
+    const userB = await findOrCreateUserFromExternalAccount(app.db, {
+      provider: "oidc",
+      subject: JSON.stringify([ISSUER, "collision-link-sub-b"]),
+      usernameCandidates: ["collision-link-b"],
+      displayName: "Collision B",
+      email: null,
+      avatarUrl: null,
+      metadata: { issuer: ISSUER, sub: "collision-link-sub-b" },
+    });
+    expect(userB.created).toBe(true);
+
+    // Snapshot User B's memberships before the conflict attempt.
+    const bMembersBefore = await app.db.select({ id: members.id }).from(members).where(eq(members.userId, userB.userId));
+
+    // Attempt to link User A's identity to User B — must throw IdentityConflictError.
+    await expect(
+      linkExternalIdentity(app.db, userB.userId, {
+        provider: "oidc",
+        subject: JSON.stringify([ISSUER, "collision-link-sub"]),
+        usernameCandidates: [],
+        displayName: null,
+        email: null,
+        avatarUrl: null,
+        metadata: { issuer: ISSUER, sub: "collision-link-sub" },
+      }),
+    ).rejects.toThrow(IdentityConflictError);
+
+    // User A still owns the identity — no transfer.
+    const [aIdentity] = await app.db
+      .select({ userId: authIdentities.userId })
+      .from(authIdentities)
+      .where(
+        and(
+          eq(authIdentities.provider, "oidc"),
+          eq(authIdentities.identifier, JSON.stringify([ISSUER, "collision-link-sub"])),
+        ),
+      );
+    expect(aIdentity?.userId).toBe(userA.userId);
+
+    // User B's memberships are unchanged.
+    const bMembersAfter = await app.db.select({ id: members.id }).from(members).where(eq(members.userId, userB.userId));
+    expect(bMembersAfter).toHaveLength(bMembersBefore.length);
+  });
+
   it("ignores extra IdP claims (org/groups/roles) and does not create additional Team memberships", async () => {
     // Record baseline counts before the callback
     const membersBefore = await app.db.select({ id: members.id }).from(members);
@@ -524,5 +589,57 @@ describe("OIDC callback — acceptance", () => {
     expect(metadata.org).toBeUndefined();
     expect(metadata.groups).toBeUndefined();
     expect(metadata.roles).toBeUndefined();
+  });
+
+  it("returning user: extra IdP claims do not mutate existing org/member/role state", async () => {
+    // First sign-in: create the user and their personal Team via bootstrap.
+    mockVerifyIdToken.mockResolvedValue(
+      baseClaims("returning-sub", { email: "returning@example.com", email_verified: true, name: "Returning User" }),
+    );
+    const firstReq = await buildCallbackRequest(app, { oidcNonce: "returning-nonce-1" });
+    const firstRes = await app.inject({ method: "GET", url: firstReq.url, headers: { cookie: firstReq.cookie } });
+    expect(firstRes.statusCode).toBe(302);
+    const firstFrag = parseFragment(firstRes.headers.location as string);
+    expect(firstFrag.get("accountCreated")).toBe("1");
+
+    // Resolve the userId from the identity row.
+    const [identity] = (await oidcIdentityRows(app)).filter(
+      (r) => r.identifier === JSON.stringify([ISSUER, "returning-sub"]),
+    );
+    const userId = identity?.userId;
+    expect(userId).toBeDefined();
+
+    // Snapshot org/member/role state after first login (before second callback).
+    const orgsBefore = await app.db.select({ id: organizations.id }).from(organizations);
+    const membersBefore = await app.db
+      .select({ id: members.id, userId: members.userId, orgId: members.organizationId, role: members.role })
+      .from(members)
+      .where(eq(members.userId, userId!));
+    expect(membersBefore.length).toBeGreaterThan(0);
+
+    // Second sign-in (returning): IdP returns extra org/groups/roles claims.
+    mockVerifyIdToken.mockResolvedValue(
+      Object.assign(
+        baseClaims("returning-sub", { email: "returning@example.com", email_verified: true }),
+        { org: "enterprise-idp-org", groups: ["sre", "platform"], roles: ["superuser"] },
+      ),
+    );
+    const secondReq = await buildCallbackRequest(app, { oidcNonce: "returning-nonce-2" });
+    const secondRes = await app.inject({ method: "GET", url: secondReq.url, headers: { cookie: secondReq.cookie } });
+    expect(secondRes.statusCode).toBe(302);
+    const secondFrag = parseFragment(secondRes.headers.location as string);
+    expect(secondFrag.get("error")).toBeNull();
+    expect(secondFrag.get("accountCreated")).toBe("0"); // Returning user, not created.
+
+    // Organizations table unchanged — no new org from IdP claims.
+    const orgsAfter = await app.db.select({ id: organizations.id }).from(organizations);
+    expect(orgsAfter).toHaveLength(orgsBefore.length);
+
+    // Member rows for this user unchanged — role not elevated by IdP claims.
+    const membersAfter = await app.db
+      .select({ id: members.id, userId: members.userId, orgId: members.organizationId, role: members.role })
+      .from(members)
+      .where(eq(members.userId, userId!));
+    expect(membersAfter).toEqual(membersBefore);
   });
 });

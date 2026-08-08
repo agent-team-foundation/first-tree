@@ -1580,6 +1580,55 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(plain.root);
   });
 
+  it("tokenless install callback preserves existing session and activates pinned org", async () => {
+    const { OAuthCompletePage } = await import("../oauth-complete.js");
+    Object.defineProperty(window, "history", {
+      configurable: true,
+      value: { replaceState: vi.fn() },
+    });
+    // No access or refresh token — OIDC-mode GitHub install returns metadata only.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#callbackIntent=install&org=org-install&orgPinned=1&next=/settings/integrations/github",
+        pathname: "/auth/complete",
+      },
+    });
+
+    const selectOrg = vi.fn(async () => undefined);
+    const adoptTokens = vi.fn(async () => undefined);
+    authMock.value = { ...authMock.value, adoptTokens, selectOrganization: selectOrg };
+
+    const result = await renderDom(<OAuthCompletePage />, "/auth/complete");
+    await flush();
+
+    // Session must NOT be replaced — no tokens in the fragment.
+    expect(adoptTokens).not.toHaveBeenCalled();
+    // Pinned org must be activated.
+    expect(selectOrg).toHaveBeenCalledWith("org-install");
+    // Fragment must be cleared from the URL bar.
+    expect(window.history.replaceState).toHaveBeenCalledWith(null, "", "/auth/complete");
+    await unmountRoot(result.root);
+  });
+
+  it("provider-unavailable fragment renders correct error copy via OAuthCompletePage", async () => {
+    const { OAuthCompletePage } = await import("../oauth-complete.js");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=provider-unavailable&next=/login",
+        pathname: "/auth/complete",
+      },
+    });
+
+    const result = await renderDom(<OAuthCompletePage />, "/auth/complete");
+    await waitForText("temporarily unavailable", result.container);
+    expect(result.container.textContent).toContain("temporarily unavailable");
+    await unmountRoot(result.root);
+  });
+
   it("switches orgs and exposes focused setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {
     clientApiMocks.post.mockResolvedValue({});
     const { TeamSwitcher } = await import("../../components/team-switcher.js");

@@ -41,7 +41,7 @@ async function buildInstallCallback(
   app: FastifyInstance,
   opts: { kickoffUserId: string; targetOrganizationId: string; next?: string },
 ): Promise<{ url: string; cookie: string }> {
-  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, opts.next ?? "/settings/github", {
+  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, opts.next ?? "/settings/integrations/github", {
     provider: "github",
     intent: "install",
     installPhase: "installation",
@@ -133,7 +133,7 @@ describe("GitHub install — oidc-required mode session preservation", () => {
     // Metadata-only: no session tokens minted in oidc-required mode.
     expect(fragment.get("access")).toBeNull();
     expect(fragment.get("refresh")).toBeNull();
-    expect(fragment.get("next")).toBe("/settings/github");
+    expect(fragment.get("next")).toBe("/settings/integrations/github");
     // The org must be pinned so the SPA activates it.
     expect(fragment.get("org")).toBe(admin.organizationId);
     expect(fragment.get("orgPinned")).toBe("1");
@@ -168,7 +168,7 @@ describe("GitHub install — oidc-required mode session preservation", () => {
     const fragment = parseFragment(res.headers.location as string);
     expect(fragment.get("error")).toBe("install-not-verified");
     expect(fragment.get("callbackIntent")).toBe("install");
-    expect(fragment.get("next")).toBe("/settings/github");
+    expect(fragment.get("next")).toBe("/settings/integrations/github");
   });
 });
 
