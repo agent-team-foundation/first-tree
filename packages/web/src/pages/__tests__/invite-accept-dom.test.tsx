@@ -274,4 +274,22 @@ describe("InviteAcceptPage", () => {
     expect(container.textContent).toContain("Joining");
     expect(container.textContent).not.toContain("You'll switch from");
   });
+
+  it("shows 'Continue with SSO to join' in oidc-required mode and hides Google/GitHub", async () => {
+    authMock.value = { ...authMock.value, isAuthenticated: false };
+    // oidc-required: only OIDC available as sign-in provider.
+    providerAvailability = { google: false, github: false, oidc: true } as typeof providerAvailability & {
+      oidc: boolean;
+    };
+    const { InviteAcceptPage } = await import("../invite-accept.js");
+    const container = await renderDom(<InviteAcceptPage />);
+
+    await waitForText(container, "Continue with SSO to join");
+    expect(container.textContent).not.toContain("Continue with GitHub to join");
+    expect(container.textContent).not.toContain("Continue with Google to join");
+
+    const oidcLink = container.querySelector<HTMLAnchorElement>("a[href^='/api/v1/auth/oidc/start']");
+    expect(oidcLink).not.toBeNull();
+    expect(oidcLink?.href).toContain("next=%2Finvite%2Ftoken-1");
+  });
 });

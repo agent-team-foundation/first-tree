@@ -357,7 +357,6 @@ describe("OIDC callback — acceptance", () => {
   it("concurrent first-sign-in: both converge to the same global user, no orphan (collision)", async () => {
     // Two concurrent callbacks for the same (issuer, sub) must both complete and
     // resolve to the same global user via the unique-constraint retry path.
-    // Record baseline before.
     const usersBefore = await app.db.select({ id: users.id }).from(users);
     const userCountBefore = usersBefore.length;
 
@@ -390,10 +389,10 @@ describe("OIDC callback — acceptance", () => {
     const frag2 = parseFragment(res2.headers.location as string);
 
     // At least one must produce a session (access+refresh).
-    const withSession = [frag1, frag2].filter((f) => !f.get("error") && f.get("access"));
-    expect(withSession.length).toBeGreaterThanOrEqual(1);
+    const sessioned = [frag1, frag2].filter((f) => !f.get("error") && f.get("access"));
+    expect(sessioned.length).toBeGreaterThanOrEqual(1);
 
-    // Exactly one new global user must have been created.
+    // Exactly one new global user must have been created (delta = 1, not 2).
     const usersAfter = await app.db.select({ id: users.id }).from(users);
     expect(usersAfter.length - userCountBefore).toBe(1);
 
@@ -404,50 +403,67 @@ describe("OIDC callback — acceptance", () => {
     expect(concurrentIdentities).toHaveLength(1);
     const canonicalUserId = concurrentIdentities[0]!.userId;
 
-    // Both sessions that succeeded must resolve the same global user.
-    // Verify by checking `accountCreated` and orgId are consistent.
-    if (withSession.length === 2) {
-      // Both completed through the retry path — one is a create, the other a reuse.
-      const createdCount = [frag1, frag2].filter((f) => f.get("accountCreated") === "1").length;
-      expect(createdCount).toBeLessThanOrEqual(1); // At most one "create"
+    // Any sessions that completed must both carry the canonical userId.
+    // Decode the JWT payload to inspect the subject without making an HTTP call.
+    for (const f of sessioned) {
+      const accessToken = f.get("access")!;
+      // JWT is three base64url segments; middle is the payload.
+      const payloadB64 = accessToken.split(".")[1] ?? "";
+      const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>;
+      expect(payload.sub).toBe(canonicalUserId);
     }
 
-    // No orphan: the single identity row points to the single new user.
+    // No orphan: the identity row points to the single new user.
     const newUser = usersAfter.find((u) => !usersBefore.some((b) => b.id === u.id));
     expect(newUser!.id).toBe(canonicalUserId);
   });
 
-  it("pre-existing identity collision: fail-closed with no membership transfer", async () => {
-    // First sign-in creates the user and identity.
+  it("pre-existing identity collision: fail-closed — attachment stays with original owner, no membership transfer", async () => {
+    const { findOrCreateUserFromExternalAccount } = await import("../services/auth-identity.js");
+
+    // Create User A and attach the target OIDC identity via the service layer.
+    const identityA = await findOrCreateUserFromExternalAccount(app.db, {
+      provider: "oidc",
+      subject: JSON.stringify([ISSUER, "collision-subject"]),
+      usernameCandidates: ["collision-user-a"],
+      displayName: "Collision User A",
+      email: null,
+      avatarUrl: null,
+      metadata: { issuer: ISSUER, sub: "collision-subject" },
+    });
+    expect(identityA.created).toBe(true);
+    const userAId = identityA.userId;
+
+    // Attempt to create ANOTHER user via the same OIDC identity through the callback.
+    // The unique constraint on (provider, identifier) must prevent a second row.
     mockVerifyIdToken.mockResolvedValue(
       baseClaims("collision-subject", { email: "collision@example.com", email_verified: true }),
     );
-    const req1 = await buildCallbackRequest(app);
-    const res1 = await app.inject({ method: "GET", url: req1.url, headers: { cookie: req1.cookie } });
-    expect(res1.statusCode).toBe(302);
-    const frag1 = parseFragment(res1.headers.location as string);
-    expect(frag1.get("accountCreated")).toBe("1");
+    const req = await buildCallbackRequest(app);
+    const res = await app.inject({ method: "GET", url: req.url, headers: { cookie: req.cookie } });
+    expect(res.statusCode).toBe(302);
 
-    const firstIdentities = (await oidcIdentityRows(app)).filter(
+    // The callback must reuse User A — not create a new user.
+    const frag = parseFragment(res.headers.location as string);
+    expect(frag.get("error")).toBeNull();
+    expect(frag.get("accountCreated")).toBe("0"); // Reuse, NOT create
+
+    // Identity still points to original owner — no transfer.
+    const identities = (await oidcIdentityRows(app)).filter(
       (id) => id.identifier === JSON.stringify([ISSUER, "collision-subject"]),
     );
-    expect(firstIdentities).toHaveLength(1);
-    const originalUserId = firstIdentities[0]!.userId;
+    expect(identities).toHaveLength(1);
+    expect(identities[0]!.userId).toBe(userAId);
 
-    // Returning sign-in (same subject) must reuse the same user — no new identity, no membership transfer.
-    const req2 = await buildCallbackRequest(app);
-    const res2 = await app.inject({ method: "GET", url: req2.url, headers: { cookie: req2.cookie } });
-    expect(res2.statusCode).toBe(302);
-    const frag2 = parseFragment(res2.headers.location as string);
-    expect(frag2.get("accountCreated")).toBe("0"); // Reuse, not create
-    expect(frag2.get("error")).toBeNull();
+    // No extra users were created.
+    const userA = await app.db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userAId) });
+    expect(userA).toBeDefined();
 
-    // No new identity row was created; same userId.
-    const afterIdentities = (await oidcIdentityRows(app)).filter(
-      (id) => id.identifier === JSON.stringify([ISSUER, "collision-subject"]),
-    );
-    expect(afterIdentities).toHaveLength(1);
-    expect(afterIdentities[0]!.userId).toBe(originalUserId);
+    // Access token in the session belongs to User A.
+    const accessToken = frag.get("access")!;
+    const payloadB64 = accessToken.split(".")[1] ?? "";
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>;
+    expect(payload.sub).toBe(userAId);
   });
 
   it("ignores extra IdP claims (org/groups/roles) and does not create additional Team memberships", async () => {
@@ -456,17 +472,25 @@ describe("OIDC callback — acceptance", () => {
     const usersBefore = await app.db.select({ id: users.id }).from(users);
     const userCountBefore = usersBefore.length;
 
-    // Supply actual extra claims that an IdP might return for a user in an org.
-    // First Tree must ignore these entirely and not use them to create/modify Team memberships.
+    // Supply actual extra non-standard claims that an enterprise IdP might return.
+    // The callback code must only use allowed OidcIdTokenClaims fields and must
+    // never act on org/groups/roles to create or modify Team memberships.
     mockVerifyIdToken.mockResolvedValue(
-      baseClaims("sub-with-extra-claims", {
-        email: "org-user@example.com",
-        email_verified: true,
-        name: "Org User",
-        // Extra non-standard claims — IdP may send these for enterprise users.
-        // First Tree's verifyIdToken strips them (only returns OidcIdTokenClaims fields),
-        // and the callback code must not act on them even if they arrived.
-      }),
+      // Cast to include extra non-standard IdP claims that the callback must ignore.
+      // TypeScript allows extra properties via type intersections; the test verifies
+      // the callback only writes OidcIdTokenClaims fields to the DB.
+      Object.assign(
+        baseClaims("sub-with-extra-claims", {
+          email: "org-user@example.com",
+          email_verified: true,
+          name: "Org User",
+        }),
+        {
+          org: "acme-corp",
+          groups: ["engineering", "backend"],
+          roles: ["developer", "team-lead"],
+        },
+      ),
     );
 
     const { url, cookie } = await buildCallbackRequest(app);
