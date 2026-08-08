@@ -67,12 +67,15 @@ export function authEntryPoint(next: string): AuthEntryPoint {
 }
 
 export function authProviderForCallbackPath(pathname: string): AuthProvider {
-  // Prefer the provider stored when the auth attempt was started (covers OIDC
-  // and any future provider). Fall back to pathname inference for legacy flows
-  // that predate explicit provider tracking.
-  const stored = readAttempt();
-  if (stored) return stored.provider;
-  return pathname === "/auth/complete" ? "google" : "github";
+  // /auth/complete is shared by Google and OIDC; use the stored attempt to
+  // distinguish them. All other paths (e.g. /auth/github/complete) are
+  // unambiguous — the pathname is authoritative and stored state is ignored.
+  if (pathname === "/auth/complete") {
+    const stored = readAttempt();
+    if (stored) return stored.provider;
+    return "google";
+  }
+  return "github";
 }
 
 export function normalizeAuthFailureReason(value: string | null): AuthFailureReason {

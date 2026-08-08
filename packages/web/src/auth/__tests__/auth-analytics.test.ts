@@ -165,6 +165,14 @@ describe("auth analytics", () => {
     expect(authProviderForCallbackPath("/auth/complete")).toBe("oidc");
   });
 
+  it("GitHub callback path is authoritative even when an OIDC attempt is stored", () => {
+    // Stored OIDC attempt must not misattribute a GitHub callback to OIDC.
+    beginAuthAttempt("oidc", "/");
+    expect(authProviderForCallbackPath("/auth/github/complete")).toBe("github");
+    // /auth/complete is genuinely shared; stored attempt still identifies OIDC there.
+    expect(authProviderForCallbackPath("/auth/complete")).toBe("oidc");
+  });
+
   it("tracks OIDC sign-in start and success round-trip", () => {
     const attemptId = beginAuthAttempt("oidc", "/teams");
 
