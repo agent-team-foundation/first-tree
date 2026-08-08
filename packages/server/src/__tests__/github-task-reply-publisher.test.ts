@@ -550,6 +550,106 @@ describe("GitHub App task reply publisher", () => {
       }),
     ).rejects.toThrow(/reserved for server-authored GitHub task reply runs/);
   });
+
+  // Regression: five webhook events on one pull request at one unchanged head
+  // dispatched five runs, and each published its own byte-identical Context
+  // Reviewer verdict. Run-scoped idempotency could not see a sibling run, so
+  // the guarantee has to be cross-run.
+  describe("cross-run publication claim", () => {
+    const VERDICT_AT_HEAD = "**Recommendation: request changes**\n\nReviewed exact head `32e5d2d4`.";
+
+    it("lets one run publish the verdict and stops a sibling run repeating it on the same entity", async () => {
+      const fixture = await createRunFixture(getApp());
+      const sibling = await createSiblingRun(fixture);
+      const github = entityGithubFetcher();
+
+      await expect(
+        submitGithubTaskReply(publishInput(fixture, github.fetcher, VERDICT_AT_HEAD)),
+      ).resolves.toMatchObject({ commentId: 901 });
+      await expect(submitGithubTaskReply(publishInput(sibling, github.fetcher, VERDICT_AT_HEAD))).rejects.toMatchObject(
+        { statusCode: 409, code: "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION" },
+      );
+
+      expect(github.comments()).toHaveLength(1);
+      expect(github.comments()[0]?.body).toContain(`first-tree-github-task-reply-run:${fixture.runId}`);
+      // The loser read its own reply back off the entity, so its loss is
+      // terminal rather than a blind retry.
+      const [message] = await fixture.app.db
+        .select({ metadata: messages.metadata })
+        .from(messages)
+        .where(eq(messages.id, sibling.messageId));
+      expect(message?.metadata.githubTaskReplySubmission).toMatchObject({
+        state: "failed",
+        code: "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION",
+      });
+    });
+
+    it("publishes again once the head moves and the verdict changes", async () => {
+      const fixture = await createRunFixture(getApp());
+      const sibling = await createSiblingRun(fixture);
+      const github = entityGithubFetcher();
+
+      await expect(
+        submitGithubTaskReply(publishInput(fixture, github.fetcher, VERDICT_AT_HEAD)),
+      ).resolves.toMatchObject({ commentId: 901 });
+      await expect(
+        submitGithubTaskReply(
+          publishInput(sibling, github.fetcher, "**Recommendation: approve**\n\nReviewed exact head `9f01ab77`."),
+        ),
+      ).resolves.toMatchObject({ commentId: 902 });
+
+      expect(github.comments()).toHaveLength(2);
+    });
+
+    it("claims once when two runs for the same exact head publish concurrently", async () => {
+      const fixture = await createRunFixture(getApp());
+      const sibling = await createSiblingRun(fixture);
+      const github = entityGithubFetcher();
+
+      const results = await Promise.allSettled([
+        submitGithubTaskReply(publishInput(fixture, github.fetcher, VERDICT_AT_HEAD)),
+        submitGithubTaskReply(publishInput(sibling, github.fetcher, VERDICT_AT_HEAD)),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const [rejected] = results.filter((result) => result.status === "rejected");
+      expect(rejected?.reason).toMatchObject({ statusCode: 409, code: "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION" });
+      expect(github.comments()).toHaveLength(1);
+      expect(githubCommentPosts(github.fetcher)).toHaveLength(1);
+    });
+
+    it("releases the claim when GitHub definitively rejects the write", async () => {
+      const fixture = await createRunFixture(getApp());
+      const sibling = await createSiblingRun(fixture);
+      const rejecting = entityGithubFetcher({ post: "reject" });
+
+      await expect(
+        submitGithubTaskReply(publishInput(fixture, rejecting.fetcher, VERDICT_AT_HEAD)),
+      ).rejects.toMatchObject({ code: "GITHUB_TASK_REPLY_GITHUB_REJECTED" });
+
+      const accepting = entityGithubFetcher();
+      await expect(
+        submitGithubTaskReply(publishInput(sibling, accepting.fetcher, VERDICT_AT_HEAD)),
+      ).resolves.toMatchObject({ commentId: 901 });
+      expect(accepting.comments()).toHaveLength(1);
+    });
+
+    it("keeps the claim after an unknown write so no sibling run republishes behind it", async () => {
+      const fixture = await createRunFixture(getApp());
+      const sibling = await createSiblingRun(fixture);
+      const unknown = entityGithubFetcher({ post: "unknown" });
+
+      await expect(
+        submitGithubTaskReply(publishInput(fixture, unknown.fetcher, VERDICT_AT_HEAD)),
+      ).rejects.toMatchObject({ code: "GITHUB_TASK_REPLY_GITHUB_UNKNOWN" });
+
+      const siblingGithub = entityGithubFetcher();
+      await expect(
+        submitGithubTaskReply(publishInput(sibling, siblingGithub.fetcher, VERDICT_AT_HEAD)),
+      ).rejects.toMatchObject({ code: "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION" });
+      expect(githubCommentPosts(siblingGithub.fetcher)).toHaveLength(0);
+    });
+  });
 });
 
 async function createRunFixture(
@@ -603,20 +703,56 @@ async function createRunFixture(
     type: "group",
     participantIds: [agent.uuid],
   });
-  const runId = randomUUID();
   const entityType = options.entityType ?? "issue";
-  const entityUrl = `https://github.com/owner/repo/${entityType === "issue" ? "issues" : "pull"}/42`;
+  const run = await sendGithubTaskRun({
+    app,
+    chatId: chat.id,
+    humanAgentUuid: admin.humanAgentUuid,
+    organizationId: admin.organizationId,
+    agentUuid: agent.uuid,
+    entityType,
+  });
+  return { app, admin, agent, runtimeToken, chatId: chat.id, entityType, ...run };
+}
+
+/**
+ * A second automatically routed run for the SAME organization, chat, and
+ * entity — the shape webhook dispatch produces when several accepted events
+ * land on one pull request at one unchanged head.
+ */
+async function createSiblingRun(fixture: Awaited<ReturnType<typeof createRunFixture>>) {
+  const run = await sendGithubTaskRun({
+    app: fixture.app,
+    chatId: fixture.chatId,
+    humanAgentUuid: fixture.admin.humanAgentUuid,
+    organizationId: fixture.admin.organizationId,
+    agentUuid: fixture.agent.uuid,
+    entityType: fixture.entityType,
+  });
+  return { ...fixture, ...run };
+}
+
+async function sendGithubTaskRun(input: {
+  app: ReturnType<ReturnType<typeof useTestApp>>;
+  chatId: string;
+  humanAgentUuid: string;
+  organizationId: string;
+  agentUuid: string;
+  entityType: "issue" | "pull_request";
+}) {
+  const runId = randomUUID();
+  const entityUrl = `https://github.com/owner/repo/${input.entityType === "issue" ? "issues" : "pull"}/42`;
   const { message } = await sendMessage(
-    app.db,
-    chat.id,
-    admin.humanAgentUuid,
+    input.app.db,
+    input.chatId,
+    input.humanAgentUuid,
     {
       source: "github",
       format: "card",
       content: {
         type: "github_event",
         reason: "mentioned",
-        event: entityType === "issue" ? "issues" : "pull_request",
+        event: input.entityType === "issue" ? "issues" : "pull_request",
         action: "opened",
         kind: "commented",
         repository: "owner/repo",
@@ -624,21 +760,21 @@ async function createRunFixture(
         title: "Task",
         body: "@test-app-slug do it",
         url: entityUrl,
-        entity: { type: entityType, key: "owner/repo#42", url: entityUrl },
-        teamAgentTask: { agentUuid: agent.uuid, runId },
+        entity: { type: input.entityType, key: "owner/repo#42", url: entityUrl },
+        teamAgentTask: { agentUuid: input.agentUuid, runId },
       },
       metadata: {
-        mentions: [agent.uuid],
+        mentions: [input.agentUuid],
         source: "github",
         systemSender: "github",
-        teamAgentTask: { agentUuid: agent.uuid, runId },
+        teamAgentTask: { agentUuid: input.agentUuid, runId },
         githubTaskRun: true,
         githubTaskRunId: runId,
-        githubTaskOrganizationId: admin.organizationId,
-        githubTaskAgentUuid: agent.uuid,
-        githubTaskManagerHumanAgentId: admin.humanAgentUuid,
+        githubTaskOrganizationId: input.organizationId,
+        githubTaskAgentUuid: input.agentUuid,
+        githubTaskManagerHumanAgentId: input.humanAgentUuid,
         githubTaskRepository: "owner/repo",
-        githubTaskEntityType: entityType,
+        githubTaskEntityType: input.entityType,
         githubTaskEntityNumber: 42,
         githubTaskEntityUrl: entityUrl,
         githubTaskReplySubmission: { state: "pending" },
@@ -646,7 +782,7 @@ async function createRunFixture(
     },
     { allowSystemSender: true, allowGithubTaskRun: true },
   );
-  return { app, admin, agent, runtimeToken, chatId: chat.id, messageId: message.id, runId };
+  return { messageId: message.id, runId };
 }
 
 function publishInput(
@@ -698,6 +834,46 @@ function successfulGithubFetcher(
     }
     return new Response("not found", { status: 404 });
   });
+}
+
+/**
+ * A GitHub App fake that keeps the entity's comment thread, so a losing run's
+ * hidden-marker read-back sees exactly what an earlier run published.
+ */
+function entityGithubFetcher(options: { post?: "accept" | "reject" | "unknown" } = {}) {
+  const comments: Array<{ id: number; html_url: string; user: { login: string }; body: string }> = [];
+  let nextCommentId = 901;
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const target = String(url);
+    if (target.endsWith("/access_tokens")) {
+      return jsonResponse(
+        {
+          token: "installation-token",
+          expires_at: "2026-12-15T18:00:00Z",
+          permissions: { metadata: "read", issues: "write", pull_requests: "write" },
+          repository_selection: "selected",
+        },
+        201,
+      );
+    }
+    if (target.endsWith("/issues/42/comments") && init?.method === "POST") {
+      if (options.post === "reject") return new Response("rejected", { status: 422 });
+      if (options.post === "unknown") throw new TypeError("socket closed after request dispatch");
+      const payload = JSON.parse(String(init.body)) as { body: string };
+      const id = nextCommentId++;
+      const comment = {
+        id,
+        html_url: `https://github.com/owner/repo/issues/42#issuecomment-${id}`,
+        user: { login: "test-app-slug[bot]" },
+        body: payload.body,
+      };
+      comments.push(comment);
+      return jsonResponse(comment, 201);
+    }
+    if (target.includes("/issues/42/comments?per_page=100")) return jsonResponse(comments);
+    return new Response("not found", { status: 404 });
+  });
+  return { fetcher, comments: () => comments };
 }
 
 function failingGithubFetcher(phase: "token" | "comment", status: number) {
