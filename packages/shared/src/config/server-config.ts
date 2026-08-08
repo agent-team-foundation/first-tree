@@ -102,6 +102,28 @@ function serverSecretFields(autoGenerateSecrets: boolean) {
   };
 }
 
+const authModeSchema = z.enum(["standard", "oidc-required"]).default("standard");
+
+const oidcIssuerSchema = z
+  .string()
+  .min(1)
+  .transform((raw, ctx) => {
+    try {
+      const url = new URL(raw);
+      if (url.username || url.password || url.search || url.hash) {
+        ctx.addIssue({ code: "custom", message: "OIDC issuer must have no userinfo, query, or fragment" });
+        return z.NEVER;
+      }
+      // Return the exact configured issuer string unchanged (required by #2188).
+      // Keycloak/Azure/GitLab IdPs use paths (e.g., https://idp.example.com/realms/foo).
+      // This exact string must match discovery issuer and be stored in (issuer, sub).
+      return raw;
+    } catch {
+      ctx.addIssue({ code: "custom", message: "OIDC issuer must be a valid URL" });
+      return z.NEVER;
+    }
+  });
+
 export const serverConfigSchema = defineConfig({
   /**
    * Which release channel this server speaks to. Single switch that drives
@@ -380,6 +402,12 @@ export const serverConfigSchema = defineConfig({
        */
       slug: field(z.string().min(1).optional(), { env: "FIRST_TREE_GITHUB_APP_SLUG" }),
     }),
+  }),
+  authMode: field(authModeSchema, { env: "FIRST_TREE_AUTH_MODE" }),
+  oidc: optional({
+    issuer: field(oidcIssuerSchema, { env: "FIRST_TREE_OIDC_ISSUER" }),
+    clientId: field(z.string().min(1), { env: "FIRST_TREE_OIDC_CLIENT_ID" }),
+    clientSecret: field(z.string().min(1), { env: "FIRST_TREE_OIDC_CLIENT_SECRET", secret: true }),
   }),
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),

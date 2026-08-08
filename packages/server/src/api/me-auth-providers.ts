@@ -1,15 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { authProviderParamsSchema, oauthStartQuerySchema, safeRedirectPath } from "@first-tree/shared";
+import {
+  type AuthProviderAvailability,
+  authProviderParamsSchema,
+  oauthStartQuerySchema,
+  safeRedirectPath,
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { requireUser } from "../scope/require-user.js";
-import {
-  type AuthCredentialSnapshot,
-  type AuthProviderAvailability,
-  hasUsableAuthentication,
-} from "../services/auth-identity.js";
+import { type AuthCredentialSnapshot, hasUsableAuthentication } from "../services/auth-identity.js";
 import { buildAppAuthorizeUrl } from "../services/github-app.js";
 import { buildGoogleAuthorizeUrl } from "../services/google-oauth.js";
 import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../services/oauth-state.js";
@@ -204,7 +205,8 @@ async function startProviderAction(
 
 function configuredProviders(app: FastifyInstance): AuthProviderAvailability {
   return {
-    google: Boolean(app.config.oauth?.google),
+    google: app.config.authMode === "oidc-required" ? false : Boolean(app.config.oauth?.google),
     github: Boolean(app.config.oauth?.githubApp),
+    oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
   };
 }

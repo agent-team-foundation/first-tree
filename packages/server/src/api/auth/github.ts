@@ -87,6 +87,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
 
+    // In oidc-required mode, reject sign-in intent; capability intents (link/unlink/install) remain allowed
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled", error: "GitHub sign-in is disabled" });
+    }
+
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, {
       intent: "sign-in",
       provider: "github",
@@ -353,6 +358,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
           {
             google: Boolean(app.config.oauth?.google),
             github: Boolean(app.config.oauth?.githubApp),
+            oidc: app.config.authMode === "oidc-required" && Boolean(app.config.oidc),
           },
           targetIdentityId ?? "",
         );
@@ -367,6 +373,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
           return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=last-provider`, 302);
         throw error;
       }
+    }
+
+    // In oidc-required mode, reject sign-in intent (install is allowed and doesn't mint session)
+    if (app.config.authMode === "oidc-required" && intent === "sign-in") {
+      return redirectCallbackError(reply, "sign-in-method-disabled", next, { callbackIntent: intent });
     }
 
     return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
@@ -402,6 +413,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       app.log.info({ url: request.url }, "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set");
       return reply.status(404).send({ error: "Not found" });
     }
+
+    // In oidc-required mode, reject GitHub sign-in
+    if (app.config.authMode === "oidc-required") {
+      return reply.status(403).send({ code: "sign-in-method-disabled", error: "GitHub sign-in disabled in OIDC mode" });
+    }
+
     const params = githubDevCallbackQuerySchema.parse(request.query);
     const next = safeRedirectPath(params.next ?? null);
 
@@ -501,6 +518,7 @@ type CallbackErrorCode =
   | "identity-conflict"
   | "identity-mismatch"
   | "last-provider"
+  | "sign-in-method-disabled"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
@@ -901,6 +919,16 @@ async function completeOauthFlow(
         accountCreated: account.created,
       });
     return reply.status(500).send({ error: "Failed to resolve membership" });
+  }
+
+  // In oidc-required mode, install callbacks must NOT mint a new GitHub session.
+  // The existing OIDC session remains active; only redirect with install metadata.
+  if (app.config.authMode === "oidc-required" && callbackIntent === "install") {
+    const fragmentParams: Record<string, string> = { next, callbackIntent };
+    if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
+    if (orgPinned) fragmentParams.orgPinned = "1";
+    const fragment = new URLSearchParams(fragmentParams).toString();
+    return reply.redirect(`/auth/complete#${fragment}`, 302);
   }
 
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);

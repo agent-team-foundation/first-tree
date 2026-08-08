@@ -44,10 +44,10 @@ export function extractGrowthLandingPagesEnabled(data: unknown): boolean {
 
 export function extractAuthProviderAvailability(data: unknown): AuthProviderAvailability {
   if (typeof data !== "object" || data === null || !("authProviders" in data)) {
-    return { google: false, github: false };
+    return { google: false, github: false, oidc: false };
   }
   const result = authProviderAvailabilitySchema.safeParse(data.authProviders);
-  return result.success ? result.data : { google: false, github: false };
+  return result.success ? result.data : { google: false, github: false, oidc: false };
 }
 
 export function extractConnectBootstrapCommandTemplate(data: unknown): ConnectBootstrapCommandTemplate | null {
@@ -140,7 +140,7 @@ export function useAuthProviderAvailabilityState(): {
 } {
   const { config, settled } = useServerBootstrapConfig();
   return {
-    providers: config?.authProviders ?? { google: false, github: false },
+    providers: config?.authProviders ?? { google: false, github: false, oidc: false },
     settled,
   };
 }

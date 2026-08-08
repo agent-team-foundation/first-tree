@@ -51,7 +51,7 @@ type StatePayload = {
   installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
-  provider?: "google" | "github";
+  provider?: "google" | "github" | "oidc";
   oidcNonce?: string;
   targetIdentityId?: string;
 };
@@ -65,7 +65,7 @@ export type SignOAuthStateOptions = {
   installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
-  provider?: "google" | "github";
+  provider?: "google" | "github" | "oidc";
   oidcNonce?: string;
   targetIdentityId?: string;
 };
@@ -123,7 +123,7 @@ export async function verifyOAuthState(
   installPhase?: "identity" | "installation";
   intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
-  provider?: "google" | "github";
+  provider?: "google" | "github" | "oidc";
   oidcNonce?: string;
   targetIdentityId?: string;
 }> {
@@ -151,7 +151,12 @@ export async function verifyOAuthState(
   if (payload.intent !== undefined && !["sign-in", "link", "unlink", "install"].includes(payload.intent)) {
     throw new Error("OAuth state payload malformed");
   }
-  if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github") {
+  if (
+    payload.provider !== undefined &&
+    payload.provider !== "google" &&
+    payload.provider !== "github" &&
+    payload.provider !== "oidc"
+  ) {
     throw new Error("OAuth state payload malformed");
   }
   for (const value of [payload.userId, payload.oidcNonce]) {

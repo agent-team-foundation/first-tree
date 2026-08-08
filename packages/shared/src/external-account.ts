@@ -1,4 +1,4 @@
-import type { AuthProvider } from "./schemas/oauth.js";
+import type { SignInProvider } from "./schemas/oauth.js";
 
 export const USERNAME_MAX_LENGTH = 100;
 export const USERNAME_SUFFIX_RESERVE = 13;
@@ -6,7 +6,7 @@ export const USERNAME_BASE_MAX_LENGTH = USERNAME_MAX_LENGTH - USERNAME_SUFFIX_RE
 export const DISPLAY_NAME_MAX_LENGTH = 200;
 
 export type ExternalAccountProfile = {
-  provider: AuthProvider;
+  provider: SignInProvider;
   subject: string;
   usernameCandidates: string[];
   displayName: string | null;

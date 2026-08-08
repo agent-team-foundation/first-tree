@@ -97,7 +97,7 @@ describe("GET /bootstrap/config — authentication provider availability", () =>
     const app = await createTestApp({ googleOAuth: true, githubOAuth: false });
     try {
       const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
-      expect(res.json().authProviders).toEqual({ google: true, github: false });
+      expect(res.json().authProviders).toEqual({ google: true, github: false, oidc: false });
     } finally {
       await app.close();
     }
@@ -107,7 +107,7 @@ describe("GET /bootstrap/config — authentication provider availability", () =>
     const app = await createTestApp({ githubOAuth: true });
     try {
       const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
-      expect(res.json().authProviders).toEqual({ google: false, github: true });
+      expect(res.json().authProviders).toEqual({ google: false, github: true, oidc: false });
     } finally {
       await app.close();
     }

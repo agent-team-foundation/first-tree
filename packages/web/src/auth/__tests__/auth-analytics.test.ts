@@ -157,4 +157,86 @@ describe("auth analytics", () => {
     expect(authEntryPoint("/settings/integrations/github")).toBe("deep_link");
     expect(normalizeAuthFailureReason("provider-denied")).toBe("provider-denied");
   });
+
+  it("recovers provider from stored attempt for OIDC callbacks", () => {
+    // When an OIDC attempt was started, authProviderForCallbackPath must return
+    // "oidc" rather than the legacy fallback "google".
+    beginAuthAttempt("oidc", "/");
+    expect(authProviderForCallbackPath("/auth/complete")).toBe("oidc");
+  });
+
+  it("GitHub callback path is authoritative even when an OIDC attempt is stored", () => {
+    // Stored OIDC attempt must not misattribute a GitHub callback to OIDC.
+    beginAuthAttempt("oidc", "/");
+    expect(authProviderForCallbackPath("/auth/github/complete")).toBe("github");
+    // /auth/complete is genuinely shared; stored attempt still identifies OIDC there.
+    expect(authProviderForCallbackPath("/auth/complete")).toBe("oidc");
+  });
+
+  it("tracks OIDC sign-in start and success round-trip", () => {
+    const attemptId = beginAuthAttempt("oidc", "/teams");
+
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("auth_started", {
+      auth_attempt_id: attemptId,
+      provider: "oidc",
+      entry_point: "deep_link",
+    });
+
+    finishAuthAttempt({ provider: "oidc", result: "success", next: "/teams", joinPath: "solo", accountCreated: true });
+
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("auth_result", {
+      auth_attempt_id: attemptId,
+      provider: "oidc",
+      result: "success",
+      entry_point: "deep_link",
+      join_path: "solo",
+      account_type: "created",
+    });
+  });
+
+  it("tracks OIDC sign-in-method-disabled as a bounded failure reason", () => {
+    const attemptId = beginAuthAttempt("oidc", "/");
+    finishAuthAttempt({
+      provider: "oidc",
+      result: "failed",
+      next: "/",
+      joinPath: undefined,
+      reasonCode: normalizeAuthFailureReason("sign-in-method-disabled"),
+      accountCreated: null,
+    });
+
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("auth_result", {
+      auth_attempt_id: attemptId,
+      provider: "oidc",
+      result: "failed",
+      entry_point: "login",
+      join_path: "unknown",
+      account_type: "unknown",
+      reason_code: "sign-in-method-disabled",
+    });
+  });
+
+  it("tracks provider-unavailable as a bounded failure reason without leaking provider data", () => {
+    const attemptId = beginAuthAttempt("oidc", "/");
+    finishAuthAttempt({
+      provider: "oidc",
+      result: "failed",
+      next: "/",
+      joinPath: undefined,
+      reasonCode: normalizeAuthFailureReason("provider-unavailable"),
+      accountCreated: null,
+    });
+
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("auth_result", {
+      auth_attempt_id: attemptId,
+      provider: "oidc",
+      result: "failed",
+      entry_point: "login",
+      join_path: "unknown",
+      account_type: "unknown",
+      reason_code: "provider-unavailable",
+    });
+    // Discovery/service failures must not emit sign_up.
+    expect(analyticsMocks.trackEvent.mock.calls.some(([name]) => name === "sign_up")).toBe(false);
+  });
 });

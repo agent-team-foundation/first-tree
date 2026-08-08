@@ -53,8 +53,14 @@ export function LoginPage() {
     redirectTo === "/"
       ? "/api/v1/auth/google/start"
       : `/api/v1/auth/google/start?next=${encodeURIComponent(redirectTo)}`;
+  const oidcHref =
+    redirectTo === "/" ? "/api/v1/auth/oidc/start" : `/api/v1/auth/oidc/start?next=${encodeURIComponent(redirectTo)}`;
 
-  const availableProviderLabels = [...(providers.google ? ["Google"] : []), ...(providers.github ? ["GitHub"] : [])];
+  const availableProviderLabels = [
+    ...(providers.google ? ["Google"] : []),
+    ...(providers.github ? ["GitHub"] : []),
+    ...(providers.oidc ? ["SSO"] : []),
+  ];
 
   // Stable dev identity — same id every time so reloads land on the same
   // user, agents, and conversations. Using `1` (not the more obvious 42)
@@ -128,6 +134,14 @@ export function LoginPage() {
                     <a href={githubHref} onClick={() => beginAuthAttempt("github", redirectTo)}>
                       <Github className="h-4 w-4" />
                       Continue with GitHub
+                    </a>
+                  </Button>
+                )}
+                {providers.oidc && (
+                  <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
+                    <a href={oidcHref} onClick={() => beginAuthAttempt("oidc", redirectTo)}>
+                      <Lock className="h-4 w-4" />
+                      Continue with SSO
                     </a>
                   </Button>
                 )}

@@ -64,6 +64,21 @@ export type CreateTestAppOptions = {
   channel?: Config["channel"];
   googleOAuth?: boolean;
   githubOAuth?: boolean;
+  /**
+   * Deployment auth mode. Defaults to `"standard"`. Set to `"oidc-required"`
+   * to exercise the enterprise SSO enforcement paths (mode guards on
+   * password/Google/GitHub sign-in, GitHub-install session preservation,
+   * and the OIDC callback happy path). When `"oidc-required"` is requested
+   * the helper also injects a default `oidc` block unless one is provided.
+   */
+  authMode?: Config["authMode"];
+  /**
+   * OIDC provider config injected into `config.oidc`. The values are only
+   * consumed by the OIDC routes/service; acceptance tests mock the network
+   * layer (`fetchDiscovery`, `exchangeOidcCode`, `verifyIdToken`,
+   * `fetchUserInfo`) so `issuer` just needs to be a stable identity key.
+   */
+  oidc?: Config["oidc"];
   /** Document review (docloop) routes. Defaults to enabled in tests. */
   docsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
@@ -203,6 +218,18 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       },
     },
     trustProxy: false,
+    authMode: opts.authMode ?? "standard",
+    ...(opts.oidc !== undefined
+      ? { oidc: opts.oidc }
+      : opts.authMode === "oidc-required"
+        ? {
+            oidc: {
+              issuer: "https://idp.test",
+              clientId: "test-oidc-client-id",
+              clientSecret: "test-oidc-client-secret",
+            },
+          }
+        : {}),
     connectBootstrap: {
       portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
       ...opts.connectBootstrap,

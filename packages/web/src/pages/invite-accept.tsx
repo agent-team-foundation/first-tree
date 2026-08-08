@@ -104,6 +104,7 @@ export function InviteAcceptPage() {
 
   const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
   const continueGoogleOauthHref = `/api/v1/auth/google/start?next=${encodeURIComponent(`/invite/${token}`)}`;
+  const continueOidcHref = `/api/v1/auth/oidc/start?next=${encodeURIComponent(`/invite/${token}`)}`;
 
   return (
     <InviteAcceptShell>
@@ -115,8 +116,10 @@ export function InviteAcceptPage() {
         onJoin={handleJoin}
         oauthHref={continueOauthHref}
         googleOauthHref={continueGoogleOauthHref}
+        oidcHref={continueOidcHref}
         googleAvailable={providers.google}
         githubAvailable={providers.github}
+        oidcAvailable={providers.oidc}
         providersSettled={providersSettled}
         onAuthStart={(provider) => beginAuthAttempt(provider, `/invite/${token}`)}
       />
@@ -151,8 +154,10 @@ export function InviteAcceptCard({
   onJoin,
   oauthHref,
   googleOauthHref,
+  oidcHref,
   googleAvailable = true,
   githubAvailable = true,
+  oidcAvailable = false,
   providersSettled = true,
   onAuthStart,
 }: {
@@ -163,8 +168,10 @@ export function InviteAcceptCard({
   onJoin: () => void;
   oauthHref: string;
   googleOauthHref?: string;
+  oidcHref?: string;
   googleAvailable?: boolean;
   githubAvailable?: boolean;
+  oidcAvailable?: boolean;
   providersSettled?: boolean;
   onAuthStart?: (provider: AuthProvider) => void;
 }) {
@@ -209,6 +216,13 @@ export function InviteAcceptCard({
               <p className="text-center text-label text-muted-foreground">Loading sign-in options…</p>
             ) : (
               <>
+                {oidcAvailable && (
+                  <Button asChild className="w-full">
+                    <a href={oidcHref} onClick={() => onAuthStart?.("oidc")}>
+                      Continue with SSO to join
+                    </a>
+                  </Button>
+                )}
                 {googleAvailable && (
                   <Button asChild className="w-full">
                     <a href={googleOauthHref ?? oauthHref} onClick={() => onAuthStart?.("google")}>
@@ -225,7 +239,7 @@ export function InviteAcceptCard({
                     </a>
                   </Button>
                 )}
-                {!googleAvailable && !githubAvailable && (
+                {!oidcAvailable && !googleAvailable && !githubAvailable && (
                   <p className="text-center text-label text-muted-foreground">
                     No sign-in providers are configured. Contact your administrator.
                   </p>

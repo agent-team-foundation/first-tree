@@ -2,17 +2,19 @@ import { trackEvent } from "../analytics.js";
 
 const AUTH_ATTEMPT_KEY = "first-tree:auth-attempt";
 
-export type AuthProvider = "google" | "github";
+export type AuthProvider = "google" | "github" | "oidc";
 export type AuthEntryPoint = "login" | "deep_link" | "invite" | "campaign";
 export type AuthJoinPath = "solo" | "invite" | "returning" | "unknown";
 export type AuthFailureReason =
   | "state-expired"
   | "provider-denied"
   | "provider-not-configured"
+  | "provider-unavailable"
   | "provider-exchange-failed"
   | "identity-conflict"
   | "identity-mismatch"
   | "last-provider"
+  | "sign-in-method-disabled"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
@@ -40,10 +42,12 @@ const CALLBACK_FAILURE_REASONS = new Set<AuthFailureReason>([
   "state-expired",
   "provider-denied",
   "provider-not-configured",
+  "provider-unavailable",
   "provider-exchange-failed",
   "identity-conflict",
   "identity-mismatch",
   "last-provider",
+  "sign-in-method-disabled",
   "github-exchange-failed",
   "install-not-admin",
   "install-not-verified",
@@ -63,7 +67,15 @@ export function authEntryPoint(next: string): AuthEntryPoint {
 }
 
 export function authProviderForCallbackPath(pathname: string): AuthProvider {
-  return pathname === "/auth/complete" ? "google" : "github";
+  // /auth/complete is shared by Google and OIDC; use the stored attempt to
+  // distinguish them. All other paths (e.g. /auth/github/complete) are
+  // unambiguous — the pathname is authoritative and stored state is ignored.
+  if (pathname === "/auth/complete") {
+    const stored = readAttempt();
+    if (stored) return stored.provider;
+    return "google";
+  }
+  return "github";
 }
 
 export function normalizeAuthFailureReason(value: string | null): AuthFailureReason {
@@ -97,7 +109,7 @@ function readAttempt(): StoredAuthAttempt | null {
     const parsed = JSON.parse(raw) as Partial<StoredAuthAttempt>;
     if (
       typeof parsed.id !== "string" ||
-      (parsed.provider !== "google" && parsed.provider !== "github") ||
+      (parsed.provider !== "google" && parsed.provider !== "github" && parsed.provider !== "oidc") ||
       !parsed.entryPoint ||
       !["login", "deep_link", "invite", "campaign"].includes(parsed.entryPoint) ||
       (parsed.scanAttemptId !== undefined && !UUID_RE.test(parsed.scanAttemptId)) ||

@@ -1,4 +1,4 @@
-import { safeRedirectPath } from "@first-tree/shared";
+import { type SignInProvider, safeRedirectPath } from "@first-tree/shared";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -22,10 +22,12 @@ const CALLBACK_ERROR_COPY: Record<string, string> = {
   "state-expired": "This authentication request took too long or was already used. Head back and start again.",
   "provider-denied": "GitHub authorization was canceled. Head back and start again when you're ready.",
   "provider-not-configured": "This sign-in provider is not configured on this First Tree deployment.",
+  "provider-unavailable": "The sign-in provider is temporarily unavailable. Please try again in a moment.",
   "provider-exchange-failed": "The sign-in provider did not accept the authentication handshake. Try again.",
   "identity-conflict": "That external account already belongs to another First Tree user.",
   "identity-mismatch": "You selected a different external account. Start again with the connected account.",
   "last-provider": "Connect another sign-in method before disconnecting this one.",
+  "sign-in-method-disabled": "This sign-in method is disabled on this deployment.",
   "github-exchange-failed": "GitHub didn't accept the sign-in handshake. Head back and try again in a moment.",
   "install-not-admin":
     "The GitHub App was installed, but connecting it needs an admin of the First Tree team it was started from. Ask a team admin to finish the connection from Settings → GitHub.",
@@ -80,7 +82,18 @@ export function OAuthCompletePage() {
     const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
     const expectedGithubLogin = params.get("expectedGithubLogin");
-    const provider = authProviderForCallbackPath(window.location.pathname);
+    // Prefer explicit provider from fragment (OIDC always sets it); fallback to pathname inference.
+    // Parse provider from fragment with runtime validation
+    const providerParam = params.get("provider");
+    let provider: SignInProvider;
+    if (providerParam === "google" || providerParam === "github" || providerParam === "oidc") {
+      provider = providerParam;
+    } else if (providerParam === null) {
+      provider = authProviderForCallbackPath(window.location.pathname);
+    } else {
+      // Invalid provider string - treat as error
+      provider = authProviderForCallbackPath(window.location.pathname);
+    }
     const accountCreatedRaw = params.get("accountCreated");
     const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
     const callbackIntent = params.get("callbackIntent");
@@ -123,7 +136,30 @@ export function OAuthCompletePage() {
       return;
     }
 
+    // In oidc-required mode, GitHub install callbacks return metadata-only (no tokens)
+    // to preserve the existing OIDC session. Handle this as a successful capability completion.
     if (!accessToken || !refreshToken) {
+      // If this is an error-free install callback without tokens, it's the metadata-only
+      // OIDC-mode install completion. Apply org, clear fragment, and navigate.
+      if (!errorCode && callbackIntent === "install") {
+        window.history.replaceState(null, "", window.location.pathname);
+        // Apply the pinned org when present
+        if (org && orgPinned) {
+          void (async () => {
+            try {
+              await selectOrganization(org);
+              navigate(safeRedirectPath(next) ?? "/");
+            } catch (err) {
+              setError("Failed to activate organization. Please try again.");
+            }
+          })();
+        } else {
+          navigate(safeRedirectPath(next) ?? "/");
+        }
+        return;
+      }
+
+      // Otherwise, missing tokens is a sign-in failure
       if (shouldReportAuth)
         finishAuthAttempt({
           provider,

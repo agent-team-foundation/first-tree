@@ -32,6 +32,7 @@ import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { googleOauthRoutes } from "./api/auth/google.js";
+import { oidcRoutes } from "./api/auth/oidc.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { chatRoutes } from "./api/chats.js";
@@ -534,6 +535,7 @@ export async function buildApp(config: Config, options: BuildAppOptions = {}) {
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(googleOauthRoutes, { prefix: "/auth/google" });
+      await api.register(oidcRoutes, { prefix: "/auth/oidc" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
       // Public read for manager-uploaded agent avatars — `<img src>` cannot

@@ -1147,7 +1147,6 @@ export {
   notificationTypeSchema,
 } from "./schemas/notification.js";
 export {
-  AUTH_PROVIDERS,
   type AuthProvider,
   type AuthProviderActionResult,
   type AuthProviderAvailability,
@@ -1158,6 +1157,7 @@ export {
   authProviderConnectionSchema,
   authProviderConnectionsResponseSchema,
   authProviderParamsSchema,
+  authProviderSchema,
   type GithubCallbackQuery,
   type GithubDevCallbackQuery,
   type GithubStartQuery,
@@ -1166,14 +1166,20 @@ export {
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
   googleCallbackQuerySchema,
+  LINKABLE_PROVIDERS,
   OAUTH_ERROR_CODES,
   OAUTH_INTENTS,
   type OAuthErrorCode,
   type OAuthIntent,
   type OAuthStartQuery,
+  type OidcCallbackQuery,
   oauthErrorCodeSchema,
   oauthIntentSchema,
   oauthStartQuerySchema,
+  oidcCallbackQuerySchema,
+  SIGN_IN_PROVIDERS,
+  type SignInProvider,
+  signInProviderSchema,
 } from "./schemas/oauth.js";
 export {
   type ContextTreeActiveBinding,

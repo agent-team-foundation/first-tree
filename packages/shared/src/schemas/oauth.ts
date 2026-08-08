@@ -1,14 +1,30 @@
 import { z } from "zod";
 
-export const AUTH_PROVIDERS = ["google", "github"] as const;
-export const authProviderSchema = z.enum(AUTH_PROVIDERS);
+// Internal sign-in identity provider type — includes oidc for server-side identity resolution.
+// Do NOT use this for Account Settings link/unlink surfaces.
+export const SIGN_IN_PROVIDERS = ["google", "github", "oidc"] as const;
+export const signInProviderSchema = z.enum(SIGN_IN_PROVIDERS);
+export type SignInProvider = z.infer<typeof signInProviderSchema>;
+
+// Linkable/unlinkable providers exposed in Account Settings — oidc is intentionally excluded.
+export const LINKABLE_PROVIDERS = ["google", "github"] as const;
+export const authProviderSchema = z.enum(LINKABLE_PROVIDERS);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
 
+// oidc is optional for rolling-deploy compatibility: older Server responses omit it,
+// and a new Web bundle must not fail parsing or hide existing providers in that case.
 export const authProviderAvailabilitySchema = z.object({
   google: z.boolean(),
   github: z.boolean(),
+  oidc: z.boolean().optional().default(false),
 });
-export type AuthProviderAvailability = z.infer<typeof authProviderAvailabilitySchema>;
+// Explicit type - Zod 4's .optional().default() should infer required, but we define it explicitly
+// to ensure TypeScript recognizes all three fields as required after parsing.
+export type AuthProviderAvailability = {
+  google: boolean;
+  github: boolean;
+  oidc: boolean;
+};
 
 export const OAUTH_INTENTS = ["sign-in", "link", "unlink"] as const;
 export const oauthIntentSchema = z.enum(OAUTH_INTENTS);
@@ -58,6 +74,7 @@ export const authProviderParamsSchema = z.object({ provider: authProviderSchema 
 export const OAUTH_ERROR_CODES = [
   "state-expired",
   "provider-not-configured",
+  "provider-unavailable",
   "provider-exchange-failed",
   "identity-conflict",
   "identity-mismatch",
@@ -66,6 +83,7 @@ export const OAUTH_ERROR_CODES = [
   "invite-invalid",
   "invite-not-allowed",
   "invite-required",
+  "sign-in-method-disabled",
 ] as const;
 export const oauthErrorCodeSchema = z.enum(OAUTH_ERROR_CODES);
 export type OAuthErrorCode = z.infer<typeof oauthErrorCodeSchema>;
@@ -156,3 +174,28 @@ export const githubDevCallbackQuerySchema = z.object({
   installationAccountGithubId: z.string().regex(/^\d+$/).optional(),
 });
 export type GithubDevCallbackQuery = z.infer<typeof githubDevCallbackQuerySchema>;
+
+/**
+ * OIDC callback query schema — validates the OAuth callback from the identity provider.
+ * Either a provider error or both code and state must be present.
+ */
+export const oidcCallbackQuerySchema = z
+  .object({
+    /**
+     * OAuth authorization code from the IdP.
+     */
+    code: z.string().min(1).max(2048).optional(),
+    /**
+     * Signed First Tree state JWT.
+     */
+    state: z.string().min(1).max(4096).optional(),
+    /**
+     * Provider-side error. Bounded to prevent log injection — the route
+     * logs only a fixed internal reason, not this raw provider value.
+     */
+    error: z.string().min(1).max(128).optional(),
+  })
+  .refine(({ code, state, error }) => Boolean(error || (code && state)), {
+    message: "OIDC callback must include an error or both code and state",
+  });
+export type OidcCallbackQuery = z.infer<typeof oidcCallbackQuerySchema>;
