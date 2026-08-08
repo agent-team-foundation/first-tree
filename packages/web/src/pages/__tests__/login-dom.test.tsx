@@ -43,7 +43,8 @@ vi.mock("../../components/first-tree-logo.js", () => ({
 }));
 
 vi.mock("../../components/ui/button.js", () => ({
-  Button: ({ children, asChild }: { children: ReactNode; asChild?: boolean }) => (asChild ? <>{children}</> : <button>{children}</button>),
+  Button: ({ children, asChild }: { children: ReactNode; asChild?: boolean }) =>
+    asChild ? children : <button type="button">{children}</button>,
 }));
 
 import { LoginPage } from "../login.js";

@@ -401,12 +401,12 @@ describe("OIDC callback — acceptance", () => {
       (id) => id.identifier === JSON.stringify([ISSUER, "concurrent-subject"]),
     );
     expect(concurrentIdentities).toHaveLength(1);
-    const canonicalUserId = concurrentIdentities[0]!.userId;
+    const canonicalUserId = concurrentIdentities[0]?.userId;
 
     // Any sessions that completed must both carry the canonical userId.
     // Decode the JWT payload to inspect the subject without making an HTTP call.
     for (const f of sessioned) {
-      const accessToken = f.get("access")!;
+      const accessToken = f.get("access") ?? "";
       // JWT is three base64url segments; middle is the payload.
       const payloadB64 = accessToken.split(".")[1] ?? "";
       const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>;
@@ -415,7 +415,7 @@ describe("OIDC callback — acceptance", () => {
 
     // No orphan: the identity row points to the single new user.
     const newUser = usersAfter.find((u) => !usersBefore.some((b) => b.id === u.id));
-    expect(newUser!.id).toBe(canonicalUserId);
+    expect(newUser?.id).toBe(canonicalUserId);
   });
 
   it("pre-existing identity collision: fail-closed — attachment stays with original owner, no membership transfer", async () => {
@@ -453,14 +453,14 @@ describe("OIDC callback — acceptance", () => {
       (id) => id.identifier === JSON.stringify([ISSUER, "collision-subject"]),
     );
     expect(identities).toHaveLength(1);
-    expect(identities[0]!.userId).toBe(userAId);
+    expect(identities[0]?.userId).toBe(userAId);
 
     // No extra users were created.
     const userA = await app.db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userAId) });
     expect(userA).toBeDefined();
 
     // Access token in the session belongs to User A.
-    const accessToken = frag.get("access")!;
+    const accessToken = frag.get("access") ?? "";
     const payloadB64 = accessToken.split(".")[1] ?? "";
     const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>;
     expect(payload.sub).toBe(userAId);
@@ -504,7 +504,7 @@ describe("OIDC callback — acceptance", () => {
     const identities = await oidcIdentityRows(app);
     const identity = identities.find((id) => id.identifier === JSON.stringify([ISSUER, "sub-with-extra-claims"]));
     expect(identity).toBeDefined();
-    const userId = identity!.userId;
+    const userId = identity?.userId;
 
     // Exactly 1 new user should have been created (the global user)
     const usersAfter = await app.db.select({ id: users.id }).from(users);
@@ -513,14 +513,12 @@ describe("OIDC callback — acceptance", () => {
     // Exactly 1 new membership should have been created (the ordinary first-login personal org).
     // No additional memberships should have been created from IdP claims.
     const membersAfter = await app.db.select({ id: members.id, userId: members.userId }).from(members);
-    const newMemberships = membersAfter.filter(
-      (m) => !membersBefore.some((b) => b.id === m.id),
-    );
+    const newMemberships = membersAfter.filter((m) => !membersBefore.some((b) => b.id === m.id));
     expect(newMemberships).toHaveLength(1);
-    expect(newMemberships[0]!.userId).toBe(userId);
+    expect(newMemberships[0]?.userId).toBe(userId);
 
     // Verify the identity metadata does NOT persist org/group/role IdP claims
-    const metadata = identity!.metadata as Record<string, unknown>;
+    const metadata = identity?.metadata as Record<string, unknown>;
     expect(metadata.issuer).toBe(ISSUER);
     expect(metadata.sub).toBe("sub-with-extra-claims");
     expect(metadata.org).toBeUndefined();

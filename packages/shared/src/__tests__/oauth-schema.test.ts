@@ -4,8 +4,8 @@ import {
   authProviderConnectionsResponseSchema,
   githubCallbackQuerySchema,
   googleCallbackQuerySchema,
-  oidcCallbackQuerySchema,
   oauthIntentSchema,
+  oidcCallbackQuerySchema,
 } from "../schemas/oauth.js";
 
 describe("OAuth schemas", () => {
