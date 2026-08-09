@@ -120,6 +120,9 @@ vi.mock("react-router", async (importOriginal) => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
+const analyticsMocks = vi.hoisted(() => ({ trackEvent: vi.fn() }));
+vi.mock("../../analytics.js", () => analyticsMocks);
+
 const authMock = vi.hoisted(() => {
   const memberships: MeMembership[] = [];
   const currentMembership: MeMembership | null = null;
@@ -1624,14 +1627,15 @@ describe("web DOM interaction coverage", () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
     const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     // Start an OIDC attempt so finishAuthAttempt can join and consume it.
-    beginAuthAttempt("oidc", "/login");
+    const attemptId = beginAuthAttempt("oidc", "/login");
     expect(window.sessionStorage.getItem("first-tree:auth-attempt")).not.toBeNull();
 
+    // Use the full Server-issued fragment shape including callbackIntent=sign-in.
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
         ...window.location,
-        hash: "#error=provider-unavailable&next=/login&provider=oidc",
+        hash: "#error=provider-unavailable&next=/login&provider=oidc&callbackIntent=sign-in",
         pathname: "/auth/complete",
       },
     });
@@ -1642,6 +1646,18 @@ describe("web DOM interaction coverage", () => {
     expect(result.container.textContent).toContain("temporarily unavailable");
     // The OIDC auth attempt must be consumed (finishAuthAttempt called).
     expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
+    // trackEvent must emit the exact bounded auth_result payload.
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("auth_result", {
+      provider: "oidc",
+      result: "failed",
+      entry_point: "deep_link",
+      join_path: "unknown",
+      account_type: "unknown",
+      auth_attempt_id: attemptId,
+      reason_code: "provider-unavailable",
+    });
+    // No sign_up event for a failed attempt.
+    expect(analyticsMocks.trackEvent.mock.calls.some(([name]: [string]) => name === "sign_up")).toBe(false);
     await unmountRoot(result.root);
   });
 
