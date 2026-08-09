@@ -14,7 +14,7 @@ describe("chunkAssistantText", () => {
   });
 
   it("splits text over the limit into consecutive chunks with NO loss", () => {
-    const text = "a".repeat(ASSISTANT_TEXT_EVENT_LIMIT) + "b".repeat(ASSISTANT_TEXT_EVENT_LIMIT) + "ccc";
+    const text = `${"a".repeat(ASSISTANT_TEXT_EVENT_LIMIT) + "b".repeat(ASSISTANT_TEXT_EVENT_LIMIT)}ccc`;
     const chunks = chunkAssistantText(text);
 
     expect(chunks).toHaveLength(3);

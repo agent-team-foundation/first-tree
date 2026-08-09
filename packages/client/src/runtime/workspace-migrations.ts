@@ -86,6 +86,7 @@ export type MigrationContext = {
  * errors etc.) — also leaves the marker unrecorded but goes through
  * the `failed` path with logging.
  */
+// biome-ignore lint/suspicious/noConfusingVoidType: void union is intentional — callers omitting a return use void; "deferred" is an explicit signal
 export type MigrationOutcome = void | "deferred";
 
 export type Migration = {
