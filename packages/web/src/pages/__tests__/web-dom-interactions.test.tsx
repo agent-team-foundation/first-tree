@@ -114,6 +114,12 @@ const contextEnablementMocks = vi.hoisted(() => ({
   getContextEnablementHandoff: vi.fn(),
 }));
 
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock("react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router")>();
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
 const authMock = vi.hoisted(() => {
   const memberships: MeMembership[] = [];
   const currentMembership: MeMembership | null = null;
@@ -1609,23 +1615,33 @@ describe("web DOM interaction coverage", () => {
     expect(selectOrg).toHaveBeenCalledWith("org-install");
     // Fragment must be cleared from the URL bar.
     expect(window.history.replaceState).toHaveBeenCalledWith(null, "", "/auth/complete");
+    // Navigation must reach the validated safe next destination.
+    expect(navigateMock).toHaveBeenCalledWith("/settings/integrations/github");
     await unmountRoot(result.root);
   });
 
-  it("provider-unavailable fragment renders correct error copy via OAuthCompletePage", async () => {
+  it("provider-unavailable fragment renders correct error copy and joins the OIDC attempt", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
+    // Start an OIDC attempt so finishAuthAttempt can join and consume it.
+    beginAuthAttempt("oidc", "/login");
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).not.toBeNull();
+
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
         ...window.location,
-        hash: "#error=provider-unavailable&next=/login",
+        hash: "#error=provider-unavailable&next=/login&provider=oidc",
         pathname: "/auth/complete",
       },
     });
 
     const result = await renderDom(<OAuthCompletePage />, "/auth/complete");
     await waitForText("temporarily unavailable", result.container);
+    // Correct error copy rendered via OAuthCompletePage (not just helper).
     expect(result.container.textContent).toContain("temporarily unavailable");
+    // The OIDC auth attempt must be consumed (finishAuthAttempt called).
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
     await unmountRoot(result.root);
   });
 

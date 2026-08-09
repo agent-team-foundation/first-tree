@@ -591,33 +591,51 @@ describe("OIDC callback — acceptance", () => {
     expect(metadata.roles).toBeUndefined();
   });
 
-  it("returning user: extra IdP claims do not mutate existing org/member/role state", async () => {
-    // First sign-in: create the user and their personal Team via bootstrap.
+  it("returning multi-Team user: extra IdP claims do not mutate existing org/member/role state", async () => {
+    const { createPersonalTeam } = await import("../services/membership.js");
+
+    // First sign-in: creates the user + Team1 (personal org via bootstrap).
     mockVerifyIdToken.mockResolvedValue(
       baseClaims("returning-sub", { email: "returning@example.com", email_verified: true, name: "Returning User" }),
     );
     const firstReq = await buildCallbackRequest(app, { oidcNonce: "returning-nonce-1" });
     const firstRes = await app.inject({ method: "GET", url: firstReq.url, headers: { cookie: firstReq.cookie } });
     expect(firstRes.statusCode).toBe(302);
-    const firstFrag = parseFragment(firstRes.headers.location as string);
-    expect(firstFrag.get("accountCreated")).toBe("1");
+    expect(parseFragment(firstRes.headers.location as string).get("accountCreated")).toBe("1");
 
-    // Resolve the userId from the identity row.
+    // Resolve userId from the identity row.
     const [identity] = (await oidcIdentityRows(app)).filter(
       (r) => r.identifier === JSON.stringify([ISSUER, "returning-sub"]),
     );
     const userId = identity?.userId;
     expect(userId).toBeDefined();
 
-    // Snapshot org/member/role state after first login (before second callback).
-    const orgsBefore = await app.db.select({ id: organizations.id }).from(organizations);
+    // Fetch user info needed for createPersonalTeam.
+    const [userRow] = await app.db.select({ username: users.username, displayName: users.displayName })
+      .from(users)
+      .where(eq(users.id, userId!))
+      .limit(1);
+    expect(userRow).toBeDefined();
+
+    // Create Team2 (second membership) for the same user.
+    await createPersonalTeam(app.db, {
+      userId: userId!,
+      username: `${userRow!.username}-team2`,
+      teamDisplayName: "Second Team",
+      userDisplayName: userRow!.displayName,
+    });
+
+    // Snapshot exact org + member rows BEFORE the returning callback.
+    const orgsBefore = await app.db
+      .select({ id: organizations.id, name: organizations.name })
+      .from(organizations);
     const membersBefore = await app.db
       .select({ id: members.id, userId: members.userId, orgId: members.organizationId, role: members.role })
       .from(members)
       .where(eq(members.userId, userId!));
-    expect(membersBefore.length).toBeGreaterThan(0);
+    expect(membersBefore).toHaveLength(2); // Must have 2 teams before the callback.
 
-    // Second sign-in (returning): IdP returns extra org/groups/roles claims.
+    // Second sign-in: IdP returns extra org/groups/roles claims that must be ignored.
     mockVerifyIdToken.mockResolvedValue(
       Object.assign(
         baseClaims("returning-sub", { email: "returning@example.com", email_verified: true }),
@@ -627,15 +645,16 @@ describe("OIDC callback — acceptance", () => {
     const secondReq = await buildCallbackRequest(app, { oidcNonce: "returning-nonce-2" });
     const secondRes = await app.inject({ method: "GET", url: secondReq.url, headers: { cookie: secondReq.cookie } });
     expect(secondRes.statusCode).toBe(302);
-    const secondFrag = parseFragment(secondRes.headers.location as string);
-    expect(secondFrag.get("error")).toBeNull();
-    expect(secondFrag.get("accountCreated")).toBe("0"); // Returning user, not created.
+    expect(parseFragment(secondRes.headers.location as string).get("error")).toBeNull();
+    expect(parseFragment(secondRes.headers.location as string).get("accountCreated")).toBe("0");
 
-    // Organizations table unchanged — no new org from IdP claims.
-    const orgsAfter = await app.db.select({ id: organizations.id }).from(organizations);
-    expect(orgsAfter).toHaveLength(orgsBefore.length);
+    // Organizations table unchanged — no new org created from IdP claims.
+    const orgsAfter = await app.db
+      .select({ id: organizations.id, name: organizations.name })
+      .from(organizations);
+    expect(orgsAfter).toEqual(orgsBefore);
 
-    // Member rows for this user unchanged — role not elevated by IdP claims.
+    // Member rows for this user unchanged — roles not modified by IdP claims.
     const membersAfter = await app.db
       .select({ id: members.id, userId: members.userId, orgId: members.organizationId, role: members.role })
       .from(members)
