@@ -1657,7 +1657,7 @@ describe("web DOM interaction coverage", () => {
       reason_code: "provider-unavailable",
     });
     // No sign_up event for a failed attempt.
-    expect(analyticsMocks.trackEvent.mock.calls.some(([name]: [string]) => name === "sign_up")).toBe(false);
+    expect(analyticsMocks.trackEvent.mock.calls.some((call) => call[0] === "sign_up")).toBe(false);
     await unmountRoot(result.root);
   });
 
