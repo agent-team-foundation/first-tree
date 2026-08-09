@@ -499,7 +499,10 @@ describe("OIDC callback — acceptance", () => {
     expect(userB.created).toBe(true);
 
     // Snapshot User B's memberships before the conflict attempt.
-    const bMembersBefore = await app.db.select({ id: members.id }).from(members).where(eq(members.userId, userB.userId));
+    const bMembersBefore = await app.db
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.userId, userB.userId));
 
     // Attempt to link User A's identity to User B — must throw IdentityConflictError.
     await expect(
@@ -611,7 +614,8 @@ describe("OIDC callback — acceptance", () => {
     expect(userId).toBeDefined();
 
     // Fetch user info needed for createPersonalTeam.
-    const [userRow] = await app.db.select({ username: users.username, displayName: users.displayName })
+    const [userRow] = await app.db
+      .select({ username: users.username, displayName: users.displayName })
       .from(users)
       .where(eq(users.id, userId!))
       .limit(1);
@@ -626,9 +630,7 @@ describe("OIDC callback — acceptance", () => {
     });
 
     // Snapshot exact org + member rows BEFORE the returning callback.
-    const orgsBefore = await app.db
-      .select({ id: organizations.id, name: organizations.name })
-      .from(organizations);
+    const orgsBefore = await app.db.select({ id: organizations.id, name: organizations.name }).from(organizations);
     const membersBefore = await app.db
       .select({ id: members.id, userId: members.userId, orgId: members.organizationId, role: members.role })
       .from(members)
@@ -637,10 +639,11 @@ describe("OIDC callback — acceptance", () => {
 
     // Second sign-in: IdP returns extra org/groups/roles claims that must be ignored.
     mockVerifyIdToken.mockResolvedValue(
-      Object.assign(
-        baseClaims("returning-sub", { email: "returning@example.com", email_verified: true }),
-        { org: "enterprise-idp-org", groups: ["sre", "platform"], roles: ["superuser"] },
-      ),
+      Object.assign(baseClaims("returning-sub", { email: "returning@example.com", email_verified: true }), {
+        org: "enterprise-idp-org",
+        groups: ["sre", "platform"],
+        roles: ["superuser"],
+      }),
     );
     const secondReq = await buildCallbackRequest(app, { oidcNonce: "returning-nonce-2" });
     const secondRes = await app.inject({ method: "GET", url: secondReq.url, headers: { cookie: secondReq.cookie } });
@@ -649,9 +652,7 @@ describe("OIDC callback — acceptance", () => {
     expect(parseFragment(secondRes.headers.location as string).get("accountCreated")).toBe("0");
 
     // Organizations table unchanged — no new org created from IdP claims.
-    const orgsAfter = await app.db
-      .select({ id: organizations.id, name: organizations.name })
-      .from(organizations);
+    const orgsAfter = await app.db.select({ id: organizations.id, name: organizations.name }).from(organizations);
     expect(orgsAfter).toEqual(orgsBefore);
 
     // Member rows for this user unchanged — roles not modified by IdP claims.

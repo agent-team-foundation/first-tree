@@ -41,13 +41,17 @@ async function buildInstallCallback(
   app: FastifyInstance,
   opts: { kickoffUserId: string; targetOrganizationId: string; next?: string },
 ): Promise<{ url: string; cookie: string }> {
-  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, opts.next ?? "/settings/integrations/github", {
-    provider: "github",
-    intent: "install",
-    installPhase: "installation",
-    targetOrganizationId: opts.targetOrganizationId,
-    kickoffUserId: opts.kickoffUserId,
-  });
+  const { token, nonce } = await signOAuthState(
+    app.config.secrets.jwtSecret,
+    opts.next ?? "/settings/integrations/github",
+    {
+      provider: "github",
+      intent: "install",
+      installPhase: "installation",
+      targetOrganizationId: opts.targetOrganizationId,
+      kickoffUserId: opts.kickoffUserId,
+    },
+  );
   const cookie = `oauth_state_nonce=${encodeURIComponent(protectOAuthStateNonce(nonce, TEST_ENCRYPTION_KEY))}`;
   return {
     url: `/api/v1/auth/github/callback?code=test-code&state=${encodeURIComponent(token)}`,

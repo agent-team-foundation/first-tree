@@ -84,10 +84,7 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     // Bounded extraction of state only — same 4096-char limit as the full schema.
     // This prevents an oversized state from reaching JWT parsing before the full
     // schema rejects it.
-    const rawState =
-      typeof rawQuery.state === "string" && rawQuery.state.length <= 4096
-        ? rawQuery.state
-        : null;
+    const rawState = typeof rawQuery.state === "string" && rawQuery.state.length <= 4096 ? rawQuery.state : null;
 
     // Read the state nonce cookie early so we can validate ownership
     // before deciding whether to clear any cookies.
