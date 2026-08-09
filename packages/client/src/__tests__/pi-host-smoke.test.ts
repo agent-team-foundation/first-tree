@@ -422,13 +422,13 @@ describe.runIf(runHostSmoke)("Pi host smoke (real 0.83.x)", () => {
       const receiptPath = join(workspaceRoot, "cleanup-receipt.txt");
       writeFileSync(
         receiptPath,
-        `${[
-          `task_owned_agent_dir=${agentDir}`,
-          `task_owned_workspace=${workspaceRoot}`,
-          `helper_bin=${join(agentDir, "bin", "fd")}`,
-          `host_auth_symlink_target=${hostAuth}`,
+        [
+          "task_owned_agent_dir=" + agentDir,
+          "task_owned_workspace=" + workspaceRoot,
+          "helper_bin=" + join(agentDir, "bin", "fd"),
+          "host_auth_symlink_target=" + hostAuth,
           "cleanup=afterEach_rmSync_recursive_force",
-        ].join("\n")}\n`,
+        ].join("\n") + "\n",
       );
       cleanupReceipts.push(receiptPath);
 
