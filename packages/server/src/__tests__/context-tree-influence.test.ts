@@ -71,6 +71,7 @@ describe("context-tree influence summary", () => {
       effects: { conflicted: 0, redirected: 0, constrained: 0, confirmed: 0 },
       nodes: [],
       recentEvents: [],
+      truncated: false,
     });
   });
 
@@ -105,21 +106,27 @@ describe("context-tree influence summary", () => {
     const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(2);
     expect(summary.nodes).toEqual([
-      { nodePath: TENANCY, title: "Organization isolation", repoUrl: REPO, commit: COMMIT, decisionCount: 2 },
-      { nodePath: GATES, title: "Release gates", repoUrl: REPO, commit: COMMIT, decisionCount: 1 },
+      { nodePath: TENANCY, repoUrl: REPO, commit: COMMIT, decisionCount: 2 },
+      { nodePath: GATES, repoUrl: REPO, commit: COMMIT, decisionCount: 1 },
     ]);
   });
 
-  it("falls back to the file name when a citation carries no heading", async () => {
+  // The ranking is org-wide, so it must carry no field only a chat participant
+  // should see. A citation's heading is the agent's own wording inside a
+  // private body; the client resolves a title from the tree snapshot instead.
+  it("never exposes a citation heading through the org-wide ranking", async () => {
     const seed = await seedChat();
     await sendMessage(seed.chatId, seed.agent.uuid, {
       [CONTEXT_DECISION_METADATA_KEY]: receipt({
-        evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: TENANCY }],
+        evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: TENANCY, heading: "SECRET LABEL" }],
       }),
     });
 
-    const summary = await summarize(seed.organizationId);
-    expect(summary.nodes[0]?.title).toBe("tenancy-and-identity.md");
+    const outsider = await summarize(seed.organizationId, {
+      viewer: { humanAgentId: `human-${crypto.randomUUID()}`, memberId: `member-${crypto.randomUUID()}` },
+    });
+    expect(JSON.stringify(outsider)).not.toContain("SECRET LABEL");
+    expect(Object.keys(outsider.nodes[0] ?? {}).sort()).toEqual(["commit", "decisionCount", "nodePath", "repoUrl"]);
   });
 
   it("excludes receipts older than the window", async () => {
@@ -233,9 +240,7 @@ describe("context-tree influence summary", () => {
 
     const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(1);
-    expect(summary.nodes).toEqual([
-      { nodePath: TENANCY, title: "Organization isolation", repoUrl: REPO, commit: COMMIT, decisionCount: 1 },
-    ]);
+    expect(summary.nodes).toEqual([{ nodePath: TENANCY, repoUrl: REPO, commit: COMMIT, decisionCount: 1 }]);
   });
 
   it("matches the bound repository across equivalent spellings", async () => {
@@ -245,6 +250,32 @@ describe("context-tree influence summary", () => {
     for (const bound of [`${REPO}.git`, "git@github.com:acme/first-tree-context.git"]) {
       expect((await summarize(seed.organizationId, { boundRepoUrl: bound })).decisionCount).toBe(1);
     }
+  });
+
+  // `canonicalGitRepoUrl` drops the HTTPS port by design, so a port-blind
+  // comparison would treat two different self-managed GitLab instances as one.
+  it("does not match a self-managed GitLab citation across a different port", async () => {
+    const seed = await seedChat();
+    const cited = "https://gitlab.example.com:8443/group/tree";
+    await sendMessage(seed.chatId, seed.agent.uuid, {
+      [CONTEXT_DECISION_METADATA_KEY]: receipt({
+        evidence: [{ repoUrl: cited, commit: COMMIT, nodePath: TENANCY }],
+      }),
+    });
+
+    const wrongPort = await summarize(seed.organizationId, {
+      boundRepoUrl: "https://gitlab.example.com/group/tree",
+      boundProvider: "gitlab",
+      gitlabInstanceOrigin: "https://gitlab.example.com",
+    });
+    expect(wrongPort.decisionCount).toBe(0);
+
+    const samePort = await summarize(seed.organizationId, {
+      boundRepoUrl: cited,
+      boundProvider: "gitlab",
+      gitlabInstanceOrigin: "https://gitlab.example.com:8443",
+    });
+    expect(samePort.decisionCount).toBe(1);
   });
 
   it("reports nothing when the organization has no Context Tree binding", async () => {

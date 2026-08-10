@@ -171,6 +171,12 @@ function applyContextDecisionTrustBoundary(
       { event: "context_decision_note_unreadable", noteCount: notes.length },
       "Context Tree impact note present but not convertible to a receipt",
     );
+    // Do NOT fall through to a caller-supplied receipt here. The body already
+    // shows the reader note-shaped content; accepting a parallel payload
+    // alongside it would let the stored claim contradict the visible one —
+    // exactly the divergence deriving from the note exists to remove. The
+    // legacy payload path is only for bodies carrying no note at all.
+    return Object.fromEntries(Object.entries(meta).filter(([key]) => key !== CONTEXT_DECISION_METADATA_KEY));
   }
 
   if (!(CONTEXT_DECISION_METADATA_KEY in meta)) return meta;

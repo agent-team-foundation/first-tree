@@ -350,10 +350,14 @@ export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
 export const contextTreeInfluenceNodeSchema = z.object({
   // Tree-root-relative path, e.g. `system/cloud/team/tenancy-and-identity.md`.
   nodePath: z.string(),
-  // Readable label: the most recent citation's heading, else the file name.
-  title: z.string(),
   // Repository and commit of the most recent citation, so the row can link to
-  // an exact version rather than a moving branch.
+  // an exact version rather than a moving branch. Both describe the org's own
+  // bound repository, which every member can already read from the snapshot.
+  //
+  // There is deliberately NO title here. A citation's readable label is the
+  // agent's own wording inside a private message body, and this ranking is
+  // org-wide — so the client resolves a display title from the org-visible
+  // `nodes[]` instead of taking one out of a chat the viewer may not open.
   repoUrl: z.string(),
   commit: z.string(),
   decisionCount: z.number().int().nonnegative(),
@@ -396,6 +400,11 @@ export const contextTreeInfluenceSummarySchema = z.object({
   // navigation without ever changing an outcome).
   nodes: z.array(contextTreeInfluenceNodeSchema),
   recentEvents: z.array(contextTreeInfluenceEventSchema),
+  // True when the window held more candidate receipts than one pass reads, so
+  // every count above is a floor rather than the answer. Surfaced instead of
+  // silently truncating: a headline people act on must not look complete when
+  // it is not. Optional for rolling Client/Server compatibility.
+  truncated: z.boolean().optional(),
 });
 export type ContextTreeInfluenceSummary = z.infer<typeof contextTreeInfluenceSummarySchema>;
 

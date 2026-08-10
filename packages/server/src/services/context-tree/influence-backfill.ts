@@ -45,8 +45,18 @@ export type BackfillOptions = {
   organizationId?: string;
   /** Rows fetched per page. Pagination is by keyset, so this only bounds memory. */
   pageSize?: number;
-  /** Safety stop for a single run. */
+  /**
+   * Exact upper bound on rows examined in one run — checked per row, not per
+   * page, so `--max-rows 100` never touches a 101st message.
+   */
   maxRows?: number;
+  /**
+   * Resume point from a previous run's reported cursor. The keyset cursor lives
+   * only in memory during a run, so without this an operator following the
+   * "rerun to continue" instruction would restart at the window's beginning and
+   * rescan every already-examined row.
+   */
+  resumeAfter?: { createdAt: Date; id: string };
 };
 
 export type BackfillReport = {
@@ -55,6 +65,11 @@ export type BackfillReport = {
   unconvertibleSample: string[];
   /** True when `maxRows` stopped the run before the window was exhausted. */
   stoppedAtMaxRows: boolean;
+  /**
+   * Last row examined, or null when the window was exhausted. Pass it back as
+   * `resumeAfter` to continue exactly where this run stopped.
+   */
+  nextCursor: { createdAt: string; id: string } | null;
 };
 
 const DEFAULT_PAGE_SIZE = 500;
@@ -101,7 +116,10 @@ export async function backfillContextDecisionFromNotes(
   const unconvertibleSample: string[] = [];
   let scanned = 0;
   let stoppedAtMaxRows = false;
-  let cursor: { createdAt: string; id: string } | null = null;
+  let cursor: { createdAt: string; id: string } | null = options.resumeAfter
+    ? { createdAt: options.resumeAfter.createdAt.toISOString(), id: options.resumeAfter.id }
+    : null;
+  let lastExamined: { createdAt: string; id: string } | null = null;
 
   for (;;) {
     // Candidates: agent-authored text bodies inside the declared window with no
@@ -128,7 +146,14 @@ export async function backfillContextDecisionFromNotes(
     if (rows.length === 0) break;
 
     for (const row of rows) {
+      // Checked per row so `maxRows` is an exact bound on what this run
+      // touches, not "the last page may overshoot it".
+      if (scanned >= maxRows) {
+        stoppedAtMaxRows = true;
+        break;
+      }
       scanned += 1;
+      lastExamined = { createdAt: isoOf(row.created_at), id: row.id };
       const body = bodyOf(row.content);
       if (body === null) {
         tally.not_text += 1;
@@ -173,15 +198,15 @@ export async function backfillContextDecisionFromNotes(
       }
     }
 
+    if (stoppedAtMaxRows) break;
     const last = rows.at(-1);
     if (!last) break;
     cursor = { createdAt: isoOf(last.created_at), id: last.id };
-    if (rows.length < pageSize) break;
-    if (scanned >= maxRows) {
-      stoppedAtMaxRows = true;
+    if (rows.length < pageSize) {
+      lastExamined = null;
       break;
     }
   }
 
-  return { scanned, tally, unconvertibleSample, stoppedAtMaxRows };
+  return { scanned, tally, unconvertibleSample, stoppedAtMaxRows, nextCursor: lastExamined };
 }

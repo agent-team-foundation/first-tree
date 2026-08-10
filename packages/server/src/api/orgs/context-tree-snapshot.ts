@@ -93,6 +93,8 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     const influence = await timing.time("influence_summary", () =>
       summarizeContextTreeInfluence(app.db, scope.organizationId, windowDays, {
         boundRepoUrl: binding?.repo ?? null,
+        boundProvider: binding?.provider ?? null,
+        gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin ?? null,
         viewer: { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
         timing: timing.add,
       }),

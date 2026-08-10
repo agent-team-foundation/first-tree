@@ -304,6 +304,24 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   // connected origin; without it every node here would render as inert text and
   // the "inspectable source" promise would hold on GitHub teams only.
   const { instanceOrigin } = useGitlabEntityPresentation(organizationId ?? null);
+  // The ranking deliberately carries no title: a citation's label is the
+  // agent's own wording inside a chat the viewer may not be in. Resolve the
+  // display name from the org-visible tree snapshot instead, falling back to
+  // the file name when the node is not in the current snapshot (it may have
+  // been renamed or removed since the decision was made).
+  const nodeTitleByPath = useMemo(() => {
+    const byPath = new Map<string, string>();
+    // Normalize both sides: snapshot node paths are tree-root-relative but a
+    // leading slash appears in some producers, and a citation always names the
+    // file while a node may be keyed by its directory path.
+    const key = (value: string) => value.replace(/^\/+/, "");
+    for (const node of snapshot.nodes) {
+      if (node.sourcePath) byPath.set(key(node.sourcePath), node.title);
+      byPath.set(key(node.path), node.title);
+      byPath.set(`${key(node.path)}.md`, node.title);
+    }
+    return byPath;
+  }, [snapshot.nodes]);
   const influence = snapshot.influence;
   // A Server too old to report influence is NOT the same as a window with none.
   // Rendering a confident "0 decisions" for the first case would invent an
@@ -336,14 +354,15 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
                 { repoUrl: node.repoUrl, commit: node.commit, nodePath: node.nodePath },
                 instanceOrigin,
               );
+              const title = nodeTitleByPath.get(node.nodePath) ?? nodeFileName(node.nodePath);
               return (
                 <li key={node.nodePath} className="context-influence-node">
                   {href ? (
                     <a href={href} target="_blank" rel="noreferrer" title={node.nodePath}>
-                      {node.title}
+                      {title}
                     </a>
                   ) : (
-                    <span title={node.nodePath}>{node.title}</span>
+                    <span title={node.nodePath}>{title}</span>
                   )}
                   <span className="context-influence-node-path">{node.nodePath}</span>
                   <span className="context-influence-node-count">{node.decisionCount}</span>
@@ -361,8 +380,8 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
           tree — or on a node missing from the list above. */}
       <p className="context-influence-coverage">
         Reported by agents in their own answers — First Tree preserves the cited version for inspection, but does not
-        verify causality. Counted from managed chats only, from English and Chinese notes, and only since this feature
-        shipped, so treat a low count as incomplete rather than as a verdict.
+        verify causality. Counted from managed chats only, and only from notes this Server could read back, so treat a
+        low count as incomplete rather than as a verdict.
       </p>
     </section>
   );
@@ -400,6 +419,11 @@ const CONTEXT_FEED_FILTERS: ReadonlyArray<{ key: ContextFeedFilter; label: strin
   { key: "writes", label: "Writes" },
   { key: "reads", label: "Reads" },
 ];
+
+/** Last path segment — the fallback display name for a node the snapshot no longer carries. */
+function nodeFileName(nodePath: string): string {
+  return nodePath.split("/").filter(Boolean).at(-1) ?? nodePath;
+}
 
 function feedTimeMs(value: string | null): number {
   if (!value) return 0;

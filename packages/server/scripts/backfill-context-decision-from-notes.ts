@@ -13,7 +13,7 @@
  *   DATABASE_URL=... pnpm --filter @first-tree/server exec tsx \
  *     scripts/backfill-context-decision-from-notes.ts \
  *     --since 2026-08-06T00:00:00Z --until 2026-08-11T00:00:00Z \
- *     [--apply] [--org ORG_ID] [--all-orgs] [--max-rows N]
+ *     [--apply] [--org ORG_ID] [--all-orgs] [--max-rows N] [--resume-after "<ISO>|<messageId>"]
  */
 
 import { connectDatabase } from "../src/db/connection.js";
@@ -52,6 +52,18 @@ function parseArgs(argv: readonly string[]) {
   }
   if (organizationId && allOrgs) throw new Error("Pass either --org or --all-orgs, not both");
 
+  const resumeRaw = optionValue(argv, "--resume-after");
+  let resumeAfter: { createdAt: Date; id: string } | undefined;
+  if (resumeRaw !== undefined) {
+    const separator = resumeRaw.lastIndexOf("|");
+    const createdAt = new Date(resumeRaw.slice(0, Math.max(separator, 0)));
+    const id = resumeRaw.slice(separator + 1);
+    if (separator <= 0 || Number.isNaN(createdAt.getTime()) || id.length === 0) {
+      throw new Error('--resume-after must be "<ISO-8601>|<messageId>", as printed by the previous run');
+    }
+    resumeAfter = { createdAt, id };
+  }
+
   const maxRowsRaw = optionValue(argv, "--max-rows");
   const maxRows = maxRowsRaw === undefined ? undefined : Number(maxRowsRaw);
   if (maxRows !== undefined && (!Number.isFinite(maxRows) || maxRows <= 0)) {
@@ -64,6 +76,7 @@ function parseArgs(argv: readonly string[]) {
     until: requiredDate(argv, "--until"),
     ...(organizationId ? { organizationId } : {}),
     ...(maxRows !== undefined ? { maxRows } : {}),
+    ...(resumeAfter ? { resumeAfter } : {}),
   };
 }
 
@@ -87,8 +100,11 @@ async function main(): Promise<void> {
   console.log(`  more than one note  : ${report.tally.two_notes}`);
   console.log(`  note not convertible: ${report.tally.unconvertible}`);
   console.log(`  body not text       : ${report.tally.not_text}`);
-  if (report.stoppedAtMaxRows) {
-    console.log("  STOPPED at --max-rows before the window was exhausted; rerun to continue.");
+  if (report.stoppedAtMaxRows && report.nextCursor) {
+    // The keyset cursor lives only in memory, so a bare rerun would restart at
+    // the window's beginning and rescan everything already examined.
+    console.log("  STOPPED at --max-rows before the window was exhausted. Continue with:");
+    console.log(`    --resume-after "${report.nextCursor.createdAt}|${report.nextCursor.id}"`);
   }
   if (report.unconvertibleSample.length > 0) {
     console.log(`  sample unconvertible message ids: ${report.unconvertibleSample.join(", ")}`);

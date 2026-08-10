@@ -329,16 +329,17 @@ describe("ContextPage DOM behavior", () => {
     // All three coverage gaps must be stated, so a low count cannot read as a
     // verdict on the tree or on a node missing from the ranking.
     expect(container.textContent).toContain("managed chats only");
-    expect(container.textContent).toContain("English and Chinese notes");
-    expect(container.textContent).toContain("since this feature shipped");
+    expect(container.textContent).toContain("notes this Server could read back");
 
+    // Titles come from the org-visible tree snapshot, never from the citation's
+    // own label — that label is the agent's wording inside a private chat.
     const nodes = [...container.querySelectorAll(".context-influence-node")];
     expect(nodes.map((node) => node.textContent)).toEqual([
-      "Organization isolationsystem/cloud/team/tenancy-and-identity.md3",
-      "Release safety gatesoperations/release/safety-gates.md2",
+      "Notebookmembers/yzw/notebook.md3",
+      "Tree Maintenancepractices/tm.md2",
     ]);
     expect(nodes[0]?.querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/acme/first-tree-context/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md",
+      "https://github.com/acme/first-tree-context/blob/0123456789abcdef0123456789abcdef01234567/members/yzw/notebook.md",
     );
 
     await click(buttonByText(container, "Influence"));

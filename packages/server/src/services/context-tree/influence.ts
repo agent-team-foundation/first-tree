@@ -5,8 +5,9 @@ import {
   type ContextTreeInfluenceEvent,
   type ContextTreeInfluenceNode,
   type ContextTreeInfluenceSummary,
-  canonicalGitRepoUrl,
+  type ContextTreeProvider,
   contextDecisionSchema,
+  sameContextTreeRepository,
 } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import type { Database } from "../../db/connection.js";
@@ -53,8 +54,9 @@ const INFLUENCE_NODE_LIMIT = 5;
  * Candidate receipts loaded per window. Parsing in JS is what keeps every facet
  * on one row set, and that requires holding the window's receipts in memory.
  * A seven-day org window is orders of magnitude below this; exceeding it means
- * the assumption behind reading `messages` in place has broken, so it is logged
- * as an error rather than silently truncating a number people act on.
+ * the assumption behind reading `messages` in place has broken. Hitting it logs
+ * an error AND sets `truncated` on the response — the counts become a floor, and
+ * a headline people act on must never look complete when it is not.
  */
 const INFLUENCE_SCAN_CAP = 5_000;
 
@@ -67,6 +69,15 @@ export type ContextTreeInfluenceOptions = {
    * is not the one being displayed.
    */
   boundRepoUrl?: string | null;
+  /**
+   * Provider and GitLab origin for the binding. Matching runs at forge
+   * authority, not on the provider-neutral canonical key: that key drops the
+   * HTTPS port by design, so `https://gitlab.example.com:8443/g/tree` and
+   * `https://gitlab.example.com/g/tree` would compare equal even though they
+   * are different self-managed instances.
+   */
+  boundProvider?: ContextTreeProvider | null;
+  gitlabInstanceOrigin?: string | null;
   viewer?: ContextTreeIoViewer;
   timing?: (stage: string, ms: number, attrs?: Record<string, unknown>) => void;
 };
@@ -102,10 +113,6 @@ function isoOrNull(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-function titleFromNodePath(nodePath: string): string {
-  return nodePath.split("/").filter(Boolean).at(-1) ?? nodePath;
-}
-
 async function timed<T>(
   options: ContextTreeInfluenceOptions,
   stage: string,
@@ -125,6 +132,7 @@ function emptySummary(windowDays: number): ContextTreeInfluenceSummary {
     effects: { conflicted: 0, redirected: 0, constrained: 0, confirmed: 0 },
     nodes: [],
     recentEvents: [],
+    truncated: false,
   };
 }
 
@@ -139,11 +147,11 @@ function emptySummary(windowDays: number): ContextTreeInfluenceSummary {
  * receipt counted in the headline but absent from the ranking is a number
  * nobody can reconcile.
  */
-function toValidReceipt(row: CandidateRow, expectedRepo: string): ValidReceipt | null {
+function toValidReceipt(row: CandidateRow, matchesBoundRepo: (repoUrl: string) => boolean): ValidReceipt | null {
   const parsed = contextDecisionSchema.safeParse(row.decision);
   if (!parsed.success) return null;
 
-  const evidence = parsed.data.evidence.filter((item) => canonicalGitRepoUrl(item.repoUrl) === expectedRepo);
+  const evidence = parsed.data.evidence.filter((item) => matchesBoundRepo(item.repoUrl));
   if (evidence.length === 0) return null;
 
   const createdAt = isoOrNull(row.created_at);
@@ -164,6 +172,17 @@ function toValidReceipt(row: CandidateRow, expectedRepo: string): ValidReceipt |
   };
 }
 
+/**
+ * Rank the bound tree's nodes by how many decisions cited them.
+ *
+ * The ranking is org-wide, like every other aggregate here, so it must carry
+ * NO field that only a chat participant should see. The citation's `heading` is
+ * the agent's own link label written inside a private message body, so it is
+ * deliberately dropped: the display title is resolved client-side from the
+ * org-visible tree snapshot instead. `nodePath`, `repoUrl`, and `commit`
+ * describe the org's own bound repository, which every member can already read
+ * from that same snapshot.
+ */
 function rankNodes(receipts: readonly ValidReceipt[]): ContextTreeInfluenceNode[] {
   const byPath = new Map<string, ContextTreeInfluenceNode>();
 
@@ -183,7 +202,6 @@ function rankNodes(receipts: readonly ValidReceipt[]): ContextTreeInfluenceNode[
       }
       byPath.set(item.nodePath, {
         nodePath: item.nodePath,
-        title: item.heading?.trim() || titleFromNodePath(item.nodePath),
         repoUrl: item.repoUrl,
         commit: item.commit,
         decisionCount: 1,
@@ -217,8 +235,15 @@ export async function summarizeContextTreeInfluence(
   // Without a binding there is no tree to attribute influence to, and an
   // unscoped ranking would merge nodes from whatever repositories happen to be
   // cited. Report nothing rather than something unattributable.
-  const expectedRepo = options.boundRepoUrl ? canonicalGitRepoUrl(options.boundRepoUrl) : null;
-  if (!expectedRepo) return emptySummary(windowDays);
+  const boundRepoUrl = options.boundRepoUrl ?? null;
+  if (!boundRepoUrl) return emptySummary(windowDays);
+  const matchesBoundRepo = (repoUrl: string): boolean =>
+    sameContextTreeRepository({
+      left: boundRepoUrl,
+      right: repoUrl,
+      provider: options.boundProvider ?? "github",
+      gitlabInstanceOrigin: options.gitlabInstanceOrigin ?? null,
+    });
 
   const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
@@ -247,7 +272,8 @@ export async function summarizeContextTreeInfluence(
     `),
   );
 
-  if (rows.length >= INFLUENCE_SCAN_CAP) {
+  const truncated = rows.length >= INFLUENCE_SCAN_CAP;
+  if (truncated) {
     log.error(
       { event: "context_influence_scan_cap_reached", organizationId, windowDays, cap: INFLUENCE_SCAN_CAP },
       "Context Tree influence candidates hit the scan cap; counts for this window are truncated",
@@ -256,10 +282,10 @@ export async function summarizeContextTreeInfluence(
 
   const receipts: ValidReceipt[] = [];
   for (const row of rows) {
-    const receipt = toValidReceipt(row, expectedRepo);
+    const receipt = toValidReceipt(row, matchesBoundRepo);
     if (receipt) receipts.push(receipt);
   }
-  if (receipts.length === 0) return emptySummary(windowDays);
+  if (receipts.length === 0) return { ...emptySummary(windowDays), truncated };
 
   const effects: Record<ContextDecisionEffect, number> = {
     conflicted: 0,
@@ -302,5 +328,6 @@ export async function summarizeContextTreeInfluence(
     effects,
     nodes: rankNodes(receipts),
     recentEvents,
+    truncated,
   };
 }

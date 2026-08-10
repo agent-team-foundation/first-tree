@@ -332,15 +332,13 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     effects: { conflicted: 1, redirected: 1, constrained: 2, confirmed: 1 },
     nodes: [
       {
-        nodePath: "system/cloud/team/tenancy-and-identity.md",
-        title: "Organization isolation",
+        nodePath: "members/yzw/notebook.md",
         repoUrl: "https://github.com/acme/first-tree-context",
         commit: "0123456789abcdef0123456789abcdef01234567",
         decisionCount: 3,
       },
       {
-        nodePath: "operations/release/safety-gates.md",
-        title: "Release safety gates",
+        nodePath: "practices/tm.md",
         repoUrl: "https://github.com/acme/first-tree-context",
         commit: "0123456789abcdef0123456789abcdef01234567",
         decisionCount: 2,
@@ -358,7 +356,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
           {
             repoUrl: "https://github.com/acme/first-tree-context",
             commit: "0123456789abcdef0123456789abcdef01234567",
-            nodePath: "operations/release/safety-gates.md",
+            nodePath: "practices/tm.md",
             heading: "Release safety gates",
           },
         ],
@@ -377,7 +375,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
           {
             repoUrl: "https://github.com/acme/first-tree-context",
             commit: "0123456789abcdef0123456789abcdef01234567",
-            nodePath: "system/cloud/team/tenancy-and-identity.md",
+            nodePath: "members/yzw/notebook.md",
             heading: "Organization isolation",
           },
         ],

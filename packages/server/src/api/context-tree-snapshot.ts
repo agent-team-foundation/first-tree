@@ -100,6 +100,8 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       ? await timing.time("influence_summary", () =>
           summarizeContextTreeInfluence(app.db, orgId, contextTreeSnapshotWindowDays(window), {
             boundRepoUrl: binding?.repo ?? null,
+            boundProvider: binding?.provider ?? null,
+            gitlabInstanceOrigin: reviewRuntime?.gitlabConnection?.instanceOrigin ?? null,
             viewer: viewer ?? undefined,
             timing: timing.add,
           }),

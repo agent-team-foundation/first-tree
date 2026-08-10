@@ -211,6 +211,35 @@ describe("contextDecision backfill from impact notes", () => {
     for (const id of blockers) expect(await metadataOf(id)).toEqual({});
   });
 
+  // maxRows must be an exact bound on what a run touches, and the keyset cursor
+  // lives only in memory — so a run that stops early has to hand back a resume
+  // point or the operator's rerun restarts at the window's beginning.
+  it("stops exactly at maxRows and reports a usable resume cursor", async () => {
+    const seed = await seedChat();
+    const base = Date.now() - 60 * 60 * 1000;
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      ids.push(await insertMessage(seed.chatId, seed.agent.uuid, noteBody(), {}, new Date(base + index * 1000)));
+    }
+
+    const first = await backfill({ organizationId: seed.organizationId, maxRows: 2, pageSize: 10 });
+    expect(first.scanned).toBe(2);
+    expect(first.stoppedAtMaxRows).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
+    expect((await metadataOf(ids[0] as string))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
+    expect(await metadataOf(ids[3] as string)).toEqual({});
+
+    const resumed = await backfill({
+      organizationId: seed.organizationId,
+      resumeAfter: {
+        createdAt: new Date(first.nextCursor?.createdAt ?? ""),
+        id: first.nextCursor?.id ?? "",
+      },
+    });
+    expect(resumed.tally.derived).toBe(2);
+    for (const id of ids) expect((await metadataOf(id))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
+  });
+
   it("ignores a body with no note at all", async () => {
     const seed = await seedChat();
     await insertMessage(seed.chatId, seed.agent.uuid, "Shipped the per-org index.");
