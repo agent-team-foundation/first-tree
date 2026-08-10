@@ -338,7 +338,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         decisionCount: 3,
       },
       {
-        nodePath: "practices/tm.md",
+        nodePath: "members/yzw/journal.md",
         decisionCount: 2,
       },
     ],
@@ -354,7 +354,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
           {
             repoUrl: "https://github.com/acme/first-tree-context",
             commit: "0123456789abcdef0123456789abcdef01234567",
-            nodePath: "practices/tm.md",
+            nodePath: "members/yzw/journal.md",
             heading: "Release safety gates",
           },
         ],

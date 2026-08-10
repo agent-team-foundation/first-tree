@@ -336,7 +336,7 @@ describe("ContextPage DOM behavior", () => {
     const nodes = [...container.querySelectorAll(".context-influence-node")];
     expect(nodes.map((node) => node.textContent)).toEqual([
       "Notebookmembers/yzw/notebook.md3",
-      "Tree Maintenancepractices/tm.md2",
+      "Journalmembers/yzw/journal.md2",
     ]);
     // Link identity is the SNAPSHOT's repo and head commit, never the note's:
     // a citation names those inside a chat the viewer may not be in.

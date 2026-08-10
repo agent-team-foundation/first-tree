@@ -178,6 +178,13 @@ describe("contextDecision backfill from impact notes", () => {
     expect((await backfill()).tally.derived).toBe(1);
   });
 
+  // A fractional bound is not a bound: `maxRows: 1.5` would examine and mutate
+  // two rows while advertising one, on a destructive run.
+  it("rejects a fractional row bound", async () => {
+    await expect(backfill({ maxRows: 1.5 })).rejects.toThrow(/maxRows must be a positive integer/);
+    await expect(backfill({ pageSize: 2.5 })).rejects.toThrow(/pageSize must be a positive integer/);
+  });
+
   it("rejects an inverted window", async () => {
     await expect(backfill({ since: WINDOW.until, until: WINDOW.since })).rejects.toThrow(/since must not be after/);
   });

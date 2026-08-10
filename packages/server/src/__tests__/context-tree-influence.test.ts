@@ -4,7 +4,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
-import { summarizeContextTreeInfluence } from "../services/context-tree/influence.js";
+import { snapshotNodePaths, summarizeContextTreeInfluence } from "../services/context-tree/influence.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -146,6 +146,60 @@ describe("context-tree influence summary", () => {
       expect(serialized).not.toContain(secret);
     }
     expect(outsider.nodes).toEqual([{ nodePath: TENANCY, decisionCount: 1 }]);
+  });
+
+  // `node.path` is a logical navigation identity, not a file. A directory node
+  // sourced at `.../NODE.md` must not allowlist a fabricated `.../<dir>.md`,
+  // which would then be counted AND linked to a file that does not exist.
+  it("allowlists only exact snapshot source files, never a derived directory path", () => {
+    const known = snapshotNodePaths([
+      { sourcePath: "system/cloud/context-tree/NODE.md" },
+      { sourcePath: "/members/yzw/notebook.md" },
+      { sourcePath: null },
+    ]);
+    expect(known.has("system/cloud/context-tree/NODE.md")).toBe(true);
+    expect(known.has("members/yzw/notebook.md")).toBe(true);
+    expect(known.has("system/cloud/context-tree.md")).toBe(false);
+    expect(known.has("system/cloud/context-tree")).toBe(false);
+  });
+
+  it("rejects a fabricated directory citation while accepting its real source", async () => {
+    const seed = await seedChat();
+    const real = "system/cloud/context-tree/NODE.md";
+    const fabricated = "system/cloud/context-tree.md";
+    await sendMessage(seed.chatId, seed.agent.uuid, {
+      [CONTEXT_DECISION_METADATA_KEY]: receipt({
+        evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: fabricated }],
+      }),
+    });
+    await sendMessage(seed.chatId, seed.agent.uuid, {
+      [CONTEXT_DECISION_METADATA_KEY]: receipt({ evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: real }] }),
+    });
+
+    const summary = await summarize(seed.organizationId, {
+      knownNodePaths: snapshotNodePaths([{ sourcePath: real }]),
+    });
+    expect(summary.nodes).toEqual([{ nodePath: real, decisionCount: 1 }]);
+  });
+
+  // One node must never split into two ranked rows. Two guarantees combine:
+  // the receipt schema already refuses a leading-slash `nodePath`, and the
+  // allowlist now holds exactly one form per node — so a citation either
+  // matches that one string or is dropped.
+  it("aggregates repeated citations of one node into a single row", async () => {
+    const seed = await seedChat();
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+    // Never storable: the schema rejects it, so it cannot reach the ranking.
+    await sendMessage(seed.chatId, seed.agent.uuid, {
+      [CONTEXT_DECISION_METADATA_KEY]: receipt({
+        evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: `/${TENANCY}` }],
+      }),
+    });
+
+    const summary = await summarize(seed.organizationId);
+    expect(summary.decisionCount).toBe(2);
+    expect(summary.nodes).toEqual([{ nodePath: TENANCY, decisionCount: 2 }]);
   });
 
   it("drops the whole ranking when the snapshot declares no known nodes", async () => {

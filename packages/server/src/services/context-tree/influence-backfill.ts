@@ -104,6 +104,17 @@ export async function backfillContextDecisionFromNotes(
   if (!(since instanceof Date) || Number.isNaN(since.getTime())) throw new Error("since must be a valid Date");
   if (!(until instanceof Date) || Number.isNaN(until.getTime())) throw new Error("until must be a valid Date");
   if (since.getTime() > until.getTime()) throw new Error("since must not be after until");
+  // A fractional bound is not a bound: `scanned >= 1.5` lets a run examine — and
+  // mutate — two rows while advertising one. Reject it at the service, not only
+  // at the CLI, so a programmatic caller cannot slip past the same guard.
+  for (const [name, value] of [
+    ["pageSize", options.pageSize],
+    ["maxRows", options.maxRows],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error(`${name} must be a positive integer`);
+    }
+  }
 
   const pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
   const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS;

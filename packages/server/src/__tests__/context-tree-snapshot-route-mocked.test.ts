@@ -112,7 +112,15 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../scope/require-resource.js", () => ({ resolveOrgViewer }));
   vi.doMock("../services/chat/sessions/events.js", () => ({ summarizeContextTreeUsage }));
   vi.doMock("../services/context-tree/io.js", () => ({ buildContextTreeIoSummary }));
-  vi.doMock("../services/context-tree/influence.js", () => ({ summarizeContextTreeInfluence }));
+  // Keep the REAL `snapshotNodePaths`: it is the privacy gate the route feeds
+  // the summarizer, so stubbing it would let this test pass while the gate is
+  // broken. Only the aggregation itself is replaced.
+  vi.doMock("../services/context-tree/influence.js", async () => ({
+    ...(await vi.importActual<typeof import("../services/context-tree/influence.js")>(
+      "../services/context-tree/influence.js",
+    )),
+    summarizeContextTreeInfluence,
+  }));
 
   const { contextTreeSnapshotRoutes } = await import("../api/context-tree-snapshot.js");
   const app = Object.assign(Fastify(), {

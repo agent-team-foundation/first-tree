@@ -69,8 +69,10 @@ function parseArgs(argv: readonly string[]) {
 
   const maxRowsRaw = optionValue(argv, "--max-rows");
   const maxRows = maxRowsRaw === undefined ? undefined : Number(maxRowsRaw);
-  if (maxRows !== undefined && (!Number.isFinite(maxRows) || maxRows <= 0)) {
-    throw new Error("--max-rows must be a positive number");
+  // Integer, not merely finite: `--max-rows 1.5` would examine and mutate two
+  // rows while the flag advertises an exact bound on a destructive run.
+  if (maxRows !== undefined && (!Number.isSafeInteger(maxRows) || maxRows <= 0)) {
+    throw new Error("--max-rows must be a positive integer");
   }
 
   return {

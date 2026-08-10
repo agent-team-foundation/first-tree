@@ -51,8 +51,9 @@ const INFLUENCE_FEED_LIMIT = 20;
 /** Ranked nodes shown under the headline. */
 const INFLUENCE_NODE_LIMIT = 5;
 /**
- * Candidate receipts loaded per window. Parsing in JS is what keeps every facet
- * on one row set, and that requires holding the window's receipts in memory.
+ * Candidate metadata rows loaded per window — receipt-shaped rows before any
+ * validation, not confirmed decisions. Parsing in JS is what keeps every facet
+ * on one row set, and that requires holding the window's candidates in memory.
  * A seven-day org window is orders of magnitude below this; exceeding it means
  * the assumption behind reading `messages` in place has broken. Hitting it logs
  * an error AND sets `truncated` on the response — the counts become a floor, and
@@ -119,6 +120,31 @@ type ValidReceipt = {
 /** Tree-root-relative form, so a leading slash never defeats a snapshot match. */
 export function normalizeNodePath(value: string): string {
   return value.replace(/^\/+/, "");
+}
+
+/**
+ * The exact source files this snapshot contains — the allowlist the org-wide
+ * ranking is gated on.
+ *
+ * ONLY `sourcePath` counts. A node's `path` is a logical navigation identity,
+ * not necessarily a file: a directory node whose real source is
+ * `system/cloud/context-tree/NODE.md` has `path` `system/cloud/context-tree`,
+ * and admitting `${path}.md` as an alias would allowlist a fabricated citation
+ * to a file that does not exist — then count it and link to it. The receipt
+ * contract says `nodePath` IS the exact Tree-root-relative source path, so
+ * exact is the only safe comparison.
+ *
+ * Shared by both snapshot routes on purpose: this is the privacy gate, and two
+ * copies of it could drift into two different answers about what is public.
+ */
+export function snapshotNodePaths(nodes: readonly { sourcePath: string | null }[]): ReadonlySet<string> {
+  const paths = new Set<string>();
+  for (const node of nodes) {
+    if (!node.sourcePath) continue;
+    const path = normalizeNodePath(node.sourcePath);
+    if (path.length > 0) paths.add(path);
+  }
+  return paths;
 }
 
 function isoOrNull(value: Date | string | null): string | null {
@@ -288,7 +314,7 @@ export async function summarizeContextTreeInfluence(
   if (truncated) {
     log.error(
       { event: "context_influence_scan_cap_reached", organizationId, windowDays, cap: INFLUENCE_SCAN_CAP },
-      "Context Tree influence candidates hit the scan cap; counts for this window are truncated",
+      "Context Tree influence candidate rows hit the scan cap; counts for this window are a floor",
     );
   }
 
