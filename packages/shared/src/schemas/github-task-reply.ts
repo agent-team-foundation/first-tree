@@ -113,6 +113,12 @@ export const GITHUB_TASK_REPLY_ERROR_CODES = [
   "GITHUB_TASK_REPLY_RUN_FORBIDDEN",
   "GITHUB_TASK_REPLY_RUN_ALREADY_SUBMITTED",
   "GITHUB_TASK_REPLY_RUN_PAYLOAD_MISMATCH",
+  /**
+   * A different run already owns the publication of this exact reply on this
+   * exact entity. Run-scoped idempotency cannot see that; the cross-run
+   * publication claim can. The losing run must exit without publishing.
+   */
+  "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION",
   "GITHUB_TASK_REPLY_ENTITY_UNSUPPORTED",
   "GITHUB_TASK_REPLY_APP_NOT_INSTALLED",
   "GITHUB_TASK_REPLY_APP_PERMISSION_REQUIRED",

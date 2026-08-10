@@ -85,6 +85,11 @@ App login or adding a GitHub-specific post-delivery branch.
   Simulate an unknown GitHub write, then confirm retry reconciles the App actor, hidden run marker, and exact body before
   returning rather than blindly creating another comment. Zero matches, duplicate exact matches, and list failure must
   all remain unknown with no second POST.
+- Deliver several supported events on one pull request without moving its head, so more than one run is dispatched for
+  the same entity, and let each run reach its terminal reply. Confirm the entity ends with exactly one App-authored
+  comment for a given reply body: the first run publishes, and every later run reports
+  `GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION` without a second GitHub write. Push a new head, let the reviewer render a
+  verdict against it, and confirm that changed reply still publishes.
 - Attempt publication from a different Agent, client, runtime session, chat, repository-scoped role assignment, inactive
   membership, and spoofed user-authored `githubTask*` metadata. Confirm each fails before GitHub mutation. Confirm a reply
   that mentions the App is rejected. Historical boolean/no-run markers remain renderable but cannot publish.
@@ -109,8 +114,8 @@ cards do not invent personnel context, and webhook content is never treated as a
 task capability and host GitHub permissions.
 
 `FAIL`: a reproducible regression in authentication, tenant resolution, followed-chat/card delivery, automatic task or
-wake routing, recipient-bound publication, self-output suppression, whole-request deduplication, or Context Reviewer
-claim coverage.
+wake routing, recipient-bound publication, self-output suppression, whole-request deduplication, cross-run publication
+claim coverage, or Context Reviewer claim coverage.
 
 `BLOCKED`: the isolated run cell cannot provision a disposable App/installation, webhook credential, bound entity, or
 connected runtime needed by the selected observations.

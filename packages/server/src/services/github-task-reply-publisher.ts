@@ -36,6 +36,11 @@ import {
 } from "./github-app.js";
 import { isGithubAppTargetLogin } from "./github-audience.js";
 import { extractMentions } from "./github-normalize.js";
+import {
+  claimGithubTaskReplyPublication,
+  findPublishedGithubTaskReply,
+  releaseGithubTaskReplyPublication,
+} from "./github-task-reply-publication-claim.js";
 import { getOrgContextReviewRuntime } from "./org-settings.js";
 import { getTeamAgentUuid } from "./team-agent-settings.js";
 
@@ -199,6 +204,15 @@ export async function submitGithubTaskReply(input: {
       };
     }
 
+    // Cross-run guard, taken before this run claims itself. Run-scoped
+    // idempotency cannot see a sibling run dispatched for the same entity, so
+    // without this every duplicate or concurrent dispatch published its own
+    // identical comment. Losing leaves the run `pending` — it is a retryable
+    // loss, not a terminal one — and the caller resolves it against GitHub.
+    if (!(await claimGithubTaskReplyPublication(db, { organizationId: run.organizationId, payloadHash }))) {
+      return { kind: "duplicate" as const, run };
+    }
+
     const attemptId = uuidv7();
     const claimed = await setSubmissionIf(db, run.messageId, "pending", {
       state: "submitting",
@@ -211,6 +225,16 @@ export async function submitGithubTaskReply(input: {
     return { kind: "claimed" as const, run, attemptId };
   });
   if (claim.kind === "submitted") return claim.response;
+  if (claim.kind === "duplicate") {
+    throw await duplicatePublication({
+      db: input.db,
+      run: claim.run,
+      payloadHash,
+      body: request.body,
+      github,
+      fetcher: input.fetcher,
+    });
+  }
   if (claim.kind === "reconcile") {
     return reconcileUnknownSubmission({
       db: input.db,
@@ -252,6 +276,14 @@ export async function submitGithubTaskReply(input: {
       );
     }
     const mapped = mapGithubMutationError(error);
+    // GitHub definitively refused the write, so no comment exists and the
+    // reply must become publishable again. Released only on this branch —
+    // an unknown outcome keeps the claim so nobody republishes behind a
+    // comment that may already be live.
+    await releaseGithubTaskReplyPublication(input.db, {
+      organizationId: claim.run.organizationId,
+      payloadHash,
+    });
     await setSubmissionForAttempt(input.db, claim.run.messageId, claim.attemptId, {
       state: "failed",
       payloadHash,
@@ -649,6 +681,53 @@ async function reconcileUnknownSubmission(input: {
   });
   await setSubmissionForPayload(input.db, input.run.messageId, input.payloadHash, submitted);
   return submittedResponse(submitted);
+}
+
+/**
+ * Resolve a lost publication claim into a definite answer for the losing run.
+ *
+ * Reads the hidden run marker back off the entity's existing App comments —
+ * the guard the marker was always shaped for but never used as. Finding this
+ * exact reply already published makes the loss terminal, so the run stops
+ * instead of rephrasing and trying again. Not finding it means the owning run
+ * is still in flight, so the run stays `pending` and can take the claim over
+ * later if that owner ends up releasing it.
+ */
+async function duplicatePublication(input: {
+  db: Database;
+  run: RunFacts;
+  payloadHash: string;
+  body: string;
+  github: { token: string; appSlug: string; owner: string; repo: string };
+  fetcher?: typeof fetch;
+}): Promise<GithubTaskReplyPublisherError> {
+  const published = await findPublishedGithubTaskReply({
+    token: input.github.token,
+    appSlug: input.github.appSlug,
+    owner: input.github.owner,
+    repo: input.github.repo,
+    entityNumber: input.run.entityNumber,
+    body: input.body,
+    fetcher: input.fetcher,
+  });
+  if (!published) {
+    return new GithubTaskReplyPublisherError(
+      409,
+      "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION",
+      `Another run already claimed publication of this exact reply on ${input.run.repository}#${input.run.entityNumber} and it is still in flight. Do not publish it again.`,
+    );
+  }
+  await setSubmissionIf(input.db, input.run.messageId, "pending", {
+    state: "failed",
+    payloadHash: input.payloadHash,
+    code: "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION",
+    failedAt: new Date().toISOString(),
+  });
+  return new GithubTaskReplyPublisherError(
+    409,
+    "GITHUB_TASK_REPLY_DUPLICATE_PUBLICATION",
+    `This exact reply is already published on ${input.run.repository}#${input.run.entityNumber} at ${published.htmlUrl}. Do not publish it again.`,
+  );
 }
 
 function submissionFromComment(input: {
