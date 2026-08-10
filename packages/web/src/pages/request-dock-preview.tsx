@@ -1,7 +1,6 @@
-import type { AskRequest, ContextDecision, GithubEventCard } from "@first-tree/shared";
+import type { AskRequest, GithubEventCard } from "@first-tree/shared";
 import { useState } from "react";
 import { AskTakeover } from "../components/chat/ask-takeover.js";
-import { ContextDecisionReceipt } from "../components/chat/context-decision-receipt.js";
 import { GithubEventCardMessage } from "../components/chat/github-event-card.js";
 
 /**
@@ -71,77 +70,6 @@ const COMMIT_CARD: GithubEventCard = {
   },
 };
 
-/**
- * Legacy agent-reported Context Tree receipts, one per observable effect. The
- * reader skill now writes a portable message-body note, but stored history and
- * older agents still exercise this production compatibility component.
- */
-const RECEIPTS: ContextDecision[] = [
-  {
-    version: 1,
-    effect: "conflicted",
-    summary: "The error budget supports expansion, but the weekend freeze blocks rollout changes after 18:00.",
-    evidence: [
-      {
-        repoUrl: "https://github.com/agent-team-foundation/first-tree-context",
-        commit: COMMIT_SHA,
-        nodePath: "product/release/rollout-policy.md",
-        heading: "Weekend change freeze",
-      },
-      {
-        repoUrl: "https://github.com/agent-team-foundation/first-tree-context",
-        commit: COMMIT_SHA,
-        nodePath: "product/reliability/error-budget.md",
-        heading: "Expansion threshold",
-      },
-    ],
-  },
-  {
-    version: 1,
-    effect: "redirected",
-    summary: "The approved migration sequence requires Web adoption before CLI expansion, so the order was reversed.",
-    evidence: [
-      {
-        repoUrl: "https://github.com/agent-team-foundation/first-tree-context",
-        commit: COMMIT_SHA,
-        nodePath: "product/billing/migration-sequence.md",
-        heading: "Web adoption first",
-      },
-    ],
-  },
-  {
-    version: 1,
-    effect: "constrained",
-    summary: "Team rollout policy caps Web at 20%; CLI remains at 5% until the migration guard is cleared.",
-    evidence: [
-      {
-        repoUrl: "https://github.com/agent-team-foundation/first-tree-context",
-        commit: COMMIT_SHA,
-        nodePath: "product/release/rollout-policy.md",
-        heading: "Expansion gates",
-      },
-      {
-        repoUrl: "https://gitlab.example.com/team/context-tree",
-        commit: COMMIT_SHA,
-        nodePath: "product/release/very/deeply/nested/surface-rollout-order-and-gates.md",
-      },
-    ],
-  },
-  {
-    version: 1,
-    effect: "confirmed",
-    summary: "Current expansion gates and the latest error-budget decision both support moving Web from 5% to 20%.",
-    evidence: [
-      {
-        repoUrl: "https://github.com/agent-team-foundation/first-tree-context",
-        commit: COMMIT_SHA,
-        nodePath: "product/reliability/error-budget.md",
-        heading: "Expansion threshold",
-      },
-    ],
-  },
-];
-
 const MODES: { label: string; payload: AskRequest }[] = [
   { label: "options · single", payload: SINGLE_PAYLOAD },
   { label: "options · multi", payload: MULTI_PAYLOAD },
@@ -153,13 +81,11 @@ function ModeBlock({
   payload,
   height = 560,
   mobile = false,
-  contextDecision = null,
 }: {
   label: string;
   payload: AskRequest;
   height?: number;
   mobile?: boolean;
-  contextDecision?: ContextDecision | null;
 }) {
   const [status, setStatus] = useState<string | null>(null);
   return (
@@ -180,7 +106,6 @@ function ModeBlock({
       >
         <AskTakeover
           body={BODY}
-          contextDecision={contextDecision}
           payload={payload}
           askerName="deploy-agent"
           mobile={mobile}
@@ -214,36 +139,8 @@ export function RequestDockPreviewPage() {
         stays pinned, so Submit is reachable at any height. Both resolve the question: Submit sends the composed answer,
         Skip sends a skipped answer (there is no keep-it-open path).
       </p>
-      {MODES.map((m, index) => (
-        <ModeBlock
-          key={m.label}
-          label={m.label}
-          payload={m.payload}
-          contextDecision={index === 0 ? RECEIPTS[0] : null}
-        />
-      ))}
-
-      <h2 className="mono text-caption font-semibold" style={{ color: "var(--fg-3)", textTransform: "uppercase" }}>
-        Context Tree decision receipt — the four observable effects
-      </h2>
-      <p className="text-body" style={{ color: "var(--fg-3)", margin: "var(--sp-1) 0 var(--sp-4)" }}>
-        Rendered where it ships: under the agent result it explains. Collapsed shows what team context did and what
-        changed; expanding reveals the exact cited nodes, repository and commit, plus the agent-attribution note.
-      </p>
-      {RECEIPTS.map((receipt) => (
-        <div
-          key={receipt.effect}
-          style={{
-            marginBottom: "var(--sp-4)",
-            padding: "var(--sp-3)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-panel)",
-            background: "var(--bg-raised)",
-          }}
-        >
-          <div className="text-body">Recommendation: expand Web to 20%, keep CLI at 5%.</div>
-          <ContextDecisionReceipt receipt={receipt} gitlabInstanceOrigin="https://gitlab.example.com" />
-        </div>
+      {MODES.map((m) => (
+        <ModeBlock key={m.label} label={m.label} payload={m.payload} />
       ))}
 
       <h2 className="mono text-caption font-semibold" style={{ color: "var(--fg-3)", textTransform: "uppercase" }}>

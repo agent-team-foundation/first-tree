@@ -324,6 +324,73 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     node("practices/tm", "practices", "/practices/tm", "Tree Maintenance", "subdomain", "removed"),
     node("practices/cr", "practices", "/practices/cr", "Code Review", "subdomain", null),
   ],
+  influence: {
+    windowDays: 7,
+    // Fewer decisions than reads on purpose: most reads are navigation, and the
+    // preview should not suggest the two numbers track each other.
+    decisionCount: 5,
+    effects: { conflicted: 1, redirected: 1, constrained: 2, confirmed: 1 },
+    nodes: [
+      {
+        nodePath: "system/cloud/team/tenancy-and-identity.md",
+        title: "Organization isolation",
+        repoUrl: "https://github.com/acme/first-tree-context",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        decisionCount: 3,
+      },
+      {
+        nodePath: "operations/release/safety-gates.md",
+        title: "Release safety gates",
+        repoUrl: "https://github.com/acme/first-tree-context",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        decisionCount: 2,
+      },
+    ],
+    recentEvents: [
+      {
+        id: "influence-1",
+        agentId: "agent-coder",
+        agentName: "gandy-coder",
+        agentAvatarColorToken: "hue-1",
+        effect: "conflicted",
+        summary: "The fixed release date and the pre-release security audit rule cannot both hold.",
+        evidence: [
+          {
+            repoUrl: "https://github.com/acme/first-tree-context",
+            commit: "0123456789abcdef0123456789abcdef01234567",
+            nodePath: "operations/release/safety-gates.md",
+            heading: "Release safety gates",
+          },
+        ],
+        chatId: "chat-design-spike",
+        chatTitle: "design-spike",
+        viewerCanAccess: true,
+        createdAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+      },
+      {
+        id: "influence-2",
+        agentId: "agent-reviewer",
+        agentName: "reviewer",
+        agentAvatarColorToken: "hue-4",
+        effect: "constrained",
+        summary: "The organization-isolation rule ruled out a global shared index.",
+        evidence: [
+          {
+            repoUrl: "https://github.com/acme/first-tree-context",
+            commit: "0123456789abcdef0123456789abcdef01234567",
+            nodePath: "system/cloud/team/tenancy-and-identity.md",
+            heading: "Organization isolation",
+          },
+        ],
+        // No deep link for a viewer who cannot open the chat — exercises the
+        // inert-label path alongside the clickable one above.
+        chatId: "chat-resource-layer",
+        chatTitle: "resource-layer",
+        viewerCanAccess: false,
+        createdAt: new Date(Date.now() - 26 * 60_000).toISOString(),
+      },
+    ],
+  },
   edges: [],
   changes: [],
   updates: [

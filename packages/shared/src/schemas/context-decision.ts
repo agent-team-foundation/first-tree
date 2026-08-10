@@ -5,18 +5,25 @@ import { contextTreeRepoSchema } from "./org-settings.js";
  * `metadata.contextDecision` — an agent's self-attributed record that Context
  * Tree content materially shaped the choice carried by THIS message.
  *
- * Legacy agents wrote this receipt on the same final `chat send` (or blocking
- * `chat ask`) that contained the affected choice. New `first-tree-read`
- * payloads use a portable note in the message body instead; this schema remains
- * the compatibility contract for stored history and older agents. The receipt
- * is the agent's own report: First Tree preserves the cited
- * repository/commit/path so a reader can inspect the exact source, but it does
- * NOT independently verify that the passage caused the choice. Every consumer
- * must present it as agent-reported, never as a system-verified causal claim.
+ * Current agents author only the visible impact note in the message body; the
+ * Server DERIVES this receipt from that note at write time (see
+ * `context-impact-note.ts`). Deriving is what keeps the machine-counted record
+ * and the human-visible claim from ever disagreeing — they are the same
+ * sentence. Legacy agents predate the note and send the payload directly; that
+ * path still validates, which is why the schema is also a wire contract and not
+ * only a storage shape.
  *
- * Trust boundary: the server strips the key from human senders and rejects a
- * malformed receipt from an agent sender, so a stored receipt is always an
- * agent's and always parses. Readers still parse defensively (`safeParse` via
+ * Either way the content is the agent's own report: First Tree preserves the
+ * cited repository/commit/path so a reader can inspect the exact source, but it
+ * does NOT independently verify that the passage caused the choice. Every
+ * consumer must present it as agent-reported, never as a system-verified causal
+ * claim.
+ *
+ * Trust boundary: the Server strips the key from human senders (a human may
+ * quote a note without it becoming an agent attribution), lets a derived
+ * receipt override a contradicting supplied one, and rejects a malformed
+ * supplied receipt. So a stored receipt is always an agent's and always parses.
+ * Readers still parse defensively (`safeParse` via
  * `readContextDecisionMetadata`) because message rows are immutable — history
  * written before that guard is not re-validated.
  */

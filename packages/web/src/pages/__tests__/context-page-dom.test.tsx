@@ -161,6 +161,9 @@ function snapshot(overrides: Partial<ContextTreeSnapshot> = {}): ContextTreeSnap
     updates: overrides.updates ?? MOCK_CONTEXT_SNAPSHOT.updates,
     edges: overrides.edges ?? MOCK_CONTEXT_SNAPSHOT.edges,
     changes: overrides.changes ?? MOCK_CONTEXT_SNAPSHOT.changes,
+    // Not `?? MOCK`: a caller passing `influence: undefined` means "no
+    // influence in this window", which is the state the panel must hide for.
+    influence: "influence" in overrides ? overrides.influence : MOCK_CONTEXT_SNAPSHOT.influence,
   };
 }
 
@@ -255,7 +258,8 @@ describe("ContextPage DOM behavior", () => {
   it("renders live preview, selects change groups, expands IO, and navigates accessible chats", async () => {
     vi.setSystemTime(new Date("2026-05-28T12:15:00.000Z"));
     const { ContextPage } = await import("../context.js");
-    // 22 events so the 20-row default still leaves rows behind "Show all".
+    // 22 io events so the 20-row default still leaves rows behind "Show all".
+    // The mock's 2 influence rows join the same stream, hence 24 below.
     const events = Array.from({ length: 22 }, (_, index) => ioEvent(index + 1));
     const liveSnapshot = snapshot({
       contextStatus: { label: "Needs attention", detail: "Tree sync is stale.", severity: "warning" },
@@ -287,7 +291,7 @@ describe("ContextPage DOM behavior", () => {
     expect(container.textContent).toContain("qa.bot-2");
     expect(container.textContent).toContain("#chat-3");
 
-    await click(buttonByText(container, "Show all 22"));
+    await click(buttonByText(container, "Show all 24"));
     expect(container.textContent).toContain("#hat-21");
 
     await click(buttonByText(container, "Nova"));
@@ -305,6 +309,53 @@ describe("ContextPage DOM behavior", () => {
     });
     await rerender(root, queryClient, <ContextPage previewSnapshot={nextSnapshot} />);
     expect(container.querySelector(".context-usage-feed-row.is-fresh")?.textContent).toContain("Fresh Agent");
+
+    await act(async () => root.unmount());
+  });
+
+  it("renders the influence panel, ranks nodes, and isolates influence rows", async () => {
+    const { ContextPage } = await import("../context.js");
+    const { container, root } = await renderDom(<ContextPage previewSnapshot={snapshot()} />);
+
+    // Outcome, not exposure: the headline counts decisions the tree changed,
+    // and conflicts are called out because they stay meaningful at any volume.
+    expect(container.textContent).toContain("decisions shaped");
+    expect(container.textContent).toContain("1 surfaced a conflict");
+    // The count must never be framed as a share of reads — a decision is a
+    // message and a read is a file open, so the two have different denominators.
+    expect(container.textContent).not.toContain("Of those reads");
+    // Coverage caveat is mandatory: a BYO session's note never reaches Server.
+    expect(container.textContent).toContain("BYO sessions are not included");
+
+    const nodes = [...container.querySelectorAll(".context-influence-node")];
+    expect(nodes.map((node) => node.textContent)).toEqual([
+      "Organization isolationsystem/cloud/team/tenancy-and-identity.md3",
+      "Release safety gatesoperations/release/safety-gates.md2",
+    ]);
+    expect(nodes[0]?.querySelector("a")?.getAttribute("href")).toBe(
+      "https://github.com/acme/first-tree-context/blob/0123456789abcdef0123456789abcdef01234567/system/cloud/team/tenancy-and-identity.md",
+    );
+
+    await click(buttonByText(container, "Influence"));
+    const rows = [...container.querySelectorAll(".context-usage-feed-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.className.includes("is-influence"))).toBe(true);
+    expect(rows[0]?.className).toContain("is-conflict");
+    expect(rows[0]?.textContent).toContain("Conflict surfaced");
+    expect(rows[1]?.textContent).toContain("Options narrowed");
+
+    await act(async () => root.unmount());
+  });
+
+  it("hides the influence panel when the window holds no decisions", async () => {
+    const { ContextPage } = await import("../context.js");
+    const { container, root } = await renderDom(<ContextPage previewSnapshot={snapshot({ influence: undefined })} />);
+
+    expect(container.querySelector(".context-influence")).toBeNull();
+    expect(container.textContent).not.toContain("decisions shaped");
+    // The read/write signal is unaffected — influence is an addition, not a
+    // replacement.
+    expect(container.textContent).toContain("read the tree");
 
     await act(async () => root.unmount());
   });

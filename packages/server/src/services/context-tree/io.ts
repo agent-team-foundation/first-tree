@@ -851,7 +851,17 @@ function isoOrNull(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-async function accessibleChatIdSet(db: Database, viewer: ContextTreeIoViewer, chatIds: string[]): Promise<Set<string>> {
+/**
+ * Chats this viewer may actually open — the same membership rule
+ * `requireChatAccess` enforces (speaker or watcher, or manages a speaker).
+ * Shared with the influence summary so the two Context tab feeds cannot drift
+ * into different answers about who gets a clickable chat link.
+ */
+export async function accessibleChatIdSet(
+  db: Database,
+  viewer: ContextTreeIoViewer,
+  chatIds: string[],
+): Promise<Set<string>> {
   const accessible = new Set<string>();
   if (chatIds.length === 0) return accessible;
 

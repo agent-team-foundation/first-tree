@@ -1578,6 +1578,134 @@ video[data-onboarding-orientation-video]::cue {
 }
 
 /*
+ * Influence — what the tree CHANGED, as opposed to how often it was opened.
+ * Sits directly under the read/write signal because the two numbers only mean
+ * something next to each other: reads are exposure, this is outcome. The signal
+ * line deliberately does NOT restate the count — "of those reads, N changed a
+ * decision" would imply a subset, and a decision is a message while a read is a
+ * file open. Two different denominators.
+ */
+.context-influence {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: var(--hairline) solid var(--border-faint);
+  border-radius: var(--radius-panel);
+}
+
+.context-influence-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.context-influence-count {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+}
+
+.context-influence-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  color: var(--fg-2);
+}
+
+.context-influence-conflict {
+  padding: 0 var(--sp-1_5);
+  border-radius: var(--radius-chip);
+  background: var(--state-blocked-soft);
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.context-influence-nodes-title {
+  margin-top: var(--sp-1);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.context-influence-nodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1_5);
+}
+
+.context-influence-node {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.context-influence-node > a,
+.context-influence-node > span:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.context-influence-node > a:hover {
+  text-decoration: underline;
+}
+
+.context-influence-node-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.context-influence-node-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+.context-influence-coverage {
+  margin: 0;
+  padding-top: var(--sp-2);
+  border-top: var(--hairline) solid var(--border-faint);
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+/* The outcome is the point of an influence row, so it gets its own line
+   under the "who applied what where" lead-in rather than trailing it. */
+.context-influence-row-outcome {
+  display: block;
+  margin-top: var(--sp-0_5);
+}
+
+.context-influence-row-effect {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.context-usage-feed-row.is-conflict .context-influence-row-effect {
+  color: var(--warning);
+}
+
+/*
  * Live usage feed under ContextSignal. Three layers of "live"-ness stack
  * here so the page feels active even when no event arrives during the
  * viewer's session:

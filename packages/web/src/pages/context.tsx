@@ -1,5 +1,7 @@
 import type {
+  ContextDecisionEffect,
   ContextTreeChangeType,
+  ContextTreeInfluenceEvent,
   ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
@@ -17,6 +19,8 @@ import { Identicon } from "../components/identicon.js";
 import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
+import { useGitlabEntityPresentation } from "../hooks/use-gitlab-entity-presentation.js";
+import { contextTreeSourceHref } from "../lib/context-source-link.js";
 import {
   GITLAB_WEB_CONTEXT_UNAVAILABLE_DETAIL,
   GITLAB_WEB_CONTEXT_UNAVAILABLE_TITLE,
@@ -91,6 +95,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
                 }}
               />
               <ContextSignal snapshot={snapshot} />
+              <ContextInfluence snapshot={snapshot} />
               <ContextUsageFeed snapshot={snapshot} />
             </>
           )
@@ -262,6 +267,88 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   );
 }
 
+const INFLUENCE_EFFECT_LABELS: Record<ContextDecisionEffect, string> = {
+  conflicted: "Conflict surfaced",
+  redirected: "Approach changed",
+  constrained: "Options narrowed",
+  confirmed: "Direction supported",
+};
+
+/**
+ * What the tree actually CHANGED, as opposed to how often it was opened.
+ *
+ * Placed directly under the read/write signal on purpose: the two numbers only
+ * mean something next to each other. A node can be opened on every navigation
+ * and never change an outcome, so the ranked list below is the signal a
+ * gardener needs — a node that has changed no decision in the window is either
+ * badly written or no longer earning its place.
+ *
+ * No percentage and no effect-distribution chart yet. The read count includes
+ * navigation opens that the authoring contract explicitly excludes from
+ * influence, so a ratio of the two would read as a conversion rate while
+ * measuring two different things. Conflicts are called out on their own because
+ * they stay meaningful at any volume: they are the case where the tree caught
+ * something before it shipped.
+ */
+function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const { organizationId } = useAuth();
+  // A GitLab-hosted tree only resolves to a web URL against the Team's own
+  // connected origin; without it every node here would render as inert text and
+  // the "inspectable source" promise would hold on GitHub teams only.
+  const { instanceOrigin } = useGitlabEntityPresentation(organizationId ?? null);
+  const influence = snapshot.influence;
+  if (!influence || influence.decisionCount === 0) return null;
+  const { decisionCount, effects, nodes } = influence;
+
+  return (
+    <section className="context-influence" aria-label="How Context Tree changed decisions">
+      <div className="context-influence-header">
+        <span className="context-influence-count">{decisionCount}</span>
+        <span className="context-influence-label">
+          {decisionCount === 1 ? "decision shaped" : "decisions shaped"}
+          {effects.conflicted > 0 ? (
+            <span className="context-influence-conflict">
+              {effects.conflicted === 1 ? "1 surfaced a conflict" : `${effects.conflicted} surfaced a conflict`}
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {nodes.length > 0 ? (
+        <>
+          <div className="context-influence-nodes-title">Nodes that changed decisions</div>
+          <ul className="context-influence-nodes">
+            {nodes.map((node) => {
+              // Same exact-commit link the chat receipt built, so a node here
+              // and a citation there resolve to the identical file version.
+              const href = contextTreeSourceHref(
+                { repoUrl: node.repoUrl, commit: node.commit, nodePath: node.nodePath },
+                instanceOrigin,
+              );
+              return (
+                <li key={node.nodePath} className="context-influence-node">
+                  {href ? (
+                    <a href={href} target="_blank" rel="noreferrer" title={node.nodePath}>
+                      {node.title}
+                    </a>
+                  ) : (
+                    <span title={node.nodePath}>{node.title}</span>
+                  )}
+                  <span className="context-influence-node-path">{node.nodePath}</span>
+                  <span className="context-influence-node-count">{node.decisionCount}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ) : null}
+      {/* Managed Chat is the only surface whose note reaches the Server: a BYO
+          session prints its note in the user's own terminal. Saying so is not
+          optional — without it this number reads as the tree's total value. */}
+      <p className="context-influence-coverage">Counted from managed chats. BYO sessions are not included.</p>
+    </section>
+  );
+}
+
 // Initial rows shown before "Show all". 20 (not 10) because the feed defaults
 // to All, where the ~13:1 read:write volume means a 10-row window is almost
 // entirely reads; 20 rows reliably surfaces recent writes without forcing the
@@ -281,14 +368,16 @@ const CONTEXT_USAGE_FRESH_MS = 1_200;
 // PR merges, reconciled to an agent when possible). A [All / Reads / Writes]
 // filter lets a viewer isolate writes — without it the ~13:1 read:write volume
 // would bury writes in the most-recent rows (the bug issue 1071 fixes).
-type ContextFeedFilter = "all" | "reads" | "writes";
+type ContextFeedFilter = "all" | "influence" | "reads" | "writes";
 
 type ContextFeedItem =
   | { kind: "read"; id: string; timeMs: number; read: ContextTreeIoEvent }
-  | { kind: "write"; id: string; timeMs: number; write: ContextTreeWriteEvent };
+  | { kind: "write"; id: string; timeMs: number; write: ContextTreeWriteEvent }
+  | { kind: "influence"; id: string; timeMs: number; influence: ContextTreeInfluenceEvent };
 
 const CONTEXT_FEED_FILTERS: ReadonlyArray<{ key: ContextFeedFilter; label: string }> = [
   { key: "all", label: "All" },
+  { key: "influence", label: "Influence" },
   { key: "writes", label: "Writes" },
   { key: "reads", label: "Reads" },
 ];
@@ -312,7 +401,16 @@ function buildContextFeedItems(snapshot: ContextTreeSnapshot): ContextFeedItem[]
     timeMs: feedTimeMs(write.createdAt),
     write,
   }));
-  return [...writes, ...reads].sort((a, b) => b.timeMs - a.timeMs);
+  // An influenced message is also a read, but the read row says only "opened
+  // this file" while the influence row says what changed. Both stay in the
+  // stream; the filter is what lets a viewer isolate the second kind.
+  const influences: ContextFeedItem[] = (snapshot.influence?.recentEvents ?? []).map((influence) => ({
+    kind: "influence",
+    id: `influence:${influence.id}`,
+    timeMs: feedTimeMs(influence.createdAt),
+    influence,
+  }));
+  return [...influences, ...writes, ...reads].sort((a, b) => b.timeMs - a.timeMs);
 }
 
 // Build a `…/pull/N` link from the bound context-tree repo, accepting both a
@@ -340,9 +438,12 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const items = useMemo(() => buildContextFeedItems(snapshot), [snapshot]);
   const filtered = useMemo(
     () =>
-      items.filter((item) =>
-        filter === "all" ? true : filter === "writes" ? item.kind === "write" : item.kind === "read",
-      ),
+      items.filter((item) => {
+        if (filter === "all") return true;
+        if (filter === "influence") return item.kind === "influence";
+        if (filter === "writes") return item.kind === "write";
+        return item.kind === "read";
+      }),
     [items, filter],
   );
 
@@ -414,19 +515,33 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
         </fieldset>
       </div>
       <ul className="context-usage-feed-list">
-        {visible.map((item) =>
-          item.kind === "write" ? (
-            <WriteFeedRow
-              key={item.id}
-              write={item.write}
-              now={now}
-              fresh={freshIds.has(item.id)}
-              repo={snapshot.repo}
-            />
-          ) : (
+        {visible.map((item) => {
+          if (item.kind === "write") {
+            return (
+              <WriteFeedRow
+                key={item.id}
+                write={item.write}
+                now={now}
+                fresh={freshIds.has(item.id)}
+                repo={snapshot.repo}
+              />
+            );
+          }
+          if (item.kind === "influence") {
+            return (
+              <InfluenceFeedRow
+                key={item.id}
+                event={item.influence}
+                now={now}
+                fresh={freshIds.has(item.id)}
+                navigate={navigate}
+              />
+            );
+          }
+          return (
             <ReadFeedRow key={item.id} event={item.read} now={now} fresh={freshIds.has(item.id)} navigate={navigate} />
-          ),
-        )}
+          );
+        })}
       </ul>
       {remaining > 0 ? (
         <button type="button" className="context-usage-feed-more" onClick={() => setShowAll(true)}>
@@ -487,6 +602,73 @@ function ReadFeedRow({
             )}
           </>
         ) : null}
+      </span>
+      <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>
+    </li>
+  );
+}
+
+/**
+ * One decision the tree changed. Unlike a read row ("opened this file") this
+ * row carries the outcome — the effect label plus the agent's own sentence —
+ * and links into the chat where the decision was made, for a viewer allowed to
+ * open it. `conflicted` is the one effect toned differently: it means the tree
+ * caught two rules that cannot both hold, which is unresolved work, not a win.
+ */
+function InfluenceFeedRow({
+  event,
+  now,
+  fresh,
+  navigate,
+}: {
+  event: ContextTreeInfluenceEvent;
+  now: number;
+  fresh: boolean;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  const chatId = event.chatId;
+  const hue = resolveAvatarHue(event.agentAvatarColorToken, event.agentId);
+  const conflict = event.effect === "conflicted";
+  const rowClass = ["context-usage-feed-row", "is-influence", conflict ? "is-conflict" : "", fresh ? "is-fresh" : ""]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <li className={rowClass}>
+      <span className="context-usage-feed-dot" aria-hidden="true" />
+      <Identicon seed={event.agentId} size={22} color={hue} className="context-usage-feed-avatar" />
+      <span className="context-usage-feed-text">
+        <span className="context-usage-feed-agent">{event.agentName}</span>
+        <span className="context-usage-feed-action"> applied </span>
+        {event.evidence.map((evidence, index) => (
+          <span key={`${evidence.commit}:${evidence.nodePath}`}>
+            {index > 0 ? <span className="context-usage-feed-action"> · </span> : null}
+            <span className="context-usage-feed-node" title={evidence.nodePath}>
+              {evidence.heading ?? evidence.nodePath}
+            </span>
+          </span>
+        ))}
+        {chatId ? (
+          <>
+            <span className="context-usage-feed-action"> in </span>
+            {event.viewerCanAccess ? (
+              <button
+                type="button"
+                className="context-usage-feed-chat"
+                onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
+              >
+                {chatLabel(event)}
+              </button>
+            ) : (
+              <span className="context-usage-feed-chat is-static" title="No access to this chat">
+                {chatLabel(event)}
+              </span>
+            )}
+          </>
+        ) : null}
+        <span className="context-influence-row-outcome">
+          <span className="context-influence-row-effect">{INFLUENCE_EFFECT_LABELS[event.effect]}</span>
+          <span className="context-usage-feed-summary"> — {event.summary}</span>
+        </span>
       </span>
       <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>
     </li>
@@ -588,7 +770,7 @@ function agentInitials(name: string): string {
   return trimmed.slice(0, 2).toUpperCase();
 }
 
-function chatLabel(event: ContextTreeIoEvent): string {
+function chatLabel(event: { chatTitle: string | null; chatId: string | null }): string {
   const trimmed = event.chatTitle?.trim();
   if (trimmed && trimmed.length > 0) return `#${trimmed}`;
   if (event.chatId) return `#${event.chatId.slice(-6)}`;

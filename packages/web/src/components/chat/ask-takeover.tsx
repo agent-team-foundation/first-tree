@@ -30,7 +30,7 @@
  * the ONLY way to resolve a question: the target human answers here, in the web
  * UI; an agent can only ask, never answer or close.
  */
-import type { AskOption, AskRequest, AttachmentKind, ContextDecision, MentionParticipant } from "@first-tree/shared";
+import type { AskOption, AskRequest, AttachmentKind, MentionParticipant } from "@first-tree/shared";
 import { COMPOSER_ACCEPT_ATTRIBUTE, extractMentions } from "@first-tree/shared";
 import { AtSign, History, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -47,7 +47,6 @@ import { FileChip } from "../ui/file-chip.js";
 import { Markdown, type MarkdownProps } from "../ui/markdown.js";
 import { useMentionComposer } from "../use-mention-composer.js";
 import type { AskAgentExchange } from "./ask-agent-state.js";
-import { ContextDecisionReceipt } from "./context-decision-receipt.js";
 import { ImageRefGallery, type ReferencedImage } from "./image-ref-gallery.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
 
@@ -140,8 +139,6 @@ export function AskTakeover({
   requestId,
   body,
   images = [],
-  contextDecision = null,
-  gitlabInstanceOrigin = null,
   payload,
   askerName,
   sending = false,
@@ -168,15 +165,6 @@ export function AskTakeover({
   body: string;
   /** Images attached to the ask, shown beneath the body in the same scroller. */
   images?: readonly ReferencedImage[];
-  /**
-   * The asking agent's Context Tree receipt for THIS question, when it reported
-   * one. Rendered after the question body and before the answer controls: it is
-   * context for the decision the human is about to make, never a second thing
-   * to answer. It adds no request state, notification, or blocking condition.
-   */
-  contextDecision?: ContextDecision | null;
-  /** Team GitLab web origin, forwarded to the receipt's source links. */
-  gitlabInstanceOrigin?: string | null;
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
@@ -819,9 +807,6 @@ export function AskTakeover({
           >
             <Markdown components={markdownComponents}>{body}</Markdown>
             <ImageRefGallery images={images} hasLeadingContent={body.trim().length > 0} />
-            {contextDecision ? (
-              <ContextDecisionReceipt receipt={contextDecision} gitlabInstanceOrigin={gitlabInstanceOrigin} />
-            ) : null}
           </div>
 
           {askAgent && askAgent.exchanges.length > 0 ? (

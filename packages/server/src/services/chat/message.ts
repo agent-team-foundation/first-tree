@@ -6,6 +6,7 @@ import {
   CLI_BODY_ORIGINS,
   CONTEXT_DECISION_METADATA_KEY,
   CRON_TRIGGER_METADATA_KEY,
+  contextDecisionFromImpactNote,
   contextDecisionSchema,
   extractCaption,
   FIRST_CHAT_ORIENTATION_CHAT_METADATA_KEY,
@@ -17,6 +18,7 @@ import {
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
+  parseContextImpactNotes,
   RUNTIME_NOTICE_METADATA_KEY,
   readFirstChatOrientationChatState,
   readFirstChatOrientationMessageMetadata,
@@ -119,24 +121,59 @@ function stripUntrustedMetadataKeys(
 }
 
 /**
- * Trust boundary for `metadata.contextDecision` — the agent-reported record
- * that Context Tree content shaped the choice carried by this message.
+ * Trust boundary for `metadata.contextDecision` — the record that Context Tree
+ * content shaped the choice carried by this message.
  *
- * Two rules, both fail-closed:
- *   1. A HUMAN sender never carries one. The key is stripped rather than
- *      rejected (a human's message body is fine; only the agent-attribution
- *      claim is not theirs to make), so a browser/API write cannot dress a
- *      human message as agent-reported Context Tree influence.
- *   2. An AGENT sender's receipt must parse. Rejecting the write surfaces the
- *      mistake to the agent, which fixes and resends; storing it silently would
- *      leave an unrenderable receipt that no consumer can show and no author
- *      knows is broken.
+ * Current agents author only the visible impact note in the body; the Server
+ * derives the structured receipt from that note. Deriving rather than accepting
+ * a parallel payload is the whole point: a hand-maintained second copy can
+ * disagree with the sentence the reader sees, and nothing at runtime would
+ * notice. One source, one claim.
+ *
+ * Three rules, all fail-closed:
+ *   1. A HUMAN sender never carries one, derived or supplied. The key is
+ *      stripped rather than rejected (a human's message body is fine, note and
+ *      all; only the agent-attribution claim is not theirs to make), so a
+ *      browser/API write cannot dress a human message as agent-reported
+ *      Context Tree influence.
+ *   2. An AGENT sender's note, when it converts, IS the receipt — it overrides
+ *      any caller-supplied payload, so the stored record can never contradict
+ *      the visible text.
+ *   3. A caller-supplied receipt still parses or the write fails. Legacy agents
+ *      predate the note and send only metadata; rejecting a malformed one
+ *      surfaces the mistake so the agent fixes and resends, where storing it
+ *      would leave an unrenderable receipt no consumer can show.
+ *
+ * A note that does not convert (unknown effect label, a source that is not an
+ * exact-commit link, an over-long summary) yields no receipt. That is the same
+ * outcome as writing no note at all, so it is logged — otherwise a formatting
+ * regression would quietly stop counting influence with nothing to show for it.
  */
-function applyContextDecisionTrustBoundary(meta: Record<string, unknown>, senderType: string): Record<string, unknown> {
-  if (!(CONTEXT_DECISION_METADATA_KEY in meta)) return meta;
+function applyContextDecisionTrustBoundary(
+  meta: Record<string, unknown>,
+  senderType: string,
+  body: unknown,
+): Record<string, unknown> {
   if (senderType === "human") {
+    if (!(CONTEXT_DECISION_METADATA_KEY in meta)) return meta;
     return Object.fromEntries(Object.entries(meta).filter(([key]) => key !== CONTEXT_DECISION_METADATA_KEY));
   }
+
+  const notes = typeof body === "string" && body.length > 0 ? parseContextImpactNotes(body) : [];
+  if (notes.length > 0) {
+    // Exactly one note or nothing: a body carrying two notes attributes two
+    // different things, and no reader — human or machine — can tell which one
+    // governed the message. Picking either would be a guess.
+    const note = notes.length === 1 ? notes[0] : undefined;
+    const derived = note ? contextDecisionFromImpactNote(note) : null;
+    if (derived) return { ...meta, [CONTEXT_DECISION_METADATA_KEY]: derived };
+    log.info(
+      { event: "context_decision_note_unreadable", noteCount: notes.length },
+      "Context Tree impact note present but not convertible to a receipt",
+    );
+  }
+
+  if (!(CONTEXT_DECISION_METADATA_KEY in meta)) return meta;
   const parsed = contextDecisionSchema.safeParse(meta[CONTEXT_DECISION_METADATA_KEY]);
   if (!parsed.success) {
     throw new BadRequestError(
@@ -559,9 +596,13 @@ export function preflightMessageSendIntent(input: {
   // normalization can salvage an empty body into a bare "@name".
   validateMessageContent({ format: data.format, content: effectiveContent }, { hasAttachmentRefs });
 
+  // `effectiveContent`, not `data.content`: the receipt is derived from the
+  // body that actually gets persisted, so a double-encoded send cannot store a
+  // note the reader sees while the Server parsed a JSON string around it.
   const incomingMeta = applyContextDecisionTrustBoundary(
     stripUntrustedMetadataKeys(rawIncomingMeta, options),
     senderType,
+    effectiveContent,
   );
   validateDocumentContext(incomingMeta);
   const parsedResolution = requestResolutionSchema.safeParse(incomingMeta.resolves);

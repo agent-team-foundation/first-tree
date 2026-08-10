@@ -5,6 +5,7 @@ import { createTimingCollector } from "../observability/timing.js";
 import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
 import { summarizeContextTreeUsage } from "../services/chat/sessions/events.js";
+import { summarizeContextTreeInfluence } from "../services/context-tree/influence.js";
 import { buildContextTreeIoSummary } from "../services/context-tree/io.js";
 import {
   type ContextTreeBinding,
@@ -92,8 +93,18 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
           ),
         )
       : snapshot.io;
+    // Same path as the org-scoped route so the influence block never silently
+    // empties on one of them. Without an org there is no message scope to
+    // aggregate, so the block is omitted rather than reported as zero.
+    const influence = orgId
+      ? await timing.time("influence_summary", () =>
+          summarizeContextTreeInfluence(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined, {
+            timing: timing.add,
+          }),
+        )
+      : undefined;
     const response = timing.timeSync("schema_parse", () =>
-      contextTreeSnapshotSchema.parse({ ...snapshot, recoveryAction, usage, io }),
+      contextTreeSnapshotSchema.parse({ ...snapshot, recoveryAction, usage, io, influence }),
     );
     const totalMs = timing.elapsedMs();
     reply.header("Server-Timing", timing.serverTimingHeader());

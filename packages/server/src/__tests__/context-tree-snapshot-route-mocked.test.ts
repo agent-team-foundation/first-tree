@@ -81,6 +81,13 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     writesTotal: 0,
     skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
   });
+  const summarizeContextTreeInfluence = vi.fn().mockResolvedValue({
+    windowDays: 7,
+    decisionCount: 1,
+    effects: { conflicted: 0, redirected: 0, constrained: 1, confirmed: 0 },
+    nodes: [],
+    recentEvents: [],
+  });
 
   vi.doMock("../scope/require-user.js", () => ({
     requireUser: () => ({ userId: "user-1" }),
@@ -104,6 +111,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../scope/require-resource.js", () => ({ resolveOrgViewer }));
   vi.doMock("../services/chat/sessions/events.js", () => ({ summarizeContextTreeUsage }));
   vi.doMock("../services/context-tree/io.js", () => ({ buildContextTreeIoSummary }));
+  vi.doMock("../services/context-tree/influence.js", () => ({ summarizeContextTreeInfluence }));
 
   const { contextTreeSnapshotRoutes } = await import("../api/context-tree-snapshot.js");
   const app = Object.assign(Fastify(), {
@@ -127,6 +135,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
       resolveContextTreeRecoveryAction,
       resolveOrgViewer,
       resolveUserPrimaryOrgId,
+      summarizeContextTreeInfluence,
       summarizeContextTreeUsage,
     },
   };
@@ -148,6 +157,9 @@ describe("context tree snapshot user route with mocked dependencies", () => {
     expect(ctx.mocks.findInstallationByOrg).not.toHaveBeenCalled();
     expect(ctx.mocks.summarizeContextTreeUsage).not.toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).not.toHaveBeenCalled();
+    // Without an org there is no message scope to aggregate, so the influence
+    // block is omitted rather than reported as a zero the reader would trust.
+    expect(ctx.mocks.summarizeContextTreeInfluence).not.toHaveBeenCalled();
     await ctx.app.close();
   });
 
@@ -169,6 +181,7 @@ describe("context tree snapshot user route with mocked dependencies", () => {
     expect(ctx.mocks.resolveOrgViewer).toHaveBeenCalledWith(ctx.app.db, "user-1", "org-1");
     expect(ctx.mocks.summarizeContextTreeUsage).toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).toHaveBeenCalled();
+    expect(ctx.mocks.summarizeContextTreeInfluence).toHaveBeenCalled();
     await ctx.app.close();
   });
 

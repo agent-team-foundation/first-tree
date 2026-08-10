@@ -1,13 +1,11 @@
+import {
+  CONTEXT_IMPACT_NOTE_EFFECT_LABELS,
+  type ContextImpactNote,
+  parseContextImpactNotes,
+  parseExactContextSourceLink,
+} from "@first-tree/shared";
 import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
-import type {
-  EvalMetrics,
-  FixtureValidation,
-  ImpactNoteEffect,
-  ImpactNoteExpectation,
-  ImpactNoteLanguage,
-  ManagedTransport,
-  ReadMode,
-} from "./types.js";
+import type { EvalMetrics, FixtureValidation, ImpactNoteExpectation, ManagedTransport, ReadMode } from "./types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -64,42 +62,24 @@ const FACT_MATCHERS: readonly FactMatcher[] = [
   },
 ];
 
-const EFFECT_LABELS: Record<ImpactNoteLanguage, Record<ImpactNoteEffect, string>> = {
-  en: {
-    conflicted: "Conflict surfaced",
-    confirmed: "Direction supported",
-    constrained: "Options narrowed",
-    redirected: "Approach changed",
-  },
-  zh: {
-    conflicted: "发现约束冲突",
-    confirmed: "支持当前方向",
-    constrained: "收窄可选范围",
-    redirected: "改变方案路径",
-  },
-};
-
-type ImpactNoteObservation = {
-  atEnd: boolean;
-  blankLineBefore: boolean;
-  effectLabel: string;
-  exactLinksOk: boolean;
-  language: ImpactNoteLanguage;
-  logicalLinesOk: boolean;
+/**
+ * A note the model wrote, plus the two judgements only this grader makes:
+ * whether the impact sentence stays objective, and which visible surface
+ * carried it. Everything else comes from the shared parser the Server reads
+ * notes with, so a format the eval blesses is a format the Server can store.
+ */
+type ImpactNoteObservation = ContextImpactNote & {
   sourceLabels: readonly string[];
-  sourceScaffoldingOk: boolean;
   sourceUrls: readonly string[];
-  summary: string;
   summaryObjectiveOk: boolean;
   textIndex: number;
 };
 
-type ExactSourceLink = {
-  commit: string;
-  nodePath: string;
-  repositoryIdentity: string;
-};
-
+/**
+ * Canonical `host/path` for a repository the FIXTURE declares, which may be an
+ * https or scp-like ssh URL. Distinct from the shared link parser, which
+ * canonicalizes a forge blob URL the MODEL wrote.
+ */
 function canonicalRepositoryIdentity(value: string): string | null {
   try {
     const url = new URL(value);
@@ -117,48 +97,6 @@ function canonicalRepositoryIdentity(value: string): string | null {
   }
 }
 
-function parseExactCredentialFreeSourceLink(value: string): ExactSourceLink | null {
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== "https:" ||
-      url.username !== "" ||
-      url.password !== "" ||
-      url.search !== "" ||
-      url.hash !== ""
-    ) {
-      return null;
-    }
-
-    const segments = url.pathname.split("/").filter(Boolean);
-    const blobIndex = segments.findIndex(
-      (segment, index) =>
-        segment === "blob" && /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/u.test(segments[index + 1] ?? ""),
-    );
-    if (blobIndex <= 0 || blobIndex + 2 >= segments.length) return null;
-    const repositoryEnd = segments[blobIndex - 1] === "-" ? blobIndex - 1 : blobIndex;
-    if (repositoryEnd <= 0) return null;
-
-    const repositoryPath = segments
-      .slice(0, repositoryEnd)
-      .join("/")
-      .replace(/\.git$/iu, "");
-    const nodePath = segments
-      .slice(blobIndex + 2)
-      .map((segment) => decodeURIComponent(segment))
-      .join("/");
-    if (repositoryPath.length === 0 || nodePath.length === 0) return null;
-
-    return {
-      commit: segments[blobIndex + 1]?.toLowerCase() ?? "",
-      nodePath,
-      repositoryIdentity: `${url.host.toLowerCase()}/${repositoryPath.toLowerCase()}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function isObjectiveImpactSummary(summary: string): boolean {
   const hasEnglishFirstPerson =
     /\b(?:we|We|our|Our|my|My|me|Me|us|Us|ours|Ours|mine|Mine)\b(?!-)/u.test(summary) ||
@@ -173,67 +111,17 @@ function isObjectiveImpactSummary(summary: string): boolean {
 
 function parseImpactNotes(texts: readonly string[]): readonly ImpactNoteObservation[] {
   const observations: ImpactNoteObservation[] = [];
-
   for (const [textIndex, text] of texts.entries()) {
-    const lines = text.replace(/\r/gu, "").split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      const firstLine = lines[index] ?? "";
-      // Only the effect label is bold: the first and third lines carry the same
-      // fixed wording in every note, so the single bold span stays the reader's
-      // entry point. A bolded first line is the superseded scaffold and is
-      // rejected rather than silently accepted.
-      const titleMatch = /^> (How Context Tree affected this work|Context Tree 如何影响本次工作)\\$/u.exec(firstLine);
-      const currentTitleScaffoldMatch =
-        /^> (How Context Tree affected this work|Context Tree 如何影响本次工作)\\?\s*$/u.exec(firstLine);
-      const legacyTitleMatch = /^> \*\*(Context Tree impact|Context Tree 影响)(?: · ([^*]+))?\*\*\\?\s*$/u.exec(
-        firstLine,
-      );
-      if (!currentTitleScaffoldMatch && !legacyTitleMatch) continue;
-
-      const language: ImpactNoteLanguage =
-        currentTitleScaffoldMatch?.[1] === "Context Tree 如何影响本次工作" ||
-        legacyTitleMatch?.[1] === "Context Tree 影响"
-          ? "zh"
-          : "en";
-      const secondLine = lines[index + 1] ?? "";
-      const thirdLine = lines[index + 2] ?? "";
-      const effectMatch =
-        language === "zh"
-          ? /^> \*\*([^*]+)\*\*：([^\s].*)\\$/u.exec(secondLine)
-          : /^> \*\*([^*]+):\*\* (.+)\\$/u.exec(secondLine);
-      const sourcePrefix = language === "zh" ? /^> Context Tree 来源：/u : /^> Context Tree (source|sources): /u;
-      const sourcePrefixMatch = sourcePrefix.exec(thirdLine);
-      const markdownLinks = [...thirdLine.matchAll(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu)];
-      const exactLinks = markdownLinks.filter((match) => parseExactCredentialFreeSourceLink(match[2] ?? "") !== null);
-      const expectedEnglishSource = markdownLinks.length === 1 ? "source" : "sources";
-      const sourceLabel = language === "zh" ? "Context Tree 来源" : `Context Tree ${expectedEnglishSource}:`;
-      const sourceSeparator = language === "zh" ? "：" : " ";
-      const expectedSourceLine = `> ${sourceLabel}${sourceSeparator}${markdownLinks.map((match) => match[0]).join(" · ")}`;
-      const sourceScaffoldingOk =
-        titleMatch !== null &&
-        sourcePrefixMatch !== null &&
-        (language === "zh" || sourcePrefixMatch[1] === expectedEnglishSource) &&
-        markdownLinks.length > 0 &&
-        thirdLine === expectedSourceLine;
-      const summary = effectMatch?.[2]?.trim() ?? "";
-
+    for (const note of parseContextImpactNotes(text)) {
       observations.push({
-        atEnd: lines.slice(index + 3).every((line) => line.trim() === ""),
-        blankLineBefore: index > 0 && (lines[index - 1] ?? "").trim() === "",
-        effectLabel: effectMatch?.[1]?.trim() ?? legacyTitleMatch?.[2]?.trim() ?? "",
-        exactLinksOk: exactLinks.length === markdownLinks.length && exactLinks.length > 0,
-        language,
-        logicalLinesOk: effectMatch !== null && sourcePrefixMatch !== null && !(lines[index + 3] ?? "").startsWith(">"),
-        sourceLabels: markdownLinks.map((match) => match[1] ?? ""),
-        sourceScaffoldingOk,
-        sourceUrls: markdownLinks.map((match) => match[2] ?? ""),
-        summary,
-        summaryObjectiveOk: isObjectiveImpactSummary(summary),
+        ...note,
+        sourceLabels: note.sources.map((source) => source.label),
+        sourceUrls: note.sources.map((source) => source.url),
+        summaryObjectiveOk: isObjectiveImpactSummary(note.summary),
         textIndex,
       });
     }
   }
-
   return observations;
 }
 
@@ -268,7 +156,7 @@ function sourceAuthorityMatches(
   if (expectedRepository === null || expectedCommit === null) return false;
 
   return observation.sourceUrls.every((value) => {
-    const source = parseExactCredentialFreeSourceLink(value);
+    const source = parseExactContextSourceLink(value);
     return (
       source !== null &&
       source.repositoryIdentity === expectedRepository &&
@@ -319,7 +207,7 @@ function deriveImpactNoteMetrics(
     ((observation?.sourceLabels.length ?? 0) >= expectation.sourceCount.min &&
       (observation?.sourceLabels.length ?? 0) <= expectation.sourceCount.max);
   const expectedEffectLabel =
-    expectation.mode === "present" ? EFFECT_LABELS[expectation.language][expectation.effect] : null;
+    expectation.mode === "present" ? CONTEXT_IMPACT_NOTE_EFFECT_LABELS[expectation.language][expectation.effect] : null;
   const behaviorOk =
     expectation.mode === "absent"
       ? observations.length === 0 && metadataFree && noteOutsideBlockingAsk

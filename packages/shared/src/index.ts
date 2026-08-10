@@ -474,6 +474,17 @@ export {
   readContextDecisionMetadata,
 } from "./schemas/context-decision.js";
 export {
+  CONTEXT_IMPACT_NOTE_EFFECT_LABELS,
+  CONTEXT_IMPACT_NOTE_LANGUAGES,
+  type ContextImpactNote,
+  type ContextImpactNoteLanguage,
+  type ContextImpactNoteSource,
+  contextDecisionFromImpactNote,
+  type ExactContextSourceLink,
+  parseContextImpactNotes,
+  parseExactContextSourceLink,
+} from "./schemas/context-impact-note.js";
+export {
   CONTEXT_ACTIVATION_SCOPE_KINDS,
   CONTEXT_INTEGRATION_PROVIDERS,
   CONTEXT_SKILL_LOADER_NAMES,
@@ -578,6 +589,9 @@ export {
   type ContextTreeContentAvailability,
   type ContextTreeEdge,
   type ContextTreeEdgeKind,
+  type ContextTreeInfluenceEvent,
+  type ContextTreeInfluenceNode,
+  type ContextTreeInfluenceSummary,
   type ContextTreeInstallationInfoResponse,
   type ContextTreeIoAction,
   type ContextTreeIoAgentSummary,
@@ -607,6 +621,9 @@ export {
   contextTreeContentAvailabilitySchema,
   contextTreeEdgeKindSchema,
   contextTreeEdgeSchema,
+  contextTreeInfluenceEventSchema,
+  contextTreeInfluenceNodeSchema,
+  contextTreeInfluenceSummarySchema,
   contextTreeInstallationInfoResponseSchema,
   contextTreeIoActionSchema,
   contextTreeIoAgentSummarySchema,
