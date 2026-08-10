@@ -349,8 +349,8 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       </div>
       {truncated ? (
         <p className="context-influence-partial">
-          This window holds more decisions than one pass reads, so these counts are a floor and the ranking may be
-          incomplete.
+          This window holds more candidate receipts than one pass reads, so these counts are a floor and the ranking may
+          be incomplete.
         </p>
       ) : null}
       {nodes.length > 0 ? (
