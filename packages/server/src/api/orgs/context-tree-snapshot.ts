@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createTimingCollector } from "../../observability/timing.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { summarizeContextTreeUsage } from "../../services/chat/sessions/events.js";
-import { summarizeContextTreeInfluence } from "../../services/context-tree/influence.js";
+import { normalizeNodePath, summarizeContextTreeInfluence } from "../../services/context-tree/influence.js";
 import { buildContextTreeIoSummary } from "../../services/context-tree/io.js";
 import {
   type ContextTreeBinding,
@@ -19,6 +19,24 @@ import {
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../../services/scm/github/app-token.js";
+
+/**
+ * Tree-root-relative paths the snapshot actually carries, in every form a
+ * citation may name them (node path, its source file, and the `.md` form).
+ * The influence ranking echoes a path back only when it appears here.
+ */
+function snapshotNodePaths(nodes: readonly { path: string; sourcePath: string | null }[]): ReadonlySet<string> {
+  const paths = new Set<string>();
+  for (const node of nodes) {
+    const path = normalizeNodePath(node.path);
+    if (path.length > 0) {
+      paths.add(path);
+      paths.add(`${path}.md`);
+    }
+    if (node.sourcePath) paths.add(normalizeNodePath(node.sourcePath));
+  }
+  return paths;
+}
 
 const querySchema = z
   .object({
@@ -95,6 +113,7 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
         boundRepoUrl: binding?.repo ?? null,
         boundProvider: binding?.provider ?? null,
         gitlabInstanceOrigin: reviewRuntime.gitlabConnection?.instanceOrigin ?? null,
+        knownNodePaths: snapshotNodePaths(snapshot.nodes),
         viewer: { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
         timing: timing.add,
       }),

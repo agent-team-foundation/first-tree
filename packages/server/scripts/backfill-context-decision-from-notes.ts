@@ -53,13 +53,16 @@ function parseArgs(argv: readonly string[]) {
   if (organizationId && allOrgs) throw new Error("Pass either --org or --all-orgs, not both");
 
   const resumeRaw = optionValue(argv, "--resume-after");
-  let resumeAfter: { createdAt: Date; id: string } | undefined;
+  let resumeAfter: { createdAt: string; id: string } | undefined;
   if (resumeRaw !== undefined) {
     const separator = resumeRaw.lastIndexOf("|");
-    const createdAt = new Date(resumeRaw.slice(0, Math.max(separator, 0)));
+    // The timestamp is carried as the database's own text, never re-parsed into
+    // a Date: a `Date` round-trip drops microseconds and the cursor would then
+    // re-select the row it was meant to skip.
+    const createdAt = resumeRaw.slice(0, Math.max(separator, 0));
     const id = resumeRaw.slice(separator + 1);
-    if (separator <= 0 || Number.isNaN(createdAt.getTime()) || id.length === 0) {
-      throw new Error('--resume-after must be "<ISO-8601>|<messageId>", as printed by the previous run');
+    if (separator <= 0 || Number.isNaN(new Date(createdAt).getTime()) || id.length === 0) {
+      throw new Error('--resume-after must be "<timestamp>|<messageId>", exactly as printed by the previous run');
     }
     resumeAfter = { createdAt, id };
   }

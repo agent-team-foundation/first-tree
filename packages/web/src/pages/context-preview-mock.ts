@@ -49,7 +49,9 @@ const update = (
 });
 
 export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
-  repo: "agent-team-foundation/first-tree-context",
+  // A real binding is always a full URL (validated by contextTreeRepoSchema);
+  // the preview uses one so source links resolve the way they do in production.
+  repo: "https://github.com/agent-team-foundation/first-tree-context",
   branch: "main",
   headCommit: "83c3939e90b",
   syncedAt: new Date().toISOString(),
@@ -333,14 +335,10 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     nodes: [
       {
         nodePath: "members/yzw/notebook.md",
-        repoUrl: "https://github.com/acme/first-tree-context",
-        commit: "0123456789abcdef0123456789abcdef01234567",
         decisionCount: 3,
       },
       {
         nodePath: "practices/tm.md",
-        repoUrl: "https://github.com/acme/first-tree-context",
-        commit: "0123456789abcdef0123456789abcdef01234567",
         decisionCount: 2,
       },
     ],

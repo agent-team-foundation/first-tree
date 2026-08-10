@@ -338,8 +338,10 @@ describe("ContextPage DOM behavior", () => {
       "Notebookmembers/yzw/notebook.md3",
       "Tree Maintenancepractices/tm.md2",
     ]);
+    // Link identity is the SNAPSHOT's repo and head commit, never the note's:
+    // a citation names those inside a chat the viewer may not be in.
     expect(nodes[0]?.querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/acme/first-tree-context/blob/0123456789abcdef0123456789abcdef01234567/members/yzw/notebook.md",
+      "https://github.com/agent-team-foundation/first-tree-context/blob/83c3939e90b/members/yzw/notebook.md",
     );
 
     await click(buttonByText(container, "Influence"));

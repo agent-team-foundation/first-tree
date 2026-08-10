@@ -87,6 +87,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     effects: { conflicted: 0, redirected: 0, constrained: 1, confirmed: 0 },
     nodes: [],
     recentEvents: [],
+    truncated: false,
   });
 
   vi.doMock("../scope/require-user.js", () => ({

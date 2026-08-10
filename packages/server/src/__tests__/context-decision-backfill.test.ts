@@ -1,5 +1,5 @@
 import { CONTEXT_DECISION_METADATA_KEY, type ContextDecision } from "@first-tree/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
@@ -231,13 +231,46 @@ describe("contextDecision backfill from impact notes", () => {
 
     const resumed = await backfill({
       organizationId: seed.organizationId,
-      resumeAfter: {
-        createdAt: new Date(first.nextCursor?.createdAt ?? ""),
-        id: first.nextCursor?.id ?? "",
-      },
+      resumeAfter: { createdAt: first.nextCursor?.createdAt ?? "", id: first.nextCursor?.id ?? "" },
     });
     expect(resumed.tally.derived).toBe(2);
     for (const id of ids) expect((await metadataOf(id))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
+  });
+
+  // `timestamptz` keeps microseconds; a JavaScript Date keeps milliseconds. A
+  // cursor that round-trips through Date rounds DOWN, so the next comparison
+  // re-selects the row it was meant to skip — with maxRows 1 on an
+  // unconvertible boundary row, every resumed run stops on it forever.
+  it("resumes past a row whose timestamp carries microseconds", async () => {
+    const app = getApp();
+    const seed = await seedChat();
+    const blocker = await insertMessage(
+      seed.chatId,
+      seed.agent.uuid,
+      noteBody({ effectLine: "**Mostly helpful:** fine." }),
+    );
+    const convertible = await insertMessage(seed.chatId, seed.agent.uuid, noteBody());
+    await app.db.execute(
+      sql`UPDATE messages SET created_at = '2026-08-10 10:00:00.123456+00'::timestamptz WHERE id = ${blocker}`,
+    );
+    await app.db.execute(
+      sql`UPDATE messages SET created_at = '2026-08-10 10:00:00.223456+00'::timestamptz WHERE id = ${convertible}`,
+    );
+    const window = { since: new Date("2026-08-10T09:00:00Z"), until: new Date("2026-08-10T11:00:00Z") };
+
+    const first = await backfill({ ...window, organizationId: seed.organizationId, maxRows: 1 });
+    expect(first.scanned).toBe(1);
+    expect(first.nextCursor?.createdAt).toContain("123456");
+
+    const resumed = await backfill({
+      ...window,
+      organizationId: seed.organizationId,
+      maxRows: 1,
+      resumeAfter: { createdAt: first.nextCursor?.createdAt ?? "", id: first.nextCursor?.id ?? "" },
+    });
+    // A rounded cursor would have re-selected the blocker and derived nothing.
+    expect(resumed.tally.derived).toBe(1);
+    expect((await metadataOf(convertible))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
   });
 
   it("ignores a body with no note at all", async () => {

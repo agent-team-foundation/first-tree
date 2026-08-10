@@ -78,6 +78,14 @@ export type ContextTreeInfluenceOptions = {
    */
   boundProvider?: ContextTreeProvider | null;
   gitlabInstanceOrigin?: string | null;
+  /**
+   * Tree-root-relative paths the current snapshot actually contains. The
+   * ranking is org-wide, and a citation's path is asserted by a private message
+   * body and never verified — so a node the snapshot does not know is dropped
+   * rather than broadcast. Without this set the ranking stays empty: silence is
+   * the safe failure, not "publish whatever the note claimed".
+   */
+  knownNodePaths?: ReadonlySet<string>;
   viewer?: ContextTreeIoViewer;
   timing?: (stage: string, ms: number, attrs?: Record<string, unknown>) => void;
 };
@@ -107,6 +115,11 @@ type ValidReceipt = {
   createdAt: string;
   createdAtMs: number;
 };
+
+/** Tree-root-relative form, so a leading slash never defeats a snapshot match. */
+export function normalizeNodePath(value: string): string {
+  return value.replace(/^\/+/, "");
+}
 
 function isoOrNull(value: Date | string | null): string | null {
   if (value === null) return null;
@@ -173,17 +186,16 @@ function toValidReceipt(row: CandidateRow, matchesBoundRepo: (repoUrl: string) =
 }
 
 /**
- * Rank the bound tree's nodes by how many decisions cited them.
+ * Rank snapshot-known nodes by how many decisions cited them.
  *
- * The ranking is org-wide, like every other aggregate here, so it must carry
- * NO field that only a chat participant should see. The citation's `heading` is
- * the agent's own link label written inside a private message body, so it is
- * deliberately dropped: the display title is resolved client-side from the
- * org-visible tree snapshot instead. `nodePath`, `repoUrl`, and `commit`
- * describe the org's own bound repository, which every member can already read
- * from that same snapshot.
+ * The ranking is org-wide, so it may contain nothing that a private message
+ * body asserted. Matching a citation against `knownNodePaths` is what makes the
+ * remaining field safe: the path is echoed back only because the snapshot the
+ * caller already holds also carries it. Heading, repository, and commit are
+ * dropped entirely — a note could name any of them, and nothing verifies that
+ * the cited object exists at the cited version.
  */
-function rankNodes(receipts: readonly ValidReceipt[]): ContextTreeInfluenceNode[] {
+function rankNodes(receipts: readonly ValidReceipt[], knownNodePaths: ReadonlySet<string>): ContextTreeInfluenceNode[] {
   const byPath = new Map<string, ContextTreeInfluenceNode>();
 
   // Newest first so the first write of each node carries the most recent
@@ -193,19 +205,16 @@ function rankNodes(receipts: readonly ValidReceipt[]): ContextTreeInfluenceNode[
     // shared parser already dedupes, this is the second line of defence.
     const seen = new Set<string>();
     for (const item of receipt.evidence) {
-      if (seen.has(item.nodePath)) continue;
-      seen.add(item.nodePath);
-      const existing = byPath.get(item.nodePath);
+      const nodePath = normalizeNodePath(item.nodePath);
+      if (!knownNodePaths.has(nodePath)) continue;
+      if (seen.has(nodePath)) continue;
+      seen.add(nodePath);
+      const existing = byPath.get(nodePath);
       if (existing) {
         existing.decisionCount += 1;
         continue;
       }
-      byPath.set(item.nodePath, {
-        nodePath: item.nodePath,
-        repoUrl: item.repoUrl,
-        commit: item.commit,
-        decisionCount: 1,
-      });
+      byPath.set(nodePath, { nodePath, decisionCount: 1 });
     }
   }
 
@@ -268,11 +277,14 @@ export async function summarizeContextTreeInfluence(
         AND m.created_at >= ${sinceIso}::timestamptz
         AND m.metadata ? ${CONTEXT_DECISION_METADATA_KEY}
       ORDER BY m.created_at DESC
-      LIMIT ${INFLUENCE_SCAN_CAP}
+      LIMIT ${INFLUENCE_SCAN_CAP + 1}
     `),
   );
 
-  const truncated = rows.length >= INFLUENCE_SCAN_CAP;
+  // One row beyond the cap is fetched so a window holding EXACTLY the cap is
+  // reported as complete rather than as truncated.
+  const truncated = rows.length > INFLUENCE_SCAN_CAP;
+  const scanned = truncated ? rows.slice(0, INFLUENCE_SCAN_CAP) : rows;
   if (truncated) {
     log.error(
       { event: "context_influence_scan_cap_reached", organizationId, windowDays, cap: INFLUENCE_SCAN_CAP },
@@ -281,7 +293,7 @@ export async function summarizeContextTreeInfluence(
   }
 
   const receipts: ValidReceipt[] = [];
-  for (const row of rows) {
+  for (const row of scanned) {
     const receipt = toValidReceipt(row, matchesBoundRepo);
     if (receipt) receipts.push(receipt);
   }
@@ -326,7 +338,7 @@ export async function summarizeContextTreeInfluence(
     windowDays,
     decisionCount: receipts.length,
     effects,
-    nodes: rankNodes(receipts),
+    nodes: rankNodes(receipts, options.knownNodePaths ?? new Set()),
     recentEvents,
     truncated,
   };

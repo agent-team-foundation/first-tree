@@ -26,7 +26,15 @@ type Row = {
   id: string;
   content: unknown;
   metadata: Record<string, unknown> | null;
-  created_at: Date | string;
+  /**
+   * The sort key as PostgreSQL renders it, NOT a `Date`. `timestamptz` keeps
+   * microseconds while a JavaScript `Date` keeps milliseconds, so a cursor that
+   * round-trips through `Date.toISOString()` rounds DOWN — and the next
+   * `(created_at, id) > (cursor…)` comparison then re-selects the very row the
+   * cursor was meant to skip. With `--max-rows 1` on an unconvertible boundary
+   * row, every resumed run would stop on that same row forever.
+   */
+  created_at_key: string;
 };
 
 type Outcome = "derived" | "no_note" | "two_notes" | "unconvertible" | "not_text";
@@ -56,7 +64,7 @@ export type BackfillOptions = {
    * "rerun to continue" instruction would restart at the window's beginning and
    * rescan every already-examined row.
    */
-  resumeAfter?: { createdAt: Date; id: string };
+  resumeAfter?: { createdAt: string; id: string };
 };
 
 export type BackfillReport = {
@@ -77,10 +85,6 @@ const DEFAULT_MAX_ROWS = 20_000;
 
 function bodyOf(content: unknown): string | null {
   return typeof content === "string" ? content : null;
-}
-
-function isoOf(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
 /**
@@ -116,9 +120,7 @@ export async function backfillContextDecisionFromNotes(
   const unconvertibleSample: string[] = [];
   let scanned = 0;
   let stoppedAtMaxRows = false;
-  let cursor: { createdAt: string; id: string } | null = options.resumeAfter
-    ? { createdAt: options.resumeAfter.createdAt.toISOString(), id: options.resumeAfter.id }
-    : null;
+  let cursor: { createdAt: string; id: string } | null = options.resumeAfter ?? null;
   let lastExamined: { createdAt: string; id: string } | null = null;
 
   for (;;) {
@@ -126,7 +128,7 @@ export async function backfillContextDecisionFromNotes(
     // receipt yet. The scaffold match is a cheap prefilter — the shared parser
     // is the authority, and it runs on every row this returns.
     const rows: Row[] = await db.execute<Row>(sql`
-      SELECT m.id, m.content, m.metadata, m.created_at
+      SELECT m.id, m.content, m.metadata, m.created_at::text AS created_at_key
       FROM messages m
       INNER JOIN agents a ON a.uuid = m.sender_id
       ${organizationId ? sql`INNER JOIN chats c ON c.id = m.chat_id AND c.organization_id = ${organizationId}` : sql``}
@@ -153,7 +155,7 @@ export async function backfillContextDecisionFromNotes(
         break;
       }
       scanned += 1;
-      lastExamined = { createdAt: isoOf(row.created_at), id: row.id };
+      lastExamined = { createdAt: row.created_at_key, id: row.id };
       const body = bodyOf(row.content);
       if (body === null) {
         tally.not_text += 1;
@@ -201,7 +203,7 @@ export async function backfillContextDecisionFromNotes(
     if (stoppedAtMaxRows) break;
     const last = rows.at(-1);
     if (!last) break;
-    cursor = { createdAt: isoOf(last.created_at), id: last.id };
+    cursor = { createdAt: last.created_at_key, id: last.id };
     if (rows.length < pageSize) {
       lastExamined = null;
       break;

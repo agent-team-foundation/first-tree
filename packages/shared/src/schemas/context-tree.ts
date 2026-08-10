@@ -348,18 +348,17 @@ export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
 // user's own terminal, so those decisions are not counted — the Context tab
 // must say so rather than let this read as the Tree's total value.
 export const contextTreeInfluenceNodeSchema = z.object({
-  // Tree-root-relative path, e.g. `system/cloud/team/tenancy-and-identity.md`.
-  nodePath: z.string(),
-  // Repository and commit of the most recent citation, so the row can link to
-  // an exact version rather than a moving branch. Both describe the org's own
-  // bound repository, which every member can already read from the snapshot.
+  // Tree-root-relative path of a node that EXISTS in this snapshot. The Server
+  // drops any citation whose path it cannot find there, because everything else
+  // in a receipt is asserted by a private message body and never verified: an
+  // agent in a chat the viewer cannot open could otherwise name an arbitrary
+  // path, and this ranking is org-wide.
   //
-  // There is deliberately NO title here. A citation's readable label is the
-  // agent's own wording inside a private message body, and this ranking is
-  // org-wide — so the client resolves a display title from the org-visible
-  // `nodes[]` instead of taking one out of a chat the viewer may not open.
-  repoUrl: z.string(),
-  commit: z.string(),
+  // For the same reason there is no title, repository, or commit here. The
+  // client already holds all three from the snapshot itself, which every member
+  // may read — so the display name and the source link are built from that
+  // org-visible source rather than from the note.
+  nodePath: z.string(),
   decisionCount: z.number().int().nonnegative(),
 });
 export type ContextTreeInfluenceNode = z.infer<typeof contextTreeInfluenceNodeSchema>;

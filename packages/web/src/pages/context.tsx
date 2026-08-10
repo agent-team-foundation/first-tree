@@ -327,13 +327,17 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   // Rendering a confident "0 decisions" for the first case would invent an
   // answer the Server never gave.
   if (!influence) return null;
-  const { decisionCount, effects, nodes } = influence;
+  const { decisionCount, effects, nodes, truncated } = influence;
 
   return (
     <section className="context-influence" aria-label="Context Tree influence reported by agents">
       <div className="context-influence-eyebrow">Agent-reported</div>
       <div className="context-influence-header">
-        <span className="context-influence-count">{decisionCount}</span>
+        <span className="context-influence-count">
+          {/* A truncated window makes every count a floor, so the number must
+              not be presented as the answer. */}
+          {truncated ? `${decisionCount}+` : decisionCount}
+        </span>
         <span className="context-influence-label">
           {decisionCount === 1 ? "decision reported as shaped" : "decisions reported as shaped"}
           {effects.conflicted > 0 ? (
@@ -343,17 +347,29 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
           ) : null}
         </span>
       </div>
+      {truncated ? (
+        <p className="context-influence-partial">
+          This window holds more decisions than one pass reads, so these counts are a floor and the ranking may be
+          incomplete.
+        </p>
+      ) : null}
       {nodes.length > 0 ? (
         <>
           <div className="context-influence-nodes-title">Nodes agents cited as changing a decision</div>
           <ul className="context-influence-nodes">
             {nodes.map((node) => {
-              // Same exact-commit link the chat receipt built, so a node here
-              // and a citation there resolve to the identical file version.
-              const href = contextTreeSourceHref(
-                { repoUrl: node.repoUrl, commit: node.commit, nodePath: node.nodePath },
-                instanceOrigin,
-              );
+              // Link identity comes from the SNAPSHOT, never from the note: the
+              // repository and commit a citation names are asserted inside a
+              // chat the viewer may not be in, and nothing verifies them. The
+              // Server already dropped any node this snapshot does not carry,
+              // so the path here is org-visible by construction.
+              const href =
+                snapshot.repo && snapshot.headCommit
+                  ? contextTreeSourceHref(
+                      { repoUrl: snapshot.repo, commit: snapshot.headCommit, nodePath: node.nodePath },
+                      instanceOrigin,
+                    )
+                  : null;
               const title = nodeTitleByPath.get(node.nodePath) ?? nodeFileName(node.nodePath);
               return (
                 <li key={node.nodePath} className="context-influence-node">

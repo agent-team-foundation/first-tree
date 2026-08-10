@@ -16,8 +16,16 @@ const getApp = useTestApp();
 
 // Every summarize call must be scoped to a bound repository — an unscoped
 // ranking would merge nodes from other repositories that share a path.
+// The ranking only echoes back paths the snapshot carries, so every call
+// declares what this Team's snapshot knows.
+const KNOWN_PATHS: ReadonlySet<string> = new Set([TENANCY, GATES]);
+
 function summarize(organizationId: string, overrides: Record<string, unknown> = {}) {
-  return summarizeContextTreeInfluence(getApp().db, organizationId, 7, { boundRepoUrl: REPO, ...overrides });
+  return summarizeContextTreeInfluence(getApp().db, organizationId, 7, {
+    boundRepoUrl: REPO,
+    knownNodePaths: KNOWN_PATHS,
+    ...overrides,
+  });
 }
 
 function receipt(overrides: Partial<ContextDecision> = {}): ContextDecision {
@@ -106,27 +114,48 @@ describe("context-tree influence summary", () => {
     const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(2);
     expect(summary.nodes).toEqual([
-      { nodePath: TENANCY, repoUrl: REPO, commit: COMMIT, decisionCount: 2 },
-      { nodePath: GATES, repoUrl: REPO, commit: COMMIT, decisionCount: 1 },
+      { nodePath: TENANCY, decisionCount: 2 },
+      { nodePath: GATES, decisionCount: 1 },
     ]);
   });
 
   // The ranking is org-wide, so it must carry no field only a chat participant
   // should see. A citation's heading is the agent's own wording inside a
   // private body; the client resolves a title from the tree snapshot instead.
-  it("never exposes a citation heading through the org-wide ranking", async () => {
+  // Everything in a receipt is asserted by a private message body and never
+  // verified. A note in a chat the viewer cannot open could name an arbitrary
+  // same-repo path and an arbitrary commit; neither may reach an org-wide
+  // surface, so the ranking echoes back only paths the snapshot itself carries.
+  it("never exposes unverified citation identity through the org-wide ranking", async () => {
     const seed = await seedChat();
+    const secretCommit = "f".repeat(40);
     await sendMessage(seed.chatId, seed.agent.uuid, {
       [CONTEXT_DECISION_METADATA_KEY]: receipt({
-        evidence: [{ repoUrl: REPO, commit: COMMIT, nodePath: TENANCY, heading: "SECRET LABEL" }],
+        evidence: [
+          { repoUrl: REPO, commit: secretCommit, nodePath: "customers/SECRET.md", heading: "SECRET LABEL" },
+          { repoUrl: REPO, commit: secretCommit, nodePath: TENANCY, heading: "ALSO SECRET" },
+        ],
       }),
     });
 
     const outsider = await summarize(seed.organizationId, {
       viewer: { humanAgentId: `human-${crypto.randomUUID()}`, memberId: `member-${crypto.randomUUID()}` },
     });
-    expect(JSON.stringify(outsider)).not.toContain("SECRET LABEL");
-    expect(Object.keys(outsider.nodes[0] ?? {}).sort()).toEqual(["commit", "decisionCount", "nodePath", "repoUrl"]);
+    const serialized = JSON.stringify(outsider);
+    for (const secret of ["SECRET LABEL", "ALSO SECRET", "customers/SECRET.md", secretCommit]) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(outsider.nodes).toEqual([{ nodePath: TENANCY, decisionCount: 1 }]);
+  });
+
+  it("drops the whole ranking when the snapshot declares no known nodes", async () => {
+    const seed = await seedChat();
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+
+    const summary = await summarize(seed.organizationId, { knownNodePaths: new Set<string>() });
+    // Silence is the safe failure — never "publish whatever the note claimed".
+    expect(summary.decisionCount).toBe(1);
+    expect(summary.nodes).toEqual([]);
   });
 
   it("excludes receipts older than the window", async () => {
@@ -240,7 +269,7 @@ describe("context-tree influence summary", () => {
 
     const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(1);
-    expect(summary.nodes).toEqual([{ nodePath: TENANCY, repoUrl: REPO, commit: COMMIT, decisionCount: 1 }]);
+    expect(summary.nodes).toEqual([{ nodePath: TENANCY, decisionCount: 1 }]);
   });
 
   it("matches the bound repository across equivalent spellings", async () => {

@@ -1634,6 +1634,15 @@ video[data-onboarding-orientation-video]::cue {
   font-size: 12px;
 }
 
+.context-influence-partial {
+  margin: 0;
+  padding: var(--sp-1_5) var(--sp-2);
+  border-radius: var(--radius-chip);
+  background: var(--state-blocked-soft);
+  color: var(--warning);
+  font-size: 12px;
+}
+
 .context-influence-nodes-title {
   margin-top: var(--sp-1);
   font-size: 11px;
