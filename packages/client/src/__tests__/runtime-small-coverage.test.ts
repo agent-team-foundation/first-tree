@@ -103,7 +103,7 @@ describe("Claude browser login invocation resolution", () => {
   it("builds the browser OAuth command with auth login and the default timeout", async () => {
     vi.resetModules();
     const runBrowserLogin = vi.fn(async () => ({ ok: true as const, authUrl: "https://claude.test/login" }));
-    vi.doMock("../runtime/runtime-login.js", () => ({
+    vi.doMock("../providers/runtime-login.js", () => ({
       BROWSER_LOGIN_TIMEOUT_MS: 1234,
       runBrowserLogin,
     }));
@@ -142,7 +142,7 @@ describe("Claude browser login invocation resolution", () => {
   it("honors an explicit browser login timeout override", async () => {
     vi.resetModules();
     const runBrowserLogin = vi.fn(async () => ({ ok: false as const, error: "timed out" }));
-    vi.doMock("../runtime/runtime-login.js", () => ({
+    vi.doMock("../providers/runtime-login.js", () => ({
       BROWSER_LOGIN_TIMEOUT_MS: 1234,
       runBrowserLogin,
     }));

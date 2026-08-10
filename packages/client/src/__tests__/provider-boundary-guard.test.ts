@@ -56,8 +56,10 @@ const GUARDED_CLIENT_FILES = [
 ] as const;
 
 /** Concrete provider binary / handler implementation modules (not support seams). */
-const CONCRETE_PROVIDER_BINARY_IMPORT = /from ["']\.\/(?:codex|cursor|grok|pi|kimi|opencode)-binary\.js["']/;
-const CONCRETE_PROVIDER_HANDLER_IMPORT = /from ["'].*handlers\/(claude-code|codex|cursor|grok|kimi-code|opencode|pi)/;
+const CONCRETE_PROVIDER_BINARY_IMPORT =
+  /from ["'](?:\.\/(?:codex|cursor|grok|pi|kimi|opencode)-binary\.js|[^"']*providers\/grok\/binary\.js)["']/;
+const CONCRETE_PROVIDER_HANDLER_IMPORT =
+  /from ["'].*(?:handlers\/(claude-code|codex|cursor|grok|kimi-code|opencode|pi)|providers\/grok)/;
 
 /** Live presentation consumers that must derive catalog-owned copy. */
 const CATALOG_CONSUMER_FILES = [
@@ -74,7 +76,7 @@ const CATALOG_CONSUMER_FILES = [
   "packages/client/src/runtime/capabilities/claude-code.ts",
   "packages/client/src/runtime/codex-binary.ts",
   "packages/client/src/runtime/cursor-binary.ts",
-  "packages/client/src/runtime/grok-binary.ts",
+  "packages/client/src/providers/grok/binary.ts",
   "packages/client/src/runtime/kimi-binary.ts",
   "packages/client/src/runtime/opencode-binary.ts",
   "packages/client/src/runtime/pi-binary.ts",
@@ -211,12 +213,12 @@ describe("runtime provider architecture guard", () => {
     for (const [file, symbol] of [
       ["runtime/codex-binary.ts", "isCodexBinaryMissingError"],
       ["runtime/cursor-binary.ts", "isCursorBinaryMissingError"],
-      ["runtime/grok-binary.ts", "isGrokBinaryMissingError"],
+      ["providers/grok/binary.ts", "isGrokBinaryMissingError"],
       ["runtime/pi-binary.ts", "isPiBinaryMissingError"],
     ] as const) {
       const source = readFileSync(join(clientSrc, file), "utf8");
       expect(source, `${file} must re-export ${symbol} from provider-support index`).toContain(
-        'from "./provider-support/index.js"',
+        "provider-support/index.js",
       );
       expect(source).toContain(symbol);
       // No second owner of the match tables / regexes.
@@ -229,7 +231,14 @@ describe("runtime provider architecture guard", () => {
 
   it("keeps production handlers from owning a second binary-missing matcher or reason-code table", () => {
     const handlersRoot = join(clientSrc, "handlers");
-    const productionFiles = listFilesRecursive(handlersRoot, (p) => p.endsWith(".ts"));
+    const providersRoot = join(clientSrc, "providers");
+    const productionFiles = [
+      ...listFilesRecursive(handlersRoot, (p) => p.endsWith(".ts")),
+      ...listFilesRecursive(
+        providersRoot,
+        (p) => p.endsWith(".ts") && !p.endsWith("/binary.ts") && !p.endsWith("\\binary.ts"),
+      ),
+    ];
     // Local regex / phrase tables that re-recognize provider binary absence.
     const secondOwnerMatchers = [
       /pi cli is missing/i,
@@ -437,7 +446,7 @@ describe("runtime provider architecture guard", () => {
       "handlers/codex/app-server/index.ts",
       "handlers/codex/turn-completion.ts",
       "handlers/cursor/index.ts",
-      "handlers/grok/index.ts",
+      "providers/grok/index.ts",
       "handlers/kimi-code.ts",
       "handlers/opencode/index.ts",
       "handlers/pi/index.ts",
@@ -492,9 +501,14 @@ describe("runtime provider architecture guard", () => {
     // Every provider-owned factory must freeze what it hands back, so the
     // guarantee holds regardless of how - or whether - it is composed into
     // RUNTIME_AUTH_DRIVERS.
-    for (const file of ["claude-login.ts", "codex-login.ts", "cursor-login.ts", "grok-login.ts"]) {
-      const source = readFileSync(join(clientSrc, "runtime", file), "utf8");
-      expect(source, `${file} must freeze its returned driver`).toContain("Object.freeze");
+    for (const rel of [
+      "runtime/claude-login.ts",
+      "runtime/codex-login.ts",
+      "runtime/cursor-login.ts",
+      "providers/grok/login.ts",
+    ]) {
+      const source = readFileSync(join(clientSrc, rel), "utf8");
+      expect(source, `${rel} must freeze its returned driver`).toContain("Object.freeze");
     }
   });
 
@@ -524,7 +538,7 @@ describe("runtime provider architecture guard", () => {
   });
 
   it("keeps provider login output bounded and incrementally scanned", () => {
-    const source = readFileSync(join(clientSrc, "runtime/runtime-login.ts"), "utf8");
+    const source = readFileSync(join(clientSrc, "providers/runtime-login.ts"), "utf8");
     expect(source).toContain("createAuthUrlScanner");
     expect(source).toContain("AUTH_URL_TOKEN_MAX");
     expect(source).toContain("LOGIN_STDERR_TAIL_MAX");
@@ -636,7 +650,11 @@ describe("runtime provider architecture guard", () => {
       if (rel.endsWith("runtime-notice.ts")) {
         expect(source).toContain("runtimeProviderLabel");
       }
-      if (rel.endsWith("cursor-binary.ts") || rel.endsWith("grok-binary.ts")) {
+      if (
+        rel.endsWith("cursor-binary.ts") ||
+        rel.endsWith("providers/grok/binary.ts") ||
+        rel.endsWith("grok/binary.ts")
+      ) {
         expect(source).toMatch(/from "@first-tree\/shared"/);
         expect(source).toContain("INSTALL_COMMAND");
       }
@@ -690,9 +708,10 @@ describe("runtime provider architecture guard", () => {
     /**
      * Fail-closed classification for provider-side production code.
      *
-     * Provider-side files: handlers/**, providers/**, and the exact
-     * transitional provider-family modules listed in
-     * TRANSITIONAL_PROVIDER_FAMILY_FILES. For any import that resolves into
+     * Provider-side files: handlers/**, providers/** (including feature-first
+     * family roots such as providers/grok/**), and the exact transitional
+     * provider-family modules listed in TRANSITIONAL_PROVIDER_FAMILY_FILES.
+     * For any import that resolves into
      * `runtime/`, the only legal targets are:
      *   - runtime/contracts.js
      *   - runtime/provider-support/index.js
@@ -1302,7 +1321,7 @@ describe("runtime provider architecture guard", () => {
       "handlers/codex/sdk.ts",
       "handlers/codex/app-server/index.ts",
       "handlers/cursor/index.ts",
-      "handlers/grok/index.ts",
+      "providers/grok/index.ts",
       "handlers/kimi-code.ts",
       "handlers/opencode/index.ts",
       "handlers/pi/index.ts",

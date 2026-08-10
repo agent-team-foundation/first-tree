@@ -4,8 +4,8 @@ import {
   normalizeGrokXaiNotification,
   parseGrokModelChangedEcho,
   parseGrokModelState,
-} from "../handlers/grok/events.js";
-import { grokShellCommandIsReadOnly, grokToolIsReadOnly } from "../handlers/grok/index.js";
+} from "../events.js";
+import { grokShellCommandIsReadOnly, grokToolIsReadOnly } from "../index.js";
 
 /**
  * Pure normalization coverage for the Grok ACP wire shapes (locked against

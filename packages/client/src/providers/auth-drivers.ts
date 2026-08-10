@@ -2,8 +2,8 @@ import type { RuntimeAuthProvider } from "@first-tree/shared";
 import { createClaudeAuthDriver } from "../runtime/claude-login.js";
 import { createCodexAuthDriver } from "../runtime/codex-login.js";
 import { createCursorAuthDriver } from "../runtime/cursor-login.js";
-import { createGrokAuthDriver } from "../runtime/grok-login.js";
 import type { RuntimeAuthDriver } from "./auth-driver.js";
+import { createGrokAuthDriver } from "./grok/login.js";
 
 /**
  * Exhaustive over {@link RuntimeAuthProvider} - the narrow, server-accepted

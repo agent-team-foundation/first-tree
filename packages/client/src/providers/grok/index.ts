@@ -9,6 +9,9 @@ import {
   runtimeProviderSchema,
   type ToolFileRef,
 } from "@first-tree/shared";
+import { chunkAssistantText } from "../../handlers/assistant-text.js";
+import { formatAuthHint, isGrokAuthError } from "../../handlers/auth-error-hint.js";
+import { resolveTurnSettlement } from "../../handlers/turn-settlement.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -18,11 +21,6 @@ import type {
   TurnConsumedErrorReason,
 } from "../../runtime/contracts.js";
 import { noopDeliveryToken, requireDeliveryToken } from "../../runtime/contracts.js";
-import {
-  formatGrokBinaryMissingMessage,
-  GrokBinaryVerifyTransientError,
-  resolveGrokRuntimeBinary,
-} from "../../runtime/grok-binary.js";
 import type {
   AgentConfigCache,
   ContextTreeAttribution,
@@ -52,11 +50,8 @@ import {
   writeAgentBriefing,
   writeSessionBriefingFingerprint,
 } from "../../runtime/provider-support/index.js";
-
-import { chunkAssistantText } from "../assistant-text.js";
-import { formatAuthHint, isGrokAuthError } from "../auth-error-hint.js";
-import { resolveTurnSettlement } from "../turn-settlement.js";
 import { buildGrokTurnArgs, runGrokAcpAttempt } from "./acp-session.js";
+import { formatGrokBinaryMissingMessage, GrokBinaryVerifyTransientError, resolveGrokRuntimeBinary } from "./binary.js";
 import {
   type GrokNormalizedEvent,
   type GrokToolInfo,

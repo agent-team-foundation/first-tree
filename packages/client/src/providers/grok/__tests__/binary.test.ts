@@ -11,7 +11,7 @@ import {
   parseGrokVersion,
   resolveGrokRuntimeBinary,
   verifyGrokExecutable,
-} from "../runtime/grok-binary.js";
+} from "../binary.js";
 
 let dir: string;
 

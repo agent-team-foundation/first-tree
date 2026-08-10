@@ -3,18 +3,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ProviderModelCatalog, ProviderModelOption, RuntimeProvider } from "@first-tree/shared";
 import { parse as parseToml } from "smol-toml";
-import { fetchGrokAcpInitializeMeta } from "../../handlers/grok/acp-session.js";
-import { parseGrokModelState } from "../../handlers/grok/events.js";
 import { findCursorExecutableOnPath } from "../cursor-binary.js";
-import { type GrokRuntimeBinaryResolution, resolveGrokRuntimeBinary } from "../grok-binary.js";
 import { runCommand } from "./launch-probe.js";
 
 /** Ceiling for `agent models` — account catalog fetch can be network-bound. */
 const CURSOR_MODELS_TIMEOUT_MS = 20_000;
-/** Ceiling for the initialize-only ACP handshake behind grok model discovery. */
-const GROK_MODELS_TIMEOUT_MS = 20_000;
 
-export type DiscoverModelsDeps = {
+export type HostDiscoverModelsDeps = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   findCursorBinary?: (env?: Record<string, string | undefined>) => string | null;
@@ -22,25 +17,19 @@ export type DiscoverModelsDeps = {
     binary: string,
     env: NodeJS.ProcessEnv,
   ) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
-  /**
-   * Launch-verified grok resolution (supported version range gate). Discovery
-   * spawns the binary, so it must go through `resolveGrokRuntimeBinary`
-   * semantics — never the existence-only probe path.
-   */
-  resolveGrokBinary?: (env: NodeJS.ProcessEnv) => GrokRuntimeBinaryResolution;
-  fetchGrokModelMeta?: (
-    binary: string,
-    env: NodeJS.ProcessEnv,
-  ) => Promise<{ ok: true; meta: Record<string, unknown> | null } | { ok: false; error: string }>;
   readKimiConfig?: () => Promise<string | null>;
   kimiConfigPath?: string;
 };
 
-function fetchedAt(deps: DiscoverModelsDeps): string {
+export function fetchedAt(deps: { now?: () => Date }): string {
   return (deps.now ?? (() => new Date()))().toISOString();
 }
 
-function unavailable(provider: RuntimeProvider, error: string, deps: DiscoverModelsDeps): ProviderModelCatalog {
+export function unavailableCatalog(
+  provider: RuntimeProvider,
+  error: string,
+  deps: { now?: () => Date },
+): ProviderModelCatalog {
   return {
     provider,
     models: [],
@@ -136,12 +125,12 @@ export function resolveKimiConfigPath(env: NodeJS.ProcessEnv = process.env, home
   return join(root, "config.toml");
 }
 
-async function discoverCursorModels(deps: DiscoverModelsDeps): Promise<ProviderModelCatalog> {
+export async function discoverCursorModels(deps: HostDiscoverModelsDeps): Promise<ProviderModelCatalog> {
   const env = deps.env ?? process.env;
   const findBinary = deps.findCursorBinary ?? findCursorExecutableOnPath;
   const binary = findBinary(env);
   if (!binary) {
-    return unavailable("cursor", "cursor-agent / agent binary not found on this host", deps);
+    return unavailableCatalog("cursor", "cursor-agent / agent binary not found on this host", deps);
   }
   const run =
     deps.runCursorModels ??
@@ -152,11 +141,11 @@ async function discoverCursorModels(deps: DiscoverModelsDeps): Promise<ProviderM
   const result = await run(binary, env);
   if (!result.ok) {
     const detail = (result.stderr || result.stdout || "agent models failed").trim();
-    return unavailable("cursor", detail.slice(0, 500), deps);
+    return unavailableCatalog("cursor", detail.slice(0, 500), deps);
   }
   const parsed = parseCursorModelsOutput(result.stdout);
   if (parsed.models.length === 0) {
-    return unavailable("cursor", "agent models returned no parseable model rows", deps);
+    return unavailableCatalog("cursor", "agent models returned no parseable model rows", deps);
   }
   return {
     provider: "cursor",
@@ -168,7 +157,7 @@ async function discoverCursorModels(deps: DiscoverModelsDeps): Promise<ProviderM
   };
 }
 
-async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderModelCatalog> {
+export async function discoverKimiModels(deps: HostDiscoverModelsDeps): Promise<ProviderModelCatalog> {
   const env = deps.env ?? process.env;
   const path = deps.kimiConfigPath ?? resolveKimiConfigPath(env);
   const read =
@@ -186,14 +175,14 @@ async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderMod
   try {
     toml = await read();
   } catch (err) {
-    return unavailable("kimi-code", err instanceof Error ? err.message : String(err), deps);
+    return unavailableCatalog("kimi-code", err instanceof Error ? err.message : String(err), deps);
   }
   if (toml == null) {
-    return unavailable("kimi-code", `Kimi config not found at ${path}`, deps);
+    return unavailableCatalog("kimi-code", `Kimi config not found at ${path}`, deps);
   }
   const parsed = parseKimiConfigModels(toml);
   if (parsed.models.length === 0) {
-    return unavailable("kimi-code", "Kimi config has no [models.*] entries", deps);
+    return unavailableCatalog("kimi-code", "Kimi config has no [models.*] entries", deps);
   }
   return {
     provider: "kimi-code",
@@ -203,87 +192,4 @@ async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderMod
     source: "provider-config",
     error: null,
   };
-}
-
-/**
- * Grok model discovery: resolve the binary through the SAME launch-verified
- * resolution the handler uses (`resolveGrokRuntimeBinary` — the capability
- * probe stays install-only, but discovery actually spawns, so the supported
- * version range must gate it and probe/discovery/handler agree on the same
- * binary), then run ONLY the `initialize` handshake (empty
- * clientCapabilities, unauthenticated metadata — never touches credentials)
- * and parse `_meta.modelState` from the response. The catalog marks the
- * provider's current model as the default.
- */
-async function discoverGrokModels(deps: DiscoverModelsDeps): Promise<ProviderModelCatalog> {
-  const env = deps.env ?? process.env;
-  const resolveBinary = deps.resolveGrokBinary ?? ((processEnv) => resolveGrokRuntimeBinary(processEnv));
-  const resolution = resolveBinary(env);
-  if (!resolution.ok) {
-    return unavailable("grok", resolution.error.slice(0, 500), deps);
-  }
-  const fetchMeta =
-    deps.fetchGrokModelMeta ??
-    ((bin, processEnv) =>
-      fetchGrokAcpInitializeMeta({
-        binary: bin,
-        env: processEnv,
-        timeoutMs: GROK_MODELS_TIMEOUT_MS,
-        clientVersion: "0",
-      }));
-  const result = await fetchMeta(resolution.binary, env);
-  if (!result.ok) {
-    return unavailable("grok", result.error.slice(0, 500), deps);
-  }
-  const parsed = parseGrokModelState({ _meta: result.meta });
-  if (parsed.models.length === 0) {
-    return unavailable("grok", "grok initialize response carried no model state", deps);
-  }
-  return {
-    provider: "grok",
-    models: parsed.models,
-    defaultModelId: parsed.defaultModelId,
-    fetchedAt: fetchedAt(deps),
-    source: "provider-cli",
-    error: null,
-  };
-}
-
-/**
- * Discover the model catalog for a runtime provider from the host-local
- * provider. Phase 1 implements Cursor + Kimi; other providers return
- * `source: "unavailable"` so the web can keep its curated/fallback UI.
- */
-export async function discoverProviderModels(
-  provider: RuntimeProvider,
-  deps: DiscoverModelsDeps = {},
-): Promise<ProviderModelCatalog> {
-  switch (provider) {
-    case "cursor":
-      return discoverCursorModels(deps);
-    case "grok":
-      return discoverGrokModels(deps);
-    case "kimi-code":
-      return discoverKimiModels(deps);
-    case "opencode":
-      return unavailable(
-        provider,
-        "OpenCode model discovery is not enabled in V1; enter the provider-native provider/model id",
-        deps,
-      );
-    case "pi":
-      return unavailable(
-        provider,
-        "Pi model discovery is not enabled in V1; enter the provider-native provider/model id",
-        deps,
-      );
-    case "claude-code":
-    case "claude-code-tui":
-    case "codex":
-      return unavailable(provider, `Host-local model discovery for ${provider} lands in a later phase`, deps);
-    default: {
-      const _exhaustive: never = provider;
-      return unavailable(_exhaustive, `Unknown provider: ${String(provider)}`, deps);
-    }
-  }
 }

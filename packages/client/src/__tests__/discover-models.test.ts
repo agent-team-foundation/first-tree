@@ -4,7 +4,7 @@ import {
   parseCursorModelsOutput,
   parseKimiConfigModels,
   resolveKimiConfigPath,
-} from "../runtime/capabilities/discover-models.js";
+} from "../providers/discover-models.js";
 
 describe("parseCursorModelsOutput", () => {
   it("parses id/label rows and marks the default", () => {

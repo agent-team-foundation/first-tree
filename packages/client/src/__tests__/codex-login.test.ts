@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { extractAuthUrl } from "../providers/runtime-login.js";
 import { runCodexBrowserLogin, stripAnsi } from "../runtime/codex-login.js";
-import { extractAuthUrl } from "../runtime/runtime-login.js";
 
 const ESC = "\u001b";
 

@@ -1,13 +1,9 @@
 import type { spawn } from "node:child_process";
 import { RUNTIME_PROVIDERS } from "@first-tree/shared";
-import type {
-  RuntimeAuthDriver,
-  RuntimeAuthLoginResolution,
-  RuntimeAuthProbeResult,
-} from "../providers/auth-driver.js";
-import { probeGrokCapability } from "./capabilities/grok.js";
-import { type GrokRuntimeBinaryResolution, resolveGrokRuntimeBinary } from "./grok-binary.js";
-import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "./runtime-login.js";
+import type { RuntimeAuthDriver, RuntimeAuthLoginResolution, RuntimeAuthProbeResult } from "../auth-driver.js";
+import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "../runtime-login.js";
+import { type GrokRuntimeBinaryResolution, resolveGrokRuntimeBinary } from "./binary.js";
+import { probeGrokCapability } from "./capability.js";
 
 /**
  * Grok Build browser-OAuth login on top of the shared {@link runBrowserLogin}

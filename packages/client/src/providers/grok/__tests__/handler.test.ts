@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildGrokTurnArgs, createGrokHandler, GROK_PENDING_SESSION_PREFIX } from "../handlers/grok/index.js";
-import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../runtime/handler.js";
-import type { ProviderProcessSpec, ProviderProcessSupervisor } from "../runtime/provider-process-supervisor.js";
-import { mockCtxPlumbing } from "./test-helpers.js";
+import { mockCtxPlumbing } from "../../../__tests__/test-helpers.js";
+import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../../../runtime/handler.js";
+import type { ProviderProcessSpec, ProviderProcessSupervisor } from "../../../runtime/provider-process-supervisor.js";
+import { buildGrokTurnArgs, createGrokHandler, GROK_PENDING_SESSION_PREFIX } from "../index.js";
 
 /**
  * Handler-integration coverage for the per-turn Grok ACP transport, on a fake

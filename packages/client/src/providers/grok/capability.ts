@@ -1,6 +1,6 @@
 import type { CapabilityEntry } from "@first-tree/shared";
-import { findGrokExecutableOnPath, formatGrokBinaryMissingMessage } from "../grok-binary.js";
-import { type DetectOutcome, runDetect } from "./detect.js";
+import { type DetectOutcome, runDetect } from "../../runtime/capabilities/detect.js";
+import { findGrokExecutableOnPath, formatGrokBinaryMissingMessage } from "./binary.js";
 
 /** Injectable seams — production callers pass nothing. */
 export type GrokProbeDeps = {

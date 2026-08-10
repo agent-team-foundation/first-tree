@@ -6,9 +6,9 @@ import type {
   RuntimeAuthLoginResolution,
   RuntimeAuthProbeResult,
 } from "../providers/auth-driver.js";
+import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "../providers/runtime-login.js";
 import { probeClaudeCodeCapability, resolveBundledClaudeBinary } from "./capabilities/claude-code.js";
 import { probeClaudeCodeTuiCapability } from "./capabilities/claude-code-tui.js";
-import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "./runtime-login.js";
 
 /**
  * Claude browser-OAuth login — the cc counterpart of `codex login`, for the

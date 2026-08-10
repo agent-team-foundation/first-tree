@@ -3,8 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchGrokAcpInitializeMeta, runGrokAcpAttempt } from "../handlers/grok/acp-session.js";
-import type { ProviderProcessSupervisor } from "../runtime/provider-process-supervisor.js";
+import type { ProviderProcessSupervisor } from "../../../runtime/provider-process-supervisor.js";
+import { fetchGrokAcpInitializeMeta, runGrokAcpAttempt } from "../acp-session.js";
 
 /**
  * Transport-level coverage for the model-discovery ACP handshake, against a

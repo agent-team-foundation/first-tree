@@ -45,6 +45,37 @@ export {
   createBuiltinHandlerRegistry,
   resolveAndLogClaudeExecutable,
 } from "./providers/builtin-registry.js";
+export {
+  type DiscoverModelsDeps,
+  discoverProviderModels,
+  parseCursorModelsOutput,
+  parseKimiConfigModels,
+} from "./providers/discover-models.js";
+export {
+  findGrokExecutableOnPath,
+  formatGrokBinaryMissingMessage,
+  GROK_INSTALL_COMMAND,
+  type GrokRuntimeBinaryResolution,
+  resolveGrokRuntimeBinary,
+} from "./providers/grok/binary.js";
+export { probeGrokCapability } from "./providers/grok/capability.js";
+export {
+  createGrokAuthDriver,
+  type GrokAuthDriverDeps,
+  type GrokBrowserLoginOptions,
+  runGrokBrowserLogin,
+} from "./providers/grok/login.js";
+// Runtime-auth (browser OAuth)
+export {
+  AUTH_URL_TOKEN_MAX,
+  type AuthUrlScanner,
+  BROWSER_LOGIN_TIMEOUT_MS,
+  createAuthUrlScanner,
+  extractAuthUrl,
+  LOGIN_STDERR_TAIL_MAX,
+  type LoginOutcome,
+  stripAnsi,
+} from "./providers/runtime-login.js";
 export { PROVIDER_SKILL_ROOTS } from "./providers/skill-roots.js";
 export { readCanonicalContextTreeWriteRouting } from "./runtime/agent-briefing.js";
 // Runtime
@@ -66,13 +97,6 @@ export {
 } from "./runtime/capabilities/codex.js";
 export { probeCursorCapability } from "./runtime/capabilities/cursor.js";
 export {
-  type DiscoverModelsDeps,
-  discoverProviderModels,
-  parseCursorModelsOutput,
-  parseKimiConfigModels,
-} from "./runtime/capabilities/discover-models.js";
-export { probeGrokCapability } from "./runtime/capabilities/grok.js";
-export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
   hasNonOkProvider,
@@ -86,7 +110,6 @@ export {
 } from "./runtime/capabilities/index.js";
 export { probeOpenCodeCapability } from "./runtime/capabilities/opencode.js";
 export { probePiCapability } from "./runtime/capabilities/pi.js";
-
 export type {
   AdoptOptions,
   ChildCategory,
@@ -132,19 +155,6 @@ export type { AttachmentUploader, SelfFence, WorkspaceFence } from "./runtime/do
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
 export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
 export { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-export {
-  findGrokExecutableOnPath,
-  formatGrokBinaryMissingMessage,
-  GROK_INSTALL_COMMAND,
-  type GrokRuntimeBinaryResolution,
-  resolveGrokRuntimeBinary,
-} from "./runtime/grok-binary.js";
-export {
-  createGrokAuthDriver,
-  type GrokAuthDriverDeps,
-  type GrokBrowserLoginOptions,
-  runGrokBrowserLogin,
-} from "./runtime/grok-login.js";
 export type {
   AgentHandler,
   HandlerConfig,
@@ -189,17 +199,6 @@ export {
 export { redactErrorPreview } from "./runtime/redact-error-preview.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
-// Runtime-auth (browser OAuth)
-export {
-  AUTH_URL_TOKEN_MAX,
-  type AuthUrlScanner,
-  BROWSER_LOGIN_TIMEOUT_MS,
-  createAuthUrlScanner,
-  extractAuthUrl,
-  LOGIN_STDERR_TAIL_MAX,
-  type LoginOutcome,
-  stripAnsi,
-} from "./runtime/runtime-login.js";
 // Skills (slash-command discovery)
 export { discoverClaudeCodeSkills } from "./runtime/skills/index.js";
 export type {

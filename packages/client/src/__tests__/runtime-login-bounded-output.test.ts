@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
+import { AUTH_URL_TOKEN_MAX, createAuthUrlScanner, LOGIN_STDERR_TAIL_MAX } from "../providers/runtime-login.js";
 import { runCodexBrowserLogin } from "../runtime/codex-login.js";
-import { AUTH_URL_TOKEN_MAX, createAuthUrlScanner, LOGIN_STDERR_TAIL_MAX } from "../runtime/runtime-login.js";
 
 /**
  * Regression cover for #1720: a provider login may stream for the full

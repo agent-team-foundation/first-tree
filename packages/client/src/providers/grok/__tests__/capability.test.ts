@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { probeGrokCapability } from "../runtime/capabilities/grok.js";
-import { GROK_INSTALL_COMMAND } from "../runtime/grok-binary.js";
+import { GROK_INSTALL_COMMAND } from "../binary.js";
+import { probeGrokCapability } from "../capability.js";
 
 describe("probeGrokCapability — install-only detection", () => {
   it("resolved binary → ok with runtimeSource=path (existence only, never launched)", async () => {

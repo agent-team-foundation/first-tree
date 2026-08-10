@@ -8,10 +8,10 @@ import { probeClaudeCodeCapability } from "../runtime/capabilities/claude-code.j
 import { probeClaudeCodeTuiCapability } from "../runtime/capabilities/claude-code-tui.js";
 import { probeCodexCapability } from "../runtime/capabilities/codex.js";
 import { probeCursorCapability } from "../runtime/capabilities/cursor.js";
-import { probeGrokCapability } from "../runtime/capabilities/grok.js";
 import { probeKimiCodeCapability } from "../runtime/capabilities/kimi-code.js";
 import { probeOpenCodeCapability } from "../runtime/capabilities/opencode.js";
 import { probePiCapability } from "../runtime/capabilities/pi.js";
+import { probeGrokCapability } from "./grok/capability.js";
 
 export type CapabilityProbe = () => Promise<CapabilityEntry>;
 

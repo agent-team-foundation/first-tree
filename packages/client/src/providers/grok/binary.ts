@@ -3,7 +3,11 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { GROK_INSTALL_COMMAND, runtimeProviderLoginCommand } from "@first-tree/shared";
-import { automaticCandidateAllowed, getLoginShellPathDirs, wellKnownBinDirs } from "./provider-support/index.js";
+import {
+  automaticCandidateAllowed,
+  getLoginShellPathDirs,
+  wellKnownBinDirs,
+} from "../../runtime/provider-support/index.js";
 
 /**
  * Grok Build CLI binary resolution. Grok Build is EXTERNAL-ONLY: First Tree
@@ -73,7 +77,7 @@ export class GrokBinaryVerifyTransientError extends Error {
 }
 
 /** Single-owner match rules live in provider-support; re-export for call sites. */
-export { isGrokBinaryMissingError } from "./provider-support/index.js";
+export { isGrokBinaryMissingError } from "../../runtime/provider-support/index.js";
 
 export function formatGrokBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();
