@@ -317,15 +317,20 @@ describe("ContextPage DOM behavior", () => {
     const { ContextPage } = await import("../context.js");
     const { container, root } = await renderDom(<ContextPage previewSnapshot={snapshot()} />);
 
-    // Outcome, not exposure: the headline counts decisions the tree changed,
-    // and conflicts are called out because they stay meaningful at any volume.
-    expect(container.textContent).toContain("decisions shaped");
+    // Outcome, not exposure — and framed as attribution, never as a verified
+    // fact: the Server proves only that an agent authored a convertible note.
+    expect(container.textContent).toContain("Agent-reported");
+    expect(container.textContent).toContain("decisions reported as shaped");
+    expect(container.textContent).toContain("does not verify causality");
     expect(container.textContent).toContain("1 surfaced a conflict");
     // The count must never be framed as a share of reads — a decision is a
     // message and a read is a file open, so the two have different denominators.
     expect(container.textContent).not.toContain("Of those reads");
-    // Coverage caveat is mandatory: a BYO session's note never reaches Server.
-    expect(container.textContent).toContain("BYO sessions are not included");
+    // All three coverage gaps must be stated, so a low count cannot read as a
+    // verdict on the tree or on a node missing from the ranking.
+    expect(container.textContent).toContain("managed chats only");
+    expect(container.textContent).toContain("English and Chinese notes");
+    expect(container.textContent).toContain("since this feature shipped");
 
     const nodes = [...container.querySelectorAll(".context-influence-node")];
     expect(nodes.map((node) => node.textContent)).toEqual([

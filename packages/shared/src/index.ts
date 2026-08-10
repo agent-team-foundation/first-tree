@@ -481,6 +481,7 @@ export {
   type ContextImpactNoteSource,
   contextDecisionFromImpactNote,
   type ExactContextSourceLink,
+  isConvertibleContextImpactNote,
   parseContextImpactNotes,
   parseExactContextSourceLink,
 } from "./schemas/context-impact-note.js";

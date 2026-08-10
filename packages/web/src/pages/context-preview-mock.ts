@@ -364,7 +364,6 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         ],
         chatId: "chat-design-spike",
         chatTitle: "design-spike",
-        viewerCanAccess: true,
         createdAt: new Date(Date.now() - 4 * 60_000).toISOString(),
       },
       {
@@ -382,11 +381,8 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
             heading: "Organization isolation",
           },
         ],
-        // No deep link for a viewer who cannot open the chat — exercises the
-        // inert-label path alongside the clickable one above.
         chatId: "chat-resource-layer",
         chatTitle: "resource-layer",
-        viewerCanAccess: false,
         createdAt: new Date(Date.now() - 26 * 60_000).toISOString(),
       },
     ],

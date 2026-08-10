@@ -71,6 +71,12 @@ const EFFECT_BY_LABEL: Record<ContextImpactNoteLanguage, ReadonlyMap<string, Con
 
 /** `heading` is display-only; a label longer than the schema allows is dropped, not fatal. */
 const MAX_EVIDENCE_HEADING_LENGTH = 200;
+/**
+ * Source lines longer than this carry no links at all rather than being
+ * scanned. Three exact-commit citations plus their labels fit in a small
+ * fraction of it, so the only thing this refuses is a pathological body.
+ */
+const MAX_SOURCE_LINE_LENGTH = 8_000;
 
 export type ContextImpactNoteSource = {
   /** The readable Markdown link label, e.g. `Rollout Policy · Expansion gates`. */
@@ -146,10 +152,19 @@ export function parseExactContextSourceLink(value: string): ExactContextSourceLi
     .slice(0, repositoryEnd)
     .join("/")
     .replace(/\.git$/iu, "");
-  const nodePath = segments
-    .slice(blobIndex + 2)
-    .map((segment) => decodeURIComponent(segment))
-    .join("/");
+  // `new URL` accepts a malformed escape such as `%E0%A4%A` that
+  // `decodeURIComponent` then throws a URIError on. This parser runs
+  // synchronously inside the message-send preflight, so an unguarded throw
+  // would turn one bad link into a 500 instead of the documented null.
+  let nodePath: string;
+  try {
+    nodePath = segments
+      .slice(blobIndex + 2)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+  } catch {
+    return null;
+  }
   if (repositoryPath.length === 0 || nodePath.length === 0) return null;
 
   return {
@@ -197,13 +212,21 @@ export function parseContextImpactNotes(text: string): ContextImpactNote[] {
     // Chinese puts the full-width colon OUTSIDE the bold span: Markdown cannot
     // close `**` when the delimiter is preceded by punctuation and followed by
     // a CJK character, so the colon-inside form renders as literal asterisks.
+    // Every repetition below is explicitly bounded. These patterns run on
+    // agent-authored message bodies — uncontrolled input on the synchronous
+    // send path — and an unbounded `+` here is a polynomial-backtracking DoS
+    // (CodeQL js/polynomial-redos). The bounds sit far above the authoring
+    // contract's own limits, so a legitimate note is never the one truncated.
     const effectMatch =
       language === "zh"
-        ? /^> \*\*([^*]+)\*\*：([^\s].*)\\$/u.exec(secondLine)
-        : /^> \*\*([^*]+):\*\* (.+)\\$/u.exec(secondLine);
+        ? /^> \*\*([^*]{1,120})\*\*：([^\s].{0,3999})\\$/u.exec(secondLine)
+        : /^> \*\*([^*]{1,120}):\*\* (.{1,4000})\\$/u.exec(secondLine);
     const sourcePrefix = language === "zh" ? /^> Context Tree 来源：/u : /^> Context Tree (source|sources): /u;
     const sourcePrefixMatch = sourcePrefix.exec(thirdLine);
-    const markdownLinks = [...thirdLine.matchAll(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu)];
+    const markdownLinks =
+      thirdLine.length <= MAX_SOURCE_LINE_LENGTH
+        ? [...thirdLine.matchAll(/\[([^\]\n]{1,400})\]\(([^)\s]{1,2048})\)/gu)]
+        : [];
     const exactLinkCount = markdownLinks.filter((match) => parseExactContextSourceLink(match[2] ?? "") !== null).length;
     const expectedEnglishSource = markdownLinks.length === 1 ? "source" : "sources";
     const sourceLabel = language === "zh" ? "Context Tree 来源" : `Context Tree ${expectedEnglishSource}:`;
@@ -234,8 +257,29 @@ export function parseContextImpactNotes(text: string): ContextImpactNote[] {
 }
 
 /**
+ * Every observation a note must satisfy before it can become a receipt.
+ *
+ * This is the whole point of one shared parser: `parseContextImpactNotes` is
+ * permissive so a grader can SEE a broken note and fail it, but a note the
+ * eval rejects must never be one the Server persists. Requiring the same flags
+ * the eval grades on is what keeps those two answers identical instead of
+ * letting the Server quietly accept a superseded scaffold, a note buried
+ * mid-message, or a fourth blockquote line the reader never asked for.
+ */
+export function isConvertibleContextImpactNote(note: ContextImpactNote): boolean {
+  return (
+    !note.legacyScaffold &&
+    note.logicalLinesOk &&
+    note.sourceScaffoldingOk &&
+    note.exactLinksOk &&
+    note.atEnd &&
+    note.blankLineBefore
+  );
+}
+
+/**
  * Convert a parsed note into the durable receipt, or `null` when anything a
- * receipt promises is missing.
+ * receipt promises is missing or the note is not in the current valid shape.
  *
  * Fail-closed on the whole note rather than storing a partial one: a receipt
  * whose evidence cannot be inspected is a claim, and the inspectable source is
@@ -244,6 +288,7 @@ export function parseContextImpactNotes(text: string): ContextImpactNote[] {
  * itself survives.
  */
 export function contextDecisionFromImpactNote(note: ContextImpactNote): ContextDecision | null {
+  if (!isConvertibleContextImpactNote(note)) return null;
   const effect = EFFECT_BY_LABEL[note.language].get(note.effectLabel);
   if (!effect) return null;
 

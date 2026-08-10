@@ -275,13 +275,21 @@ const INFLUENCE_EFFECT_LABELS: Record<ContextDecisionEffect, string> = {
 };
 
 /**
- * What the tree actually CHANGED, as opposed to how often it was opened.
+ * What agents REPORT the tree changed, as opposed to how often it was opened.
+ *
+ * Every number here is agent-reported, and the copy has to keep saying so. The
+ * Server proves only that an agent authored a convertible impact note citing an
+ * exact commit; it does not verify that the passage caused the choice, and the
+ * per-message receipt card that used to carry that disclosure is gone. So the
+ * eyebrow, the headline, and the ranked list all read as attribution rather
+ * than as a platform-verified fact.
  *
  * Placed directly under the read/write signal on purpose: the two numbers only
  * mean something next to each other. A node can be opened on every navigation
- * and never change an outcome, so the ranked list below is the signal a
- * gardener needs — a node that has changed no decision in the window is either
- * badly written or no longer earning its place.
+ * and never change an outcome, so the ranked list is the signal a gardener
+ * needs — but a node absent from it is an incomplete signal, never a verdict
+ * that the node has no value: coverage is partial in three separate ways, which
+ * is what the caveat below spells out.
  *
  * No percentage and no effect-distribution chart yet. The read count includes
  * navigation opens that the authoring contract explicitly excludes from
@@ -297,15 +305,19 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   // the "inspectable source" promise would hold on GitHub teams only.
   const { instanceOrigin } = useGitlabEntityPresentation(organizationId ?? null);
   const influence = snapshot.influence;
-  if (!influence || influence.decisionCount === 0) return null;
+  // A Server too old to report influence is NOT the same as a window with none.
+  // Rendering a confident "0 decisions" for the first case would invent an
+  // answer the Server never gave.
+  if (!influence) return null;
   const { decisionCount, effects, nodes } = influence;
 
   return (
-    <section className="context-influence" aria-label="How Context Tree changed decisions">
+    <section className="context-influence" aria-label="Context Tree influence reported by agents">
+      <div className="context-influence-eyebrow">Agent-reported</div>
       <div className="context-influence-header">
         <span className="context-influence-count">{decisionCount}</span>
         <span className="context-influence-label">
-          {decisionCount === 1 ? "decision shaped" : "decisions shaped"}
+          {decisionCount === 1 ? "decision reported as shaped" : "decisions reported as shaped"}
           {effects.conflicted > 0 ? (
             <span className="context-influence-conflict">
               {effects.conflicted === 1 ? "1 surfaced a conflict" : `${effects.conflicted} surfaced a conflict`}
@@ -315,7 +327,7 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       </div>
       {nodes.length > 0 ? (
         <>
-          <div className="context-influence-nodes-title">Nodes that changed decisions</div>
+          <div className="context-influence-nodes-title">Nodes agents cited as changing a decision</div>
           <ul className="context-influence-nodes">
             {nodes.map((node) => {
               // Same exact-commit link the chat receipt built, so a node here
@@ -341,10 +353,17 @@ function ContextInfluence({ snapshot }: { snapshot: ContextTreeSnapshot }) {
           </ul>
         </>
       ) : null}
-      {/* Managed Chat is the only surface whose note reaches the Server: a BYO
-          session prints its note in the user's own terminal. Saying so is not
-          optional — without it this number reads as the tree's total value. */}
-      <p className="context-influence-coverage">Counted from managed chats. BYO sessions are not included.</p>
+      {/* Three separate coverage gaps, each of which makes this an undercount:
+          a BYO session prints its note in the user's own terminal and never
+          reaches the Server; only English and Chinese notes can be read back;
+          and nothing before this feature shipped was recorded. Stating all
+          three is what stops a low number from reading as a verdict on the
+          tree — or on a node missing from the list above. */}
+      <p className="context-influence-coverage">
+        Reported by agents in their own answers — First Tree preserves the cited version for inspection, but does not
+        verify causality. Counted from managed chats only, from English and Chinese notes, and only since this feature
+        shipped, so treat a low count as incomplete rather than as a verdict.
+      </p>
     </section>
   );
 }
@@ -626,7 +645,6 @@ function InfluenceFeedRow({
   fresh: boolean;
   navigate: ReturnType<typeof useNavigate>;
 }) {
-  const chatId = event.chatId;
   const hue = resolveAvatarHue(event.agentAvatarColorToken, event.agentId);
   const conflict = event.effect === "conflicted";
   const rowClass = ["context-usage-feed-row", "is-influence", conflict ? "is-conflict" : "", fresh ? "is-fresh" : ""]
@@ -647,24 +665,17 @@ function InfluenceFeedRow({
             </span>
           </span>
         ))}
-        {chatId ? (
-          <>
-            <span className="context-usage-feed-action"> in </span>
-            {event.viewerCanAccess ? (
-              <button
-                type="button"
-                className="context-usage-feed-chat"
-                onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
-              >
-                {chatLabel(event)}
-              </button>
-            ) : (
-              <span className="context-usage-feed-chat is-static" title="No access to this chat">
-                {chatLabel(event)}
-              </span>
-            )}
-          </>
-        ) : null}
+        <span className="context-usage-feed-action"> in </span>
+        {/* The Server omits decisions from chats this viewer cannot open — the
+            summary below is copied from a private message body — so every row
+            that reaches here is one they may follow. */}
+        <button
+          type="button"
+          className="context-usage-feed-chat"
+          onClick={() => navigate(`/?c=${encodeURIComponent(event.chatId)}`)}
+        >
+          {chatLabel(event)}
+        </button>
         <span className="context-influence-row-outcome">
           <span className="context-influence-row-effect">{INFLUENCE_EFFECT_LABELS[event.effect]}</span>
           <span className="context-usage-feed-summary"> — {event.summary}</span>

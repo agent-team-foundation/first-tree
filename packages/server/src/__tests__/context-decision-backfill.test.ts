@@ -13,6 +13,12 @@ const SOURCE = `[Organization isolation](${REPO}/blob/${COMMIT}/${NODE})`;
 
 const getApp = useTestApp();
 
+const WINDOW = { since: new Date(Date.now() - 24 * 60 * 60 * 1000), until: new Date(Date.now() + 60 * 1000) };
+
+function backfill(overrides: Record<string, unknown> = {}) {
+  return backfillContextDecisionFromNotes(getApp().db, { apply: true, ...WINDOW, ...overrides });
+}
+
 function noteBody(options: { effectLine?: string; sourceLine?: string; repeat?: number } = {}): string {
   const note = [
     "> How Context Tree affected this work\\",
@@ -35,11 +41,21 @@ async function insertMessage(
   senderId: string,
   content: unknown,
   metadata: Record<string, unknown> = {},
+  createdAt?: Date,
 ): Promise<string> {
   const id = `msg-${crypto.randomUUID()}`;
   await getApp()
     .db.insert(messages)
-    .values({ id, chatId, senderId, format: "markdown", content, metadata, source: "cli" });
+    .values({
+      id,
+      chatId,
+      senderId,
+      format: "markdown",
+      content,
+      metadata,
+      source: "cli",
+      ...(createdAt ? { createdAt } : {}),
+    });
   return id;
 }
 
@@ -53,7 +69,7 @@ describe("contextDecision backfill from impact notes", () => {
     const seed = await seedChat();
     const id = await insertMessage(seed.chatId, seed.agent.uuid, noteBody(), { mentions: ["someone"] });
 
-    const report = await backfillContextDecisionFromNotes(getApp().db, { apply: true, limit: 100 });
+    const report = await backfill();
     expect(report.tally.derived).toBe(1);
 
     const metadata = await metadataOf(id);
@@ -71,7 +87,7 @@ describe("contextDecision backfill from impact notes", () => {
     const seed = await seedChat();
     const id = await insertMessage(seed.chatId, seed.agent.uuid, noteBody());
 
-    const report = await backfillContextDecisionFromNotes(getApp().db, { apply: false, limit: 100 });
+    const report = await backfill({ apply: false });
     expect(report.tally.derived).toBe(1);
     expect(await metadataOf(id)).toEqual({});
   });
@@ -90,7 +106,7 @@ describe("contextDecision backfill from impact notes", () => {
       [CONTEXT_DECISION_METADATA_KEY]: existing,
     });
 
-    const report = await backfillContextDecisionFromNotes(getApp().db, { apply: true, limit: 100 });
+    const report = await backfill();
     expect(report.scanned).toBe(0);
     expect((await metadataOf(id))[CONTEXT_DECISION_METADATA_KEY]).toEqual(existing);
   });
@@ -99,7 +115,7 @@ describe("contextDecision backfill from impact notes", () => {
     const seed = await seedChat();
     const id = await insertMessage(seed.chatId, seed.humanAgentUuid, noteBody());
 
-    const report = await backfillContextDecisionFromNotes(getApp().db, { apply: true, limit: 100 });
+    const report = await backfill();
     expect(report.scanned).toBe(0);
     expect(await metadataOf(id)).toEqual({});
   });
@@ -118,7 +134,7 @@ describe("contextDecision backfill from impact notes", () => {
     );
     const twoNotes = await insertMessage(seed.chatId, seed.agent.uuid, noteBody({ repeat: 2 }));
 
-    const report = await backfillContextDecisionFromNotes(getApp().db, { apply: true, limit: 100 });
+    const report = await backfill();
     expect(report.tally.derived).toBe(0);
     expect(report.tally.unconvertible).toBe(2);
     expect(report.tally.two_notes).toBe(1);
@@ -136,28 +152,69 @@ describe("contextDecision backfill from impact notes", () => {
     // Both test agents share the default org, so an org filter that matched
     // nothing would silently look like success — assert the positive case with
     // a deliberately absent org instead.
-    const absent = await backfillContextDecisionFromNotes(getApp().db, {
-      apply: true,
-      limit: 100,
-      organizationId: `org-${crypto.randomUUID()}`,
-    });
+    const absent = await backfill({ organizationId: `org-${crypto.randomUUID()}` });
     expect(absent.scanned).toBe(0);
     expect(await metadataOf(mine)).toEqual({});
 
-    const scoped = await backfillContextDecisionFromNotes(getApp().db, {
-      apply: true,
-      limit: 100,
-      organizationId: seed.organizationId,
-    });
+    const scoped = await backfill({ organizationId: seed.organizationId });
     expect(scoped.tally.derived).toBe(2);
     expect((await metadataOf(mine))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
     expect((await metadataOf(theirs))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
+  });
+
+  // The window is the whole point: an unbounded run would let a later operator
+  // rewrite rows the write path deliberately left receipt-free.
+  it("ignores messages outside the declared window", async () => {
+    const seed = await seedChat();
+    const id = await insertMessage(seed.chatId, seed.agent.uuid, noteBody());
+
+    const before = await backfill({
+      since: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      until: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+    expect(before.scanned).toBe(0);
+    expect(await metadataOf(id)).toEqual({});
+
+    expect((await backfill()).tally.derived).toBe(1);
+  });
+
+  it("rejects an inverted window", async () => {
+    await expect(backfill({ since: WINDOW.until, until: WINDOW.since })).rejects.toThrow(/since must not be after/);
+  });
+
+  // Unconvertible rows stay candidates forever and sort first. A plain LIMIT
+  // would rescan them on every rerun and never reach the messages behind them.
+  it("pages past unconvertible rows to reach later convertible ones", async () => {
+    const seed = await seedChat();
+    // Explicit, increasing timestamps: the convertible row must sort LAST so a
+    // non-paginating implementation would stop before ever reaching it.
+    const base = Date.now() - 60 * 60 * 1000;
+    const blockers: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      blockers.push(
+        await insertMessage(
+          seed.chatId,
+          seed.agent.uuid,
+          noteBody({ effectLine: "**Mostly helpful:** fine." }),
+          {},
+          new Date(base + index * 1000),
+        ),
+      );
+    }
+    const convertible = await insertMessage(seed.chatId, seed.agent.uuid, noteBody(), {}, new Date(base + 10_000));
+
+    // Counts are org-wide and this suite shares one org, so assert on the rows
+    // this test owns rather than on the run's totals.
+    const report = await backfill({ pageSize: 2 });
+    expect(report.scanned).toBeGreaterThan(2);
+    expect((await metadataOf(convertible))[CONTEXT_DECISION_METADATA_KEY]).toBeDefined();
+    for (const id of blockers) expect(await metadataOf(id)).toEqual({});
   });
 
   it("ignores a body with no note at all", async () => {
     const seed = await seedChat();
     await insertMessage(seed.chatId, seed.agent.uuid, "Shipped the per-org index.");
 
-    expect((await backfillContextDecisionFromNotes(getApp().db, { apply: true, limit: 100 })).scanned).toBe(0);
+    expect((await backfill()).scanned).toBe(0);
   });
 });

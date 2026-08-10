@@ -71,6 +71,15 @@ describe("parseExactContextSourceLink", () => {
   it("rejects a non-https transport", () => {
     expect(parseExactContextSourceLink(`http://github.com/example/t/blob/${COMMIT}/a.md`)).toBeNull();
   });
+
+  // `new URL` accepts these; `decodeURIComponent` throws on them. This parser
+  // runs inside the synchronous send preflight, so a throw here would be a 500.
+  it("returns null instead of throwing on a malformed percent escape", () => {
+    for (const bad of ["%E0%A4%A", "%", "%zz", "a%2"]) {
+      expect(() => parseExactContextSourceLink(`${REPO}/blob/${COMMIT}/${bad}`)).not.toThrow();
+      expect(parseExactContextSourceLink(`${REPO}/blob/${COMMIT}/${bad}`)).toBeNull();
+    }
+  });
 });
 
 describe("parseContextImpactNotes", () => {
@@ -139,6 +148,50 @@ describe("parseContextImpactNotes", () => {
 
   it("finds every note when an agent wrote more than one", () => {
     expect(parseContextImpactNotes(`${englishNote()}\n\n${englishNote()}`)).toHaveLength(2);
+  });
+});
+
+// A note the eval rejects must never be one the Server persists — that
+// divergence is exactly what one shared parser exists to remove.
+describe("contextDecisionFromImpactNote strictness", () => {
+  it("refuses the superseded bold-title scaffold", () => {
+    const body = [
+      "Answer.",
+      "",
+      "> **Context Tree impact · Options narrowed**\\",
+      "> **Options narrowed:** The rule ruled out a global shared index.\\",
+      `> Context Tree source: ${githubSource()}`,
+    ].join("\n");
+    const [note] = parseContextImpactNotes(body);
+    expect(note?.legacyScaffold).toBe(true);
+    expect(note && contextDecisionFromImpactNote(note)).toBeNull();
+  });
+
+  it("refuses a note that is not the last thing in the body", () => {
+    const [note] = parseContextImpactNotes(`${englishNote()}\n\nOne more thing.`);
+    expect(note && contextDecisionFromImpactNote(note)).toBeNull();
+  });
+
+  it("refuses a note with no blank line before it", () => {
+    const body = [
+      "> How Context Tree affected this work\\",
+      "> **Options narrowed:** The rule ruled out a global shared index.\\",
+      `> Context Tree source: ${githubSource()}`,
+    ].join("\n");
+    const [note] = parseContextImpactNotes(body);
+    expect(note && contextDecisionFromImpactNote(note)).toBeNull();
+  });
+
+  it("refuses a fourth blockquote line", () => {
+    const [note] = parseContextImpactNotes(`${englishNote()}\n> Extra commentary.`);
+    expect(note && contextDecisionFromImpactNote(note)).toBeNull();
+  });
+
+  it("refuses a source line whose fixed scaffolding is wrong", () => {
+    const sources = `Context Tree source: ${githubSource()} · ${githubSource("a.md", "Second")}`;
+    const [note] = parseContextImpactNotes(englishNote({ sources }));
+    expect(note?.sourceScaffoldingOk).toBe(false);
+    expect(note && contextDecisionFromImpactNote(note)).toBeNull();
   });
 });
 

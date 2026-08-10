@@ -1595,6 +1595,15 @@ video[data-onboarding-orientation-video]::cue {
   border-radius: var(--radius-panel);
 }
 
+/* The panel leads with its own provenance: everything below is what agents
+   reported, not what the Server verified. */
+.context-influence-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
 .context-influence-header {
   display: flex;
   align-items: baseline;

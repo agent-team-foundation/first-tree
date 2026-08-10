@@ -14,6 +14,12 @@ const GATES = "operations/release/safety-gates.md";
 
 const getApp = useTestApp();
 
+// Every summarize call must be scoped to a bound repository — an unscoped
+// ranking would merge nodes from other repositories that share a path.
+function summarize(organizationId: string, overrides: Record<string, unknown> = {}) {
+  return summarizeContextTreeInfluence(getApp().db, organizationId, 7, { boundRepoUrl: REPO, ...overrides });
+}
+
 function receipt(overrides: Partial<ContextDecision> = {}): ContextDecision {
   return {
     version: 1,
@@ -58,7 +64,7 @@ describe("context-tree influence summary", () => {
     const seed = await seedChat();
     await sendMessage(seed.chatId, seed.agent.uuid, {});
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary).toEqual({
       windowDays: 7,
       decisionCount: 0,
@@ -78,7 +84,7 @@ describe("context-tree influence summary", () => {
       [CONTEXT_DECISION_METADATA_KEY]: receipt({ effect: "conflicted" }),
     });
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(3);
     expect(summary.effects).toEqual({ conflicted: 2, redirected: 0, constrained: 1, confirmed: 0 });
   });
@@ -96,7 +102,7 @@ describe("context-tree influence summary", () => {
     });
     await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(2);
     expect(summary.nodes).toEqual([
       { nodePath: TENANCY, title: "Organization isolation", repoUrl: REPO, commit: COMMIT, decisionCount: 2 },
@@ -112,7 +118,7 @@ describe("context-tree influence summary", () => {
       }),
     });
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary.nodes[0]?.title).toBe("tenancy-and-identity.md");
   });
 
@@ -121,7 +127,7 @@ describe("context-tree influence summary", () => {
     const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() }, stale);
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(0);
   });
 
@@ -136,8 +142,8 @@ describe("context-tree influence summary", () => {
       .values({ id: otherChatId, organizationId: otherOrgId, type: "direct", topic: "elsewhere" });
     await sendMessage(otherChatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
 
-    expect((await summarizeContextTreeInfluence(app.db, seed.organizationId, 7)).decisionCount).toBe(0);
-    expect((await summarizeContextTreeInfluence(app.db, otherOrgId, 7)).decisionCount).toBe(1);
+    expect((await summarize(seed.organizationId)).decisionCount).toBe(0);
+    expect((await summarize(otherOrgId)).decisionCount).toBe(1);
   });
 
   // Message rows are immutable, so history written before a guard existed is
@@ -153,7 +159,7 @@ describe("context-tree influence summary", () => {
     });
     await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: "constrained" });
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
+    const summary = await summarize(seed.organizationId);
     expect(summary.decisionCount).toBe(0);
     expect(summary.nodes).toEqual([]);
   });
@@ -167,40 +173,84 @@ describe("context-tree influence summary", () => {
       }),
     });
 
-    const summary = await summarizeContextTreeInfluence(getApp().db, seed.organizationId, 7);
-    expect(summary.recentEvents).toHaveLength(1);
-    expect(summary.recentEvents[0]).toMatchObject({
+    const summary = await summarize(seed.organizationId);
+    // Fail closed: with no viewer nobody has proven chat access, so no
+    // body-derived prose leaves the Server even though the decision is counted.
+    expect(summary.decisionCount).toBe(1);
+    expect(summary.recentEvents).toEqual([]);
+
+    await getApp()
+      .db.insert(chatMembership)
+      .values({ chatId: seed.chatId, agentId: seed.humanAgentUuid, accessMode: "speaker" });
+    const withAccess = await summarize(seed.organizationId, {
+      viewer: { humanAgentId: seed.humanAgentUuid, memberId: seed.memberId },
+    });
+    expect(withAccess.recentEvents[0]).toMatchObject({
       id: messageId,
       agentId: seed.agent.uuid,
       chatId: seed.chatId,
       chatTitle: "Release cut",
       effect: "conflicted",
       summary: "Two release rules cannot both hold.",
-      viewerCanAccess: false,
     });
-    expect(summary.recentEvents[0]?.evidence[0]?.nodePath).toBe(TENANCY);
+    expect(withAccess.recentEvents[0]?.evidence[0]?.nodePath).toBe(TENANCY);
   });
 
-  // The topic stays org-wide visible; only a viewer who passes the same
-  // membership rule as requireChatAccess gets a clickable link.
-  it("marks a chat accessible only for a viewer who may open it", async () => {
+  // `summary` and `evidence` come straight out of a private message body, so an
+  // inaccessible event is omitted rather than shown with the link disabled.
+  it("omits decisions from chats the viewer cannot open", async () => {
     const app = getApp();
     const seed = await seedChat();
     await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
 
-    const outsider = await summarizeContextTreeInfluence(app.db, seed.organizationId, 7, {
-      humanAgentId: `human-${crypto.randomUUID()}`,
-      memberId: `member-${crypto.randomUUID()}`,
+    const outsider = await summarize(seed.organizationId, {
+      viewer: { humanAgentId: `human-${crypto.randomUUID()}`, memberId: `member-${crypto.randomUUID()}` },
     });
-    expect(outsider.recentEvents[0]?.viewerCanAccess).toBe(false);
+    // The aggregate stays org-wide; the body-derived prose does not leak.
+    expect(outsider.decisionCount).toBe(1);
+    expect(outsider.recentEvents).toEqual([]);
 
     await app.db
       .insert(chatMembership)
       .values({ chatId: seed.chatId, agentId: seed.humanAgentUuid, accessMode: "speaker" });
-    const member = await summarizeContextTreeInfluence(app.db, seed.organizationId, 7, {
-      humanAgentId: seed.humanAgentUuid,
-      memberId: seed.memberId,
+    const member = await summarize(seed.organizationId, {
+      viewer: { humanAgentId: seed.humanAgentUuid, memberId: seed.memberId },
     });
-    expect(member.recentEvents[0]?.viewerCanAccess).toBe(true);
+    expect(member.recentEvents).toHaveLength(1);
+    expect(member.recentEvents[0]?.summary).toContain("organization-isolation");
+  });
+  // A citation pointing elsewhere belongs to a different tree, or to a binding
+  // that has since moved. Counting it here would attribute another repo's node
+  // to this Team, and grouping by path alone would merge the two.
+  it("ignores citations that do not point at the bound repository", async () => {
+    const seed = await seedChat();
+    await sendMessage(seed.chatId, seed.agent.uuid, {
+      [CONTEXT_DECISION_METADATA_KEY]: receipt({
+        evidence: [{ repoUrl: "https://github.com/acme/some-other-tree", commit: COMMIT, nodePath: TENANCY }],
+      }),
+    });
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+
+    const summary = await summarize(seed.organizationId);
+    expect(summary.decisionCount).toBe(1);
+    expect(summary.nodes).toEqual([
+      { nodePath: TENANCY, title: "Organization isolation", repoUrl: REPO, commit: COMMIT, decisionCount: 1 },
+    ]);
+  });
+
+  it("matches the bound repository across equivalent spellings", async () => {
+    const seed = await seedChat();
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+
+    for (const bound of [`${REPO}.git`, "git@github.com:acme/first-tree-context.git"]) {
+      expect((await summarize(seed.organizationId, { boundRepoUrl: bound })).decisionCount).toBe(1);
+    }
+  });
+
+  it("reports nothing when the organization has no Context Tree binding", async () => {
+    const seed = await seedChat();
+    await sendMessage(seed.chatId, seed.agent.uuid, { [CONTEXT_DECISION_METADATA_KEY]: receipt() });
+
+    expect((await summarize(seed.organizationId, { boundRepoUrl: null })).decisionCount).toBe(0);
   });
 });

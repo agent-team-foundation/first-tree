@@ -369,14 +369,14 @@ export const contextTreeInfluenceEventSchema = z.object({
   effect: contextDecisionEffectSchema,
   summary: z.string(),
   evidence: z.array(contextDecisionEvidenceSchema),
-  // Same org-wide transparency / access split as the io feed: the topic label
-  // is visible to any member, but only a viewer who passes `requireChatAccess`
-  // gets a clickable link. Unlike the io feed there is no cross-org masking to
-  // do — these rows are reached THROUGH `chats.organization_id`, so the chat is
-  // in-org by construction. `chatTitle` is null only when no topic is set.
+  // Unlike the io feed, an event the viewer cannot open is OMITTED rather than
+  // shown with the link disabled. `summary` and `evidence` are copied out of a
+  // private message body, and the Context Tree contract keeps chat content
+  // behind the chat-access rule while only the topic label is org-wide — so
+  // there is no partially-redacted row worth rendering. Every event returned
+  // here is one the viewer may open; the aggregate counts above stay org-wide.
   chatId: z.string(),
   chatTitle: z.string().nullable(),
-  viewerCanAccess: z.boolean(),
   createdAt: z.string(),
 });
 export type ContextTreeInfluenceEvent = z.infer<typeof contextTreeInfluenceEventSchema>;

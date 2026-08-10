@@ -98,7 +98,9 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     // aggregate, so the block is omitted rather than reported as zero.
     const influence = orgId
       ? await timing.time("influence_summary", () =>
-          summarizeContextTreeInfluence(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined, {
+          summarizeContextTreeInfluence(app.db, orgId, contextTreeSnapshotWindowDays(window), {
+            boundRepoUrl: binding?.repo ?? null,
+            viewer: viewer ?? undefined,
             timing: timing.add,
           }),
         )

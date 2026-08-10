@@ -91,13 +91,11 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
     // Influence reads `messages.metadata.contextDecision` in place — see
     // summarizeContextTreeInfluence for why it has no table of its own.
     const influence = await timing.time("influence_summary", () =>
-      summarizeContextTreeInfluence(
-        app.db,
-        scope.organizationId,
-        windowDays,
-        { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
-        { timing: timing.add },
-      ),
+      summarizeContextTreeInfluence(app.db, scope.organizationId, windowDays, {
+        boundRepoUrl: binding?.repo ?? null,
+        viewer: { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
+        timing: timing.add,
+      }),
     );
     const response = timing.timeSync("schema_parse", () =>
       contextTreeSnapshotSchema.parse({ ...snapshot, recoveryAction, usage, io, influence }),
