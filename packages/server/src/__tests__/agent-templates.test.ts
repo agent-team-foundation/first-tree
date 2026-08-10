@@ -341,6 +341,36 @@ describe("Agent Template catalog", () => {
       expect(reactivate.statusCode).toBe(409);
     });
 
+    // A component-less Template can never be adopted, so publish must reject
+    // it at the source instead of letting it reach the public catalog and
+    // fail only once a real user clicks Use.
+    it("rejects publishing a Template with no components and leaves it draft", async () => {
+      const app = getApp();
+      const publisher = await createPublisherAdmin(app);
+      const draft = await createDraft(app, publisher, []);
+
+      const rejected = await call(app, publisher, "POST", `${INTERNAL_URL}/${draft.id}/publish`, {
+        expectedUpdatedAt: draft.updatedAt,
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json<{ error: string }>().error).toContain("has no components");
+
+      const detail = await call(app, publisher, "GET", `${INTERNAL_URL}/${draft.id}`);
+      expect(detail.statusCode).toBe(200);
+      const unchanged = detail.json<{ status: string; updatedAt: string }>();
+      expect(unchanged.status).toBe("draft");
+      expect(unchanged.updatedAt).toBe(draft.updatedAt);
+
+      // The draft is still publishable once it actually carries a component.
+      const filled = await call(app, publisher, "PATCH", `${INTERNAL_URL}/${draft.id}`, {
+        expectedUpdatedAt: draft.updatedAt,
+        components: [promptComponent()],
+      });
+      expect(filled.statusCode).toBe(200);
+      const active = await publish(app, publisher, filled.json<{ id: string; updatedAt: string }>());
+      expect(active.status).toBe("active");
+    });
+
     it("allows slug edits only while draft", async () => {
       const app = getApp();
       const publisher = await createPublisherAdmin(app);
