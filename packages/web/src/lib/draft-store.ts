@@ -55,7 +55,11 @@ function readMap(): DraftMap {
     for (const [k, v] of Object.entries(parsed)) {
       if (isStoredDraft(v)) out[k] = v;
     }
-    return out;
+    // Upgrade pre-SEC-042 `u:<userId>:` scopes to the origin-aware format in
+    // place. Idempotent — after the rewrite nothing matches the legacy shape.
+    const { map: migratedMap, migrated } = migrateLegacyScopes(out);
+    if (migrated) writeMap(migratedMap);
+    return migratedMap;
   } catch {
     // Corrupt JSON or unavailable storage — start from empty rather than throw.
     return {};
@@ -80,12 +84,108 @@ function prune(map: DraftMap): DraftMap {
   return Object.fromEntries(entries.slice(0, MAX_ENTRIES));
 }
 
-/** Per-user prefix so a shared browser never restores another account's draft
- *  after a logout/login on the same profile — `logout()` clears tokens and
- *  query state, not this store. Mirrors the userId-bucketed selected-org
- *  storage in auth-context (`first-tree:selectedOrganizationId:<userId>`). */
+/**
+ * Server identity for draft scoping — the web app is same-origin with its API,
+ * so `window.location.origin` distinguishes drafts written against different
+ * deployments in the same browser profile. Computed locally (rather than
+ * imported from `api/storage-scope.ts`) to keep this module dependency-free:
+ * storage-scope imports THIS module, never the reverse.
+ */
+function currentOrigin(): string {
+  if (typeof window === "undefined" || !window.location?.origin) return "unknown-origin";
+  return window.location.origin;
+}
+
+/**
+ * Per-user, per-server prefix so a shared browser never restores another
+ * account's — or another deployment's — draft after a logout/login on the
+ * same profile. Mirrors the userId-bucketed selected-org storage in
+ * auth-context (`first-tree:selectedOrganizationId:<userId>`).
+ *
+ * Scope format history: pre-SEC-042 scopes were `u:<userId>:...` (no server
+ * dimension). Current scopes are `u:<userId>@<origin>:...`; legacy entries
+ * are migrated forward on read (drafts are user data, so they are rewritten
+ * rather than dropped) and both formats are removed by `clearDraftsForUser`.
+ */
 function userPrefix(userId: string | null): string {
-  return `u:${userId ?? "anon"}`;
+  return `u:${userId ?? "anon"}@${currentOrigin()}`;
+}
+
+/**
+ * Split a map key into its legacy-vs-current shape. Current keys are
+ * `u:<userId>@<origin>:<rest>`; legacy keys are `u:<userId>:<rest>`.
+ * The discriminator is the `@` before the first `:`: legacy keys predate the
+ * origin segment, so they contain no `@` at all, while current keys always
+ * carry `@<origin>` right after the userId — so their `@` precedes every
+ * `:` that matters, whether the origin brings its own colons (`https://…`)
+ * or is the colon-less `unknown-origin` fallback.
+ *
+ * Only the legacy branch carries `rest`: the migration rewrite is its sole
+ * consumer, and the current branch has no well-defined `rest` to offer (the
+ * origin's own colons make "the rest after the origin" ambiguous to slice).
+ */
+type ParsedUserScopedKey = { userId: string; legacy: true; rest: string } | { userId: string; legacy: false };
+
+function parseUserScopedKey(key: string): ParsedUserScopedKey | null {
+  if (!key.startsWith("u:")) return null;
+  const body = key.slice(2);
+  const at = body.indexOf("@");
+  const colon = body.indexOf(":");
+  if (colon === -1) return null;
+  const legacy = at === -1 || colon < at;
+  if (legacy) return { userId: body.slice(0, colon), rest: body.slice(colon + 1), legacy: true };
+  return { userId: body.slice(0, at), legacy: false };
+}
+
+/** Rewrite a legacy `u:<userId>:` map to current `u:<userId>@<origin>:` keys. */
+function migrateLegacyScopes(map: DraftMap): { map: DraftMap; migrated: boolean } {
+  let migrated = false;
+  const out: DraftMap = {};
+  for (const [key, value] of Object.entries(map)) {
+    const parsed = parseUserScopedKey(key);
+    if (parsed?.legacy) {
+      const nextKey = `u:${parsed.userId}@${currentOrigin()}:${parsed.rest}`;
+      // A current-format entry for the same scope wins — it was written by
+      // newer code and is at least as fresh.
+      if (!(nextKey in map) && !(nextKey in out)) out[nextKey] = value;
+      migrated = true;
+    } else {
+      out[key] = value;
+    }
+  }
+  return { map: migrated ? out : map, migrated };
+}
+
+/**
+ * User ids whose draft writes are blocked after a logout purge (SEC-042).
+ * Mirrors the IndexedDB purged-namespace write-block in `api/storage-scope.ts`:
+ * without it, an in-flight failed send's `parkFailedDraftIfSwitched` (or any
+ * other post-purge `saveDraft`) would re-write the purged account's drafts.
+ * Blocking gates WRITES only — `clearDraft` / `clearDraftsForUser` stay open
+ * so the purge itself can run after the block is in place. The anonymous
+ * owner is tracked as "anon" and, once blocked, never unblocks: anonymous
+ * state has no legitimate draft writer.
+ */
+const blockedDraftUserIds = new Set<string>();
+
+/** Block draft writes for `userId` (`null` → the anonymous owner). */
+export function blockDraftWritesForUser(userId: string | null): void {
+  blockedDraftUserIds.add(userId ?? "anon");
+}
+
+/**
+ * Re-enable draft writes for `userId` after an explicit sign-in (mirrors
+ * storage-scope lifting the IndexedDB write-block on re-login).
+ */
+export function unblockDraftWritesForUser(userId: string): void {
+  blockedDraftUserIds.delete(userId);
+}
+
+/** `true` when the owner of `scope` (current or legacy format) is write-blocked. */
+function isScopeWriteBlocked(scope: string): boolean {
+  const parsed = parseUserScopedKey(scope);
+  if (!parsed) return false;
+  return blockedDraftUserIds.has(parsed.userId);
 }
 
 /** Storage scope for the in-chat composer: per user, per chat. */
@@ -116,12 +216,18 @@ export function loadDraft(scope: string): DraftSnapshot | null {
  * treated as empty and removes the entry — participant chips are remembered
  * only alongside real text, never on their own (an auto-seeded default chip
  * must not masquerade as an unsent draft).
+ *
+ * No-ops when the scope's owner is write-blocked (see
+ * `blockDraftWritesForUser` — the post-logout purge state).
  */
 export function saveDraft(
   scope: string,
   draft: { text: string; participantIds?: readonly string[] },
   now: number = Date.now(),
 ): void {
+  // SEC-042: dropped silently when the scope's owner was purged by a logout —
+  // a late write (e.g. a failed send being parked) must not resurrect drafts.
+  if (isScopeWriteBlocked(scope)) return;
   const map = readMap();
   if (draft.text.trim().length === 0) {
     if (scope in map) {
@@ -142,6 +248,37 @@ export function clearDraft(scope: string): void {
   if (scope in map) {
     delete map[scope];
     writeMap(map);
+  }
+}
+
+/**
+ * Remove every draft belonging to `userId` — both the current
+ * `u:<userId>@<origin>:` scopes and any not-yet-migrated legacy
+ * `u:<userId>:` ones. Called by the logout purge (SEC-042 /
+ * `api/storage-scope.ts`); other users' drafts are untouched.
+ *
+ * Scans the raw stored object rather than the validated map so malformed
+ * entries (which `readMap` would skip) are purged too — this is a security
+ * path, and skipped entries could still hold the account's plaintext.
+ */
+export function clearDraftsForUser(userId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return;
+    const map = parsed as Record<string, unknown>;
+    let changed = false;
+    for (const key of Object.keys(map)) {
+      if (key.startsWith(`u:${userId}:`) || key.startsWith(`u:${userId}@`)) {
+        delete map[key];
+        changed = true;
+      }
+    }
+    if (changed) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Unavailable storage or corrupt JSON — best-effort purge, never throws.
   }
 }
 
