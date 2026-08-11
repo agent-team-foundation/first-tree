@@ -158,7 +158,7 @@ describe("findStaleAliases", () => {
     expect(stale).toEqual([]);
   });
 
-  it("ignores entries that vanish before stat", async (ctx) => {
+  it("classifies a dangling alias symlink as unreadable without following it", async (ctx) => {
     try {
       symlinkSync(join(agentsDir, "missing"), join(agentsDir, "broken-link"));
     } catch {
@@ -171,7 +171,13 @@ describe("findStaleAliases", () => {
       listPinnedAgents: async () => [],
     });
 
-    expect(stale).toEqual([]);
+    expect(stale).toEqual([
+      {
+        name: "broken-link",
+        agentId: null,
+        reason: { kind: "unreadable", error: "alias directory must not be a symlink" },
+      },
+    ]);
   });
 
   it("formats stale reasons and removes local agent footprints", () => {
