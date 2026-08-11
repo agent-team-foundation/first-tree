@@ -96,6 +96,34 @@ describe("message-store / cacheMessages", () => {
   });
 });
 
+describe("message-store / clearAllChatCaches", () => {
+  beforeEach(() => {
+    globalThis.indexedDB = new IDBFactory();
+  });
+
+  it("removes every chat's rows (logout purge, SEC-042)", async () => {
+    const { cacheMessages, clearAllChatCaches, getCachedMessages } = await loadStore();
+    await cacheMessages("chat-1", [msg("a", T(1)), msg("b", T(2))]);
+    await cacheMessages("chat-2", [msg("c", T(3), { chatId: "chat-2" })]);
+    await clearAllChatCaches();
+    expect(await getCachedMessages("chat-1")).toEqual([]);
+    expect(await getCachedMessages("chat-2")).toEqual([]);
+  });
+
+  it("is a no-op on an empty cache", async () => {
+    const { clearAllChatCaches, getCachedMessages } = await loadStore();
+    await expect(clearAllChatCaches()).resolves.toBeUndefined();
+    expect(await getCachedMessages("chat-1")).toEqual([]);
+  });
+
+  it("silently no-ops when IndexedDB is unavailable", async () => {
+    vi.resetModules();
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+    const { clearAllChatCaches } = await import("../message-store.js");
+    await expect(clearAllChatCaches()).resolves.toBeUndefined();
+  });
+});
+
 describe("message-store / clearChatCache", () => {
   beforeEach(() => {
     globalThis.indexedDB = new IDBFactory();

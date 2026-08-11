@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   chatDraftScope,
+  clearAllDrafts,
   clearDraft,
   loadDraft,
   newChatDraftScope,
@@ -71,6 +72,27 @@ describe("clearDraft", () => {
 
   it("is a no-op for an unknown scope", () => {
     expect(() => clearDraft("nope")).not.toThrow();
+  });
+});
+
+describe("clearAllDrafts", () => {
+  it("removes every user's drafts and the backing storage key (logout purge, SEC-042)", () => {
+    saveDraft(chatDraftScope("user-a", "chat-1"), { text: "A's unsent text" });
+    saveDraft(newChatDraftScope("user-a", "org-1"), { text: "A's new chat" });
+    saveDraft(chatDraftScope("user-b", "chat-2"), { text: "B's unsent text" });
+
+    clearAllDrafts();
+
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))).toBeNull();
+    expect(loadDraft(newChatDraftScope("user-a", "org-1"))).toBeNull();
+    expect(loadDraft(chatDraftScope("user-b", "chat-2"))).toBeNull();
+    // No plaintext blob may survive for devtools inspection either.
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("is a no-op when nothing is stored", () => {
+    expect(() => clearAllDrafts()).not.toThrow();
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 });
 
