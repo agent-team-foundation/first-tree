@@ -186,6 +186,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - [CLI Reference](docs/cli-reference.md) — every command and environment variable
 - [Observability](docs/observability.md) — logs and OpenTelemetry traces
 - [Portable Node Runtime](docs/development/portable-node-runtime.md) — bundled Node policy for portable releases
+- [Local Context Fallback](docs/development/local-context-fallback.md) — no-Git, Team-shared local Context design
 - [docs/development/](docs/development/) — contributor reference
 - [docs/troubleshooting/](docs/troubleshooting/) — environment-specific gotchas
 - [docs/migration/](docs/migration/) — coming from `first-tree@0.4.x`
