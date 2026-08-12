@@ -46,8 +46,7 @@
       "!**/*.code-workspace",
       "!**/.gstack",
       "!**/.first-tree/tmp",
-      "!packages/skill-evals/.runs",
-      "!e2e/scripts"
+      "!packages/skill-evals/.runs"
     ]
   }
 }

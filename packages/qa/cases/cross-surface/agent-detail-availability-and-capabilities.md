@@ -94,10 +94,3 @@ states, runtime presence, or resource bindings.
 
 `INCONCLUSIVE`: source inspection or component tests exist, but the assembled
 cross-surface flow was not observed in a browser.
-
-## Optional Executable Aid
-
-`e2e/agent-detail-configuration.test.yaml` walks the online admin happy path from
-Team through Agent Detail to shared resource Settings. It is optional Momentic
-tooling, not a substitute for the permission, failure, degraded-state, and
-evidence judgement in this case.

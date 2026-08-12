@@ -105,11 +105,3 @@ claimed to have blocked, show the disabled state, not only the later success.
   advances through a state no daemon can reach.
 - The journey is not idempotent. Every attempt leaves a new user, org, agent and
   chat behind, so run it where accumulating rows is acceptable.
-
-## Optional executable aid
-
-`e2e/` holds a Momentic browser suite that walks steps 1–8 unattended and is
-useful for a quick regression pass. It is optional tooling, not a replacement for
-this case: it needs an external Momentic account, resolves steps through a hosted
-model, and covers only the happy path plus the connect-computer gate. Judgement
-about whether the journey is genuinely healthy still lives here.
