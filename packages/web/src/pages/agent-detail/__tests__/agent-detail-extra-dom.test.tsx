@@ -804,6 +804,66 @@ describe("PromptTab extra DOM states", () => {
     await click(dialog?.querySelector("button") ?? null);
     await waitForCondition(() => document.activeElement === trigger, "Expected focus to return to Read full");
   });
+
+  it("reserves Editable here for standalone inline instructions", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    contextMock.value = createContext({
+      config: config({
+        payload: {
+          kind: "claude-code",
+          prompt: {
+            append: "Customized team instructions.",
+            sections: [{ scope: "agent", name: "Customized instructions", body: "Customized team instructions." }],
+          },
+          model: "sonnet",
+          reasoningEffort: "medium",
+          mcpServers: [],
+          env: [],
+          gitRepos: [],
+          resourceSkills: [],
+        },
+      }),
+    });
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: {
+          version: 9,
+          repos: [],
+          prompts: [
+            promptRow({
+              id: "binding:override-1:enabled",
+              bindingId: "override-1",
+              source: "inline_prompt",
+              scope: "agent",
+              resourceId: null,
+              replacesResourceId: "team-prompt",
+              name: "Customized instructions",
+              promptBody: "Customized team instructions.",
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "override-1",
+            type: "prompt",
+            mode: "replace",
+            resourceId: null,
+            replacesResourceId: "team-prompt",
+            inlinePromptBody: "Customized team instructions.",
+            order: 1,
+          },
+        ],
+      }),
+    );
+
+    const container = await renderWithProviders(<PromptTab />);
+    await waitForText(container, "For this agent · Customized from team");
+    expect(container.textContent).not.toContain("For this agent · Editable here");
+    expect(container.querySelector('button[aria-label="More actions for Custom instructions"]')).toBeTruthy();
+  });
 });
 
 describe("ProfileEditDialog extra DOM states", () => {
