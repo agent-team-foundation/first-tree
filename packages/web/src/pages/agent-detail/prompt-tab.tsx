@@ -453,7 +453,7 @@ function PromptResourceBlocks(props: {
   const templateNameById = new Map(props.data.adoptedTemplates.map((summary) => [summary.id, summary.name]));
   // Disabled / overridden prompts are hidden from the active list, but the user
   // must still be able to re-enable or revert them — render them below.
-  const inactiveRows = props.data.effective.prompts.filter((row) => row.mode !== "enabled");
+  const inactiveRows = props.data.effective.prompts.filter((row) => !isAppliedPromptRow(row));
   // Inline prompt bindings the backend produced no effective row for (e.g. an
   // empty body it drops): keep them visible so they can be edited or removed —
   // an unremovable empty include binding otherwise makes every save fail.
@@ -521,6 +521,7 @@ function PromptResourceBlocks(props: {
 
   const inactiveBlocks: ReactNode[] = [];
   for (const row of inactiveRows) {
+    const isEditingRow = !!props.editor && editorIsInline && props.editor.rowId === row.id;
     // Disabled team prompt → Switch off (toggling on removes the disable binding).
     // Overridden prompt with no live replacement row (e.g. an empty inline
     // replacement) → ⋯ Remove, so it never gets stuck.
@@ -532,7 +533,11 @@ function PromptResourceBlocks(props: {
     const name = promptBlockName(row) ?? "instructions";
     let toggle: RowToggle | undefined;
     let menu: RowMenu | undefined;
-    if (row.mode === "unavailable" && props.canEdit && !props.editor) {
+    if (row.mode === "enabled" && props.canEdit && !props.editor) {
+      const controls = promptRowControls(row, props);
+      toggle = controls.toggle;
+      menu = controls.menu;
+    } else if (row.mode === "unavailable" && props.canEdit && !props.editor) {
       const controls = promptRowControls(row, props);
       toggle = controls.toggle;
       menu = controls.menu;
@@ -574,6 +579,7 @@ function PromptResourceBlocks(props: {
         unavailableReason={row.unavailableReason}
         expanded={expandedIds.has(row.id)}
         onToggle={() => toggleExpand(row.id)}
+        editor={isEditingRow ? editorNode : null}
       />,
     );
   }
@@ -753,7 +759,7 @@ function PromptResourceBlock(props: {
       toggle={props.toggle}
       menu={props.menu}
       dimmed={props.dimmed}
-      peek={props.unavailableReason ?? (hasBody ? promptExcerpt(props.body) : undefined)}
+      peek={instructionUnavailableReason(props.unavailableReason) ?? (hasBody ? promptExcerpt(props.body) : undefined)}
       emptyPeek={hasBody ? undefined : "No instructions yet."}
       expandLabel="instructions"
       leadingIcon={resourceTypeIcon("prompt")}
@@ -876,7 +882,14 @@ function InstructionsMenuButton(props: {
 }
 
 function appliedPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
-  return data.effective.prompts.filter((row) => row.mode === "enabled");
+  return data.effective.prompts.filter(isAppliedPromptRow);
+}
+
+// Match the server's runtime projection: an enabled row contributes only when
+// it carries a body. Empty Team Prompt resources remain manageable below, but
+// do not inflate the applied count or contradict the read-only result.
+function isAppliedPromptRow(row: EffectivePromptRow): boolean {
+  return row.mode === "enabled" && !!row.promptBody;
 }
 
 function instructionOwnershipLabel(source: EffectivePromptRow["source"], customizedFromTeam: boolean): string {
@@ -891,6 +904,19 @@ function promptStatusMarker(mode: EffectivePromptRow["mode"]): RowStatusMarker {
   if (mode === "replaced") return { label: "Replaced", tone: "neutral" };
   if (mode === "unavailable") return { label: "Can't load", tone: "error" };
   return null;
+}
+
+function instructionUnavailableReason(reason: string | null | undefined): string | undefined {
+  const normalized = reason?.trim();
+  if (!normalized) return undefined;
+  if (normalized === "prompt_budget_exceeded") {
+    return "These instructions exceed the agent's instruction limit.";
+  }
+  // Preserve already-readable server copy. Unknown machine codes still get a
+  // safe sentence rather than leaking snake_case into the UI.
+  if (/\s|[.!?]/.test(normalized)) return normalized;
+  const words = normalized.replace(/[_-]+/g, " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
 }
 
 function promptExcerpt(body: string): string {

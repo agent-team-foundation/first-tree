@@ -154,6 +154,9 @@ describe("ResourceRowView — converged action slots", () => {
     expect(container.querySelector('button[aria-label="More actions for Default resource"]')?.className).not.toContain(
       "min-h-11",
     );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="More actions for Default resource"]')?.style.width,
+    ).toBe(`${28}px`);
 
     render(
       <ResourceRowView
@@ -167,9 +170,14 @@ describe("ResourceRowView — converged action slots", () => {
     );
     const instructionHeader = container.querySelector("[data-resource-row] > div");
     expect(instructionHeader?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
-    expect(container.querySelector('button[aria-label="More actions for Custom instructions"]')?.className).toContain(
-      "min-h-11",
-    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="More actions for Custom instructions"]')?.style
+        .width,
+    ).toBe("var(--sp-11)");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="More actions for Custom instructions"]')?.style
+        .height,
+    ).toBe("var(--sp-11)");
     expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("h-11");
     expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("w-11");
     expect(container.querySelector<HTMLElement>("[data-resource-row] > p")?.dataset.lineClamp).toBe("3");

@@ -153,7 +153,7 @@ export function ResourceRowView(props: {
               <RowActionsMenu
                 actions={props.menu.actions}
                 ariaLabel={props.menu.ariaLabel}
-                triggerClassName={instructionPresentation ? "min-h-11 min-w-11" : undefined}
+                touchTarget={instructionPresentation}
               />
             ) : null}
           </div>

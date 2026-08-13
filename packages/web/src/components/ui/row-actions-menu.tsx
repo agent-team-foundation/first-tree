@@ -26,11 +26,14 @@ export function RowActionsMenu({
   actions,
   ariaLabel,
   triggerClassName,
+  touchTarget,
   icon: Icon = MoreHorizontal,
 }: {
   actions: RowAction[];
   ariaLabel: string;
   triggerClassName?: string;
+  /** Preserve the compact icon inside the minimum interactive target. */
+  touchTarget?: boolean;
   icon?: LucideIcon;
 }) {
   const [open, setOpen] = useState(false);
@@ -84,8 +87,8 @@ export function RowActionsMenu({
         }}
         className={cn("inline-flex items-center justify-center", triggerClassName)}
         style={{
-          width: 28,
-          height: 28,
+          width: touchTarget ? "var(--sp-11)" : 28,
+          height: touchTarget ? "var(--sp-11)" : 28,
           borderRadius: 4,
           background: "transparent",
           color: "var(--fg-3)",

@@ -662,8 +662,17 @@ describe("PromptTab extra DOM states", () => {
               name: "Unavailable prompt",
               mode: "unavailable",
               promptBody: "Unavailable content must not be merged.",
-              unavailableReason: "Prompt budget exceeded.",
+              unavailableReason: "prompt_budget_exceeded",
               order: 3,
+            }),
+            promptRow({
+              id: "resource:unknown-unavailable-prompt",
+              resourceId: "unknown-unavailable-prompt",
+              name: "Unknown unavailable prompt",
+              mode: "unavailable",
+              promptBody: "Unknown unavailable content must not be merged.",
+              unavailableReason: "unexpected_prompt_failure",
+              order: 4,
             }),
           ],
           skills: [],
@@ -696,13 +705,17 @@ describe("PromptTab extra DOM states", () => {
     const container = await renderWithProviders(<PromptTab />);
     await waitForText(container, "Active prompt");
     expect(container.textContent).toContain("1 instruction applied");
-    expect(container.textContent).toContain("Not applied · 3");
+    expect(container.textContent).toContain("Not applied · 4");
     expect(container.textContent).toContain("Replaced");
     expect(container.textContent).toContain("Can't load");
-    expect(container.textContent).toContain("Prompt budget exceeded.");
+    expect(container.textContent).toContain("These instructions exceed the agent's instruction limit.");
+    expect(container.textContent).not.toContain("prompt_budget_exceeded");
+    expect(container.textContent).toContain("Unexpected prompt failure.");
+    expect(container.textContent).not.toContain("unexpected_prompt_failure");
     const preview = container.querySelector("[data-instruction-result-preview]");
     expect(preview?.textContent).not.toContain("Original body is hidden until expanded.");
     expect(preview?.textContent).not.toContain("Unavailable content must not be merged.");
+    expect(preview?.textContent).not.toContain("Unknown unavailable content must not be merged.");
     expect((container.textContent?.match(/Active body is hidden until expanded\./g) ?? []).length).toBe(1);
 
     await click(container.querySelector('button[aria-label="Expand Active prompt"]'));
@@ -803,6 +816,54 @@ describe("PromptTab extra DOM states", () => {
     expect(dialog?.textContent).not.toContain("Legacy merged fallback must not replace sections.");
     await click(dialog?.querySelector("button") ?? null);
     await waitForCondition(() => document.activeElement === trigger, "Expected focus to return to Read full");
+  });
+
+  it("keeps an enabled empty Team Prompt manageable without counting it as applied", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    contextMock.value = createContext({
+      config: config({
+        payload: {
+          kind: "claude-code",
+          prompt: { append: "", sections: [] },
+          model: "sonnet",
+          reasoningEffort: "medium",
+          mcpServers: [],
+          env: [],
+          gitRepos: [],
+          resourceSkills: [],
+        },
+      }),
+    });
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: {
+          version: 9,
+          repos: [],
+          prompts: [
+            promptRow({
+              id: "resource:empty-team-prompt",
+              resourceId: "empty-team-prompt",
+              name: "Empty team prompt",
+              mode: "enabled",
+              promptBody: "",
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+      }),
+    );
+
+    const container = await renderWithProviders(<PromptTab />);
+    await waitForText(container, "Empty team prompt");
+    expect(container.textContent).toContain("0 instructions applied");
+    expect(container.textContent).toContain("No additional instructions are active.");
+    expect(container.textContent).toContain("No instructions are applied.");
+    expect(container.textContent).toContain("Not applied · 1");
+    expect(container.querySelector('button[aria-label="Read full"]')).toBeNull();
+    expect(container.querySelector('button[role="switch"][aria-label="Enable Empty team prompt"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label="More actions for Empty team prompt"]')).toBeTruthy();
   });
 
   it("reserves Editable here for standalone inline instructions", async () => {
