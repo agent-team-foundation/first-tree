@@ -7,7 +7,7 @@ import { FeishuSection } from "./feishu-section.js";
 import { IdentitySection } from "./identity-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ProfileEditDialog } from "./profile-edit-dialog.js";
-import { ResponsibilitiesSection } from "./responsibilities-section.js";
+import { TemplateProvenance } from "./responsibilities-section.js";
 import { useJustSaved } from "./save-semantics.js";
 
 export function ProfileTab() {
@@ -34,6 +34,18 @@ export function ProfileTab() {
         title="Identity"
         description={null}
         aside={<AppearanceSection agent={ctx.agent} canEdit={ctx.canManageAgent} onEdit={onEdit} variant="inline" />}
+        createdFrom={
+          !ctx.isHuman && resources.data && resources.data.templateIds.length > 0 ? (
+            <TemplateProvenance
+              agentUuid={ctx.uuid}
+              agentStatus={ctx.agent.status}
+              canManage={ctx.canEditConfig}
+              templateIds={resources.data.templateIds}
+              adoptedTemplates={resources.data.adoptedTemplates}
+              version={resources.data.version}
+            />
+          ) : undefined
+        }
       />
       {!ctx.isHuman && !resources.data && resources.isError ? (
         <div className="flex flex-wrap items-center gap-2 py-3" role="alert">
@@ -49,16 +61,6 @@ export function ProfileTab() {
             {resources.reloading ? "Retrying…" : "Retry"}
           </Button>
         </div>
-      ) : null}
-      {!ctx.isHuman && resources.data && resources.data.templateIds.length > 0 ? (
-        <ResponsibilitiesSection
-          agentUuid={ctx.uuid}
-          agentStatus={ctx.agent.status}
-          canManage={ctx.canEditConfig}
-          templateIds={resources.data.templateIds}
-          adoptedTemplates={resources.data.adoptedTemplates}
-          version={resources.data.version}
-        />
       ) : null}
       {!ctx.isHuman && <FeishuSection onOpenProfileEdit={onEdit} />}
       {/* Agent lifecycle is identity-level, so destructive controls stay at the

@@ -1,10 +1,10 @@
 import { AGENT_TEMPLATE_LIFECYCLE_ERROR_CODES, type AgentTemplateAdoptionSummary } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { Link } from "react-router";
 import { trackEvent } from "../../analytics.js";
 import { updateAgentTemplates } from "../../api/agent-templates.js";
 import { ApiError } from "../../api/client.js";
-import { TemplateResponsibilityLabel } from "../../components/template-responsibility-label.js";
 import { Button } from "../../components/ui/button.js";
 import {
   Dialog,
@@ -14,16 +14,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog.js";
-import { Section } from "../../components/ui/section.js";
+import { RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { agentResourcesMutationHandlers } from "./capability-section.js";
-import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 /**
- * Compact Template provenance inside Profile. This section explains only the
- * responsibilities already adopted by the agent; discovery and adoption stay
- * in agent creation and the Template Library.
+ * One-line Template provenance inside Profile identity. The source names link
+ * to their public Template pages; the compact overflow preserves the existing
+ * remove-binding action without restoring a dedicated management section.
  */
-export type ResponsibilitiesSectionProps = {
+export type TemplateProvenanceProps = {
   agentUuid: string;
   agentStatus: string;
   canManage: boolean;
@@ -33,18 +32,17 @@ export type ResponsibilitiesSectionProps = {
 };
 
 const VERSION_CAS_FEEDBACK =
-  "This agent changed elsewhere. Its responsibilities were refreshed — review and remove again.";
+  "This agent changed elsewhere. Its template sources were refreshed — review and remove again.";
 
-export function ResponsibilitiesSection({
+export function TemplateProvenance({
   agentUuid,
   agentStatus,
   canManage,
   templateIds,
   adoptedTemplates,
   version,
-}: ResponsibilitiesSectionProps) {
+}: TemplateProvenanceProps) {
   const queryClient = useQueryClient();
-  const { justSaved, markSaved } = useJustSaved();
   const [removeTarget, setRemoveTarget] = useState<AgentTemplateAdoptionSummary | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const canEdit = canManage && agentStatus === "active";
@@ -58,7 +56,7 @@ export function ResponsibilitiesSection({
     return templateIds.map((id) => byId.get(id) ?? missingSummary(id)).sort(compareResponsibilitySummaries);
   }, [adoptedTemplates, templateIds]);
 
-  const mutationHandlers = agentResourcesMutationHandlers(queryClient, agentUuid, { onSuccessAfter: markSaved });
+  const mutationHandlers = agentResourcesMutationHandlers(queryClient, agentUuid);
   const removeMutation = useMutation({
     mutationFn: (target: AgentTemplateAdoptionSummary) =>
       updateAgentTemplates(agentUuid, {
@@ -81,49 +79,47 @@ export function ResponsibilitiesSection({
         setFeedback(VERSION_CAS_FEEDBACK);
         return;
       }
-      setFeedback(error instanceof Error ? error.message : "Failed to remove responsibility");
+      setFeedback(error instanceof Error ? error.message : "Failed to remove template source");
     },
   });
 
   if (ordered.length === 0) return null;
 
-  const targetName = removeTarget?.name ?? "this unavailable template";
+  const targetName = removeTarget ? sourceLabel(removeTarget) : "this template source";
 
   return (
     <>
-      <Section
-        headingLevel={3}
-        title={titleWithSemantics("Responsibilities", justSaved)}
-        count={ordered.length}
-        description="One-time starting points imported from Agent Templates. Instructions and tools are managed in their own sections."
-      >
-        <ul className="m-0 list-none p-0">
-          {ordered.map((summary) => (
-            <li
-              key={summary.id}
-              className="flex items-start justify-between gap-3 py-3"
-              style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}
-            >
-              <TemplateResponsibilityLabel template={summary} variant="assigned" />
-              {canEdit ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  className="shrink-0"
-                  aria-label={`Manage ${summary.name ?? `Unavailable template ${summary.id}`} responsibility`}
-                  onClick={() => {
-                    setFeedback(null);
-                    setRemoveTarget(summary);
-                  }}
-                >
-                  Manage
-                </Button>
-              ) : null}
-            </li>
+      <span className="inline-flex min-w-0 max-w-full items-center gap-1" data-slot="template-provenance">
+        <span className="min-w-0 truncate">
+          {ordered.map((summary, index) => (
+            <Fragment key={summary.id}>
+              {sourceSeparator(index, ordered.length)}
+              {summary.slug ? (
+                <Link to={`/templates/${summary.slug}`} className="text-primary underline underline-offset-2">
+                  {sourceLabel(summary)}
+                </Link>
+              ) : (
+                <span style={{ color: "var(--fg-3)" }}>{sourceLabel(summary)}</span>
+              )}
+            </Fragment>
           ))}
-        </ul>
-      </Section>
+        </span>
+        {canEdit ? (
+          <RowActionsMenu
+            ariaLabel="Manage template sources"
+            touchTarget
+            actions={ordered.map((summary) => ({
+              key: summary.id,
+              label: summary.name ? `Remove ${sourceLabel(summary)}` : `Remove unavailable template ${summary.id}`,
+              destructive: true,
+              onSelect: () => {
+                setFeedback(null);
+                setRemoveTarget(summary);
+              },
+            }))}
+          />
+        ) : null}
+      </span>
 
       <Dialog
         open={removeTarget !== null}
@@ -135,9 +131,10 @@ export function ResponsibilitiesSection({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove responsibility?</DialogTitle>
+            <DialogTitle>Remove template source?</DialogTitle>
             <DialogDescription>
-              Only this agent’s bindings created by {targetName} will be removed. Team Resources will remain available.
+              Only this agent’s bindings imported from {targetName} will be removed. Team Resources will remain
+              available.
             </DialogDescription>
           </DialogHeader>
           {feedback ? (
@@ -157,13 +154,23 @@ export function ResponsibilitiesSection({
                 if (removeTarget) removeMutation.mutate(removeTarget);
               }}
             >
-              {removeMutation.isPending ? "Removing…" : "Remove responsibility"}
+              {removeMutation.isPending ? "Removing…" : "Remove source"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
   );
+}
+
+function sourceLabel(summary: AgentTemplateAdoptionSummary): string {
+  return summary.name ? `${summary.name} template` : "an unavailable template";
+}
+
+function sourceSeparator(index: number, total: number): string {
+  if (index === 0) return "";
+  if (index === total - 1) return total === 2 ? " and " : ", and ";
+  return ", ";
 }
 
 function compareResponsibilitySummaries(

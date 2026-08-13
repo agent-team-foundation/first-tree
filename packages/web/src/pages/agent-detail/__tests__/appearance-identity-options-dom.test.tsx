@@ -288,7 +288,9 @@ describe("IdentitySection (display-only)", () => {
       metadata: { tree: { role: "Maintainer", domains: ["agent-hub", "first_tree"] } },
     });
 
-    const { container, root } = await renderDom(<IdentitySection agent={human} onEdit={onEdit} />);
+    const { container, root } = await renderDom(
+      <IdentitySection agent={human} onEdit={onEdit} createdFrom={<span>QA Engineer template</span>} />,
+    );
     await flush();
     expect(container.textContent).toContain("Manager User");
     expect(container.textContent).toContain("Helper");
@@ -296,6 +298,8 @@ describe("IdentitySection (display-only)", () => {
     expect(container.textContent).toContain("Maintainer");
     expect(container.textContent).toContain("Agent hub");
     expect(container.textContent).toContain("First tree");
+    expect(container.textContent).toContain("Created from");
+    expect(container.textContent).toContain("QA Engineer template");
 
     await click(buttonByText(container, "Edit"));
     expect(onEdit).toHaveBeenCalledTimes(1);

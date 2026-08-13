@@ -641,7 +641,7 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
-  it("renders adopted responsibilities between Identity and Agent lifecycle without a dedicated tab", async () => {
+  it("renders adopted Template provenance inside Identity without a dedicated section or tab", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     agentResourceMocks.getAgentResources.mockResolvedValue(
       agentResources({
@@ -652,11 +652,12 @@ describe("AgentDetailPage", () => {
 
     const profile = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(profile.container, "PR Engineer");
-    expect(profile.container.querySelectorAll('[data-slot="template-responsibility-label"]')).toHaveLength(1);
+    expect(profile.container.querySelectorAll('[data-slot="template-provenance"]')).toHaveLength(1);
+    expect(profile.container.textContent).toContain("Created from");
+    expect(profile.container.textContent).toContain("PR Engineer template");
     const headings = [...profile.container.querySelectorAll("h3")].map((heading) => heading.textContent?.trim());
-    expect(headings).toContain("Responsibilities · 1");
-    expect(headings.indexOf("Identity")).toBeLessThan(headings.indexOf("Responsibilities · 1"));
-    expect(headings.indexOf("Responsibilities · 1")).toBeLessThan(headings.indexOf("Agent lifecycle"));
+    expect(headings).not.toContain("Responsibilities · 1");
+    expect(headings.indexOf("Identity")).toBeLessThan(headings.indexOf("Agent lifecycle"));
     const profileNav = profile.container.querySelector('nav[aria-label="Agent sections"]');
     if (!profileNav) throw new Error("Expected Agent navigation");
     expect([...profileNav.querySelectorAll("a")].map((tab) => tab.textContent?.trim())).toEqual([
@@ -670,7 +671,7 @@ describe("AgentDetailPage", () => {
     await act(async () => profile.root.unmount());
   });
 
-  it("shows adopted responsibilities read-only in Profile for a non-editor", async () => {
+  it("shows adopted Template provenance read-only in Profile for a non-editor", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     authMock.value = { memberId: "member-other", role: "member", organizationId: "org-1" };
     agentMocks.getAgent.mockResolvedValue(agent({ managerId: "member-owner" }));
@@ -690,25 +691,26 @@ describe("AgentDetailPage", () => {
       "Tools & skills",
       "Usage",
     ]);
-    expect(exactButtonByText(view.container, "Manage")).toBeNull();
+    expect(view.container.textContent).toContain("Created from");
+    expect(view.container.querySelector('button[aria-label="Manage template sources"]')).toBeNull();
     await act(async () => view.root.unmount());
   });
 
-  it("does not query or show responsibilities for a human", async () => {
+  it("does not query or show Template provenance for a human", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     agentMocks.getAgent.mockResolvedValue(agent({ type: "human", clientId: null }));
 
     const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(view.container, "Identity");
     expect(view.container.querySelector('nav[aria-label="Agent sections"]')).toBeNull();
-    expect(view.container.textContent).not.toContain("Responsibilities");
+    expect(view.container.textContent).not.toContain("Created from");
     expect(view.container.textContent).not.toContain("Some profile details couldn’t be loaded.");
     expect(agentResourceMocks.getAgentResources).not.toHaveBeenCalled();
     expect(templateMocks.listAgentTemplates).not.toHaveBeenCalled();
     await act(async () => view.root.unmount());
   });
 
-  it("hides the Profile section when the agent has no adopted templates", async () => {
+  it("hides the provenance row when the agent has no adopted templates", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     agentResourceMocks.getAgentResources.mockResolvedValue(agentResources({ templateIds: [], adoptedTemplates: [] }));
 
@@ -722,7 +724,7 @@ describe("AgentDetailPage", () => {
       "Repositories",
       "Usage",
     ]);
-    expect(view.container.textContent).not.toContain("Responsibilities");
+    expect(view.container.textContent).not.toContain("Created from");
     expect(templateMocks.listAgentTemplates).not.toHaveBeenCalled();
     await act(async () => view.root.unmount());
   });
@@ -738,30 +740,30 @@ describe("AgentDetailPage", () => {
 
     const loading = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(loading.container, "Identity");
-    expect(loading.container.textContent).not.toContain("Responsibilities");
+    expect(loading.container.textContent).not.toContain("Created from");
     expect(loading.container.textContent).not.toContain("Some profile details couldn’t be loaded.");
 
     await act(async () => resolveResources(agentResources({ templateIds: [], adoptedTemplates: [] })));
     await flush();
-    expect(loading.container.textContent).not.toContain("Responsibilities");
+    expect(loading.container.textContent).not.toContain("Created from");
     await act(async () => loading.root.unmount());
   });
 
-  it("retries an initial resources error without speculating about responsibilities", async () => {
+  it("retries an initial resources error without speculating about Template provenance", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     agentResourceMocks.getAgentResources
       .mockRejectedValueOnce(new Error("resources down"))
       .mockResolvedValueOnce(agentResources({ templateIds: [], adoptedTemplates: [] }));
     const failed = await renderDom("/agents/agent-1/profile", <ProfileTab />);
     await waitForText(failed.container, "Some profile details couldn’t be loaded.");
-    expect(failed.container.textContent).not.toContain("Responsibilities");
+    expect(failed.container.textContent).not.toContain("Created from");
     expect(failed.container.textContent).not.toContain("resources down");
     await click(exactButtonByText(failed.container, "Retry"));
     await waitForCondition(
       () => !failed.container.textContent?.includes("Some profile details couldn’t be loaded."),
       "Expected the Profile warning to clear after retry",
     );
-    expect(failed.container.textContent).not.toContain("Responsibilities");
+    expect(failed.container.textContent).not.toContain("Created from");
     expect(agentResourceMocks.getAgentResources).toHaveBeenCalledTimes(2);
     await act(async () => failed.root.unmount());
   });
@@ -782,7 +784,7 @@ describe("AgentDetailPage", () => {
     await act(async () => cached.root.unmount());
   });
 
-  it("revalidates cached responsibilities when Profile mounts", async () => {
+  it("revalidates cached Template provenance when Profile mounts", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
     let resolveRefresh!: (value: AgentResourcesOutput) => void;
     agentResourceMocks.getAgentResources.mockReturnValueOnce(
@@ -800,8 +802,8 @@ describe("AgentDetailPage", () => {
     expect(agentResourceMocks.getAgentResources).toHaveBeenCalledTimes(1);
     await act(async () => resolveRefresh(agentResources({ templateIds: [], adoptedTemplates: [] })));
     await waitForCondition(
-      () => !cached.container.textContent?.includes("Responsibilities"),
-      "Expected mount revalidation to remove stale responsibilities",
+      () => !cached.container.textContent?.includes("Created from"),
+      "Expected mount revalidation to remove stale Template provenance",
     );
     await act(async () => cached.root.unmount());
   });

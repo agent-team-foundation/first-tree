@@ -31,6 +31,8 @@ export type IdentitySectionProps = {
   title?: string;
   description?: ReactNode;
   aside?: ReactNode;
+  /** Optional one-line creation provenance shown with the other identity metadata. */
+  createdFrom?: ReactNode;
 };
 
 export function IdentitySection({
@@ -41,6 +43,7 @@ export function IdentitySection({
   title = "Identity",
   description,
   aside,
+  createdFrom,
 }: IdentitySectionProps) {
   const resolveAgent = useAgentIdentityMap();
   const resolveMember = useMemberNameMap();
@@ -85,6 +88,11 @@ export function IdentitySection({
             <IdentityField label="Owner">
               <MemberReference memberId={agent.managerId} name={managerName ?? "—"} />
             </IdentityField>
+            {createdFrom && (
+              <IdentityField label="Created from" allowOverflow>
+                {createdFrom}
+              </IdentityField>
+            )}
             {delegateIdentity && (
               <IdentityField label="Delegate">
                 <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
@@ -137,7 +145,15 @@ function VisibilityBadge({ visibility }: { visibility: Agent["visibility"] }) {
   );
 }
 
-function IdentityField({ label, children }: { label: string; children: ReactNode }) {
+function IdentityField({
+  label,
+  children,
+  allowOverflow = false,
+}: {
+  label: string;
+  children: ReactNode;
+  allowOverflow?: boolean;
+}) {
   return (
     <div
       className="grid min-w-0 grid-cols-1 items-baseline gap-1 sm:grid-cols-[var(--agent-detail-label-col)_minmax(0,1fr)] sm:gap-4"
@@ -148,7 +164,12 @@ function IdentityField({ label, children }: { label: string; children: ReactNode
       </div>
       <div
         className="min-w-0 text-body font-medium"
-        style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        style={{
+          color: "var(--fg)",
+          overflow: allowOverflow ? "visible" : "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
       >
         {children}
       </div>

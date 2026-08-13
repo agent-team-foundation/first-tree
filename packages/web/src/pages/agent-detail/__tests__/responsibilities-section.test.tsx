@@ -8,11 +8,12 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../api/client.js";
 import { ToastProvider } from "../../../components/ui/toast.js";
 import { useAgentResources } from "../capability-section.js";
-import { ResponsibilitiesSection } from "../responsibilities-section.js";
+import { TemplateProvenance } from "../responsibilities-section.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -119,7 +120,9 @@ async function render(element: ReactElement): Promise<HTMLElement> {
   await act(async () => {
     root?.render(
       <QueryClientProvider client={queryClient}>
-        <ToastProvider>{element}</ToastProvider>
+        <MemoryRouter>
+          <ToastProvider>{element}</ToastProvider>
+        </MemoryRouter>
       </QueryClientProvider>,
     );
   });
@@ -135,7 +138,7 @@ function renderSection(props: {
   version?: number;
 }): Promise<HTMLElement> {
   return render(
-    <ResponsibilitiesSection
+    <TemplateProvenance
       agentUuid="agent-1"
       agentStatus={props.agentStatus ?? "active"}
       canManage={props.canManage ?? true}
@@ -158,7 +161,7 @@ function exactButton(text: string): HTMLButtonElement | null {
   return [...document.body.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
 
-describe("ResponsibilitiesSection", () => {
+describe("TemplateProvenance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -169,13 +172,13 @@ describe("ResponsibilitiesSection", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders nothing when the agent has no adopted responsibilities", async () => {
+  it("renders nothing when the agent has no adopted template sources", async () => {
     const container = await renderSection({ templateIds: [] });
     expect(container.textContent).toBe("");
     expect(container.querySelector("section")).toBeNull();
   });
 
-  it("renders parallel responsibilities in stable visible-name order with missing summaries last", async () => {
+  it("renders one quiet source line in stable visible-name order with missing summaries last", async () => {
     await renderSection({
       templateIds: [TEMPLATE_A_ID, TEMPLATE_C_ID, TEMPLATE_B_ID],
       adoptedTemplates: [
@@ -184,27 +187,25 @@ describe("ResponsibilitiesSection", () => {
       ],
     });
 
-    expect([...document.body.querySelectorAll("h3")].map((heading) => heading.textContent?.trim())).toContain(
-      "Responsibilities · 3",
+    expect(document.body.querySelector("h3")).toBeNull();
+    expect(document.body.querySelector('[data-slot="template-provenance"]')?.textContent).toContain(
+      "Docs Writer template, PR Engineer template, and an unavailable template",
     );
-    expect(document.body.textContent).toContain("One-time starting points imported from Agent Templates.");
-    const labels = [...document.body.querySelectorAll('[data-slot="template-responsibility-label"]')];
-    expect(labels.map((label) => label.textContent)).toEqual([
-      "Docs WriterRetiredShips review-ready pull requests.",
-      "PR EngineerShips review-ready pull requests.",
-      "Unavailable templateUnavailable",
+    expect(document.body.textContent).not.toContain("Retired");
+    expect(document.body.textContent).not.toContain("Ship review-ready PRs");
+    expect([...document.body.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "/templates/docs-writer",
+      "/templates/pr-engineer",
     ]);
-    expect(document.body.textContent).not.toContain("Active");
   });
 
-  it("shows row-level management only to managers of active agents", async () => {
+  it("shows one compact source menu only to managers of active agents", async () => {
     await renderSection({
       canManage: true,
       templateIds: [TEMPLATE_A_ID],
       adoptedTemplates: [summary({ id: TEMPLATE_A_ID })],
     });
-    expect(exactButton("Manage")).toBeTruthy();
-    expect(document.body.querySelector('button[aria-label="Manage PR Engineer responsibility"]')).toBeTruthy();
+    expect(document.body.querySelector('button[aria-label="Manage template sources"]')).toBeTruthy();
 
     act(() => root?.unmount());
     root = null;
@@ -214,7 +215,7 @@ describe("ResponsibilitiesSection", () => {
       templateIds: [TEMPLATE_A_ID],
       adoptedTemplates: [summary({ id: TEMPLATE_A_ID })],
     });
-    expect(exactButton("Manage")).toBeNull();
+    expect(document.body.querySelector('button[aria-label="Manage template sources"]')).toBeNull();
 
     act(() => root?.unmount());
     root = null;
@@ -225,24 +226,21 @@ describe("ResponsibilitiesSection", () => {
       templateIds: [TEMPLATE_A_ID],
       adoptedTemplates: [summary({ id: TEMPLATE_A_ID })],
     });
-    expect(exactButton("Manage")).toBeNull();
+    expect(document.body.querySelector('button[aria-label="Manage template sources"]')).toBeNull();
   });
 
-  it("gives every missing responsibility a distinct accessible management name", async () => {
+  it("gives every missing source a distinct accessible removal name", async () => {
     await renderSection({
       templateIds: [TEMPLATE_A_ID, TEMPLATE_B_ID],
       adoptedTemplates: [],
     });
 
-    expect(
-      document.body.querySelector(`button[aria-label="Manage Unavailable template ${TEMPLATE_A_ID} responsibility"]`),
-    ).toBeTruthy();
-    expect(
-      document.body.querySelector(`button[aria-label="Manage Unavailable template ${TEMPLATE_B_ID} responsibility"]`),
-    ).toBeTruthy();
+    await click(document.body.querySelector('button[aria-label="Manage template sources"]'));
+    expect(exactButton(`Remove unavailable template ${TEMPLATE_A_ID}`)).toBeTruthy();
+    expect(exactButton(`Remove unavailable template ${TEMPLATE_B_ID}`)).toBeTruthy();
   });
 
-  it("removes only the selected responsibility without loading the catalog", async () => {
+  it("removes only the selected source without loading the catalog", async () => {
     templateMocks.updateAgentTemplates.mockResolvedValue(
       resources({
         version: 8,
@@ -258,16 +256,14 @@ describe("ResponsibilitiesSection", () => {
       ],
     });
 
-    expect(document.body.querySelector('button[aria-label="Manage Docs Writer responsibility"]')).toBeTruthy();
-    expect(document.body.querySelector('button[aria-label="Manage PR Engineer responsibility"]')).toBeTruthy();
-
-    await click(exactButton("Manage"));
-    expect(document.body.textContent).toContain("Remove responsibility?");
+    await click(document.body.querySelector('button[aria-label="Manage template sources"]'));
+    await click(exactButton("Remove Docs Writer template"));
+    expect(document.body.textContent).toContain("Remove template source?");
     expect(document.body.textContent).toContain(
-      "Only this agent’s bindings created by Docs Writer will be removed. Team Resources will remain available.",
+      "Only this agent’s bindings imported from Docs Writer template will be removed. Team Resources will remain available.",
     );
     expect(templateMocks.listAgentTemplates).not.toHaveBeenCalled();
-    await click(exactButton("Remove responsibility"));
+    await click(exactButton("Remove source"));
 
     await waitForCondition(
       () => templateMocks.updateAgentTemplates.mock.calls.length === 1,
@@ -280,7 +276,7 @@ describe("ResponsibilitiesSection", () => {
     expect(analyticsMocks.trackEvent).toHaveBeenCalledWith("agent_template_replace_set", { result: "success" });
   });
 
-  it("disappears after the last responsibility is removed", async () => {
+  it("disappears after the last template source is removed", async () => {
     resourceMocks.getAgentResources.mockResolvedValue(
       resources({ templateIds: [TEMPLATE_A_ID], adoptedTemplates: [summary({ id: TEMPLATE_A_ID })] }),
     );
@@ -290,7 +286,7 @@ describe("ResponsibilitiesSection", () => {
       const current = useAgentResources("agent-1", { enabled: true });
       if (!current.data) return null;
       return (
-        <ResponsibilitiesSection
+        <TemplateProvenance
           agentUuid="agent-1"
           agentStatus="active"
           canManage
@@ -302,10 +298,11 @@ describe("ResponsibilitiesSection", () => {
     }
 
     const container = await render(<Harness />);
-    await waitForCondition(() => container.textContent?.includes("PR Engineer") ?? false, "Expected responsibility");
-    await click(exactButton("Manage"));
-    await click(exactButton("Remove responsibility"));
-    await waitForCondition(() => container.textContent === "", "Expected section to disappear");
+    await waitForCondition(() => container.textContent?.includes("PR Engineer") ?? false, "Expected template source");
+    await click(document.body.querySelector('button[aria-label="Manage template sources"]'));
+    await click(exactButton("Remove PR Engineer template"));
+    await click(exactButton("Remove source"));
+    await waitForCondition(() => container.textContent === "", "Expected source line to disappear");
   });
 
   it("refreshes and asks for a retry on a version conflict", async () => {
@@ -321,8 +318,9 @@ describe("ResponsibilitiesSection", () => {
       templateIds: [TEMPLATE_A_ID],
       adoptedTemplates: [summary({ id: TEMPLATE_A_ID })],
     });
-    await click(exactButton("Manage"));
-    await click(exactButton("Remove responsibility"));
+    await click(document.body.querySelector('button[aria-label="Manage template sources"]'));
+    await click(exactButton("Remove PR Engineer template"));
+    await click(exactButton("Remove source"));
     await waitForCondition(
       () => document.body.textContent?.includes("refreshed — review and remove again") ?? false,
       "Expected version conflict guidance",
