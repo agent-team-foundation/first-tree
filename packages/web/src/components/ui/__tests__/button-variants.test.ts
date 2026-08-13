@@ -27,6 +27,16 @@ describe("cn — custom typography scale does not eat text colors", () => {
     expect(out).toContain("text-label");
     expect(out).not.toContain("text-body");
   });
+
+  it.each([
+    "instruction-preview",
+    "instruction-reading",
+    "instruction-provenance",
+  ])("keeps inherited color with the %s font-size tier", (tier) => {
+    const out = cn("prose text-[color:inherit]", `text-${tier}`);
+    expect(out).toContain("text-[color:inherit]");
+    expect(out).toContain(`text-${tier}`);
+  });
 });
 
 describe("buttonVariants — filled variants keep their text color at every size", () => {

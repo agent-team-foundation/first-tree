@@ -814,6 +814,7 @@ describe("PromptTab extra DOM states", () => {
     const dialog = document.body.querySelector('[role="dialog"]');
     const dialogProse = dialog?.querySelector<HTMLElement>("[data-instruction-result-prose] .prose");
     expect(dialogProse?.className).toContain("text-instruction-reading");
+    expect(dialogProse?.className).toContain("text-[color:inherit]");
     expect(dialog?.textContent).toContain("Team guide · Team instruction");
     expect(dialog?.textContent).toContain("Custom instructions · Editable for this agent");
     expect(dialog?.textContent?.indexOf("Team section.")).toBeLessThan(
