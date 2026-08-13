@@ -867,21 +867,29 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
-    expect(container.textContent).toContain("All instructions");
+    expect(container.textContent).toContain("What this agent follows");
+    expect(container.textContent).toContain("2 instructions applied");
+    expect(container.textContent).toContain("Applied instructions");
     await waitForText(container, "Team style guide");
     expect(container.textContent).toContain("Team style guide");
-    expect(container.textContent).toContain("Custom for this agent");
-    // The merged block renders each contributed instruction as its own labelled
-    // segment (not one blob): the team segment + the agent's own "Custom" segment.
-    const effBlock = container.querySelector('[aria-label="All instructions"]');
-    expect(effBlock).toBeTruthy();
-    const segLabels = [...(effBlock?.querySelectorAll(".text-eyebrow") ?? [])].map((n) => n.textContent?.trim());
-    // Each segment label is "<name> · <source>", aligned with the source rows.
-    expect(segLabels.some((l) => l?.includes("Team style guide") && l?.includes("Team default"))).toBe(true);
-    expect(segLabels.some((l) => l?.includes("Custom instructions") && l?.includes("Custom for this agent"))).toBe(
+    expect(container.textContent).toContain("Team instruction · Managed by your team");
+    expect(container.textContent).toContain("For this agent · Editable here");
+    const preview = container.querySelector("[data-instruction-result-preview]");
+    expect(preview?.textContent).toContain("Use the team house style. Always explain tradeoffs.");
+
+    const readFull = exactButtonByText(container, "Read full");
+    readFull?.focus();
+    await click(readFull);
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).toBeTruthy();
+    const segLabels = [...(dialog?.querySelectorAll(".text-eyebrow") ?? [])].map((n) => n.textContent?.trim());
+    expect(segLabels.some((l) => l?.includes("Team style guide") && l?.includes("Team instruction"))).toBe(true);
+    expect(segLabels.some((l) => l?.includes("Custom instructions") && l?.includes("Editable for this agent"))).toBe(
       true,
     );
-    expect(effBlock?.textContent).toContain("Use the team house style.");
+    expect(dialog?.textContent).toContain("Use the team house style.");
+    await click(dialog?.querySelector("button span.sr-only")?.parentElement ?? null);
+    await waitForCondition(() => document.activeElement === readFull, "Expected dialog focus to return to Read full");
 
     // The custom prompt's edit action now lives in the row's ⋯ overflow menu.
     await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
@@ -963,7 +971,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Team style guide");
-    await waitForText(container, "Custom for this agent");
+    await waitForText(container, "For this agent · Editable here");
     expect(container.textContent).toContain("No instructions yet.");
 
     await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
@@ -1193,8 +1201,9 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "No instructions yet.");
-    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await waitForText(container, "No additional instructions are active.");
+    await waitForText(container, "No instructions are applied.");
+    await click(container.querySelector('button[aria-label="Add instruction"]'));
     await click(buttonByText(document.body, "Add custom instructions"));
     await waitForText(container, "Save instructions");
     await click(exactButtonByText(container, "Save instructions"));
@@ -1205,7 +1214,7 @@ describe("AgentDetailPage", () => {
       "Expected prompt body validation error to clear",
     );
 
-    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await click(container.querySelector('button[aria-label="Add instruction"]'));
     await click(buttonByText(document.body, "Add custom instructions"));
     await waitForText(container, "Save instructions");
     expect(container.textContent).not.toContain("Instructions are required.");

@@ -68,7 +68,11 @@ export function ResourceRowView(props: {
   /** Leading type glyph (repo / skill / MCP / instruction) so the four resource
    *  kinds are distinguishable at a glance. A small line icon, tinted --fg-4. */
   leadingIcon?: ReactNode;
+  /** Prompt-only presentation used by Instructions. The default keeps every
+   *  other Agent Detail resource row byte-for-byte on its existing layout. */
+  presentation?: "default" | "instruction";
 }): ReactNode {
+  const instructionPresentation = props.presentation === "instruction";
   const expanded = !!props.expand?.expanded;
   const canExpand = !props.editor && !!props.expand?.canExpand;
   const showSunken = props.editor ? true : expanded && !!props.expand?.body;
@@ -91,7 +95,13 @@ export function ResourceRowView(props: {
       {/* Title + action cluster. On mobile they stack (title, then the controls
           wrap below) so a long control group never overflows a phone width; on
           sm+ they sit on one row with the controls right-aligned. */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+      <div
+        className={cn(
+          instructionPresentation
+            ? "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
+            : "flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3",
+        )}
+      >
         <div className="min-w-0 flex-1">
           {canExpand ? (
             <button
@@ -114,6 +124,7 @@ export function ResourceRowView(props: {
                 dimmed={props.dimmed}
                 expandable
                 expanded={expanded}
+                instructionPresentation={instructionPresentation}
               />
             </button>
           ) : (
@@ -123,20 +134,28 @@ export function ResourceRowView(props: {
               status={props.status}
               leadingIcon={props.leadingIcon}
               dimmed={props.dimmed}
+              instructionPresentation={instructionPresentation}
             />
           )}
         </div>
         {showCluster ? (
-          <div className="flex flex-wrap items-center gap-1 shrink-0">
+          <div className={cn("flex shrink-0 items-center", instructionPresentation ? "gap-2" : "flex-wrap gap-1")}>
             {props.toggle ? (
               <Switch
                 checked={props.toggle.checked}
                 onCheckedChange={props.toggle.onChange}
                 disabled={props.toggle.disabled}
                 aria-label={props.toggle.ariaLabel}
+                touchTarget={instructionPresentation}
               />
             ) : null}
-            {props.menu ? <RowActionsMenu actions={props.menu.actions} ariaLabel={props.menu.ariaLabel} /> : null}
+            {props.menu ? (
+              <RowActionsMenu
+                actions={props.menu.actions}
+                ariaLabel={props.menu.ariaLabel}
+                triggerClassName={instructionPresentation ? "min-h-11 min-w-11" : undefined}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -145,10 +164,10 @@ export function ResourceRowView(props: {
           className="text-body"
           style={{
             marginTop: "var(--sp-2)",
-            background: "var(--bg-sunken)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-panel)",
-            padding: "var(--sp-3)",
+            background: instructionPresentation && !props.editor ? "transparent" : "var(--bg-sunken)",
+            border: instructionPresentation && !props.editor ? "none" : "var(--hairline) solid var(--border-faint)",
+            borderRadius: instructionPresentation && !props.editor ? undefined : "var(--radius-panel)",
+            padding: instructionPresentation && !props.editor ? "0 0 0 var(--sp-6)" : "var(--sp-3)",
           }}
         >
           {props.editor ? props.editor : props.expand?.body}
@@ -156,19 +175,27 @@ export function ResourceRowView(props: {
       ) : props.peek ? (
         <p
           className={cn("m-0 text-caption", props.monoPeek && "mono")}
+          data-line-clamp={instructionPresentation ? "3" : undefined}
           style={{
             color: "var(--fg-3)",
             marginTop: "var(--sp-0_5)",
             display: "-webkit-box",
             WebkitBoxOrient: "vertical",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: instructionPresentation ? 3 : 2,
             overflow: "hidden",
+            paddingLeft: instructionPresentation ? "var(--sp-6)" : undefined,
           }}
         >
           {props.peek}
         </p>
       ) : props.emptyPeek ? (
-        <p className="m-0 text-caption text-muted-foreground" style={{ marginTop: "var(--sp-0_5)" }}>
+        <p
+          className="m-0 text-caption text-muted-foreground"
+          style={{
+            marginTop: "var(--sp-0_5)",
+            paddingLeft: instructionPresentation ? "var(--sp-6)" : undefined,
+          }}
+        >
           {props.emptyPeek}
         </p>
       ) : null}
@@ -184,6 +211,7 @@ function RowHeading({
   dimmed,
   expandable,
   expanded,
+  instructionPresentation,
 }: {
   name: ReactNode | null;
   source: ReactNode;
@@ -193,7 +221,45 @@ function RowHeading({
   /** When the heading itself is the expand trigger, show a subtle affordance. */
   expandable?: boolean;
   expanded?: boolean;
+  instructionPresentation?: boolean;
 }) {
+  if (instructionPresentation) {
+    return (
+      <span className="flex min-w-0 items-start gap-2">
+        {leadingIcon ? (
+          <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-3)" }} aria-hidden>
+            {leadingIcon}
+          </span>
+        ) : null}
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            {name ? (
+              <span
+                className="min-w-0 truncate text-body font-medium"
+                style={{ color: dimmed ? "var(--fg-4)" : "var(--fg)" }}
+              >
+                {name}
+              </span>
+            ) : null}
+            {status ? (
+              <DenseBadge tone={status.tone} className="shrink-0">
+                {status.label}
+              </DenseBadge>
+            ) : null}
+            {expandable ? (
+              <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-4)" }} aria-hidden>
+                {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </span>
+            ) : null}
+          </span>
+          <span className="block text-caption font-normal" style={{ color: "var(--fg-4)", marginTop: "var(--sp-0_5)" }}>
+            {source}
+          </span>
+        </span>
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-2">
       {leadingIcon ? (

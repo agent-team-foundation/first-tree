@@ -454,7 +454,7 @@ describe("PromptTab extra DOM states", () => {
     await waitForText(container, "resources offline");
 
     expect(container.textContent).toContain("Fallback instructions from config.");
-    expect(container.querySelector('button[aria-label="Add instructions"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Add instruction"]')).toBeNull();
   });
 
   it("enables optional team prompts and routes the settings escape through navigateAway", async () => {
@@ -483,13 +483,14 @@ describe("PromptTab extra DOM states", () => {
     );
 
     const container = await renderWithProviders(<PromptTab />);
-    await waitForText(container, "No instructions yet.");
+    await waitForText(container, "No additional instructions are active.");
+    await waitForText(container, "No instructions are applied.");
 
-    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await click(container.querySelector('button[aria-label="Add instruction"]'));
     await click(buttonByText(document.body, "Manage in Settings"));
     expect(navigateAway).toHaveBeenCalledWith("/settings/resources");
 
-    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    await click(container.querySelector('button[aria-label="Add instruction"]'));
     await waitForText(document.body, "Optional safety prompt");
     await click(buttonByText(document.body, "Optional safety prompt"));
     await waitForCondition(
@@ -655,6 +656,15 @@ describe("PromptTab extra DOM states", () => {
               promptBody: "Original body is hidden until expanded.",
               order: 2,
             }),
+            promptRow({
+              id: "resource:unavailable-prompt",
+              resourceId: "unavailable-prompt",
+              name: "Unavailable prompt",
+              mode: "unavailable",
+              promptBody: "Unavailable content must not be merged.",
+              unavailableReason: "Prompt budget exceeded.",
+              order: 3,
+            }),
           ],
           skills: [],
           mcp: [],
@@ -685,12 +695,24 @@ describe("PromptTab extra DOM states", () => {
 
     const container = await renderWithProviders(<PromptTab />);
     await waitForText(container, "Active prompt");
-    expect(container.textContent).not.toContain("Active body is hidden until expanded.");
+    expect(container.textContent).toContain("1 instruction applied");
+    expect(container.textContent).toContain("Not applied · 3");
+    expect(container.textContent).toContain("Replaced");
+    expect(container.textContent).toContain("Can't load");
+    expect(container.textContent).toContain("Prompt budget exceeded.");
+    const preview = container.querySelector("[data-instruction-result-preview]");
+    expect(preview?.textContent).not.toContain("Original body is hidden until expanded.");
+    expect(preview?.textContent).not.toContain("Unavailable content must not be merged.");
+    expect((container.textContent?.match(/Active body is hidden until expanded\./g) ?? []).length).toBe(1);
 
     await click(container.querySelector('button[aria-label="Expand Active prompt"]'));
-    expect(container.textContent).toContain("Active body is hidden until expanded.");
+    expect(container.querySelector('button[aria-label="Collapse Active prompt"]')).toBeTruthy();
+    const activeRow = container
+      .querySelector('button[aria-label="Collapse Active prompt"]')
+      ?.closest("[data-resource-row]");
+    expect(activeRow?.querySelector<HTMLElement>(".max-w-2xl")?.parentElement?.style.background).toBe("transparent");
     await click(container.querySelector('button[aria-label="Collapse Active prompt"]'));
-    expect(container.textContent).not.toContain("Active body is hidden until expanded.");
+    expect((container.textContent?.match(/Active body is hidden until expanded\./g) ?? []).length).toBe(1);
 
     await click(container.querySelector('button[aria-label="Expand Overridden prompt"]'));
     expect(container.textContent).toContain("Original body is hidden until expanded.");
@@ -716,73 +738,71 @@ describe("PromptTab extra DOM states", () => {
     });
   });
 
-  it("toggles the clamped effective instructions block", async () => {
+  it("opens the ordered read-only result in a dialog and restores trigger focus", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
-    const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
-    const clientDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
-    Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 600 });
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 80 });
-    try {
-      contextMock.value = createContext({
-        config: config({
-          payload: {
-            kind: "claude-code",
-            prompt: {
-              append: "Team section.\n\nCustom section.",
-              sections: [
-                { scope: "team", name: "Team guide", body: "Team section." },
-                { scope: "agent", name: "", body: "Custom section." },
-              ],
-            },
-            model: "sonnet",
-            reasoningEffort: "medium",
-            mcpServers: [],
-            env: [],
-            gitRepos: [],
-            resourceSkills: [],
-          },
-        }),
-      });
-      agentResourceMocks.getAgentResources.mockResolvedValue(
-        agentResources({
-          effective: {
-            version: 9,
-            repos: [],
-            prompts: [
-              promptRow({ id: "team-guide", name: "Team guide", promptBody: "Team section.", order: 1 }),
-              promptRow({
-                id: "binding:inline-1:enabled",
-                bindingId: "inline-1",
-                source: "inline_prompt",
-                scope: "agent",
-                resourceId: null,
-                name: "Custom instructions",
-                promptBody: "Custom section.",
-                order: 2,
-              }),
+    contextMock.value = createContext({
+      config: config({
+        payload: {
+          kind: "claude-code",
+          prompt: {
+            append: "Legacy merged fallback must not replace sections.",
+            sections: [
+              { scope: "team", name: "Team guide", body: "Team section." },
+              { scope: "agent", name: "", body: "Custom section.", editable: true },
             ],
-            skills: [],
-            mcp: [],
-            unavailable: [],
           },
-        }),
-      );
+          model: "sonnet",
+          reasoningEffort: "medium",
+          mcpServers: [],
+          env: [],
+          gitRepos: [],
+          resourceSkills: [],
+        },
+      }),
+    });
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: {
+          version: 9,
+          repos: [],
+          prompts: [
+            promptRow({ id: "team-guide", name: "Team guide", promptBody: "Team section.", order: 1 }),
+            promptRow({
+              id: "binding:inline-1:enabled",
+              bindingId: "inline-1",
+              source: "inline_prompt",
+              scope: "agent",
+              resourceId: null,
+              name: "Custom instructions",
+              promptBody: "Custom section.",
+              order: 2,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+      }),
+    );
 
-      const container = await renderWithProviders(<PromptTab />);
-      await waitForText(container, "All instructions");
-      await waitForText(container, "Show all");
-      const toggle = buttonByText(container, "Show all");
-      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-      await click(toggle);
-      expect(buttonByText(container, "Collapse")?.getAttribute("aria-expanded")).toBe("true");
-      await click(buttonByText(container, "Collapse"));
-      expect(buttonByText(container, "Show all")?.getAttribute("aria-expanded")).toBe("false");
-    } finally {
-      if (scrollDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollDescriptor);
-      else Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
-      if (clientDescriptor) Object.defineProperty(HTMLElement.prototype, "clientHeight", clientDescriptor);
-      else Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
-    }
+    const container = await renderWithProviders(<PromptTab />);
+    await waitForText(container, "Read-only preview");
+    const preview = container.querySelector<HTMLElement>("[data-instruction-result-preview] p:last-child");
+    expect(preview?.textContent).toBe("Team section. Custom section.");
+    expect(preview?.dataset.lineClamp).toBe("4");
+
+    const trigger = buttonByText(container, "Read full");
+    trigger?.focus();
+    await click(trigger);
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Team guide · Team instruction");
+    expect(dialog?.textContent).toContain("Custom instructions · Editable for this agent");
+    expect(dialog?.textContent?.indexOf("Team section.")).toBeLessThan(
+      dialog?.textContent?.indexOf("Custom section.") ?? 0,
+    );
+    expect(dialog?.textContent).not.toContain("Legacy merged fallback must not replace sections.");
+    await click(dialog?.querySelector("button") ?? null);
+    await waitForCondition(() => document.activeElement === trigger, "Expected focus to return to Read full");
   });
 });
 

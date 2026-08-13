@@ -10,15 +10,23 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "rea
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
 import type { RowAction as RowMenuAction } from "../../components/ui/row-actions-menu.js";
 import { Section } from "../../components/ui/section.js";
 import { Textarea } from "../../components/ui/textarea.js";
-import { agentResourcesMutationHandlers, resourceTypeIcon, statusMarker } from "./capability-section.js";
+import { agentResourcesMutationHandlers, resourceTypeIcon } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ResourceRowView, type RowMenu, type RowStatusMarker, type RowToggle } from "./resource-row.js";
-import { sourceLabel, templateSourceLabel } from "./resource-source.js";
+import { templateSourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 type AvailablePrompt = { id: string; name: string };
@@ -78,7 +86,9 @@ export function PromptTab() {
   const canEditPrompt = ctx.canManageAgent && ctx.agent.status === "active";
   const resourceError = resourcesQuery.error instanceof Error ? resourcesQuery.error.message : null;
   const resources = resourcesQuery.data;
-  const showEffectiveInstructions = resources ? shouldShowEffectiveInstructions(resources, prompt) : false;
+  const appliedCount = resources
+    ? appliedPromptRows(resources).length
+    : (promptSections?.filter((section) => section.body.trim()).length ?? (prompt.trim() ? 1 : 0));
   const editorError = savePromptMut.error instanceof Error ? savePromptMut.error.message : null;
   const bindingError = bindingMut.error instanceof Error ? bindingMut.error.message : null;
   const bindings = resources?.bindings ?? [];
@@ -134,9 +144,12 @@ export function PromptTab() {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+      <EffectiveInstructionsBlock prompt={prompt} sections={promptSections} appliedCount={appliedCount} />
       <Section
         headingLevel={3}
-        title={titleWithSemantics("Instructions", justSaved)}
+        title={titleWithSemantics("Applied instructions", justSaved)}
+        count={appliedCount}
+        className="[&>div:first-child]:flex-row [&>div:first-child]:items-center"
         action={
           canEditPrompt && !resourceError && !editor && resources ? (
             <AddInstructionsMenu
@@ -149,7 +162,6 @@ export function PromptTab() {
           ) : null
         }
       >
-        {showEffectiveInstructions ? <EffectiveInstructionsBlock prompt={prompt} sections={promptSections} /> : null}
         <div>
           {resources ? (
             <PromptResourceBlocks
@@ -168,7 +180,7 @@ export function PromptTab() {
               onEditBinding={editBinding}
             />
           ) : (
-            <PromptFallbackPanel prompt={prompt} />
+            <PromptFallbackPanel loading={resourcesQuery.isPending} />
           )}
         </div>
         {resourceError ? (
@@ -186,90 +198,109 @@ export function PromptTab() {
   );
 }
 
-// Result-first: the merged runtime instructions (`ctx.config.payload.prompt.append`,
-// after every team prompt + override) are surfaced at the TOP of the tab as the
-// thing the agent actually runs with — replacing the old on-demand 👁 modal. Long
-// bodies clamp to ~8 lines with a Show all toggle; the source list below is for
-// management (toggle / customize / add).
-function EffectiveInstructionsBlock({ prompt, sections }: { prompt: string; sections?: PromptSection[] }) {
-  const [showAll, setShowAll] = useState(false);
-  const [clamped, setClamped] = useState(false);
-  const bodyRef = useRef<HTMLElement | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the merged text changes.
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (el) setClamped(el.scrollHeight > el.clientHeight + 2);
-  }, [prompt]);
-
-  // Prefer the structured per-source sections (resolved server-side from the
-  // same effective stack as `append`, in the same order) so each contributed
-  // instruction reads as its own segment split by a dashed rule. Fall back to
-  // the merged `append` string for older payloads that carry no sections.
+// Result-first: the resolved prompt is always visible before its management
+// rows. The compact preview answers "what does this agent follow?" without
+// turning the tab into a long document; the full ordered result remains a
+// read-only Dialog.
+function EffectiveInstructionsBlock({
+  prompt,
+  sections,
+  appliedCount,
+}: {
+  prompt: string;
+  sections?: PromptSection[];
+  appliedCount: number;
+}) {
   const segments = sections?.filter((s) => s.body.trim()) ?? [];
+  const effectiveBody = segments.length > 0 ? segments.map((segment) => segment.body).join("\n\n") : prompt;
+  const hasInstructions = effectiveBody.trim().length > 0;
+  const countLabel = `${appliedCount} ${appliedCount === 1 ? "instruction" : "instructions"} applied`;
 
   return (
-    <div style={{ marginBottom: "var(--sp-4)" }}>
-      {prompt.trim() ? (
-        <>
-          <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1_5)" }}>
-            All instructions
-          </p>
-          <section
-            ref={bodyRef}
-            aria-label="All instructions"
-            className="text-body"
+    <Dialog>
+      <Section
+        headingLevel={3}
+        title="What this agent follows"
+        count={countLabel}
+        className="[&>div:first-child]:flex-row [&>div:first-child]:items-center"
+        action={
+          hasInstructions ? (
+            <DialogTrigger asChild>
+              <Button type="button" size="xs" variant="ghost">
+                Read full
+              </Button>
+            </DialogTrigger>
+          ) : null
+        }
+      >
+        {hasInstructions ? (
+          <div
+            data-instruction-result-preview
             style={{
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border-faint)",
-              borderRadius: "var(--radius-panel)",
-              padding: "var(--sp-3)",
-              maxHeight: showAll ? undefined : "var(--sp-35)",
-              overflow: showAll ? undefined : "hidden",
+              borderLeft: "var(--hairline-bold) solid var(--border)",
+              margin: "var(--sp-3) 0",
+              paddingLeft: "var(--sp-3)",
             }}
           >
+            <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1)" }}>
+              Read-only preview
+            </p>
+            <p
+              className="m-0 text-body"
+              data-line-clamp="4"
+              style={{
+                color: "var(--fg-2)",
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 4,
+                overflow: "hidden",
+              }}
+            >
+              {promptExcerpt(effectiveBody)}
+            </p>
+          </div>
+        ) : (
+          <p className="m-0 text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
+            No additional instructions are active.
+          </p>
+        )}
+      </Section>
+      {hasInstructions ? (
+        <DialogContent className="max-h-[calc(100vh-var(--sp-8))] w-[calc(100%-var(--sp-4))] max-w-2xl grid-rows-[auto_minmax(0,1fr)]">
+          <DialogHeader>
+            <DialogTitle>What this agent follows</DialogTitle>
+            <DialogDescription className="sr-only">
+              Read-only instructions applied to this agent, shown in their effective order.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto" style={{ paddingRight: "var(--sp-2)" }}>
             {segments.length > 0 ? (
-              segments.map((section, i) => (
-                <div
+              segments.map((section, index) => (
+                <section
                   key={`${section.scope}:${section.name}:${section.body.length}`}
                   style={
-                    i > 0
+                    index > 0
                       ? {
-                          marginTop: "var(--sp-3)",
-                          paddingTop: "var(--sp-3)",
-                          borderTop: "var(--hairline) dashed var(--border)",
+                          marginTop: "var(--sp-4)",
+                          paddingTop: "var(--sp-4)",
+                          borderTop: "var(--hairline) solid var(--border-faint)",
                         }
                       : undefined
                   }
                 >
-                  <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1)" }}>
+                  <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-2)" }}>
                     {segmentLabel(section)}
                   </p>
                   <Markdown className={PROSE_COMPACT_HEADINGS}>{section.body}</Markdown>
-                </div>
+                </section>
               ))
             ) : (
               <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
             )}
-          </section>
-          {clamped || showAll ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              aria-expanded={showAll}
-              onClick={() => setShowAll((v) => !v)}
-              style={{ marginTop: "var(--sp-1)" }}
-            >
-              {showAll ? "Collapse" : "Show all"}
-            </Button>
-          ) : null}
-        </>
-      ) : (
-        <p className="text-body" style={{ color: "var(--fg-4)", margin: 0 }}>
-          No extra instructions — this agent runs on its base profile only.
-        </p>
-      )}
-    </div>
+          </div>
+        </DialogContent>
+      ) : null}
+    </Dialog>
   );
 }
 
@@ -280,7 +311,12 @@ function EffectiveInstructionsBlock({ prompt, sections }: { prompt: string; sect
 // exactly like its row does.
 function segmentLabel(section: PromptSection): string {
   const name = section.name.trim() || "Custom instructions";
-  const source = section.scope === "team" ? "Team default" : "Custom for this agent";
+  const source =
+    section.scope === "team"
+      ? "Team instruction"
+      : section.editable
+        ? "Editable for this agent"
+        : "Customized for this agent";
   return `${name} · ${source}`;
 }
 
@@ -385,13 +421,6 @@ function nextOrder(bindings: readonly AgentResourceBindingInput[]): number {
   return bindings.reduce((max, binding) => Math.max(max, binding.order ?? 0), 0) + 1;
 }
 
-function shouldShowEffectiveInstructions(data: AgentResourcesOutput, prompt: string): boolean {
-  if (!prompt.trim()) return false;
-  const activeRows = enabledPromptRows(data);
-  if (activeRows.length > 1) return true;
-  return data.effective.prompts.some((row) => row.mode === "replaced" || !!row.replacesResourceId);
-}
-
 function PromptResourceBlocks(props: {
   data: AgentResourcesOutput;
   editor: PromptEditorState | null;
@@ -407,10 +436,10 @@ function PromptResourceBlocks(props: {
   onRemoveBinding: (bindingId: string) => void;
   onEditBinding: (bindingId: string) => void;
 }) {
-  // Every instruction block collapses to a short summary by default and expands
-  // to its full body on demand — same affordance whether the block is enabled or
-  // inactive (disabled / overridden). This keeps the list scannable while the
-  // bottom "Effective instructions" panel stays the single full merged preview.
+  // Each row exposes a short readable summary by default and expands in place.
+  // Only rows that contribute to the effective prompt live in Applied;
+  // disabled, replaced, unavailable, and empty orphan bindings stay explainable
+  // under Not applied without inflating the count above.
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -420,11 +449,11 @@ function PromptResourceBlocks(props: {
       return next;
     });
   };
-  const rows = enabledPromptRows(props.data);
+  const rows = appliedPromptRows(props.data);
   const templateNameById = new Map(props.data.adoptedTemplates.map((summary) => [summary.id, summary.name]));
   // Disabled / overridden prompts are hidden from the active list, but the user
   // must still be able to re-enable or revert them — render them below.
-  const inactiveRows = props.data.effective.prompts.filter((row) => row.mode === "disabled" || row.mode === "replaced");
+  const inactiveRows = props.data.effective.prompts.filter((row) => row.mode !== "enabled");
   // Inline prompt bindings the backend produced no effective row for (e.g. an
   // empty body it drops): keep them visible so they can be edited or removed —
   // an unremovable empty include binding otherwise makes every save fail.
@@ -454,7 +483,7 @@ function PromptResourceBlocks(props: {
     />
   ) : null;
 
-  const blocks: ReactNode[] = rows.map((row) => {
+  const appliedBlocks: ReactNode[] = rows.map((row) => {
     const isEditingRow = !!props.editor && editorIsInline && props.editor.rowId === row.id;
     const controls = props.editor || !props.canEdit ? {} : promptRowControls(row, props);
     return (
@@ -462,11 +491,13 @@ function PromptResourceBlocks(props: {
         key={row.id}
         name={promptBlockName(row)}
         source={row.source}
+        customizedFromTeam={!!row.replacesResourceId}
         templateName={row.originTemplateId ? (templateNameById.get(row.originTemplateId) ?? null) : undefined}
-        marker={statusMarker(row.mode)}
+        marker={promptStatusMarker(row.mode)}
         toggle={controls.toggle}
         menu={controls.menu}
         body={row.promptBody ?? ""}
+        unavailableReason={row.unavailableReason}
         expanded={expandedIds.has(row.id)}
         onToggle={() => toggleExpand(row.id)}
         editor={isEditingRow ? editorNode : null}
@@ -475,7 +506,7 @@ function PromptResourceBlocks(props: {
   });
 
   if (editorNeedsAgentBlock) {
-    blocks.push(
+    appliedBlocks.push(
       <PromptResourceBlock
         key="agent-custom-editor"
         name={null}
@@ -488,6 +519,7 @@ function PromptResourceBlocks(props: {
     );
   }
 
+  const inactiveBlocks: ReactNode[] = [];
   for (const row of inactiveRows) {
     // Disabled team prompt → Switch off (toggling on removes the disable binding).
     // Overridden prompt with no live replacement row (e.g. an empty inline
@@ -500,7 +532,11 @@ function PromptResourceBlocks(props: {
     const name = promptBlockName(row) ?? "instructions";
     let toggle: RowToggle | undefined;
     let menu: RowMenu | undefined;
-    if (manageable && row.bindingId) {
+    if (row.mode === "unavailable" && props.canEdit && !props.editor) {
+      const controls = promptRowControls(row, props);
+      toggle = controls.toggle;
+      menu = controls.menu;
+    } else if (manageable && row.bindingId) {
       if (row.mode === "disabled") {
         toggle = {
           checked: false,
@@ -523,17 +559,19 @@ function PromptResourceBlocks(props: {
         };
       }
     }
-    blocks.push(
+    inactiveBlocks.push(
       <PromptResourceBlock
         key={row.id}
         name={promptBlockName(row)}
         source={row.source}
+        customizedFromTeam={!!row.replacesResourceId}
         templateName={row.originTemplateId ? (templateNameById.get(row.originTemplateId) ?? null) : undefined}
-        marker={statusMarker(row.mode)}
+        marker={promptStatusMarker(row.mode)}
         toggle={toggle}
         menu={menu}
-        dimmed={row.mode === "disabled"}
+        dimmed
         body={row.promptBody ?? ""}
+        unavailableReason={row.unavailableReason}
         expanded={expandedIds.has(row.id)}
         onToggle={() => toggleExpand(row.id)}
       />,
@@ -561,7 +599,7 @@ function PromptResourceBlocks(props: {
               },
             ],
           };
-    blocks.push(
+    inactiveBlocks.push(
       <PromptResourceBlock
         key={orphanId}
         name={null}
@@ -575,12 +613,35 @@ function PromptResourceBlocks(props: {
     );
   }
 
-  return blocks.length > 0 ? (
-    <div className="ad-tail-trim">{blocks}</div>
-  ) : (
-    <p className="text-body text-muted-foreground" style={{ margin: 0, padding: "var(--sp-3) 0" }}>
-      No instructions yet.
-    </p>
+  return (
+    <>
+      <div className="ad-tail-trim">
+        {appliedBlocks.length > 0 ? (
+          appliedBlocks
+        ) : (
+          <p className="m-0 text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
+            No instructions are applied. Add custom instructions or enable one from your team.
+          </p>
+        )}
+      </div>
+      {inactiveBlocks.length > 0 ? (
+        <section style={{ marginTop: "var(--sp-5)" }}>
+          <h4 className="m-0 text-subtitle font-semibold" style={{ color: "var(--fg-3)" }}>
+            Not applied
+            <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+              {" · "}
+              {inactiveBlocks.length}
+            </span>
+          </h4>
+          <div
+            className="ad-tail-trim"
+            style={{ borderTop: "var(--hairline) solid var(--border)", marginTop: "var(--sp-3)" }}
+          >
+            {inactiveBlocks}
+          </div>
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -646,43 +707,23 @@ function promptRowControls(
   return {};
 }
 
-function PromptFallbackPanel(props: { prompt: string }) {
+function PromptFallbackPanel(props: { loading: boolean }) {
   return (
-    <PromptPanel minHeight={props.prompt ? "10rem" : undefined} sunken={!props.prompt}>
-      {props.prompt ? (
-        <Markdown>{props.prompt}</Markdown>
-      ) : (
-        <span className="text-muted-foreground">No instructions yet.</span>
-      )}
-    </PromptPanel>
-  );
-}
-
-function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: boolean }) {
-  return (
-    <div
-      className="text-body"
-      style={{
-        minHeight: props.minHeight,
-        border: "var(--hairline) solid var(--border-faint)",
-        borderRadius: "var(--radius-panel)",
-        background: props.sunken ? "var(--bg-sunken)" : "var(--bg)",
-        padding: "var(--sp-3)",
-      }}
-    >
-      {props.children}
-    </div>
+    <p className="m-0 text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
+      {props.loading ? "Loading instruction details…" : "Instruction details are unavailable."}
+    </p>
   );
 }
 
 // One instruction row — a thin wrapper over the shared `ResourceRowView`
 // primitive (the same flat skeleton the Tools & skills / Repositories rows use):
-// name → source → status, plus Switch / ⋯. De-crowded: no per-row body peek —
-// click the row to read the full Markdown in the sunken block (the merged net
-// result lives in the top Effective block).
+// name → ownership → status, plus Switch / ⋯. A short plain-text excerpt keeps
+// the default state informative; click the row to read the full Markdown while
+// the merged result remains in the result-first block above.
 function PromptResourceBlock(props: {
   name: string | null;
   source: EffectivePromptRow["source"];
+  customizedFromTeam?: boolean;
   /** Resolved Template name when the row was imported from one; undefined otherwise. */
   templateName?: string | null;
   marker?: RowStatusMarker;
@@ -690,6 +731,7 @@ function PromptResourceBlock(props: {
   menu?: RowMenu;
   dimmed?: boolean;
   body: string;
+  unavailableReason?: string | null;
   expanded: boolean;
   onToggle: () => void;
   /** When present (editor active), the sunken area shows this instead of Markdown. */
@@ -704,13 +746,14 @@ function PromptResourceBlock(props: {
       name={props.name}
       source={
         <span title={props.templateName !== undefined ? templateSourceLabel(props.templateName) : undefined}>
-          {sourceLabel(props.source)}
+          {instructionOwnershipLabel(props.source, !!props.customizedFromTeam)}
         </span>
       }
       status={props.marker}
       toggle={props.toggle}
       menu={props.menu}
       dimmed={props.dimmed}
+      peek={props.unavailableReason ?? (hasBody ? promptExcerpt(props.body) : undefined)}
       emptyPeek={hasBody ? undefined : "No instructions yet."}
       expandLabel="instructions"
       leadingIcon={resourceTypeIcon("prompt")}
@@ -726,6 +769,7 @@ function PromptResourceBlock(props: {
         ) : null,
       }}
       editor={props.editor ?? undefined}
+      presentation="instruction"
     />
   );
 }
@@ -748,13 +792,14 @@ function AddInstructionsMenu(props: {
       trigger={({ open, toggle }) => (
         <Button
           size="xs"
-          variant="ghost"
+          variant="outline"
           aria-expanded={open}
-          aria-label="Add instructions"
-          title="Add instructions"
+          aria-label="Add instruction"
+          title="Add instruction"
           onClick={toggle}
         >
           <Plus className="h-4 w-4" />
+          Add instruction
         </Button>
       )}
     >
@@ -830,12 +875,34 @@ function InstructionsMenuButton(props: {
   );
 }
 
-function enabledPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
-  // Active list = enabled + unavailable (e.g. budget-exceeded). Include blank-body
-  // rows too: a team prompt can legitimately have an empty body and still needs its
-  // management controls. (The backend only drops blank *inline* bindings, which the
-  // orphan-binding path below recovers — those never produce a row here.)
-  return data.effective.prompts.filter((row) => row.mode === "enabled" || row.mode === "unavailable");
+function appliedPromptRows(data: AgentResourcesOutput): EffectivePromptRow[] {
+  return data.effective.prompts.filter((row) => row.mode === "enabled");
+}
+
+function instructionOwnershipLabel(source: EffectivePromptRow["source"], customizedFromTeam: boolean): string {
+  if (source === "inline_prompt") {
+    return customizedFromTeam ? "For this agent · Customized from team" : "For this agent · Editable here";
+  }
+  if (source.startsWith("team_")) return "Team instruction · Managed by your team";
+  return "For this agent · Managed here";
+}
+
+function promptStatusMarker(mode: EffectivePromptRow["mode"]): RowStatusMarker {
+  if (mode === "replaced") return { label: "Replaced", tone: "neutral" };
+  if (mode === "unavailable") return { label: "Can't load", tone: "error" };
+  return null;
+}
+
+function promptExcerpt(body: string): string {
+  return body
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/```/g, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*])\s+/gm, "")
+    .replace(/[*_~`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function promptBlockName(row: EffectivePromptRow): string | null {

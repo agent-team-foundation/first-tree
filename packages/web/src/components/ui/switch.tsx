@@ -24,8 +24,32 @@ export function Switch(props: {
   "aria-labelledby"?: string;
   id?: string;
   className?: string;
+  /** Preserve the compact visual track inside the minimum interactive target. */
+  touchTarget?: boolean;
 }): ReactNode {
-  const { checked, onCheckedChange, disabled, className } = props;
+  const { checked, onCheckedChange, disabled, className, touchTarget } = props;
+  if (touchTarget) {
+    return (
+      <button
+        type="button"
+        role="switch"
+        id={props.id}
+        aria-checked={checked}
+        aria-label={props["aria-label"]}
+        aria-labelledby={props["aria-labelledby"]}
+        disabled={disabled}
+        onClick={() => onCheckedChange(!checked)}
+        className={cn(
+          "inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-input)] border-0 bg-transparent p-0",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          className,
+        )}
+      >
+        <SwitchTrack checked={checked} />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -47,12 +71,31 @@ export function Switch(props: {
         className,
       )}
     >
-      <span
-        className={cn(
-          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
-          checked ? "translate-x-4" : "translate-x-0.5",
-        )}
-      />
+      <SwitchThumb checked={checked} />
     </button>
+  );
+}
+
+function SwitchTrack({ checked }: { checked: boolean }): ReactNode {
+  return (
+    <span
+      className={cn(
+        "pointer-events-none inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent p-0 transition-colors",
+        checked ? "bg-primary" : "bg-secondary dark:border-[var(--border-strong)]",
+      )}
+    >
+      <SwitchThumb checked={checked} />
+    </span>
+  );
+}
+
+function SwitchThumb({ checked }: { checked: boolean }): ReactNode {
+  return (
+    <span
+      className={cn(
+        "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+        checked ? "translate-x-4" : "translate-x-0.5",
+      )}
+    />
   );
 }

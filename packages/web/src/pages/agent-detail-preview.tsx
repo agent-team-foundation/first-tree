@@ -523,8 +523,8 @@ export function AgentDetailPreviewPage() {
             Instructions section
           </h2>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Result-first: the top block shows the merged runtime instructions (clamp + Show all), without extra label
-            copy. Source rows are de-crowded — Switch + ⋯ only, click a row to read its full body.
+            Result-first: the top block shows a compact merged-instructions preview with a full reader dialog. Applied
+            rows explain ownership and editability without exposing the internal source stack.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<PromptTab />} />

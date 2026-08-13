@@ -137,4 +137,42 @@ describe("ResourceRowView — converged action slots", () => {
     // The expand control is the heading (aria-label), not a duplicate chevron button.
     expect(buttons.filter((b) => b.getAttribute("aria-label") === "Expand Style guide")).toHaveLength(1);
   });
+
+  it("opts Instructions into a two-column mobile row without changing the default presentation", () => {
+    const actions = [{ key: "edit", label: "Edit", onSelect: () => {} }];
+    render(
+      <ResourceRowView
+        name="Default resource"
+        source="From your team"
+        toggle={{ checked: true, ariaLabel: "Enable Default resource", onChange: () => {} }}
+        menu={{ ariaLabel: "More actions for Default resource", actions }}
+      />,
+    );
+    const defaultHeader = container.querySelector("[data-resource-row] > div");
+    expect(defaultHeader?.className).toContain("flex-col");
+    expect(defaultHeader?.className).not.toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(container.querySelector('button[aria-label="More actions for Default resource"]')?.className).not.toContain(
+      "min-h-11",
+    );
+
+    render(
+      <ResourceRowView
+        name="Custom instructions"
+        source="For this agent · Editable here"
+        peek="A readable three-line prompt excerpt."
+        presentation="instruction"
+        toggle={{ checked: true, ariaLabel: "Enable Custom instructions", onChange: () => {} }}
+        menu={{ ariaLabel: "More actions for Custom instructions", actions }}
+      />,
+    );
+    const instructionHeader = container.querySelector("[data-resource-row] > div");
+    expect(instructionHeader?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(container.querySelector('button[aria-label="More actions for Custom instructions"]')?.className).toContain(
+      "min-h-11",
+    );
+    expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("h-11");
+    expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("w-11");
+    expect(container.querySelector<HTMLElement>("[data-resource-row] > p")?.dataset.lineClamp).toBe("3");
+    expect(container.textContent).toContain("For this agent · Editable here");
+  });
 });
