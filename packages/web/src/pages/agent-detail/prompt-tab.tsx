@@ -31,11 +31,10 @@ import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 type AvailablePrompt = { id: string; name: string };
 
-// Clamp markdown headings to the dense in-app scale inside the Effective block, so
-// a prompt that opens with a big "# Heading" doesn't blow out the ~8-line clamp
-// (h1 → subtitle, the rest → body).
-const PROSE_COMPACT_HEADINGS =
-  "prose-headings:font-semibold prose-h1:text-subtitle prose-h1:mt-0 prose-h2:text-body prose-h3:text-body prose-h4:text-body";
+// Keep long-form instructions comfortable to read without allowing Markdown
+// headings to escape the restrained Agent Detail hierarchy.
+const INSTRUCTION_READING_PROSE =
+  "text-instruction-reading leading-[var(--text-instruction-reading--line-height)] prose-headings:font-semibold prose-h1:text-title prose-h1:mt-0 prose-h2:text-title prose-h3:text-instruction-reading prose-h4:text-instruction-reading prose-headings:mt-4 prose-headings:mb-2 prose-p:my-3 prose-ul:my-3 prose-ol:my-3 prose-li:my-1 prose-blockquote:my-3";
 
 export function PromptTab() {
   const ctx = useAgentDetailContext();
@@ -246,7 +245,7 @@ function EffectiveInstructionsBlock({
               Read-only preview
             </p>
             <p
-              className="m-0 text-body"
+              className="m-0 text-instruction-preview"
               data-line-clamp="4"
               style={{
                 color: "var(--fg-2)",
@@ -273,7 +272,11 @@ function EffectiveInstructionsBlock({
               Read-only instructions applied to this agent, shown in their effective order.
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 overflow-y-auto" style={{ paddingRight: "var(--sp-2)" }}>
+          <div
+            className="min-h-0 overflow-y-auto"
+            data-instruction-result-prose
+            style={{ paddingRight: "var(--sp-2)" }}
+          >
             {segments.length > 0 ? (
               segments.map((section, index) => (
                 <section
@@ -291,11 +294,11 @@ function EffectiveInstructionsBlock({
                   <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-2)" }}>
                     {segmentLabel(section)}
                   </p>
-                  <Markdown className={PROSE_COMPACT_HEADINGS}>{section.body}</Markdown>
+                  <Markdown className={INSTRUCTION_READING_PROSE}>{section.body}</Markdown>
                 </section>
               ))
             ) : (
-              <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
+              <Markdown className={INSTRUCTION_READING_PROSE}>{prompt}</Markdown>
             )}
           </div>
         </DialogContent>

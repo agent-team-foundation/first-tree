@@ -157,6 +157,7 @@ describe("ResourceRowView — converged action slots", () => {
     expect(
       container.querySelector<HTMLButtonElement>('button[aria-label="More actions for Default resource"]')?.style.width,
     ).toBe(`${28}px`);
+    expect(container.querySelector("[data-instruction-provenance]")).toBeNull();
 
     render(
       <ResourceRowView
@@ -181,6 +182,9 @@ describe("ResourceRowView — converged action slots", () => {
     expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("h-11");
     expect(container.querySelector('button[aria-label="Enable Custom instructions"]')?.className).toContain("w-11");
     expect(container.querySelector<HTMLElement>("[data-resource-row] > p")?.dataset.lineClamp).toBe("3");
+    expect(container.querySelector("[data-instruction-provenance]")?.className).toContain(
+      "text-instruction-provenance",
+    );
     expect(container.textContent).toContain("For this agent · Editable here");
   });
 });

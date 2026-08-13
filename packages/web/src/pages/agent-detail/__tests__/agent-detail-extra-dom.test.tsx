@@ -803,11 +803,17 @@ describe("PromptTab extra DOM states", () => {
     const preview = container.querySelector<HTMLElement>("[data-instruction-result-preview] p:last-child");
     expect(preview?.textContent).toBe("Team section. Custom section.");
     expect(preview?.dataset.lineClamp).toBe("4");
+    expect(preview?.className).toContain("text-instruction-preview");
+    const provenance = container.querySelector<HTMLElement>("[data-instruction-provenance]");
+    expect(provenance?.className).toContain("text-instruction-provenance");
+    expect(provenance?.style.color).toBe("var(--fg-3)");
 
     const trigger = buttonByText(container, "Read full");
     trigger?.focus();
     await click(trigger);
     const dialog = document.body.querySelector('[role="dialog"]');
+    const dialogProse = dialog?.querySelector<HTMLElement>("[data-instruction-result-prose] .prose");
+    expect(dialogProse?.className).toContain("text-instruction-reading");
     expect(dialog?.textContent).toContain("Team guide · Team instruction");
     expect(dialog?.textContent).toContain("Custom instructions · Editable for this agent");
     expect(dialog?.textContent?.indexOf("Team section.")).toBeLessThan(

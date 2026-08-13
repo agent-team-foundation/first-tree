@@ -121,6 +121,24 @@ video[data-onboarding-orientation-video]::cue {
   --text-title--letter-spacing: -0.2px;
   --text-title--font-weight: 600;
 
+  /* Instructions-only reading tiers. The surrounding Agent Detail chrome
+     stays on the dense app scale; these utilities are explicit opt-ins for
+     long-form prompt prose and the provenance needed to interpret it. */
+  --text-instruction-preview: 14px;
+  --text-instruction-preview--line-height: 1.6;
+  --text-instruction-preview--letter-spacing: 0;
+  --text-instruction-preview--font-weight: 400;
+
+  --text-instruction-reading: 15px;
+  --text-instruction-reading--line-height: 1.65;
+  --text-instruction-reading--letter-spacing: 0;
+  --text-instruction-reading--font-weight: 400;
+
+  --text-instruction-provenance: 12px;
+  --text-instruction-provenance--line-height: 1.45;
+  --text-instruction-provenance--letter-spacing: 0;
+  --text-instruction-provenance--font-weight: 500;
+
   /* Mobile work-surface typography. Kept as a local scale so dense desktop
      surfaces can stay compact while phone views remain readable at hand-held
      distance. */

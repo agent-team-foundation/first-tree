@@ -252,7 +252,11 @@ function RowHeading({
               </span>
             ) : null}
           </span>
-          <span className="block text-caption font-normal" style={{ color: "var(--fg-4)", marginTop: "var(--sp-0_5)" }}>
+          <span
+            className="block text-instruction-provenance"
+            data-instruction-provenance
+            style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}
+          >
             {source}
           </span>
         </span>
