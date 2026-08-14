@@ -52,6 +52,54 @@ export const githubAppInstallationPermissionsSchema = z.record(z.string(), githu
 export type GithubAppInstallationPermissions = z.infer<typeof githubAppInstallationPermissionsSchema>;
 
 /**
+ * The permission levels an installation must grant before the GitHub Task
+ * Agent can reply automatically on Issues and pull requests —
+ * `permission name -> required level`.
+ *
+ * Scoped to that one capability, not to the installation as a whole. Other
+ * First Tree capabilities gate on their own permissions, events, and
+ * repository coverage (Context Reviewer, the setup-capability probe, …), so
+ * this set answers "can automatic replies work here", never "is this
+ * installation generally usable".
+ *
+ * Within that scope it is the one definition: the server gates the GitHub Task
+ * Agent on it (`taskReplyInstallationBlocker`) and the Settings → GitHub
+ * readout renders it, so an admin is never told replies are fine while the
+ * server refuses to publish (or the reverse).
+ *
+ * `metadata: read` is deliberately absent: GitHub grants it to every App
+ * install and it cannot be withheld, so listing it would only ever render a
+ * tautological ✓. The reply publisher still requests it when minting a scoped
+ * token — that is a token scope, not a gate.
+ */
+export const GITHUB_TASK_REPLY_REQUIRED_PERMISSIONS = {
+  issues: "write",
+  pull_requests: "write",
+} as const satisfies Record<string, GithubPermissionLevel>;
+
+/**
+ * True when `granted` meets a required level.
+ *
+ * Deliberately an exact match, not a `read < write < admin` ranking. Every
+ * other installation-permission check in the server compares levels exactly
+ * (`github-audience.ts`, `github-task-reply-publisher.ts`,
+ * `context-reviewer-publisher.ts`, `setup-capabilities.ts`, …). A ranking here
+ * would let the Settings readout and the task-agent gate accept an `admin`
+ * grant that routing and publishing then reject — the exact contradiction this
+ * shared definition exists to prevent. GitHub only ever issues `read` / `write`
+ * for `issues` and `pull_requests`, so a ranking would buy nothing anyway.
+ *
+ * If the ranked semantics are ever wanted, change every call site together,
+ * not just this one.
+ */
+export function githubPermissionSatisfies(
+  granted: GithubPermissionLevel | undefined,
+  required: GithubPermissionLevel,
+): boolean {
+  return granted === required;
+}
+
+/**
  * Subscribed event-name list, e.g. `["issues", "pull_request", "push"]`.
  * Free-form for the same forward-compat reason as `permissions`.
  */

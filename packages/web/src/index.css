@@ -572,6 +572,11 @@ video[data-onboarding-orientation-video]::cue {
   /* Shared label column for ConfigRow / IdentityField / DangerActionRow grids. */
   --agent-detail-label-col: 8.25rem;
 
+  /* SettingRow's text column: the glyph tile (--sp-7) plus the gap after it
+     (--sp-2_5). Anything a row renders below its first line indents by this so
+     it hangs off the title instead of resetting to the section edge. */
+  --setting-row-indent: 2.375rem; /* 38px */
+
   /* Default color-scheme so native form controls, scrollbars, and the
      canvas match the light theme (.dark flips this to dark below). */
   color-scheme: light;

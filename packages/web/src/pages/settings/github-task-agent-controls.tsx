@@ -1,6 +1,7 @@
 import type { OrgGithubFeaturesOutput, SetupBlocker, TeamAgentCandidatesOutput } from "@first-tree/shared";
 import { setupBlockerCodeSchema } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../../api/client.js";
@@ -9,6 +10,7 @@ import { setupCapabilitiesQueryKey } from "../../api/setup-capabilities.js";
 import { getTeamAgentCandidates, putTeamAgentAssignment } from "../../api/team-agent-settings.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Select } from "../../components/ui/select.js";
+import { SettingRow } from "../../components/ui/setting-row.js";
 import { setupBlockerCopy } from "./setup-blocker-copy.js";
 
 export function GithubTaskAgentControls({
@@ -62,24 +64,20 @@ export function GithubTaskAgentControls({
   if (!isAdmin) {
     const projectedAgent = settingQuery.data?.teamAgent.agent ?? null;
     return (
-      <div
+      <SettingRow
         data-github-task-agent-controls="read-only"
-        className="flex flex-col"
-        style={{ gap: "var(--sp-1)", paddingTop: "var(--sp-3)" }}
-      >
-        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          GitHub Task Agent
-        </span>
-        <span className="text-label" style={{ color: "var(--fg-3)" }}>
-          {settingQuery.isLoading
+        icon={<Bot className="h-4 w-4" />}
+        title="GitHub Task Agent"
+        description={
+          settingQuery.isLoading
             ? "Loading configured Agent…"
             : settingQuery.error
               ? "First Tree could not load the configured Agent."
               : projectedAgent
                 ? `${projectedAgent.displayName} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`
-                : "Not configured. An admin can choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."}
-        </span>
-      </div>
+                : "Not configured. An admin can choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."
+        }
+      />
     );
   }
 
@@ -110,32 +108,46 @@ export function GithubTaskAgentControls({
     (item) => item.resolutionOwner === "admin" && item.actionKind === "manage_github_installation",
   );
   const error = settingQuery.error ?? candidatesQuery.error ?? assignmentMutation.error;
+  const loading = settingQuery.isLoading || candidatesQuery.isLoading;
+  const assignable = !loading && candidates.length > 0;
 
   return (
-    <div
+    <SettingRow
       data-github-task-agent-controls="admin"
-      className="flex flex-col"
-      style={{
-        gap: "var(--sp-3)",
-        padding: "var(--sp-3) 0",
-      }}
+      icon={<Bot className="h-4 w-4" />}
+      title="GitHub Task Agent"
+      description={
+        selectedLabel
+          ? `${selectedLabel} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`
+          : "Choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."
+      }
+      control={
+        loading ? (
+          <span className="text-label" style={{ color: "var(--fg-3)" }}>
+            Loading eligible Agents…
+          </span>
+        ) : assignable ? (
+          // The picker keeps a readable minimum instead of stretching the full
+          // page width — it is one control in a column of controls, not a form.
+          <div style={{ minWidth: "var(--sp-45)" }}>
+            <Select
+              aria-label="GitHub Task Agent"
+              value={selectedAgentUuid ?? ""}
+              onChange={(agentUuid) => {
+                const next = agentUuid || null;
+                if (next === selectedAgentUuid) return;
+                assignmentMutation.mutate(next);
+              }}
+              disabled={assignmentMutation.isPending}
+              options={options}
+              placeholder="Select an eligible Agent"
+              searchable={candidates.length > 6}
+            />
+          </div>
+        ) : null
+      }
     >
-      <div>
-        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          GitHub Task Agent
-        </span>
-        <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
-          {selectedLabel
-            ? `${selectedLabel} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`
-            : "Choose the Agent that automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App."}
-        </div>
-      </div>
-
-      {settingQuery.isLoading || candidatesQuery.isLoading ? (
-        <div className="text-label" style={{ color: "var(--fg-3)" }}>
-          Loading eligible Agents…
-        </div>
-      ) : candidates.length === 0 ? (
+      {!loading && !assignable ? (
         <div className="text-label" style={{ color: "var(--fg-3)" }}>
           {blockerText(blockers)}
           {manageGithubInstallation ? (
@@ -158,33 +170,20 @@ export function GithubTaskAgentControls({
             </>
           ) : null}
         </div>
-      ) : (
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          <Select
-            aria-label="GitHub Task Agent"
-            value={selectedAgentUuid ?? ""}
-            onChange={(agentUuid) => {
-              const next = agentUuid || null;
-              if (next === selectedAgentUuid) return;
-              assignmentMutation.mutate(next);
-            }}
-            disabled={assignmentMutation.isPending}
-            options={options}
-            placeholder="Select an eligible Agent"
-            searchable={candidates.length > 6}
-          />
-          <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-            Context Tree activity uses Context Reviewer. These roles must use different Agents.
-          </div>
+      ) : null}
+
+      {assignable ? (
+        <div className="text-caption" style={{ color: "var(--fg-4)" }}>
+          Context Tree activity uses Context Reviewer. These roles must use different Agents.
         </div>
-      )}
+      ) : null}
 
       {error ? (
         <div role="alert" className="text-label" style={{ color: "var(--state-error)" }}>
           {teamAgentMutationError(error)}
         </div>
       ) : null}
-    </div>
+    </SettingRow>
   );
 }
 

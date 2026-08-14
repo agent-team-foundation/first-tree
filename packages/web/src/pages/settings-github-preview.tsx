@@ -1,8 +1,12 @@
-import { Building2, ChevronRight, ExternalLink, PauseCircle, User } from "lucide-react";
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
+import { ArrowRight, Bot, Building2, ExternalLink, FolderGit2, Github, PauseCircle, User } from "lucide-react";
 import { useState } from "react";
+import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Section } from "../components/ui/section.js";
 import { Select } from "../components/ui/select.js";
+import { SettingRow } from "../components/ui/setting-row.js";
+import { GithubConnectionDetails } from "./github-connection-details.js";
 
 /**
  * DEV-only visual review for Settings → GitHub (the connected GitHub App
@@ -20,14 +24,17 @@ import { Select } from "../components/ui/select.js";
  *   - **Not installed**         — the "Install on GitHub" CTA.
  *   - **Loading**               — the initial fetch state.
  *
- * Connection and automatic handling are separate provider-owned sections. The
- * markup here mirrors the real page closely enough to review their hierarchy
- * without a live GitHub installation.
+ * Connection, automatic handling, and the Repositories hand-off are separate
+ * provider-owned sections, each a `SettingRow` (glyph + name + effect on the
+ * left, control right-aligned). The markup here mirrors the real page closely
+ * enough to review their hierarchy without a live GitHub installation.
  */
 
-const MOCK = {
+const MOCK: GithubAppInstallationOutput = {
+  installationId: 131952074,
+  accountType: "Organization",
   accountLogin: "agent-team-foundation",
-  accountType: "Organization" as const,
+  accountGithubId: 987654,
   permissions: {
     issues: "write",
     members: "read",
@@ -36,10 +43,31 @@ const MOCK = {
     contents: "write",
     pull_requests: "write",
     administration: "write",
-  } as Record<string, string>,
-  events: ["issues", "issue_comment", "member", "pull_request", "pull_request_review", "push"],
+  },
+  // `installation` / `installation_repositories` are in here because a real
+  // App subscribes to them — they are the traffic that keeps this installation
+  // row and its repository coverage current. The gallery has to show them so
+  // the three event classes (activity / lifecycle / dropped) can be reviewed.
+  events: [
+    "installation",
+    "installation_repositories",
+    "issues",
+    "issue_comment",
+    "member",
+    "pull_request",
+    "pull_request_review",
+    "push",
+  ],
+  suspended: false,
   manageUrl: "https://github.com/organizations/agent-team-foundation/settings/installations/131952074",
-  installationId: 131952074,
+  createdAt: "2026-08-03T09:12:00.000Z",
+  updatedAt: "2026-08-06T16:41:00.000Z",
+};
+
+/** Same installation with a downgraded scope — the one state worth acting on. */
+const MOCK_MISSING_PERMISSION: GithubAppInstallationOutput = {
+  ...MOCK,
+  permissions: { ...MOCK.permissions, pull_requests: "read" },
 };
 
 const AccountIcon = MOCK.accountType === "Organization" ? Building2 : User;
@@ -65,119 +93,51 @@ function SuspendedBanner() {
   );
 }
 
-function ConnectionDetails({ defaultOpen = false }: { defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const permissionEntries = Object.entries(MOCK.permissions);
-  const regionId = "github-connection-details";
-
-  return (
-    <div style={{ borderTop: "var(--hairline) solid var(--border)", paddingTop: "var(--sp-3)" }}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-controls={open ? regionId : undefined}
-        className="inline-flex items-center text-label"
-        style={{
-          gap: "var(--sp-1)",
-          color: "var(--fg-3)",
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-        }}
-      >
-        <ChevronRight
-          aria-hidden
-          className="h-3 w-3 transition-transform"
-          style={{ transform: open ? "rotate(90deg)" : "none" }}
-        />
-        Connection details
-      </button>
-
-      {open && (
-        <div
-          id={regionId}
-          style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)", marginTop: "var(--sp-3)" }}
-        >
-          {permissionEntries.length > 0 && (
-            <div>
-              <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-                Permissions granted
-              </div>
-              <ul
-                className="text-body"
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: 0,
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "var(--sp-1)",
-                  color: "var(--fg-2)",
-                }}
-              >
-                {permissionEntries.map(([key, value]) => (
-                  <li key={key} className="mono">
-                    {key}: <strong style={{ color: "var(--fg)" }}>{value}</strong>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {MOCK.events.length > 0 && (
-            <div>
-              <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-                Subscribed events
-              </div>
-              <div className="text-body mono" style={{ color: "var(--fg-2)" }}>
-                {MOCK.events.join(", ")}
-              </div>
-            </div>
-          )}
-          <span className="text-label" style={{ color: "var(--fg-3)" }}>
-            Installation #{MOCK.installationId}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AutomaticHandlingPreview() {
   const [agentUuid, setAgentUuid] = useState("dev-agent");
   const agentName = agentUuid === "release-agent" ? "Release Agent" : "Dev Assistant";
 
   return (
-    <div
-      className="flex flex-col"
-      style={{
-        gap: "var(--sp-3)",
-        padding: "var(--sp-3) 0",
-      }}
-    >
-      <div>
-        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          GitHub Task Agent
-        </span>
-        <div className="text-label" style={{ marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}>
-          {agentName} automatically handles Issue and pull request activity outside the Context Tree repository and
-          posts final replies as the First Tree GitHub App.
+    <SettingRow
+      icon={<Bot className="h-4 w-4" />}
+      title="GitHub Task Agent"
+      description={`${agentName} automatically handles Issue and pull request activity outside the Context Tree repository and posts final replies as the First Tree GitHub App.`}
+      control={
+        <div style={{ minWidth: "var(--sp-45)" }}>
+          <Select
+            aria-label="GitHub Task Agent"
+            value={agentUuid}
+            onChange={setAgentUuid}
+            options={[
+              { value: "dev-agent", label: "Dev Assistant", hint: "Runtime ready" },
+              { value: "release-agent", label: "Release Agent", hint: "Runtime ready" },
+            ]}
+          />
         </div>
-      </div>
-      <Select
-        aria-label="GitHub Task Agent"
-        value={agentUuid}
-        onChange={setAgentUuid}
-        options={[
-          { value: "dev-agent", label: "Dev Assistant", hint: "Runtime ready" },
-          { value: "release-agent", label: "Release Agent", hint: "Runtime ready" },
-        ]}
-      />
+      }
+    >
       <div className="text-caption" style={{ color: "var(--fg-4)" }}>
         Context Tree activity uses Context Reviewer. These roles must use different Agents.
       </div>
-    </div>
+    </SettingRow>
+  );
+}
+
+function RepositoriesPointerPreview() {
+  return (
+    <SettingRow
+      icon={<FolderGit2 className="h-4 w-4" />}
+      title="Team code repositories"
+      description="Repository URLs and the agents that may clone them live in the Repositories tab — they apply to GitLab too, so they aren't tied to this connection."
+      control={
+        <Button asChild variant="outline" size="sm">
+          <a href="/settings/repositories#code-repositories">
+            Manage repositories
+            <ArrowRight className="h-3 w-3" aria-hidden />
+          </a>
+        </Button>
+      }
+    />
   );
 }
 
@@ -194,64 +154,57 @@ function PageShell({ children }: { children: React.ReactNode }) {
         >
           <AutomaticHandlingPreview />
         </Section>
+        <Section title="Repositories">
+          <RepositoriesPointerPreview />
+        </Section>
       </div>
     </div>
   );
 }
 
-function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?: boolean; detailsOpen?: boolean }) {
+function InstalledCard({
+  suspended = false,
+  detailsOpen = false,
+  data = MOCK,
+}: {
+  suspended?: boolean;
+  detailsOpen?: boolean;
+  data?: GithubAppInstallationOutput;
+}) {
   return (
     <PageShell>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--sp-4)",
-        }}
-      >
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
         {suspended && <SuspendedBanner />}
-        <div>
-          <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-            Connected to
-          </div>
-          <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <AccountIcon className="h-4 w-4" style={{ color: "var(--fg-2)" }} />
-            <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-              {MOCK.accountLogin}
+        <SettingRow
+          icon={<Github className="h-4 w-4" />}
+          title="GitHub App"
+          description={
+            <span className="inline-flex flex-wrap items-center" style={{ gap: "var(--sp-1_5)" }}>
+              <span className="inline-flex items-center" style={{ gap: "var(--sp-1)" }}>
+                <AccountIcon className="h-3 w-3 shrink-0" aria-hidden />
+                Connected to github.com/{data.accountLogin}
+              </span>
+              <span style={{ color: "var(--fg-4)" }}>{data.accountType}</span>
             </span>
-            <span
-              className="text-label"
-              style={{
-                padding: "var(--sp-0_5) var(--sp-1_5)",
-                background: "var(--bg-sunken)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg-3)",
-              }}
-            >
-              {MOCK.accountType}
-            </span>
-          </div>
-        </div>
-        <div>
-          <a
-            href={MOCK.manageUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center text-body"
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-1_5) var(--sp-2_5)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg)",
-              textDecoration: "none",
-            }}
-          >
-            Manage on GitHub
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-        <ConnectionDetails defaultOpen={detailsOpen} />
+          }
+          control={
+            <>
+              <Button type="button" variant="outline" size="sm">
+                Manage connection
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <a href={data.manageUrl} target="_blank" rel="noreferrer">
+                  Manage on GitHub
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </Button>
+            </>
+          }
+        >
+          {/* The real component, not a copy: the gallery is only useful while it
+              can't drift from what ships. */}
+          <GithubConnectionDetails data={data} defaultOpen={detailsOpen} />
+        </SettingRow>
       </div>
     </PageShell>
   );
@@ -266,53 +219,28 @@ function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?:
 function NotInstalledCard({ waiting = false }: { waiting?: boolean }) {
   return (
     <PageShell>
-      <div>
-        <p className="text-body" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-3)" }}>
-          Install the GitHub App on your personal account or organization to start receiving issues, pull requests, and
-          reviews as routed messages.
-        </p>
-        <button
-          type="button"
-          disabled={waiting}
-          className="inline-flex items-center justify-center font-medium"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-2) var(--sp-3)",
-            background: "var(--primary)",
-            color: "var(--primary-on)",
-            border: "none",
-            borderRadius: "var(--radius-input)",
-            cursor: waiting ? "default" : "pointer",
-            opacity: waiting ? 0.6 : 1,
-          }}
-        >
-          Install on GitHub
-          <ExternalLink className="h-3 w-3" />
-        </button>
+      <SettingRow
+        icon={<Github className="h-4 w-4" />}
+        title="GitHub App"
+        description="This team isn't connected to GitHub yet. Connect a GitHub App installation to start receiving issues, pull requests, and reviews as routed messages."
+        control={
+          <Button type="button" size="sm" disabled={waiting}>
+            Install on GitHub
+            <ExternalLink className="h-3 w-3" />
+          </Button>
+        }
+      >
         {waiting && (
-          <div
-            className="flex items-center"
-            style={{ gap: "var(--sp-2_5)", marginTop: "var(--sp-3)", flexWrap: "wrap" }}
-          >
+          <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2_5)" }}>
             <span className="text-label" style={{ color: "var(--fg-3)" }}>
               Waiting for GitHub…
             </span>
-            <button
-              type="button"
-              className="text-label underline underline-offset-2"
-              style={{
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                color: "var(--fg-3)",
-                cursor: "pointer",
-              }}
-            >
+            <Button type="button" variant="link" size="sm">
               Didn't work? Start over
-            </button>
+            </Button>
           </div>
         )}
-      </div>
+      </SettingRow>
     </PageShell>
   );
 }
@@ -372,9 +300,11 @@ export function SettingsGithubPreviewPage() {
           Settings → GitHub — shipped layout
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
-          Lean default: who's connected + Manage on GitHub. Permissions, subscribed events, and the installation id sit
-          behind a collapsed "Connection details" disclosure (click to toggle). GitHub Task Agent lives in the adjacent
-          Automatic handling section instead of appearing as a standalone Setup capability.
+          Every section is one row: glyph + what it is + what it currently does on the left, the control that changes it
+          right-aligned. Permissions, subscribed events, and the installation id sit behind a collapsed "Connection
+          details" disclosure (click to toggle). GitHub Task Agent lives in the adjacent Automatic handling section
+          instead of appearing as a standalone Setup capability, and Repositories hands off to the provider-neutral
+          catalog rather than dead-ending here.
         </p>
       </div>
 
@@ -382,8 +312,25 @@ export function SettingsGithubPreviewPage() {
         <InstalledCard />
       </Frame>
 
-      <Frame label="Connected — details expanded" note="the disclosure open: scopes, events, installation id">
+      <Frame
+        label="Connected — details expanded"
+        note="required scopes checked off, other grants secondary, events named, installation facts"
+      >
         <InstalledCard detailsOpen />
+      </Frame>
+
+      <Frame
+        label="Connected — a required scope is missing"
+        note="pull_requests downgraded to read: marked blocked, with what it costs and where to fix it"
+      >
+        <InstalledCard detailsOpen data={MOCK_MISSING_PERMISSION} />
+      </Frame>
+
+      <Frame
+        label="Missing scope — collapsed"
+        note="the shortfall still marks the closed disclosure, so it isn't hidden behind a click"
+      >
+        <InstalledCard data={MOCK_MISSING_PERMISSION} />
       </Frame>
 
       <Frame label="Suspended upstream" note="webhook delivery paused on GitHub's side — banner preserved">

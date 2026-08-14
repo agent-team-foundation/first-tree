@@ -350,6 +350,23 @@ describe("SettingsGithubPage — automatic handling", () => {
     await act(async () => root.unmount());
   });
 
+  it("hands off to the provider-neutral repository catalog below automatic handling", async () => {
+    const { SettingsGithubPage } = await import("../github.js");
+    const { container, root } = await renderAt("/settings/integrations/github", <SettingsGithubPage />);
+    await waitForText(container, "Team code repositories");
+
+    const link = await waitForSelector<HTMLAnchorElement>(
+      container,
+      'a[href="/settings/repositories#code-repositories"]',
+    );
+    expect(link.textContent).toContain("Manage repositories");
+    // The hand-off closes the page — it must not push automatic handling down.
+    const taskRouting = await waitForSelector<HTMLElement>(container, "#task-routing");
+    expect(taskRouting.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+    await act(async () => root.unmount());
+  });
+
   it("shows members the configured Agent without exposing assignment controls", async () => {
     authMock.value = {
       role: "member",

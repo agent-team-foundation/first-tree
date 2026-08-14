@@ -1,3 +1,4 @@
+import { Plug } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { AgentStatusChip } from "../components/ui/agent-status-chip.js";
 import { Badge } from "../components/ui/badge.js";
@@ -25,6 +26,7 @@ import { PresenceChip } from "../components/ui/presence-chip.js";
 import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
 import { SegmentedControl } from "../components/ui/segmented-control.js";
 import { Select } from "../components/ui/select.js";
+import { SettingRow } from "../components/ui/setting-row.js";
 import { StateChip } from "../components/ui/state-chip.js";
 import { StateDot } from "../components/ui/state-dot.js";
 import { StatusGlyph } from "../components/ui/status-glyph.js";
@@ -697,7 +699,7 @@ export function StyleguidePreviewPage() {
         </Section>
 
         {/* ─── Containers ────────────────────────────────────────────────── */}
-        <Section title="Containers" subtitle="Card, Panel, Tile.">
+        <Section title="Containers" subtitle="Card, Panel, SettingRow, Tile.">
           <Row>
             <Card style={{ width: "20rem" }}>
               <CardHeader>
@@ -723,6 +725,31 @@ export function StyleguidePreviewPage() {
               </PanelBody>
             </Panel>
           </Row>
+          <Subhead>SettingRow</Subhead>
+          <div style={{ width: "100%", borderTop: "var(--hairline) solid var(--border)" }}>
+            {/* No chrome of its own — an enclosing Section owns the rule above.
+                Extras hang off the row's text column, not the container edge. */}
+            <SettingRow
+              icon={<Plug className="h-4 w-4" />}
+              title="GitHub App"
+              description="Connected to github.com/acme"
+              control={
+                <Button variant="outline" size="sm">
+                  Manage
+                </Button>
+              }
+            >
+              <span className="text-label" style={{ color: "var(--fg-3)" }}>
+                Extras indent to the title, so the block reads as one column.
+              </span>
+            </SettingRow>
+            <SettingRow
+              title="No glyph"
+              description="Without a leading glyph the row and its extras stay flush."
+              control={<Badge variant="secondary">optional</Badge>}
+            />
+          </div>
+
           <Subhead>Tile</Subhead>
           <Row>
             <Tile label="Agents" value="12" />

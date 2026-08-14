@@ -308,8 +308,8 @@ const buttonVariants = cva("…base classes…", {
 **Inventory** (representative):
 - **Actions / inputs:** Button, Input, Label, SegmentedControl, FilterPill,
   OptionCard, Command (cmdk), RowActionsMenu
-- **Containers / layout:** Card, Panel, Section, Tile, SettingsField, PageHeader,
-  SectionHeader, FlatSectionHeader, TabBar
+- **Containers / layout:** Card, Panel, Section, SettingRow, Tile, SettingsField,
+  PageHeader, SectionHeader, FlatSectionHeader, TabBar
 - **Data:** Table, DenseTable, Breadcrumb, Markdown
 - **Status / presence:** Badge, DenseBadge, StateChip, StateDot, StatusGlyph,
   PresenceChip, AgentStatusChip

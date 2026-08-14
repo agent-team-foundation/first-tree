@@ -101,16 +101,31 @@ only touches the webhook where an `installation.created` delivery records the ro
 
 ### Web UI (Settings → GitHub)
 
-- Admin, connected: the connected account + type, "Connection" and "Source repos" section headings, and the
-  "Manage connection" / "Manage on GitHub" / "Connection details" controls; the connect panel exposes Reinstall (step 1,
-  when installed) and Disconnect (step 2).
+- Admin, connected: the connected account + type, the "Connection" / "Automatic handling" / "Repositories" section
+  headings, and the "Manage connection" / "Manage on GitHub" / "Connection details" controls; the connect panel exposes
+  Reinstall (step 1, when installed) and Disconnect (step 2). The Repositories section hands off to Settings →
+  Repositories rather than editing repository URLs here.
 - Admin, not connected: a "Connect GitHub" call-to-action.
+- Connection details, permissions satisfied: every entry under "Required for automatic replies" reads as ready, and no
+  GitHub-side call to action appears. The heading stays scoped to that capability — it must not claim the installation
+  satisfies First Tree generally, since Context Reviewer and repository coverage gate on their own requirements.
+- Connection details, a required permission missing (downgrade `issues` or `pull_requests` to `read` on the installation
+  row): the entry reads as blocked and names what it costs, a "Grant on GitHub" action appears for an admin, and the
+  shortfall is also visible on the *collapsed* disclosure. This must agree with the server: the same installation makes
+  `team-agent` assignment fail with `github_app_task_reply_permission_required`, so the readout and the gate never
+  disagree.
+- Connection details, facts: subscribed events First Tree does not consume are listed as unused rather than blended into
+  the consumed list; `installation` / `installation_repositories` are *not* among them, since the webhook route consumes
+  both through `handleInstallationLifecycle` — a normally configured installation must never be described as carrying
+  unused subscriptions. The installation timestamp is labelled "First seen", not "Connected": the row is written unbound
+  by `installation.created` and survives disconnect/rebind, so it does not record when this team connected. The
+  installation id copies (a non-secure-context copy failure surfaces "Copy failed" instead of looking inert).
 - Google/OIDC admin without GitHub identity: after opening Connect, only the inline link-account state appears. After the
   identity is linked and the same Team is restored, the panel shows the linked login and Install remains a separate click.
 - Install preflight mismatch: the current First Tree session and selected Team remain unchanged; the recovery message
   names the expected GitHub login and offers a retry rather than opening the picker.
-- Member: the connection state stays readable, but every admin control (Manage / Disconnect / Connect / Reinstall /
-  Install / Add source repo) is absent.
+- Member: the connection state and the permission diagnosis stay readable, but every admin control (Manage / Disconnect /
+  Connect / Reinstall / Install / Grant on GitHub) is absent.
 - No browser console errors on any state.
 
 ## Expected Result
