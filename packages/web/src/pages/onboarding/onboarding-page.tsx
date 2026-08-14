@@ -41,7 +41,7 @@ export function OnboardingPage() {
     return <div className="min-h-screen bg-background" />;
   }
   // A confirmed Member never enters the legacy invitee wizard: they go to the
-  // Team Agent directory. The invitee path below remains only for the
+  // existing Team page. The invitee path below remains only for the
   // unresolved-role recovery state and the explicit onboarding preview.
   if (role === "member") {
     return <Navigate to="/team" replace />;

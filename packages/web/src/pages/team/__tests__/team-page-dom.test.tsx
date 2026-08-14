@@ -670,6 +670,33 @@ describe("TeamPage", () => {
     await act(async () => root.unmount());
   });
 
+  it("uses member-scoped agent listing and opens read-only profiles for non-admins", async () => {
+    authMock.value = { role: "member", memberId: "member-self" };
+    const { TeamPage } = await import("../index.js");
+    const { container, root } = await renderDom(<TeamPage />);
+
+    await waitForText(container, "Nova");
+    expect(agentMocks.listAgents).toHaveBeenCalledWith({ limit: 100 });
+    expect(agentMocks.listAllAgents).not.toHaveBeenCalled();
+    // Issue 836: sharing the invite link is member-level, so the "Invite link"
+    // entry is no longer admin-gated — non-admins see it too.
+    expect(container.textContent).toContain("Invite link");
+    expect(container.textContent).not.toContain("Design Critique");
+    expect(container.textContent).toContain("Ops Helper");
+
+    await click(container.querySelector('[aria-label="Open Alice"]'));
+    await waitForText(document.body, "Profile");
+    expect(document.body.textContent).not.toContain("Demoting the last admin");
+    expect(exactButton(document.body, "Save")).toBeNull();
+    await click(exactButton(document.body, "Close"));
+
+    await click(container.querySelector('button[aria-label="Actions for Ops Helper"]'));
+    await waitForText(container, "Chat");
+    expect(exactButton(container, "Suspend")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("remembers the agent filter preference", async () => {
     window.localStorage.setItem("first-tree:team-agent-filter:v1", "mine");
     const { TeamPage } = await import("../index.js");

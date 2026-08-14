@@ -175,7 +175,7 @@ afterEach(async () => {
 });
 
 describe("InviteAcceptPage", () => {
-  it("loads a preview, warns about switching teams, joins, and opens Team Agents", async () => {
+  it("loads a preview, warns about switching teams, joins, and opens the existing Team page", async () => {
     const { InviteAcceptPage } = await import("../invite-accept.js");
     const container = await renderDom(<InviteAcceptPage />);
 

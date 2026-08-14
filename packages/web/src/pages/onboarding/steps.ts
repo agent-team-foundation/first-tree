@@ -11,7 +11,7 @@
  *   - "admin"   — the team creator (org admin). Creates/confirms the team,
  *                 connects a computer, creates the agent, and starts chat.
  *   - "invitee" — legacy preview plus unresolved-role recovery. Confirmed
- *                 Members are redirected to the Team Agent directory before
+ *                 Members are redirected to the existing Team page before
  *                 this sequence is mounted.
  *
  * Step ids are deliberately product-facing, jargon-free concepts — never

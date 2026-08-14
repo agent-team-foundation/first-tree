@@ -191,15 +191,6 @@ async function renderDom(initialEntry: string, element: ReactElement): Promise<{
               </>
             }
           />
-          <Route
-            path="/team"
-            element={
-              <>
-                <LocationProbe />
-                <div>Team Agents route</div>
-              </>
-            }
-          />
         </Routes>
       </MemoryRouter>,
     );
@@ -430,7 +421,7 @@ describe("WorkspacePage DOM behavior", () => {
     };
   });
 
-  it("defaults a member's bare root to Team Agents while preserving direct chat deep links", async () => {
+  it("keeps a confirmed member's bare root and direct chat links in the complete Workspace", async () => {
     const { WorkspacePage } = await import("../index.js");
     authMock.value = {
       ...authMock.value,
@@ -440,13 +431,16 @@ describe("WorkspacePage DOM behavior", () => {
     };
 
     const bare = await renderDom("/", <WorkspacePage />);
-    expect(bare.container.textContent).toContain("Team Agents route");
-    expect(bare.container.querySelector('[data-testid="location"]')?.textContent).toBe("/team");
+    expect(bare.container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
+    expect(bare.container.querySelector('[data-testid="conversation-list"]')).toBeTruthy();
+    expect(bare.container.textContent).toContain("center:none:wide:no-with");
+    await click(buttonByText(bare.container, "New chat"));
+    expect(bare.container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=draft");
     await act(async () => bare.root.unmount());
 
     const deepLink = await renderDom("/?c=chat-1", <WorkspacePage />);
+    expect(deepLink.container.querySelector('[data-testid="conversation-list"]')).toBeTruthy();
     expect(deepLink.container.textContent).toContain("center:chat-1");
-    expect(deepLink.container.textContent).not.toContain("Team Agents route");
     await act(async () => deepLink.root.unmount());
   });
 
@@ -463,7 +457,6 @@ describe("WorkspacePage DOM behavior", () => {
     const unresolved = await renderDom("/", <WorkspacePage />);
 
     expect(unresolved.container.textContent).toContain("Onboarding route");
-    expect(unresolved.container.textContent).not.toContain("Team Agents route");
     await act(async () => unresolved.root.unmount());
   });
 });

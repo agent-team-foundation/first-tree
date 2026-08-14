@@ -89,7 +89,7 @@ describe("InviteAcceptPage — authenticated join", () => {
           <Routes>
             <Route path="/invite/:token" element={<InviteAcceptPage />} />
             <Route path="/" element={<div>workspace</div>} />
-            <Route path="/team" element={<div>team agents</div>} />
+            <Route path="/team" element={<div>team page</div>} />
           </Routes>
         </MemoryRouter>,
       );
@@ -110,7 +110,7 @@ describe("InviteAcceptPage — authenticated join", () => {
     expect(apiMocks.post).toHaveBeenCalledWith("/me/organizations/join", { token: "tok-123" });
     // Switched to the just-joined org.
     expect(authMocks.selectOrganization).toHaveBeenCalledWith("org-invited");
-    expect(container?.textContent).toContain("team agents");
+    expect(container?.textContent).toContain("team page");
     // Crucially: never adopted tokens (the endpoint returns none — adopting
     // `undefined` is what corrupted the session / logged the user out).
     expect(authMocks.adoptTokens).not.toHaveBeenCalled();

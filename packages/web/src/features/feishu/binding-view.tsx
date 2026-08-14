@@ -23,19 +23,16 @@ export function feishuBindingQueryKey(agentUuid: string): [string, string] {
 }
 
 /**
- * One read contract for the binding. Setup/detail surfaces poll while the
- * member watches provisioning; directory snapshots can explicitly opt out so
- * one open roster does not create a per-Agent polling fan-out.
+ * One read contract for the binding: while Feishu is still provisioning the
+ * Bot the member is watching the page, so it polls fast; afterwards it drops
+ * back to an ambient refresh.
  */
-export function feishuBindingQueryOptions(agentUuid: string, options: { poll?: boolean } = {}) {
+export function feishuBindingQueryOptions(agentUuid: string) {
   return {
     queryKey: feishuBindingQueryKey(agentUuid),
     queryFn: () => getAgentFeishuBinding(agentUuid),
-    refetchInterval:
-      options.poll === false
-        ? (false as const)
-        : (state: { state: { data?: { binding: FeishuBotBinding | null } } }) =>
-            state.state.data?.binding?.status === "provisioning" ? PROVISIONING_POLL_MS : IDLE_POLL_MS,
+    refetchInterval: (state: { state: { data?: { binding: FeishuBotBinding | null } } }) =>
+      state.state.data?.binding?.status === "provisioning" ? PROVISIONING_POLL_MS : IDLE_POLL_MS,
   };
 }
 

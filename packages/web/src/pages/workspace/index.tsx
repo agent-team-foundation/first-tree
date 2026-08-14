@@ -101,16 +101,13 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 }
 
 export function WorkspacePage() {
-  const location = useLocation();
   const { meLoaded, role, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
 
-  if (meLoaded && role === "member") {
-    if (location.pathname === "/" && !location.search && !location.hash) {
-      return <Navigate to="/team" replace />;
-    }
-    return <WorkspaceBody />;
-  }
+  // Confirmed Members use the existing Workspace directly. They must not
+  // be sent through personal Agent / Computer onboarding just because they do
+  // not own an Agent in the selected Team.
+  if (meLoaded && role === "member") return <WorkspaceBody />;
 
   // Users who haven't finished setup go through the standalone /onboarding
   // flow — including the server-`completed`-but-no-start-chat case. Only

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteTracker } from "./analytics.js";
-import { AuthProvider, useAuth } from "./auth/auth-context.js";
+import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
 import { Button } from "./components/ui/button.js";
@@ -585,12 +585,8 @@ function ContextTreeSetupPreviewUnavailable() {
 
 function WorkspaceEntry() {
   const location = useLocation();
-  const { role } = useAuth();
   const mobileExperience = useMobileExperienceState();
   if (!mobileExperience.settled) return null;
-  if (role === "member" && shouldOpenMobileRoot(location)) {
-    return <Navigate to="/team" replace />;
-  }
   if (mobileExperience.enabled && shouldOpenMobileRoot(location)) {
     return <Navigate to="/m/chat" replace />;
   }

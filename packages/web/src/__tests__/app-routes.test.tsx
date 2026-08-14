@@ -7,11 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const authStateMock = vi.hoisted(() => ({ role: "admin" as "admin" | "member" | null }));
-
 vi.mock("../auth/auth-context.js", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  useAuth: () => authStateMock,
 }));
 
 vi.mock("../auth/require-auth.js", async () => {
@@ -270,7 +267,6 @@ describe("App routes", () => {
         "~/.local/bin/first-tree-staging login FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
       codePlaceholder: "FIRST_TREE_CONNECT_CODE_PLACEHOLDER",
     };
-    authStateMock.role = "admin";
     routerCommitMock.selectedChatIdAfterUrgentUpdate = null;
   });
 
@@ -448,14 +444,6 @@ describe("App routes", () => {
     setViewportWidth(390);
     expect(await renderAppAt("/m/chat")).toContain("mobile work");
     expect(window.location.pathname).toBe("/m/chat");
-  });
-
-  it("opens Team Agents from a member's bare mobile root", async () => {
-    authStateMock.role = "member";
-    setViewportWidth(390);
-
-    expect(await renderAppAt("/")).toContain("team page");
-    expect(window.location.pathname).toBe("/team");
   });
 
   it("waits for the server channel before choosing the mobile or desktop shell", async () => {
