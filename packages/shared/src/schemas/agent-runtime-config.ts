@@ -439,8 +439,24 @@ export const agentRuntimeConfigPayloadSchema = z
   });
 export type AgentRuntimeConfigPayload = z.infer<typeof agentRuntimeConfigPayloadSchema>;
 
+/**
+ * Provider-specific payload variants. Default constants are typed against these
+ * rather than the union so spreading a default and overriding `model` (or other
+ * variant-narrowed fields) stays assignable — Amp's `model` is
+ * `"" | low | medium | high | ultra`, which otherwise poisons union spreads.
+ */
+export type ClaudeCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "claude-code" }>;
+export type ClaudeCodeTuiRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "claude-code-tui" }>;
+export type CodexRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "codex" }>;
+export type AmpRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "amp" }>;
+export type CursorRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "cursor" }>;
+export type KimiCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "kimi-code" }>;
+export type OpenCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "opencode" }>;
+export type PiRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "pi" }>;
+export type GrokRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "grok" }>;
+
 /** Default payload used when creating a fresh claude-code agent. */
-export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: ClaudeCodeRuntimeConfigPayload = {
   kind: "claude-code",
   prompt: { append: "" },
   model: "opus",
@@ -458,7 +474,7 @@ export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
  * user's auth mode — `gpt-5-codex` is rejected by ChatGPT-account auth, while
  * an empty string lets the SDK fall through to its built-in default.
  */
-export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: CodexRuntimeConfigPayload = {
   kind: "codex",
   prompt: { append: "" },
   model: "",
@@ -476,7 +492,7 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
  * `claude` CLI; the provider differs only in how the client runtime
  * communicates with that CLI (TUI through tmux vs SDK).
  */
-export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: ClaudeCodeTuiRuntimeConfigPayload = {
   kind: "claude-code-tui",
   prompt: { append: "" },
   model: "opus",
@@ -488,7 +504,7 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
 };
 
 /** Default payload for a fresh Amp agent. Empty model omits `--mode` (Amp default: medium). */
-export const DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD: AmpRuntimeConfigPayload = {
   kind: "amp",
   prompt: { append: "" },
   model: "",
@@ -503,7 +519,7 @@ export const DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
  * spawn omits `--model` and the Cursor CLI picks its local default (`auto`); a
  * non-empty operator value is passed through verbatim as one argv entry.
  */
-export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: CursorRuntimeConfigPayload = {
   kind: "cursor",
   prompt: { append: "" },
   model: "",
@@ -514,7 +530,7 @@ export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = 
 };
 
 /** Default payload for Kimi Code. Empty model inherits ~/.kimi-code config. */
-export const DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD: KimiCodeRuntimeConfigPayload = {
   kind: "kimi-code",
   prompt: { append: "" },
   model: "",
@@ -525,7 +541,7 @@ export const DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload
 };
 
 /** Default payload for OpenCode. Empty model inherits the host-local config. */
-export const DEFAULT_OPENCODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_OPENCODE_RUNTIME_CONFIG_PAYLOAD: OpenCodeRuntimeConfigPayload = {
   kind: "opencode",
   prompt: { append: "" },
   model: "",
@@ -536,7 +552,7 @@ export const DEFAULT_OPENCODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload 
 };
 
 /** Default payload for Pi. Empty model inherits the host-local Pi default. */
-export const DEFAULT_PI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_PI_RUNTIME_CONFIG_PAYLOAD: PiRuntimeConfigPayload = {
   kind: "pi",
   prompt: { append: "" },
   model: "",
@@ -554,7 +570,7 @@ export const DEFAULT_PI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
  * calls `session/set_model` (initialize default model, no effort meta when
  * unset). A non-empty operator value for either is passed through verbatim.
  */
-export const DEFAULT_GROK_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+export const DEFAULT_GROK_RUNTIME_CONFIG_PAYLOAD: GrokRuntimeConfigPayload = {
   kind: "grok",
   prompt: { append: "" },
   model: "",
