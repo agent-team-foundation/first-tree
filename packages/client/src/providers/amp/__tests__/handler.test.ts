@@ -235,8 +235,11 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
       "--execute",
       "--stream-json",
       "--stream-json-thinking",
+      "--no-remote-control-terminal",
       "--settings-file",
       "/tmp/amp-runtime-settings.json",
+      "--visibility",
+      "private",
     ]);
     expect(
       buildAmpTurnArgs({
@@ -251,6 +254,7 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
       "--execute",
       "--stream-json",
       "--stream-json-thinking",
+      "--no-remote-control-terminal",
       "--settings-file",
       "/tmp/settings.json",
       "--mode",
@@ -329,9 +333,19 @@ describe("Amp handler — per-turn CLI transport", () => {
     if (!spec) throw new Error("unreachable");
     expect(spec.command).toBe("/fake/bin/amp");
     expect(spec.args[0]).toBe("--execute");
-    expect(spec.args).toEqual(expect.arrayContaining(["--stream-json", "--stream-json-thinking", "--settings-file"]));
+    expect(spec.args).toEqual(
+      expect.arrayContaining([
+        "--stream-json",
+        "--stream-json-thinking",
+        "--no-remote-control-terminal",
+        "--settings-file",
+        "--visibility",
+        "private",
+      ]),
+    );
     expect(spec.args.join(" ")).not.toContain("do the thing");
     expect(spec.args).not.toContain("threads");
+    expect((spec.options.env as Record<string, string> | undefined)?.AMP_REMOTE_CONTROL_TERMINAL).toBe("0");
     const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
     expect(settingsPath).toMatch(/amp-runtime-settings\.json$/);
     expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
@@ -368,9 +382,11 @@ describe("Amp handler — per-turn CLI transport", () => {
     const spec = specs[0];
     if (!spec) throw new Error("unreachable");
     expect(spec.args.slice(0, 3)).toEqual(["threads", "continue", "T-sess-real-2"]);
-    expect(spec.args).toEqual(expect.arrayContaining(["--mode", "high"]));
+    expect(spec.args).toEqual(expect.arrayContaining(["--mode", "high", "--no-remote-control-terminal"]));
+    expect(spec.args).not.toContain("--visibility");
     expect(spec.args).not.toContain("--model");
     expect(spec.args).not.toContain("--mcp-config");
+    expect((spec.options.env as Record<string, string> | undefined)?.AMP_REMOTE_CONTROL_TERMINAL).toBe("0");
     expect(spec.args.join(" ")).not.toContain("secret-token");
     const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
     expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({
@@ -500,6 +516,51 @@ describe("Amp handler — per-turn CLI transport", () => {
     expect(
       events.some((event) => event.kind === "error" && String(event.payload.message).includes("amp_mode_invalid")),
     ).toBe(true);
+    await handler.shutdown();
+  });
+
+  it("emits token_usage from assistant message.usage when result omits usage", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor } = makeFakeSupervisor([
+      (child) => {
+        child.stdout.emit("data", line({ type: "system", subtype: "init", session_id: "T-usage-2" }));
+        child.stdout.emit(
+          "data",
+          line({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "ok" }],
+              usage: { input_tokens: 11, output_tokens: 3, cache_read_input_tokens: 2 },
+            },
+            session_id: "T-usage-2",
+          }),
+        );
+        child.stdout.emit(
+          "data",
+          line({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "ok",
+            session_id: "T-usage-2",
+          }),
+        );
+        child.stdout.emit("end");
+        child.emit("close", 0, null);
+      },
+    ]);
+    const handler = makeHandler(supervisor);
+    const token = makeToken();
+
+    await handler.start(makeMessage("m1", "hi"), makeContext({ events }), token);
+
+    expect(token.completed).toMatchObject([{ status: "success" }]);
+    expect(events.some((event) => event.kind === "token_usage")).toBe(true);
+    expect(events.find((event) => event.kind === "token_usage")).toMatchObject({
+      kind: "token_usage",
+      payload: { provider: "amp", inputTokens: 11, outputTokens: 3, cachedInputTokens: 2 },
+    });
     await handler.shutdown();
   });
 });

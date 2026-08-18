@@ -26,6 +26,7 @@ export type AmpStreamEvent =
   | { kind: "assistant_message"; text: string }
   | { kind: "tool_started"; callId: string; tool: AmpToolCall }
   | { kind: "tool_completed"; callId: string; preview: string | null; failed: boolean }
+  | { kind: "usage"; usage: AmpUsage }
   | {
       kind: "result";
       isError: boolean;
@@ -34,6 +35,17 @@ export type AmpStreamEvent =
       usage: AmpUsage | null;
     }
   | { kind: "unknown"; note: string; raw: string };
+
+/** Sum per-message Amp usage records (assistant stream examples emit one per message). */
+export function addAmpUsage(left: AmpUsage | null, right: AmpUsage): AmpUsage {
+  if (!left) return right;
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+  };
+}
 
 const PREVIEW_LIMIT = 400;
 
@@ -167,6 +179,10 @@ export function parseAmpStreamLine(line: string): AmpStreamEvent[] {
           }
         }
       }
+      // Official Amp stream examples put usage on each assistant message and
+      // often omit it from the terminal result — retain it as a fallback.
+      const usage = extractUsage(message?.usage) ?? extractUsage(record.usage);
+      if (usage) events.push({ kind: "usage", usage });
       return events.length > 0 ? events : [{ kind: "user_echo" }];
     }
     case "result": {

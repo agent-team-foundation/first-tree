@@ -14,13 +14,15 @@ describe("Amp install-only capability", () => {
   });
 
   it("reports a missing external runtime with actionable setup copy", async () => {
-    const result = await probeAmpCapability({ findOnPath: () => null, env: {} });
+    const result = await probeAmpCapability({ findOnPath: () => null, env: {}, platform: "linux" });
     expect(result).toMatchObject({ state: "missing", available: false });
     expect(result.error).toContain("ampcode.com/install.sh");
     expect(result.error).toContain("amp login");
   });
 
-  it("does not advertise a resolved Windows binary that the default supervisor rejects", async () => {
+  it("win32 fails closed before install detection (missing or present) with Job Object copy", async () => {
+    // state `error` (not `missing`) keeps setup cards from rendering the
+    // macOS/Linux installer for a runtime First Tree will always reject here.
     const findOnPath = vi.fn(() => "C:\\Users\\me\\AppData\\Roaming\\npm\\amp.exe");
     const result = await probeAmpCapability({
       findOnPath,
@@ -31,10 +33,18 @@ describe("Amp install-only capability", () => {
     expect(result).toMatchObject({
       state: "error",
       available: false,
-      runtimeSource: "path",
-      runtimePath: "C:\\Users\\me\\AppData\\Roaming\\npm\\amp.exe",
     });
-    expect(result.error).toContain("cannot run it on Windows");
-    expect(findOnPath).toHaveBeenCalledTimes(1);
+    expect(result.error).toContain("not supported on Windows");
+    expect(result.error).toContain("Job Object");
+    expect(findOnPath).not.toHaveBeenCalled();
+  });
+
+  it("win32 missing binary also fails closed without the install.sh invite", async () => {
+    const findOnPath = vi.fn(() => null);
+    const result = await probeAmpCapability({ findOnPath, env: {}, platform: "win32" });
+    expect(result).toMatchObject({ state: "error", available: false });
+    expect(result.error).toContain("not supported on Windows");
+    expect(result.error).not.toContain("ampcode.com/install.sh");
+    expect(findOnPath).not.toHaveBeenCalled();
   });
 });

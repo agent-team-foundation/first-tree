@@ -52,7 +52,7 @@ import { formatAuthHint, isAmpAuthError } from "../handlers/auth-error-hint.js";
 import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
 import { resolveAmpRuntimeBinary } from "./binary.js";
-import { type AmpStreamEvent, AmpStreamParser, type AmpUsage } from "./parser.js";
+import { type AmpStreamEvent, AmpStreamParser, type AmpUsage, addAmpUsage } from "./parser.js";
 
 export const AMP_PENDING_SESSION_PREFIX = "amp-pending-";
 
@@ -88,7 +88,18 @@ export function buildAmpTurnArgs(input: {
 }): string[] {
   const args: string[] = [];
   if (input.resumeSessionId) args.push("threads", "continue", input.resumeSessionId);
-  args.push("--execute", "--stream-json", "--stream-json-thinking", "--settings-file", input.settingsFile);
+  // Force private new threads (Amp's execute default is workspace-shared) and
+  // disable remote web-terminal control every turn (host AMP_REMOTE_CONTROL_TERMINAL
+  // must not open a second control plane outside First Tree's session boundary).
+  args.push(
+    "--execute",
+    "--stream-json",
+    "--stream-json-thinking",
+    "--no-remote-control-terminal",
+    "--settings-file",
+    input.settingsFile,
+  );
+  if (!input.resumeSessionId) args.push("--visibility", "private");
   if (input.mode) args.push("--mode", input.mode);
   return args;
 }
@@ -292,6 +303,9 @@ export const createAmpHandler: HandlerFactory = (config) => {
     for (const [key, value] of Object.entries(merged)) {
       if (typeof value === "string") env[key] = value;
     }
+    // Neutralize a host-inherited Amp remote-control enablement; argv also
+    // passes `--no-remote-control-terminal` (CLI flag wins over this env).
+    env.AMP_REMOTE_CONTROL_TERMINAL = "0";
     return env;
   }
 
@@ -522,9 +536,13 @@ export const createAmpHandler: HandlerFactory = (config) => {
           },
         });
         break;
+      case "usage":
+        state.usage = addAmpUsage(state.usage, event.usage);
+        break;
       case "result":
         state.results.push({ isError: event.isError, text: event.text });
         if (event.sessionId) state.sessionIds.add(event.sessionId);
+        // Terminal result usage wins when present; otherwise keep assistant-message totals.
         if (event.usage) state.usage = event.usage;
         if (event.isError) state.errors.push(event.text);
         break;

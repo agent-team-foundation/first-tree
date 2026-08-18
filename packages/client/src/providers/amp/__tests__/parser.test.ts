@@ -121,4 +121,53 @@ describe("Amp stream-json parser", () => {
       { kind: "tool_completed", callId: "call_read", preview: "hello", failed: false },
     ]);
   });
+
+  it("retains assistant message.usage when the terminal result omits usage", () => {
+    const parser = new AmpStreamParser();
+    const events = [
+      ...parser.push(
+        [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "T-usage-1" }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "8" }],
+              usage: {
+                input_tokens: 10,
+                cache_creation_input_tokens: 100,
+                cache_read_input_tokens: 0,
+                output_tokens: 4,
+              },
+            },
+            session_id: "T-usage-1",
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "8",
+            session_id: "T-usage-1",
+          }),
+          "",
+        ].join("\n"),
+      ),
+      ...parser.flush(),
+    ];
+    expect(events).toEqual([
+      { kind: "init", sessionId: "T-usage-1" },
+      { kind: "assistant_message", text: "8" },
+      {
+        kind: "usage",
+        usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 100 },
+      },
+      {
+        kind: "result",
+        isError: false,
+        text: "8",
+        sessionId: "T-usage-1",
+        usage: null,
+      },
+    ]);
+  });
 });

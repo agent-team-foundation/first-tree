@@ -1,5 +1,4 @@
 import type { CapabilityEntry } from "@first-tree/shared";
-import { supportsDefaultProviderProcessSupervision } from "../../runtime/provider-support/index.js";
 import { type DetectOutcome, runDetect } from "../capabilities/detect.js";
 import { findAmpExecutableOnPath, formatAmpBinaryMissingMessage } from "./binary.js";
 
@@ -10,17 +9,26 @@ export type AmpProbeDeps = {
 };
 
 /**
- * Resolve-only probe plus an execution-support gate. It deliberately does not
+ * Resolve-only probe plus a platform admission gate. It deliberately does not
  * launch Amp, inspect its config, or infer provider authentication.
  *
- * A resolved Windows binary stays visible in diagnostics, but is not
- * advertised as available while the built-in supervisor would reject it
- * before spawn.
+ * Windows V1 fails closed before install detection so setup cards never invite
+ * operators to install a runtime `prepareSession` will always reject (Job Object
+ * supervisor not yet available).
  */
 export async function probeAmpCapability(deps: AmpProbeDeps = {}): Promise<CapabilityEntry> {
   const env = deps.env ?? process.env;
+  const platform = deps.platform ?? process.platform;
   const findOnPath = deps.findOnPath ?? findAmpExecutableOnPath;
-  const detected = await runDetect(async (): Promise<DetectOutcome> => {
+
+  return runDetect(async (): Promise<DetectOutcome> => {
+    if (platform === "win32") {
+      throw new Error(
+        "Amp is not supported on Windows in v1 until the client-wide pre-admission " +
+          "Job Object supervisor is available. First Tree fails closed on this platform " +
+          "and will not spawn `amp` here.",
+      );
+    }
     const runtimePath = findOnPath(env);
     if (runtimePath) return { installed: true, runtimeSource: "path", runtimePath };
     return {
@@ -28,15 +36,4 @@ export async function probeAmpCapability(deps: AmpProbeDeps = {}): Promise<Capab
       error: formatAmpBinaryMissingMessage("no amp binary resolved on this host"),
     };
   });
-  if (detected.state !== "ok" || supportsDefaultProviderProcessSupervision(deps.platform)) {
-    return detected;
-  }
-  return {
-    ...detected,
-    state: "error",
-    available: false,
-    error:
-      "Amp is installed, but First Tree cannot run it on Windows until the client-wide " +
-      "pre-admission Job Object supervisor is available.",
-  };
 }
