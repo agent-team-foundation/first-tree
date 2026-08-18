@@ -1,6 +1,6 @@
 import {
-  asRuntimeProvider,
   AMP_INSTALL_COMMAND,
+  asRuntimeProvider,
   CURSOR_INSTALL_COMMAND,
   enabledRuntimeProviders,
   GROK_INSTALL_COMMAND,
