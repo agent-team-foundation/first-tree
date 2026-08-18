@@ -1130,18 +1130,23 @@ export const createAmpHandler: HandlerFactory = (config) => {
       }
       const fingerprint = computeBriefingFingerprint(briefing);
       if (message) {
-        let prompt = await sessionCtx.formatInboundContent(message);
-        if (readSessionBriefingFingerprint(workspaceCwd, sessionId) !== fingerprint) {
-          prompt = `${buildBriefingUpdateNotice(join(workspaceCwd, "AGENTS.md"))}\n\n${prompt}`;
-        }
+        let completed = false;
         try {
+          // formatInboundContent + briefing notice must stay inside this cleanup
+          // try/finally: a throw before runTurn used to leave initialTurnPreparing
+          // latched, so inject() kept queueing without scheduling drain.
+          let prompt = await sessionCtx.formatInboundContent(message);
+          if (readSessionBriefingFingerprint(workspaceCwd, sessionId) !== fingerprint) {
+            prompt = `${buildBriefingUpdateNotice(join(workspaceCwd, "AGENTS.md"))}\n\n${prompt}`;
+          }
           const delivered = await runTurn(prompt, sessionCtx, [message], deliveryToken);
           if (delivered) {
             writeSessionBriefingFingerprint(workspaceCwd, providerSessionId ?? sessionId, fingerprint);
           }
+          completed = delivered;
         } finally {
           initialTurnPreparing = false;
-          scheduleDrain();
+          if (completed) scheduleDrain();
         }
       } else {
         initialTurnPreparing = false;

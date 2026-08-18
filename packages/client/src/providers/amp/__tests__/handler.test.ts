@@ -563,4 +563,36 @@ describe("Amp handler — per-turn CLI transport", () => {
     });
     await handler.shutdown();
   });
+
+  it("clears initialTurnPreparing when resume formatInboundContent throws so inject can drain", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([
+      successScript({ sessionId: "T-sess-real", text: "queued turn" }),
+    ]);
+    const handler = makeHandler(supervisor);
+    const ctx = makeContext({ events });
+    let failFormat = true;
+    ctx.formatInboundContent = async (entry) => {
+      if (failFormat) throw new Error("attachment decode failed");
+      return String(entry.content);
+    };
+
+    await expect(handler.resume(makeMessage("m1", "hello"), "T-sess-real", ctx, makeToken())).rejects.toThrow(
+      "attachment decode failed",
+    );
+    expect(specs).toHaveLength(0);
+
+    failFormat = false;
+    const injectToken = makeToken();
+    expect(handler.inject(makeMessage("m2", "follow up"), injectToken)).toMatchObject({
+      kind: "owned",
+      mode: "queued",
+    });
+    await vi.waitFor(() => {
+      if (injectToken.completed.length === 0) throw new Error("queued turn not settled yet");
+    });
+    expect(specs).toHaveLength(1);
+    expect(injectToken.completed).toMatchObject([{ status: "success" }]);
+    await handler.shutdown();
+  });
 });
