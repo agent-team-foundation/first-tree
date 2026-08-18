@@ -57,12 +57,14 @@ describe("Amp stream-json parser", () => {
   });
 
   it("never throws on unparsable or unknown lines", () => {
-    expect(parseAmpStreamLine("not-json")).toMatchObject({ kind: "unknown", note: "unparsable stream line" });
-    expect(parseAmpStreamLine('{"type":"mystery"}')).toMatchObject({
-      kind: "unknown",
-      note: "unknown stream type mystery",
-    });
-    expect(parseAmpStreamLine("")).toBeNull();
+    expect(parseAmpStreamLine("not-json")).toMatchObject([{ kind: "unknown", note: "unparsable stream line" }]);
+    expect(parseAmpStreamLine('{"type":"mystery"}')).toMatchObject([
+      {
+        kind: "unknown",
+        note: "unknown stream type mystery",
+      },
+    ]);
+    expect(parseAmpStreamLine("")).toEqual([]);
   });
 
   it("maps system execution errors and result is_error to a failed result", () => {
@@ -75,9 +77,48 @@ describe("Amp stream-json parser", () => {
           session_id: "T-1",
         }),
       ),
-    ).toMatchObject({ kind: "result", isError: true, text: "not logged in", sessionId: "T-1" });
+    ).toMatchObject([{ kind: "result", isError: true, text: "not logged in", sessionId: "T-1" }]);
     expect(
       parseAmpStreamLine(JSON.stringify({ type: "result", is_error: true, error: "amp login required" })),
-    ).toMatchObject({ kind: "result", isError: true, text: "amp login required" });
+    ).toMatchObject([{ kind: "result", isError: true, text: "amp login required" }]);
+  });
+
+  it("emits every assistant and user content block in order, including parallel tools", () => {
+    expect(
+      parseAmpStreamLine(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              { type: "thinking", thinking: "plan the write" },
+              { type: "text", text: "mutating then reading" },
+              { type: "tool_use", id: "call_write", name: "write", input: { path: "secret.txt" } },
+              { type: "tool_use", id: "call_read", name: "read", input: { path: "README.md" } },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([
+      { kind: "thinking_delta", text: "plan the write" },
+      { kind: "assistant_message", text: "mutating then reading" },
+      { kind: "tool_started", callId: "call_write", tool: { name: "write", args: { path: "secret.txt" } } },
+      { kind: "tool_started", callId: "call_read", tool: { name: "read", args: { path: "README.md" } } },
+    ]);
+    expect(
+      parseAmpStreamLine(
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "call_write", content: "wrote" },
+              { type: "tool_result", tool_use_id: "call_read", content: "hello", is_error: false },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([
+      { kind: "tool_completed", callId: "call_write", preview: "wrote", failed: false },
+      { kind: "tool_completed", callId: "call_read", preview: "hello", failed: false },
+    ]);
   });
 });

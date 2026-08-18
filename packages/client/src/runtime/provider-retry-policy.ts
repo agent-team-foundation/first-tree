@@ -597,6 +597,7 @@ function isConfiguration(text: string, base: Classification, provider: RuntimePr
   if (provider === "kimi-code" && /model\.not_configured|model\.config_invalid/.test(text)) return true;
   // Pi model/MCP configuration gates — keep provider-gated so shared English
   // phrases cannot terminalize another provider's retryable failures.
+  if (provider === "amp" && /amp_mode_invalid|amp mode must be one of/.test(text)) return true;
   if (provider === "pi" && (isPiModelConfiguration(text) || isPiMcpConfiguration(text))) return true;
   // Cursor CLI literal invalid-model / explicit-deny / trust-wall phrasings
   // (captured in Phase 0). Gated to the cursor provider: this classifier is

@@ -62,7 +62,7 @@ export async function discoverProviderModels(
     case "amp":
       return unavailableCatalog(
         provider,
-        "Amp model discovery is not enabled in V1; enter the provider-native model id",
+        "Amp exposes modes, not a host-local model catalog; pick a mode in agent config",
         deps,
       );
     case "opencode":

@@ -4,7 +4,9 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   type AgentRuntimeConfig,
   type AgentRuntimeConfigPayload,
+  AMP_RUNTIME_MODES,
   encodeProviderRetryEventMessage,
+  isAmpRuntimeMode,
   isLandingCampaignTrialAgentMetadata,
   runtimeProviderSchema,
   type ToolFileRef,
@@ -80,28 +82,37 @@ export function mapAmpMcpServers(payload: AgentRuntimeConfigPayload): Record<str
 }
 
 export function buildAmpTurnArgs(input: {
-  model: string;
+  mode: string;
   resumeSessionId: string | null;
-  mcpConfig: Record<string, AmpMcpServerConfig> | null;
   settingsFile: string;
 }): string[] {
   const args: string[] = [];
   if (input.resumeSessionId) args.push("threads", "continue", input.resumeSessionId);
   args.push("--execute", "--stream-json", "--stream-json-thinking", "--settings-file", input.settingsFile);
-  if (input.model) args.push("--model", input.model);
-  if (input.mcpConfig && Object.keys(input.mcpConfig).length > 0) {
-    args.push("--mcp-config", JSON.stringify(input.mcpConfig));
-  }
+  if (input.mode) args.push("--mode", input.mode);
   return args;
 }
 
-export function writeAmpRuntimeSettings(workspaceCwd: string): string {
+/**
+ * Runtime-owned Amp settings (SDK "custom settings file"): user-settings class,
+ * so projected MCP does not need `amp mcp approve`. Mode 0600. MCP headers stay
+ * in this file rather than `--mcp-config` argv, matching the prompt-off-argv
+ * secret handling.
+ */
+export function writeAmpRuntimeSettings(
+  workspaceCwd: string,
+  mcpServers?: Record<string, AmpMcpServerConfig> | null,
+): string {
   const dir = join(workspaceCwd, ".first-tree");
   const path = join(dir, "amp-runtime-settings.json");
   const temporaryPath = join(dir, `.amp-runtime-settings.${process.pid}.${randomUUID()}.tmp`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const settings: Record<string, unknown> = { "amp.dangerouslyAllowAll": true };
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    settings["amp.mcpServers"] = mcpServers;
+  }
   try {
-    writeFileSync(temporaryPath, `${JSON.stringify({ "amp.dangerouslyAllowAll": true }, null, 2)}\n`, {
+    writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
@@ -736,15 +747,29 @@ export const createAmpHandler: HandlerFactory = (config) => {
       token.processingStarted(messages);
       const timeout = setTimeout(() => abort.abort(), turnTimeoutMs);
       timeout.unref?.();
+
+      const configuredMode = payload.model.trim();
+      if (configuredMode.length > 0 && !isAmpRuntimeMode(configuredMode)) {
+        clearTimeout(timeout);
+        return settleFailure({
+          failure: `amp_mode_invalid: Amp --mode must be one of ${AMP_RUNTIME_MODES.join(", ")}; received ${JSON.stringify(configuredMode)}`,
+          state,
+          sessionCtx,
+          messages,
+          token,
+          turnGeneration,
+        });
+      }
+
       let outcome: ProcessOutcome;
       try {
-        const settingsFile = writeAmpRuntimeSettings(workspaceCwd);
+        const mcpServers = payload.mcpServers.length > 0 ? mapAmpMcpServers(payload) : null;
+        const settingsFile = writeAmpRuntimeSettings(workspaceCwd, mcpServers);
         outcome = await runProcess({
           command: activeBinary,
           args: buildAmpTurnArgs({
-            model: payload.model,
+            mode: configuredMode,
             resumeSessionId: expectedSessionId,
-            mcpConfig: payload.mcpServers.length > 0 ? mapAmpMcpServers(payload) : null,
             settingsFile,
           }),
           prompt: `${providerPrompt}\n`,
@@ -783,12 +808,12 @@ export const createAmpHandler: HandlerFactory = (config) => {
         protocolErrors.push(`expected one terminal result event, observed ${state.results.length}`);
       }
       if (state.errors.length > 0) protocolErrors.push(...state.errors);
-      const failureText = `${outcome.stderrTail}\n${outcome.stdoutTail}`;
-      const authFailure = isAmpAuthError(failureText)
-        ? redactErrorPreview(failureText, 800)
-        : isAmpAuthError(state.errors.join("\n"))
-          ? (state.errors[0] ?? null)
-          : null;
+      const authFailure = classifyAmpAuthFailure({
+        exitCode: outcome.exitCode,
+        stderrTail: outcome.stderrTail,
+        stdoutTail: outcome.stdoutTail,
+        structuredErrors: state.errors,
+      });
 
       const success =
         !outcome.spawnError &&
@@ -1158,6 +1183,23 @@ export const createAmpHandler: HandlerFactory = (config) => {
     },
   } satisfies AgentHandler;
 };
+
+function classifyAmpAuthFailure(input: {
+  exitCode: number | null;
+  stderrTail: string;
+  stdoutTail: string;
+  structuredErrors: readonly string[];
+}): string | null {
+  if (isAmpAuthError(input.stderrTail)) {
+    return redactErrorPreview(input.stderrTail, 800);
+  }
+  const structured = input.structuredErrors.find((error) => isAmpAuthError(error));
+  if (structured) return structured;
+  if (input.exitCode !== 0 && isAmpAuthError(input.stdoutTail)) {
+    return redactErrorPreview(input.stdoutTail, 800);
+  }
+  return null;
+}
 
 function isReadOnlyTool(name: string): boolean {
   return /^(read|glob|grep|finder|todo_read|read_web_page|read_mcp_resource|oracle|list|ls)$/i.test(name);

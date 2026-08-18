@@ -294,10 +294,20 @@ const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   serviceTier: z.string().min(1).default("default"),
 });
 
+/** Amp CLI/SDK capability presets. Empty config omits `--mode` (Amp default: medium). */
+export const AMP_RUNTIME_MODES = ["low", "medium", "high", "ultra"] as const;
+export type AmpRuntimeMode = (typeof AMP_RUNTIME_MODES)[number];
+
+export function isAmpRuntimeMode(value: string): value is AmpRuntimeMode {
+  return (AMP_RUNTIME_MODES as readonly string[]).includes(value);
+}
+
 const ampRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("amp"),
-  // Amp model identifiers are provider-native. An empty value delegates to the
-  // operator's local Amp default; a non-empty value is forwarded as `--model`.
+  // Amp's official CLI/SDK contract exposes `mode` (capability presets), not a
+  // model id. Empty omits `--mode` so Amp uses its local default (medium). A
+  // leftover model id fails closed at parse and at spawn.
+  model: z.union([z.literal(""), z.enum(AMP_RUNTIME_MODES)]).default(""),
 });
 
 const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
@@ -477,7 +487,7 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
   reasoningEffort: "",
 };
 
-/** Default payload for a fresh Amp agent. Empty model inherits Amp's local default. */
+/** Default payload for a fresh Amp agent. Empty model omits `--mode` (Amp default: medium). */
 export const DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   kind: "amp",
   prompt: { append: "" },

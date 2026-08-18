@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODEX_MODEL_IDS, CODEX_MODEL_OPTIONS } from "../model-section.js";
+import { AMP_MODE_OPTIONS, CODEX_MODEL_IDS, CODEX_MODEL_OPTIONS } from "../model-section.js";
 
 describe("Codex model options", () => {
   it("exposes every enum-style model id exactly once", () => {
@@ -12,5 +12,11 @@ describe("Codex model options", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
+  });
+});
+
+describe("Amp mode options", () => {
+  it("exposes Amp CLI/SDK capability presets, not model ids", () => {
+    expect(AMP_MODE_OPTIONS.map((option) => option.value)).toEqual(["low", "medium", "high", "ultra"]);
   });
 });

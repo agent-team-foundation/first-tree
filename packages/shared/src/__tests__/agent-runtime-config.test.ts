@@ -318,20 +318,29 @@ describe("agent runtime config — kimi-code variant", () => {
 });
 
 describe("agent runtime config — amp variant", () => {
-  it("defaults to host-local model selection with no reasoning-effort field", () => {
+  it("defaults to host-local mode selection with no reasoning-effort field", () => {
     expect(DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD).toMatchObject({ kind: "amp", model: "" });
     expect("reasoningEffort" in DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD).toBe(false);
     expect(defaultRuntimeConfigPayload("amp")).toMatchObject({ kind: "amp", model: "" });
   });
 
-  it("passes a provider-native model id through unchanged", () => {
+  it("accepts an Amp mode and strips reasoning-effort", () => {
     const parsed = agentRuntimeConfigPayloadSchema.parse({
       kind: "amp",
-      model: "claude-opus-4.6",
+      model: "high",
       reasoningEffort: "high",
     });
-    expect(parsed.model).toBe("claude-opus-4.6");
+    expect(parsed.model).toBe("high");
     expect("reasoningEffort" in parsed).toBe(false);
+  });
+
+  it("rejects leftover Amp model ids", () => {
+    expect(() =>
+      agentRuntimeConfigPayloadSchema.parse({
+        kind: "amp",
+        model: "claude-opus-4.6",
+      }),
+    ).toThrow();
   });
 });
 

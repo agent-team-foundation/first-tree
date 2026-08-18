@@ -86,100 +86,105 @@ function previewFromUnknown(value: unknown): string | null {
   }
 }
 
-/** Parse ONE stream-json line into an event. Never throws. */
-export function parseAmpStreamLine(line: string): AmpStreamEvent | null {
+/**
+ * Parse ONE stream-json line into ordered events. Amp content arrays may
+ * contain multiple text/thinking/tool blocks; each block becomes its own
+ * event so replay safety sees every tool. Never throws.
+ */
+export function parseAmpStreamLine(line: string): AmpStreamEvent[] {
   const trimmed = line.trim();
-  if (trimmed.length === 0) return null;
+  if (trimmed.length === 0) return [];
 
   let value: unknown;
   try {
     value = JSON.parse(trimmed);
   } catch {
-    return unknownEvent("unparsable stream line", trimmed);
+    return [unknownEvent("unparsable stream line", trimmed)];
   }
   const record = asRecord(value);
-  if (!record) return unknownEvent("non-object stream line", trimmed);
+  if (!record) return [unknownEvent("non-object stream line", trimmed)];
 
   const type = asString(record.type);
   switch (type) {
     case "system": {
       if (record.subtype === "init") {
-        return { kind: "init", sessionId: asString(record.session_id) };
+        return [{ kind: "init", sessionId: asString(record.session_id) }];
       }
       if (record.subtype === "error_during_execution" || record.subtype === "error_max_turns") {
-        return {
-          kind: "result",
-          isError: true,
-          text: asString(record.error) ?? "Amp system error",
-          sessionId: asString(record.session_id),
-          usage: null,
-        };
+        return [
+          {
+            kind: "result",
+            isError: true,
+            text: asString(record.error) ?? "Amp system error",
+            sessionId: asString(record.session_id),
+            usage: null,
+          },
+        ];
       }
-      return unknownEvent(`unknown system subtype ${String(record.subtype)}`, trimmed);
+      return [unknownEvent(`unknown system subtype ${String(record.subtype)}`, trimmed)];
     }
     case "user": {
       const message = asRecord(record.message);
       const content = Array.isArray(message?.content) ? message.content : [];
+      const events: AmpStreamEvent[] = [];
       for (const block of content) {
         const blockRecord = asRecord(block);
-        if (blockRecord?.type === "tool_result") {
-          const callId = asString(blockRecord.tool_use_id);
-          if (!callId) return unknownEvent("tool_result without tool_use_id", trimmed);
-          return {
-            kind: "tool_completed",
-            callId,
-            preview: previewFromUnknown(blockRecord.content),
-            failed: blockRecord.is_error === true,
-          };
+        if (blockRecord?.type !== "tool_result") continue;
+        const callId = asString(blockRecord.tool_use_id);
+        if (!callId) {
+          events.push(unknownEvent("tool_result without tool_use_id", trimmed));
+          continue;
         }
+        events.push({
+          kind: "tool_completed",
+          callId,
+          preview: previewFromUnknown(blockRecord.content),
+          failed: blockRecord.is_error === true,
+        });
       }
-      return { kind: "user_echo" };
+      return events.length > 0 ? events : [{ kind: "user_echo" }];
     }
     case "assistant": {
       const message = asRecord(record.message);
       const content = Array.isArray(message?.content) ? message.content : [];
-      const texts: string[] = [];
-      const thinking: string[] = [];
-      let tool: { callId: string; tool: AmpToolCall } | null = null;
+      const events: AmpStreamEvent[] = [];
       for (const block of content) {
         const blockRecord = asRecord(block);
         if (!blockRecord) continue;
         if (blockRecord.type === "text" && typeof blockRecord.text === "string") {
-          texts.push(blockRecord.text);
+          events.push({ kind: "assistant_message", text: blockRecord.text });
         } else if (blockRecord.type === "thinking" && typeof blockRecord.thinking === "string") {
-          thinking.push(blockRecord.thinking);
+          events.push({ kind: "thinking_delta", text: blockRecord.thinking });
         } else if (blockRecord.type === "tool_use") {
           const callId = asString(blockRecord.id);
           const name = asString(blockRecord.name);
           if (callId && name) {
-            tool = {
+            events.push({
+              kind: "tool_started",
               callId,
               tool: { name, args: asRecord(blockRecord.input) ?? {} },
-            };
+            });
           }
         }
       }
-      if (tool) return { kind: "tool_started", callId: tool.callId, tool: tool.tool };
-      if (thinking.length > 0 && texts.length === 0) {
-        return { kind: "thinking_delta", text: thinking.join("") };
-      }
-      if (texts.length > 0) return { kind: "assistant_message", text: texts.join("") };
-      return { kind: "user_echo" };
+      return events.length > 0 ? events : [{ kind: "user_echo" }];
     }
     case "result": {
       const isError = record.is_error === true || asString(record.subtype)?.startsWith("error_") === true;
-      return {
-        kind: "result",
-        isError,
-        text: isError
-          ? (asString(record.error) ?? asString(record.result) ?? "Amp turn failed")
-          : (asString(record.result) ?? ""),
-        sessionId: asString(record.session_id),
-        usage: extractUsage(record.usage),
-      };
+      return [
+        {
+          kind: "result",
+          isError,
+          text: isError
+            ? (asString(record.error) ?? asString(record.result) ?? "Amp turn failed")
+            : (asString(record.result) ?? ""),
+          sessionId: asString(record.session_id),
+          usage: extractUsage(record.usage),
+        },
+      ];
     }
     default:
-      return unknownEvent(`unknown stream type ${String(type)}`, trimmed);
+      return [unknownEvent(`unknown stream type ${String(type)}`, trimmed)];
   }
 }
 
@@ -194,8 +199,7 @@ export class AmpStreamParser {
       if (newline < 0) break;
       const line = this.buffer.slice(0, newline);
       this.buffer = this.buffer.slice(newline + 1);
-      const event = parseAmpStreamLine(line);
-      if (event) events.push(event);
+      events.push(...parseAmpStreamLine(line));
     }
     return events;
   }
@@ -203,7 +207,6 @@ export class AmpStreamParser {
   flush(): AmpStreamEvent[] {
     const leftover = this.buffer;
     this.buffer = "";
-    const event = parseAmpStreamLine(leftover);
-    return event ? [event] : [];
+    return parseAmpStreamLine(leftover);
   }
 }

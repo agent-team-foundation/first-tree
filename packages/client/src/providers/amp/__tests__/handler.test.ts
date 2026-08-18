@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared";
@@ -227,9 +227,8 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
   it("locks execute/stream-json/settings-file and never puts the prompt on argv", () => {
     expect(
       buildAmpTurnArgs({
-        model: "",
+        mode: "",
         resumeSessionId: null,
-        mcpConfig: null,
         settingsFile: "/tmp/amp-runtime-settings.json",
       }),
     ).toEqual([
@@ -241,9 +240,8 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
     ]);
     expect(
       buildAmpTurnArgs({
-        model: "claude-opus-4.6",
+        mode: "high",
         resumeSessionId: "T-aaaa",
-        mcpConfig: { "first-tree-mcp-1": { command: "docs" } },
         settingsFile: "/tmp/settings.json",
       }),
     ).toEqual([
@@ -255,10 +253,8 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
       "--stream-json-thinking",
       "--settings-file",
       "/tmp/settings.json",
-      "--model",
-      "claude-opus-4.6",
-      "--mcp-config",
-      JSON.stringify({ "first-tree-mcp-1": { command: "docs" } }),
+      "--mode",
+      "high",
     ]);
   });
 
@@ -282,6 +278,33 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
     const path = writeAmpRuntimeSettings(workspaceRoot);
     expect(path).toBe(join(workspaceRoot, ".first-tree", "amp-runtime-settings.json"));
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("folds MCP servers including headers into the 0600 settings file, never argv", () => {
+    const mcp = mapAmpMcpServers(
+      ampPayload({
+        mcpServers: [
+          {
+            name: "http",
+            transport: "http",
+            url: "https://example.test/mcp",
+            headers: { Authorization: "Bearer secret-token" },
+          },
+        ],
+      }),
+    );
+    const path = writeAmpRuntimeSettings(workspaceRoot, mcp);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/mcp", headers: { Authorization: "Bearer secret-token" } },
+      },
+    });
+    expect(buildAmpTurnArgs({ mode: "high", resumeSessionId: null, settingsFile: path }).join(" ")).not.toContain(
+      "secret-token",
+    );
+    expect(buildAmpTurnArgs({ mode: "high", resumeSessionId: null, settingsFile: path })).not.toContain("--mcp-config");
   });
 });
 
@@ -323,13 +346,20 @@ describe("Amp handler — per-turn CLI transport", () => {
     await handler.shutdown();
   });
 
-  it("resume: threads continue plus --model and --mcp-config; never continues a pending id", async () => {
+  it("resume: threads continue plus --mode; MCP lives in settings, never --mcp-config", async () => {
     const events: SessionEvent[] = [];
     const { supervisor, specs } = makeFakeSupervisor([successScript({ sessionId: "T-sess-real-2", text: "resumed" })]);
     const handler = makeHandler(supervisor, {
       payload: ampPayload({
-        model: "claude-opus-4.6",
-        mcpServers: [{ name: "docs", transport: "stdio", command: "docs-server" }],
+        model: "high",
+        mcpServers: [
+          {
+            name: "docs",
+            transport: "http",
+            url: "https://example.test/mcp",
+            headers: { Authorization: "Bearer secret-token" },
+          },
+        ],
       }),
     });
 
@@ -338,9 +368,17 @@ describe("Amp handler — per-turn CLI transport", () => {
     const spec = specs[0];
     if (!spec) throw new Error("unreachable");
     expect(spec.args.slice(0, 3)).toEqual(["threads", "continue", "T-sess-real-2"]);
-    expect(spec.args).toEqual(expect.arrayContaining(["--model", "claude-opus-4.6"]));
-    const mcpJson = spec.args[spec.args.indexOf("--mcp-config") + 1];
-    expect(JSON.parse(mcpJson ?? "{}")).toEqual({ "first-tree-mcp-1": { command: "docs-server" } });
+    expect(spec.args).toEqual(expect.arrayContaining(["--mode", "high"]));
+    expect(spec.args).not.toContain("--model");
+    expect(spec.args).not.toContain("--mcp-config");
+    expect(spec.args.join(" ")).not.toContain("secret-token");
+    const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
+    expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/mcp", headers: { Authorization: "Bearer secret-token" } },
+      },
+    });
     await handler.shutdown();
   });
 
@@ -365,6 +403,103 @@ describe("Amp handler — per-turn CLI transport", () => {
     await handler.resume(makeMessage("m2", "retry"), first.sessionId, ctx, makeToken());
     expect(specs[1]?.args).not.toContain("threads");
     expect(specs[1]?.args).not.toContain(first.sessionId);
+    await handler.shutdown();
+  });
+
+  it("does not treat a successful answer that mentions an auth phrase as an auth failure", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor } = makeFakeSupervisor([
+      successScript({
+        sessionId: "T-sess-real-4",
+        text: "An invalid api key error usually means AMP_API_KEY is wrong; run amp login.",
+      }),
+    ]);
+    const forwarded: string[] = [];
+    const handler = makeHandler(supervisor);
+    const token = makeToken();
+
+    await handler.start(
+      makeMessage("m1", "explain an invalid api key error"),
+      makeContext({ events, forwardResult: async (text) => void forwarded.push(text) }),
+      token,
+    );
+
+    expect(token.completed).toMatchObject([{ status: "success" }]);
+    expect(token.retried).toEqual([]);
+    expect(forwarded[0]).toContain("invalid api key");
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+    await handler.shutdown();
+  });
+
+  it("marks a mixed write+read assistant message unsafe so a later failure is not replayed", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([
+      (child) => {
+        child.stdout.emit("data", line({ type: "system", subtype: "init", session_id: "T-sess-real-5" }));
+        child.stdout.emit(
+          "data",
+          line({
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "call_write", name: "write", input: { path: "secret.txt" } },
+                { type: "tool_use", id: "call_read", name: "read", input: { path: "README.md" } },
+              ],
+            },
+          }),
+        );
+        child.stdout.emit(
+          "data",
+          line({
+            type: "result",
+            subtype: "error",
+            is_error: true,
+            error: "rate limit exceeded",
+            session_id: "T-sess-real-5",
+          }),
+        );
+        child.stdout.emit("end");
+        child.emit("close", 1, null);
+      },
+    ]);
+    const handler = makeHandler(supervisor, {
+      ampRetrySleep: async () => true,
+    });
+    const token = makeToken();
+
+    await handler.start(makeMessage("m1", "do the thing"), makeContext({ events }), token);
+
+    expect(specs).toHaveLength(1);
+    expect(events.filter((event) => event.kind === "tool_call").map((event) => event.payload.name)).toEqual([
+      "write",
+      "read",
+    ]);
+    expect(token.retried).toEqual([]);
+    expect(token.completed).toMatchObject([{ status: "error", completion: "consumed" }]);
+    await handler.shutdown();
+  });
+
+  it("fails closed on a leftover model id without spawning --model", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([
+      successScript({ sessionId: "T-should-not-spawn", text: "nope" }),
+    ]);
+    const handler = makeHandler(supervisor, {
+      payload: {
+        ...ampPayload(),
+        model: "claude-opus-4.6",
+      } as AgentRuntimeConfigPayload,
+    });
+    const token = makeToken();
+
+    await handler.start(makeMessage("m1", "hello"), makeContext({ events }), token);
+
+    expect(specs).toHaveLength(0);
+    expect(token.retried).toEqual([]);
+    expect(token.completed[0]).toMatchObject({ status: "error" });
+    expect(
+      events.some((event) => event.kind === "error" && String(event.payload.message).includes("amp_mode_invalid")),
+    ).toBe(true);
     await handler.shutdown();
   });
 });
