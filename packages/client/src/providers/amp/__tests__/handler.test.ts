@@ -1,0 +1,370 @@
+import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockCtxPlumbing } from "../../../__tests__/test-helpers.js";
+import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../../../runtime/handler.js";
+import type { ProviderProcessSpec, ProviderProcessSupervisor } from "../../../runtime/provider-process-supervisor.js";
+import {
+  AMP_PENDING_SESSION_PREFIX,
+  buildAmpTurnArgs,
+  createAmpHandler,
+  isAmpPendingSessionId,
+  mapAmpMcpServers,
+  writeAmpRuntimeSettings,
+} from "../index.js";
+
+class FakeStdin extends EventEmitter {
+  written = "";
+  ended = false;
+  write(chunk: string): boolean {
+    this.written += chunk;
+    return true;
+  }
+  end(): void {
+    this.ended = true;
+  }
+}
+
+class FakeStream extends EventEmitter {
+  setEncoding(): this {
+    return this;
+  }
+}
+
+class FakeChild extends EventEmitter {
+  stdin = new FakeStdin();
+  stdout = new FakeStream();
+  stderr = new FakeStream();
+  pid = 4242;
+  kills: string[] = [];
+  kill(signal?: string): boolean {
+    this.kills.push(signal ?? "SIGTERM");
+    return true;
+  }
+}
+
+type ChildScript = (child: FakeChild) => void;
+
+function makeFakeSupervisor(scripts: ChildScript[]): {
+  supervisor: ProviderProcessSupervisor;
+  specs: ProviderProcessSpec[];
+  children: FakeChild[];
+} {
+  const specs: ProviderProcessSpec[] = [];
+  const children: FakeChild[] = [];
+  return {
+    specs,
+    children,
+    supervisor: {
+      spawn(spec) {
+        specs.push(spec);
+        const child = new FakeChild();
+        children.push(child);
+        const script = scripts.shift();
+        if (!script) throw new Error("fake Amp spawn called more times than scripted");
+        setImmediate(() => script(child));
+        return {
+          child: child as unknown as ReturnType<ProviderProcessSupervisor["spawn"]>["child"],
+          exited: new Promise<void>((resolve) => child.once("close", () => resolve())),
+        };
+      },
+    },
+  };
+}
+
+function line(value: unknown): string {
+  return `${JSON.stringify(value)}\n`;
+}
+
+function successScript(input: { sessionId: string; text: string }): ChildScript {
+  return (child) => {
+    child.stdout.emit("data", line({ type: "system", subtype: "init", session_id: input.sessionId }));
+    child.stdout.emit(
+      "data",
+      line({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: input.text,
+        session_id: input.sessionId,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+    );
+    child.stdout.emit("end");
+    child.emit("close", 0, null);
+  };
+}
+
+function authFailureScript(): ChildScript {
+  return (child) => {
+    child.stderr.emit("data", "Error: not logged in. Run `amp login` or set AMP_API_KEY.\n");
+    child.stdout.emit("end");
+    child.emit("close", 1, null);
+  };
+}
+
+function makeToken(): DeliveryToken & { completed: TurnOutcome[]; retried: string[] } {
+  const completed: TurnOutcome[] = [];
+  const retried: string[] = [];
+  return {
+    completed,
+    retried,
+    processingStarted: () => {},
+    complete: async (_messages, outcome) => {
+      completed.push(outcome);
+    },
+    retry: (_messages, reason) => {
+      retried.push(reason);
+    },
+    terminalRejected: async () => {},
+  };
+}
+
+function makeMessage(id: string, content: string): SessionMessage {
+  return {
+    inboxEntryId: 1,
+    id,
+    chatId: "chat-amp",
+    senderId: "human-1",
+    format: "text",
+    content,
+    metadata: {},
+  };
+}
+
+let workspaceRoot: string;
+
+function makeContext(opts: {
+  events: SessionEvent[];
+  forwardResult?: (text: string) => Promise<void>;
+  replaceSessionId?: (sessionId: string, reason: string) => void;
+}): SessionContext {
+  const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const plumbing = mockCtxPlumbing({ sendMessage }, "chat-amp");
+  return {
+    agent: {
+      agentId: "agent-amp-1",
+      inboxId: "inbox_agent-amp-1",
+      displayName: "amp-assistant",
+      type: "agent",
+      visibility: "organization",
+      delegateMention: null,
+      metadata: {},
+    },
+    sdk: {
+      serverUrl: "https://first-tree.test",
+      sendMessage,
+      getAgentContextTreeConfig: async () => ({
+        bindingState: "invalid",
+        repo: null,
+        branch: null,
+        provider: null,
+      }),
+    } as unknown as SessionContext["sdk"],
+    chatId: "chat-amp",
+    log: () => {},
+    recordProviderActivity: () => {},
+    emitEvent: (event) => {
+      opts.events.push(event);
+    },
+    ...plumbing,
+    ...(opts.forwardResult ? { forwardResult: opts.forwardResult } : {}),
+    ...(opts.replaceSessionId ? { replaceSessionId: opts.replaceSessionId } : {}),
+  };
+}
+
+function ampPayload(
+  over: Partial<Omit<Extract<AgentRuntimeConfigPayload, { kind: "amp" }>, "kind">> = {},
+): Extract<AgentRuntimeConfigPayload, { kind: "amp" }> {
+  return {
+    kind: "amp",
+    prompt: { append: "" },
+    model: "",
+    mcpServers: [],
+    env: [],
+    gitRepos: [],
+    resourceSkills: [],
+    ...over,
+  };
+}
+
+function makeHandler(supervisor: ProviderProcessSupervisor, extraConfig: Record<string, unknown> = {}) {
+  const payload = extraConfig.payload as AgentRuntimeConfigPayload | undefined;
+  const runtimeConfig = {
+    agentId: "agent-amp-1",
+    version: 1,
+    payload: payload ?? ampPayload(),
+    updatedAt: new Date(0).toISOString(),
+    updatedBy: "test",
+  };
+  return createAmpHandler({
+    workspaceRoot,
+    agentName: "amp-test-agent",
+    runtimeProvider: "amp",
+    ampBinaryResolver: () => ({ ok: true, binary: "/fake/bin/amp" }),
+    providerProcessSupervisor: supervisor,
+    ampTurnTimeoutMs: 5_000,
+    agentConfigCache: {
+      refresh: async () => runtimeConfig,
+      get: () => runtimeConfig,
+    },
+    ...extraConfig,
+  });
+}
+
+beforeEach(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "amp-handler-test-"));
+});
+
+afterEach(() => {
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
+
+describe("buildAmpTurnArgs — canonical spawn contract", () => {
+  it("locks execute/stream-json/settings-file and never puts the prompt on argv", () => {
+    expect(
+      buildAmpTurnArgs({
+        model: "",
+        resumeSessionId: null,
+        mcpConfig: null,
+        settingsFile: "/tmp/amp-runtime-settings.json",
+      }),
+    ).toEqual([
+      "--execute",
+      "--stream-json",
+      "--stream-json-thinking",
+      "--settings-file",
+      "/tmp/amp-runtime-settings.json",
+    ]);
+    expect(
+      buildAmpTurnArgs({
+        model: "claude-opus-4.6",
+        resumeSessionId: "T-aaaa",
+        mcpConfig: { "first-tree-mcp-1": { command: "docs" } },
+        settingsFile: "/tmp/settings.json",
+      }),
+    ).toEqual([
+      "threads",
+      "continue",
+      "T-aaaa",
+      "--execute",
+      "--stream-json",
+      "--stream-json-thinking",
+      "--settings-file",
+      "/tmp/settings.json",
+      "--model",
+      "claude-opus-4.6",
+      "--mcp-config",
+      JSON.stringify({ "first-tree-mcp-1": { command: "docs" } }),
+    ]);
+  });
+
+  it("maps caller MCP servers onto first-tree-mcp-N without writing Amp user settings", () => {
+    expect(
+      mapAmpMcpServers(
+        ampPayload({
+          mcpServers: [
+            { name: "docs", transport: "stdio", command: "docs-server", args: ["--stdio"] },
+            { name: "http", transport: "sse", url: "https://example.test/mcp" },
+          ],
+        }),
+      ),
+    ).toEqual({
+      "first-tree-mcp-1": { command: "docs-server", args: ["--stdio"] },
+      "first-tree-mcp-2": { url: "https://example.test/mcp" },
+    });
+  });
+
+  it("writes runtime-owned dangerouslyAllowAll settings under the agent home", () => {
+    const path = writeAmpRuntimeSettings(workspaceRoot);
+    expect(path).toBe(join(workspaceRoot, ".first-tree", "amp-runtime-settings.json"));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
+  });
+});
+
+describe("Amp handler — per-turn CLI transport", () => {
+  it("start: prompt on stdin only, canonical args, session id from stream", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs, children } = makeFakeSupervisor([
+      successScript({ sessionId: "T-sess-real-1", text: "hello world" }),
+    ]);
+    const forwarded: string[] = [];
+    const handler = makeHandler(supervisor);
+    const token = makeToken();
+
+    const result = await handler.start(
+      makeMessage("m1", "do the thing"),
+      makeContext({ events, forwardResult: async (text) => void forwarded.push(text) }),
+      token,
+    );
+
+    expect(specs).toHaveLength(1);
+    const spec = specs[0];
+    if (!spec) throw new Error("unreachable");
+    expect(spec.command).toBe("/fake/bin/amp");
+    expect(spec.args[0]).toBe("--execute");
+    expect(spec.args).toEqual(expect.arrayContaining(["--stream-json", "--stream-json-thinking", "--settings-file"]));
+    expect(spec.args.join(" ")).not.toContain("do the thing");
+    expect(spec.args).not.toContain("threads");
+    const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
+    expect(settingsPath).toMatch(/amp-runtime-settings\.json$/);
+    expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
+    expect(children[0]?.stdin.written).toContain("do the thing");
+    expect(children[0]?.stdin.ended).toBe(true);
+
+    expect(result).toMatchObject({ sessionId: "T-sess-real-1", route: { kind: "owned", mode: "processing" } });
+    expect(token.completed).toMatchObject([{ status: "success" }]);
+    expect(forwarded).toEqual(["hello world"]);
+    expect(events.some((event) => event.kind === "assistant_text" && event.payload.text === "hello world")).toBe(true);
+    expect(events.at(-1)).toMatchObject({ kind: "turn_end", payload: { status: "success" } });
+    await handler.shutdown();
+  });
+
+  it("resume: threads continue plus --model and --mcp-config; never continues a pending id", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([successScript({ sessionId: "T-sess-real-2", text: "resumed" })]);
+    const handler = makeHandler(supervisor, {
+      payload: ampPayload({
+        model: "claude-opus-4.6",
+        mcpServers: [{ name: "docs", transport: "stdio", command: "docs-server" }],
+      }),
+    });
+
+    await handler.resume(makeMessage("m2", "continue"), "T-sess-real-2", makeContext({ events }), makeToken());
+
+    const spec = specs[0];
+    if (!spec) throw new Error("unreachable");
+    expect(spec.args.slice(0, 3)).toEqual(["threads", "continue", "T-sess-real-2"]);
+    expect(spec.args).toEqual(expect.arrayContaining(["--model", "claude-opus-4.6"]));
+    const mcpJson = spec.args[spec.args.indexOf("--mcp-config") + 1];
+    expect(JSON.parse(mcpJson ?? "{}")).toEqual({ "first-tree-mcp-1": { command: "docs-server" } });
+    await handler.shutdown();
+  });
+
+  it("first-turn auth failure returns a synthetic id that must never be sent to threads continue", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([
+      authFailureScript(),
+      successScript({ sessionId: "T-sess-real-3", text: "recovered" }),
+    ]);
+    const handler = makeHandler(supervisor);
+    const token = makeToken();
+    const ctx = makeContext({ events });
+
+    const first = await handler.start(makeMessage("m1", "hello"), ctx, token);
+    expect(isAmpPendingSessionId(first.sessionId)).toBe(true);
+    expect(first.sessionId.startsWith(AMP_PENDING_SESSION_PREFIX)).toBe(true);
+    expect(specs[0]?.args).not.toContain("threads");
+    expect(events.some((event) => event.kind === "error" && String(event.payload.message).includes("amp login"))).toBe(
+      true,
+    );
+
+    await handler.resume(makeMessage("m2", "retry"), first.sessionId, ctx, makeToken());
+    expect(specs[1]?.args).not.toContain("threads");
+    expect(specs[1]?.args).not.toContain(first.sessionId);
+    await handler.shutdown();
+  });
+});

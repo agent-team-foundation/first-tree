@@ -1,0 +1,83 @@
+import { describe, expect, it } from "vitest";
+import { AmpStreamParser, parseAmpStreamLine } from "../parser.js";
+
+describe("Amp stream-json parser", () => {
+  it("parses init, thinking, assistant text, tools, and a successful result", () => {
+    const parser = new AmpStreamParser();
+    const events = [
+      ...parser.push(
+        [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "T-11111111-1111-4111-8111-111111111111" }),
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "thinking", thinking: "plan the answer" }] },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              content: [{ type: "tool_use", id: "call_read", name: "read", input: { path: "README.md" } }],
+            },
+          }),
+          JSON.stringify({
+            type: "user",
+            message: { content: [{ type: "tool_result", tool_use_id: "call_read", content: "hello" }] },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "text", text: "done" }] },
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "done",
+            session_id: "T-11111111-1111-4111-8111-111111111111",
+            usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3 },
+          }),
+          "",
+        ].join("\n"),
+      ),
+      ...parser.flush(),
+    ];
+
+    expect(events).toEqual([
+      { kind: "init", sessionId: "T-11111111-1111-4111-8111-111111111111" },
+      { kind: "thinking_delta", text: "plan the answer" },
+      { kind: "tool_started", callId: "call_read", tool: { name: "read", args: { path: "README.md" } } },
+      { kind: "tool_completed", callId: "call_read", preview: "hello", failed: false },
+      { kind: "assistant_message", text: "done" },
+      {
+        kind: "result",
+        isError: false,
+        text: "done",
+        sessionId: "T-11111111-1111-4111-8111-111111111111",
+        usage: { inputTokens: 12, outputTokens: 4, cacheReadTokens: 3, cacheWriteTokens: 0 },
+      },
+    ]);
+  });
+
+  it("never throws on unparsable or unknown lines", () => {
+    expect(parseAmpStreamLine("not-json")).toMatchObject({ kind: "unknown", note: "unparsable stream line" });
+    expect(parseAmpStreamLine('{"type":"mystery"}')).toMatchObject({
+      kind: "unknown",
+      note: "unknown stream type mystery",
+    });
+    expect(parseAmpStreamLine("")).toBeNull();
+  });
+
+  it("maps system execution errors and result is_error to a failed result", () => {
+    expect(
+      parseAmpStreamLine(
+        JSON.stringify({
+          type: "system",
+          subtype: "error_during_execution",
+          error: "not logged in",
+          session_id: "T-1",
+        }),
+      ),
+    ).toMatchObject({ kind: "result", isError: true, text: "not logged in", sessionId: "T-1" });
+    expect(
+      parseAmpStreamLine(JSON.stringify({ type: "result", is_error: true, error: "amp login required" })),
+    ).toMatchObject({ kind: "result", isError: true, text: "amp login required" });
+  });
+});

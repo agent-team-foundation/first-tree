@@ -8,6 +8,7 @@ import type { RuntimeProvider } from "@first-tree/shared";
  * imports Providers to obtain it.
  */
 export const PROVIDER_SKILL_ROOTS: Readonly<Record<RuntimeProvider, string>> = Object.freeze({
+  amp: ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",

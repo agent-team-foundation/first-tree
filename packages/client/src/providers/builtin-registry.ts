@@ -1,5 +1,6 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import type { HandlerFactory } from "../runtime/contracts.js";
+import { createAmpHandler } from "./amp/index.js";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "./claude/executable.js";
 import { createClaudeCodeHandler } from "./claude/index.js";
 import { createClaudeCodeTuiHandler } from "./claude/tui/index.js";
@@ -40,6 +41,7 @@ export function createBuiltinHandlerRegistry(deps: BuiltinHandlerRegistryDeps = 
   const resolution = (deps.resolveExecutable ?? (() => resolveClaudeCodeExecutable({ includeLoginShell: false })))();
 
   return Object.freeze({
+    amp: (config) => createAmpHandler(config),
     "claude-code": (config) => createClaudeCodeHandler({ ...config, claudeCodeExecutable: resolution.path }),
     "claude-code-tui": (config) => createClaudeCodeTuiHandler({ ...config, claudeCodeExecutable: resolution.path }),
     codex: (config) => createCodexHandler(config),

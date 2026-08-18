@@ -5,6 +5,7 @@ import {
   agentRuntimeConfigPayloadSchema,
   agentRuntimeConfigSchema,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
@@ -155,6 +156,10 @@ describe("agent runtime config — codex defaults", () => {
       kind: "codex",
       model: "",
       serviceTier: "default",
+    });
+    expect(defaultRuntimeConfigPayload("amp")).toMatchObject({
+      kind: "amp",
+      model: "",
     });
   });
 
@@ -308,6 +313,24 @@ describe("agent runtime config — kimi-code variant", () => {
       reasoningEffort: "high",
     });
     expect(parsed.model).toBe("kimi-for-coding");
+    expect("reasoningEffort" in parsed).toBe(false);
+  });
+});
+
+describe("agent runtime config — amp variant", () => {
+  it("defaults to host-local model selection with no reasoning-effort field", () => {
+    expect(DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD).toMatchObject({ kind: "amp", model: "" });
+    expect("reasoningEffort" in DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD).toBe(false);
+    expect(defaultRuntimeConfigPayload("amp")).toMatchObject({ kind: "amp", model: "" });
+  });
+
+  it("passes a provider-native model id through unchanged", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "amp",
+      model: "claude-opus-4.6",
+      reasoningEffort: "high",
+    });
+    expect(parsed.model).toBe("claude-opus-4.6");
     expect("reasoningEffort" in parsed).toBe(false);
   });
 });

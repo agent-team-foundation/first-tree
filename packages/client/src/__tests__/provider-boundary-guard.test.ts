@@ -74,7 +74,7 @@ function isForbiddenConcreteProviderModuleTarget(relPosix: string): boolean {
   const rel = relPosix.replaceAll("\\", "/").replace(/\.tsx?$/, ".js");
   if (rel === "handlers/kimi-code.js" || rel === "providers/handlers/kimi-code.js") return true;
   if (/^(?:providers\/)?handlers\/(cursor|kimi-code|opencode|pi)\//.test(rel)) return true;
-  if (/^providers\/(claude|codex|cursor|grok|kimi-code|opencode|pi)(\/|$)/.test(rel)) return true;
+  if (/^providers\/(amp|claude|codex|cursor|grok|kimi-code|opencode|pi)(\/|$)/.test(rel)) return true;
   // Shared capability foundation — Runtime must not reverse-load it.
   // Do not forbid providers/skill-roots (managed-skills composition seam).
   if (/^providers\/capabilities(\/|$)/.test(rel)) return true;
@@ -137,6 +137,7 @@ const CATALOG_CONSUMER_FILES = [
   "packages/client/src/providers/kimi-code/binary.ts",
   "packages/client/src/providers/opencode/binary.ts",
   "packages/client/src/providers/pi/binary.ts",
+  "packages/client/src/providers/amp/binary.ts",
 ] as const;
 
 function listFilesRecursive(root: string, predicate: (path: string) => boolean): string[] {
@@ -305,6 +306,7 @@ describe("runtime provider architecture guard", () => {
     expect(productionRels).toContain("providers/grok/capability.ts");
     expect(productionRels).toContain("providers/opencode/capability.ts");
     expect(productionRels).toContain("providers/pi/capability.ts");
+    expect(productionRels).toContain("providers/amp/capability.ts");
 
     // Local regex / phrase tables that re-recognize provider binary absence.
     const codexBundledLocateMatcher = /unable to locate codex cli binaries/i;
@@ -1511,6 +1513,7 @@ describe("runtime provider architecture guard", () => {
       "providers/kimi-code/index.ts",
       "providers/opencode/index.ts",
       "providers/pi/index.ts",
+      "providers/amp/index.ts",
       "providers/handlers/turn-settlement.ts",
       "providers/builtin-registry.ts",
       "providers/auth-driver.ts",
@@ -1724,6 +1727,11 @@ describe("runtime provider architecture guard", () => {
       if (rel.endsWith("providers/opencode/binary.ts") || rel.endsWith("opencode/binary.ts")) {
         expect(source).toContain("OPENCODE_MINIMUM_VERSION");
         expect(source).toContain("runtimeProviderInstallCommand");
+      }
+      if (rel.endsWith("providers/amp/binary.ts") || rel.endsWith("amp/binary.ts")) {
+        expect(source).toMatch(/from "@first-tree\/shared"/);
+        expect(source).toContain("AMP_INSTALL_COMMAND");
+        expect(source).toContain("runtimeProviderLoginCommand");
       }
       if (rel.endsWith("providers/pi/binary.ts") || rel.endsWith("pi/binary.ts")) {
         expect(source).toContain("runtimeProviderInstallCommand");
@@ -2076,6 +2084,7 @@ describe("runtime provider architecture guard", () => {
       "providers/kimi-code/index.ts",
       "providers/opencode/index.ts",
       "providers/pi/index.ts",
+      "providers/amp/index.ts",
     ] as const;
     for (const rel of mustUseProviderSupport) {
       const source = readFileSync(join(clientSrc, rel), "utf8");

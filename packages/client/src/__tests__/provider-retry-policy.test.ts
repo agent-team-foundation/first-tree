@@ -571,6 +571,31 @@ describe("classifyProviderFailure", () => {
     ).toMatchObject({ category: "deterministic_input", reasonCode: "provider_deterministic_input" });
   });
 
+  it("amp win32 fail-closed classifies capability/amp_platform_unsupported with a deterministic stop", () => {
+    const c = classifyProviderFailure(
+      new Error(
+        "Amp is not supported on Windows in v1 until the client-wide pre-admission Job Object supervisor is available.",
+      ),
+      { provider: "amp", scope: "provider_turn" },
+    );
+    expect(c).toMatchObject({ category: "capability", reasonCode: "amp_platform_unsupported" });
+    expect(
+      decideProviderRetry({ classification: c, scope: "provider_turn", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "stop" });
+  });
+
+  it("classifies Amp credential phrasings as needs_operator", () => {
+    const c = classifyProviderFailure(new Error("Error: not logged in. Run `amp login` or set AMP_API_KEY."), {
+      provider: "amp",
+      scope: "provider_turn",
+      source: "stream",
+    });
+    expect(c).toMatchObject({ category: "credential" });
+    expect(
+      decideProviderRetry({ classification: c, scope: "provider_turn", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "stop", terminalKind: "needs_operator" });
+  });
+
   it("grok win32 fail-closed classifies capability/grok_platform_unsupported with a deterministic stop", () => {
     const c = classifyProviderFailure(
       new Error("the grok provider is not supported on Windows in V1 (macOS/Linux only)"),

@@ -9,6 +9,7 @@ import {
 } from "./runtime-provider.js";
 
 /** Official installer scripts (also re-exported for client binary remediation). */
+export const AMP_INSTALL_COMMAND = "curl -fsSL https://ampcode.com/install.sh | bash";
 export const CURSOR_INSTALL_COMMAND = "curl https://cursor.com/install -fsS | bash";
 export const GROK_INSTALL_COMMAND = "curl -fsSL https://x.ai/cli/install.sh | bash";
 
@@ -73,6 +74,17 @@ export type RuntimeProviderCatalogEntry = {
  * Exhaustive catalog keyed by every {@link RuntimeProvider}.
  */
 export const RUNTIME_PROVIDER_CATALOG = {
+  amp: {
+    id: "amp",
+    label: "Amp",
+    // After Pi in setup-card order. Agent creation keeps Codex/Claude prefix.
+    displayOrder: 90,
+    selectionPriority: null,
+    install: { kind: "script", command: AMP_INSTALL_COMMAND },
+    loginSteps: ["amp login"],
+    authRecovery: { kind: "host" },
+    authOwnerLabel: "Amp",
+  },
   "claude-code": {
     id: "claude-code",
     label: "Claude Code",

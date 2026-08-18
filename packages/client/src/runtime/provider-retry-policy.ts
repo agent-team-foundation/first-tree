@@ -115,6 +115,15 @@ export function classifyProviderFailure(
   // verification). Both must stop deterministically — never the unknown
   // retry path, never the binary_missing reason code (that one is reserved
   // for "no binary resolved").
+  if (context.provider === "amp" && /not supported on windows in v1/.test(text)) {
+    return {
+      category: "capability",
+      reasonCode: "amp_platform_unsupported",
+      message: base.message,
+      retryAfterMs,
+      sourceKind: base.kind,
+    };
+  }
   if (context.provider === "grok" && /not supported on windows in v1/.test(text)) {
     return {
       category: "capability",
@@ -536,6 +545,7 @@ function isCredential(
   // Cursor" CTA renders only for category=credential, so a wording variant
   // that drops the word "authentication" must still classify credential —
   // without leaking these generic phrases into other providers' traffic.
+  if (provider === "amp" && /not logged in|amp login|amp_api_key/.test(text)) return true;
   if (provider === "cursor" && /not logged in|agent login|cursor_api_key/.test(text)) return true;
   // Grok Build CLI logged-out phrasings (kept in sync with isGrokAuthError in
   // handlers/auth-error-hint.ts). Same provider-gating rationale as cursor:

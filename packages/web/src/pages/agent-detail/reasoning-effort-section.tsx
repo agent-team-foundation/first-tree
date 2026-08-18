@@ -43,6 +43,7 @@ const GROK_EFFORT_OPTIONS: SelectOption[] = [
 ];
 
 const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
+  amp: [],
   "claude-code": CLAUDE_EFFORT_OPTIONS,
   // claude-code-tui drives the same `claude` CLI as claude-code, so it shares
   // the identical effort options + inherit sentinel.
@@ -59,6 +60,7 @@ const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
 };
 
 export const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
+  amp: "Amp reasoning is inherited from the local Amp configuration; there is no separate First Tree effort control.",
   "claude-code": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   codex: "Applies to new sessions. Higher means more reasoning per turn; max and ultra require a compatible model.",

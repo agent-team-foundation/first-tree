@@ -4,6 +4,7 @@ import {
   RUNTIME_PROVIDER_IDS,
   type RuntimeProvider,
 } from "@first-tree/shared";
+import { probeAmpCapability } from "./amp/capability.js";
 import { probeClaudeCodeCapability } from "./claude/capability.js";
 import { probeClaudeCodeTuiCapability } from "./claude/capability-tui.js";
 import { probeCodexCapability } from "./codex/capability.js";
@@ -79,6 +80,7 @@ export function probeExternalTool(
  * so the probe path does not pull handler/SDK imports.
  */
 export const BUILTIN_PROVIDER_PROBES: BuiltinProviderProbeTable = Object.freeze({
+  amp: probeAmpCapability,
   "claude-code": probeClaudeCodeCapability,
   "claude-code-tui": probeClaudeCodeTuiCapability,
   codex: probeCodexCapability,

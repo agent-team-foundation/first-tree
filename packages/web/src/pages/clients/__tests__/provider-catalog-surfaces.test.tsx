@@ -33,6 +33,7 @@ const IN_PRODUCT_SETUP_CASES = [
 ] as const satisfies readonly (readonly [RuntimeProvider, string])[];
 
 const HOST_SETUP_CASES = [
+  ["amp", "amp login"],
   ["kimi-code", "kimi # then run /login"],
   ["opencode", "opencode auth login"],
   ["pi", "pi # then run /login"],
@@ -120,7 +121,8 @@ describe("web provider surfaces derived from shared catalog", () => {
       "npm install -g --ignore-scripts @earendil-works/pi-coding-agent\npi # then run /login",
     );
     expect(buildInstallCommand("opencode")).toBe("npm install -g opencode-ai@^1.18.7\nopencode auth login");
-    expect(buildInstallCommand("cursor")).toBe("curl https://cursor.com/install -fsS | bash");
+    expect(buildInstallCommand("amp")).toBe("curl -fsSL https://ampcode.com/install.sh | bash\namp login");
+    expect(providerInstallHint("amp", "linux")).toContain("ampcode.com/install.sh");
     expect(buildInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");
     expect(buildInstallCommand("cursor")).not.toContain("cursor-agent login");
     expect(buildInstallCommand("grok")).not.toContain("grok login");

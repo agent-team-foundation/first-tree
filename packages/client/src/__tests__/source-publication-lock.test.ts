@@ -34,6 +34,7 @@ import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
+  amp: ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",

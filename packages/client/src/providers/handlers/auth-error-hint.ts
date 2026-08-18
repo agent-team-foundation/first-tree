@@ -138,6 +138,23 @@ export function isPiAuthError(message: string): boolean {
   return PI_AUTH_KEYWORDS.some((keyword) => lower.includes(keyword));
 }
 
+const AMP_AUTH_KEYWORDS: readonly string[] = [
+  "amp login",
+  "amp_api_key",
+  "not logged in",
+  "not authenticated",
+  "authentication required",
+  "unauthorized",
+  "invalid api key",
+  "missing api key",
+];
+
+export function isAmpAuthError(message: string): boolean {
+  if (message.length === 0) return false;
+  const lower = message.toLowerCase();
+  return AMP_AUTH_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
 /**
  * The single auth-failure code claude-code's SDK reports (out of the
  * `SDKAssistantMessageError` union). Centralised here so both the assistant-

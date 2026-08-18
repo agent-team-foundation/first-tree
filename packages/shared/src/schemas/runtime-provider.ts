@@ -10,6 +10,7 @@ import { z } from "zod";
  * {@link asRuntimeProvider} / {@link runtimeProviderSchema} before dispatch.
  */
 export const runtimeProviderSchema = z.enum([
+  "amp",
   "claude-code",
   "claude-code-tui",
   "codex",

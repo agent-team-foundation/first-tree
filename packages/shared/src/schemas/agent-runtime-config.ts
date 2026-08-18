@@ -294,6 +294,12 @@ const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   serviceTier: z.string().min(1).default("default"),
 });
 
+const ampRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("amp"),
+  // Amp model identifiers are provider-native. An empty value delegates to the
+  // operator's local Amp default; a non-empty value is forwarded as `--model`.
+});
+
 const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("cursor"),
   // No `reasoningEffort` — Cursor has no separate effort channel; effort/fast/
@@ -341,6 +347,7 @@ const grokRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
 });
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
+  ampRuntimeConfigPayloadShape,
   claudeRuntimeConfigPayloadShape,
   claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
@@ -470,6 +477,17 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
   reasoningEffort: "",
 };
 
+/** Default payload for a fresh Amp agent. Empty model inherits Amp's local default. */
+export const DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "amp",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+};
+
 /**
  * Default payload for a fresh cursor agent. `model` is empty by default so the
  * spawn omits `--model` and the Cursor CLI picks its local default (`auto`); a
@@ -544,6 +562,8 @@ export function defaultRuntimeConfigPayload(
   provider: z.infer<typeof runtimeProviderSchema>,
 ): AgentRuntimeConfigPayload {
   switch (provider) {
+    case "amp":
+      return { ...DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD };
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
     case "cursor":

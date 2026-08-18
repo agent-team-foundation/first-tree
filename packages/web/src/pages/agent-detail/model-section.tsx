@@ -104,6 +104,7 @@ export const CURSOR_AUTO_MODEL_OPTIONS: ModelOption[] = [
  * their fallback is the free-form exact-id input.
  */
 const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
+  amp: [],
   "claude-code": CLAUDE_MODEL_OPTIONS,
   "claude-code-tui": CLAUDE_MODEL_OPTIONS,
   codex: CODEX_MODEL_OPTIONS,
@@ -115,6 +116,7 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
+  amp: "Enter an exact Amp model id. It is passed through verbatim on the next turn; unset inherits Amp's local default.",
   "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
   "claude-code-tui": "Applies to new sessions immediately. Model swap restarts the tmux session (~2–4s).",
   codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",

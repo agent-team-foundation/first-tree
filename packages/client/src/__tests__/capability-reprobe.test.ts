@@ -77,6 +77,7 @@ describe("hasNonOkProvider", () => {
     // claude-code-tui is disabled, so every other built-in must be ok.
     expect(
       hasNonOkProvider({
+        amp: okEntry(),
         "claude-code": okEntry(),
         codex: okEntry(),
         cursor: okEntry(),
@@ -92,6 +93,7 @@ describe("hasNonOkProvider", () => {
   it("keeps polling when runtimes are healthy but lark-cli is missing", () => {
     expect(
       hasNonOkProvider({
+        amp: okEntry(),
         "claude-code": okEntry(),
         codex: okEntry(),
         cursor: okEntry(),
@@ -151,9 +153,15 @@ describe("nextCapabilityRefreshDelayMs", () => {
 
 describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", () => {
   afterEach(() => {
+    vi.doUnmock("../providers/amp/capability.js");
     vi.doUnmock("../providers/claude/capability.js");
     vi.doUnmock("../providers/claude/capability-tui.js");
     vi.doUnmock("../providers/codex/capability.js");
+    vi.doUnmock("../providers/cursor/capability.js");
+    vi.doUnmock("../providers/grok/capability.js");
+    vi.doUnmock("../providers/kimi-code/capability.js");
+    vi.doUnmock("../providers/opencode/capability.js");
+    vi.doUnmock("../providers/pi/capability.js");
     vi.resetModules();
   });
 
@@ -171,11 +179,17 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
         return Promise.resolve(results[provider] ?? okEntry());
       });
     vi.resetModules();
+    vi.doMock("../providers/amp/capability.js", () => ({ probeAmpCapability: mk("amp") }));
     vi.doMock("../providers/claude/capability.js", () => ({ probeClaudeCodeCapability: mk("claude-code") }));
     vi.doMock("../providers/claude/capability-tui.js", () => ({
       probeClaudeCodeTuiCapability: mk("claude-code-tui"),
     }));
     vi.doMock("../providers/codex/capability.js", () => ({ probeCodexCapability: mk("codex") }));
+    vi.doMock("../providers/cursor/capability.js", () => ({ probeCursorCapability: mk("cursor") }));
+    vi.doMock("../providers/grok/capability.js", () => ({ probeGrokCapability: mk("grok") }));
+    vi.doMock("../providers/kimi-code/capability.js", () => ({ probeKimiCodeCapability: mk("kimi-code") }));
+    vi.doMock("../providers/opencode/capability.js", () => ({ probeOpenCodeCapability: mk("opencode") }));
+    vi.doMock("../providers/pi/capability.js", () => ({ probePiCapability: mk("pi") }));
     const mod = await import("../providers/capabilities/index.js");
     return { mod, calls };
   }
@@ -192,6 +206,7 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     // fresh probe output, not the previous snapshot.
     expect(calls["claude-code"]).toBe(1);
     expect(calls.codex).toBe(1);
+    expect(calls.amp).toBe(1);
     expect(out["claude-code"]?.state).toBe("ok");
     expect(out.codex?.state).toBe("ok");
     // claude-code-tui is disabled → never probed, no entry.

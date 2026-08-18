@@ -148,6 +148,7 @@ export {
   agentRuntimeConfigSchema,
   type ClientMessagePayload,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
@@ -1495,6 +1496,7 @@ export {
   runtimeProviderSchema,
 } from "./schemas/runtime-provider.js";
 export {
+  AMP_INSTALL_COMMAND,
   CURSOR_INSTALL_COMMAND,
   enabledOkRuntimeProviders,
   enabledRuntimeProviders,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAuthHint,
+  isAmpAuthError,
   isClaudeAuthError,
   isCodexAuthError,
   isGrokAuthError,
@@ -137,6 +138,15 @@ describe("isOpenCodeAuthError", () => {
   });
 });
 
+describe("isAmpAuthError", () => {
+  it("matches provider-owned credential failures without treating capacity failures as auth", () => {
+    expect(isAmpAuthError("Error: not logged in. Run `amp login` or set AMP_API_KEY.")).toBe(true);
+    expect(isAmpAuthError("invalid api key")).toBe(true);
+    expect(isAmpAuthError("rate limit exceeded")).toBe(false);
+    expect(isAmpAuthError("")).toBe(false);
+  });
+});
+
 describe("formatAuthHint", () => {
   it("targets `codex login` for the codex runtime and quotes the original SDK message", () => {
     const hint = formatAuthHint(
@@ -166,6 +176,14 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("Grok Build");
     expect(hint).toContain("not First Tree's");
     expect(hint).toContain("not logged in");
+  });
+
+  it("keeps Amp authentication host-local and points at the provider-owned login", () => {
+    const hint = formatAuthHint("amp", "Error: not logged in. Run `amp login`.");
+    expect(hint).toContain("amp");
+    expect(hint).toContain("`amp login`");
+    expect(hint).toContain("Amp");
+    expect(hint).toContain("not First Tree's");
   });
 
   it("keeps OpenCode authentication host-local and points at the provider-owned login", () => {

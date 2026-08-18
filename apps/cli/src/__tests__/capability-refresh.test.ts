@@ -32,6 +32,7 @@ const missing = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
 });
 
 const allOk = (): ClientCapabilities => ({
+  amp: ok(),
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: ok(),
@@ -44,6 +45,7 @@ const allOk = (): ClientCapabilities => ({
 });
 
 const codexMissing = (): ClientCapabilities => ({
+  amp: ok(),
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: missing(),
@@ -76,6 +78,7 @@ const codexPending = (): CapabilityEntry =>
 
 /** Snapshot with codex mid-browser-auth (not-yet-installed + a pending login). */
 const codexPendingSnapshot = (): ClientCapabilities => ({
+  amp: ok(),
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: codexPending(),
@@ -89,6 +92,7 @@ const codexPendingSnapshot = (): ClientCapabilities => ({
 
 /** What a re-probe sees while the login is still in flight: still not installed. */
 const codexUnauthSnapshot = (): ClientCapabilities => ({
+  amp: ok(),
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: codexUnauth(),

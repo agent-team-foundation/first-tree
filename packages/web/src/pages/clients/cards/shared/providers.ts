@@ -1,5 +1,6 @@
 import {
   asRuntimeProvider,
+  AMP_INSTALL_COMMAND,
   CURSOR_INSTALL_COMMAND,
   enabledRuntimeProviders,
   GROK_INSTALL_COMMAND,
@@ -174,6 +175,8 @@ export function providerInstallHint(
         ? `Run \`${installCmd}\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`
         : `Run \`${installCmd}\`, then install tmux (>= 3.0) with your package manager, on this ${device}.`;
     }
+    case "amp":
+      return `Run \`${AMP_INSTALL_COMMAND}\` on this ${device} (official Amp installer), then complete provider-owned setup with \`${loginCmd}\`.`;
     case "cursor":
       return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;
     case "grok":

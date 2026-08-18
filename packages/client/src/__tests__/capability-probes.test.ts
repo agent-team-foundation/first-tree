@@ -732,6 +732,7 @@ describe("probeCapabilities (aggregator)", () => {
     const tuiProbe = vi.fn().mockResolvedValue(fakeEntry("missing"));
     const okProbe = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
+      amp: okProbe,
       "claude-code": okProbe,
       "claude-code-tui": tuiProbe,
       codex: okProbe,
@@ -747,13 +748,21 @@ describe("probeCapabilities (aggregator)", () => {
 
     // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS — it is skipped, so it
     // gets no capability entry AND its probe is never called (no binary spawn).
-    expect(Object.keys(caps).sort()).toEqual(["claude-code", "codex", "cursor", "grok", "kimi-code", "opencode", "pi"]);
+    expect(Object.keys(caps).sort()).toEqual([
+      "amp",
+      "claude-code",
+      "codex",
+      "cursor",
+      "grok",
+      "kimi-code",
+      "opencode",
+      "pi",
+    ]);
     expect(caps["claude-code"]?.state).toBe("ok");
     expect(caps["claude-code-tui"]).toBeUndefined();
     expect(tuiProbe).not.toHaveBeenCalled();
-    // Each enabled provider invokes the shared ok probe once (7 enabled).
-    expect(okProbe).toHaveBeenCalledTimes(7);
-  });
+    expect(okProbe).toHaveBeenCalledTimes(8);
+  }, 15_000);
 
   it("publishes the machine-level lark-cli capability alongside runtime providers", async () => {
     const okProbe = vi.fn().mockResolvedValue(fakeEntry("ok"));
@@ -769,6 +778,7 @@ describe("probeCapabilities (aggregator)", () => {
 
   it("converts enabled-provider probe rejections into error capability entries", async () => {
     const probes = {
+      amp: vi.fn().mockRejectedValue("amp probe failed"),
       "claude-code": vi.fn().mockRejectedValue(new Error("claude probe failed")),
       "claude-code-tui": vi.fn().mockRejectedValue("tui probe failed"),
       codex: vi.fn().mockRejectedValue("codex probe failed"),
@@ -782,6 +792,7 @@ describe("probeCapabilities (aggregator)", () => {
     const { probeCapabilities } = await import("../providers/capabilities/index.js");
     const caps = await probeCapabilities({ probes });
 
+    expect(caps.amp).toMatchObject({ state: "error", error: "amp probe failed" });
     expect(caps["claude-code"]).toMatchObject({
       state: "error",
       available: false,
@@ -831,6 +842,7 @@ describe("probeCapabilities (aggregator)", () => {
     expect(enabledOkRuntimeProviders(caps)).toEqual([
       "codex",
       "claude-code",
+      "amp",
       "cursor",
       "grok",
       "kimi-code",
@@ -842,6 +854,7 @@ describe("probeCapabilities (aggregator)", () => {
   it("isolates a single probe rejection to that provider entry", async () => {
     const ok = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
+      amp: ok,
       "claude-code": ok,
       "claude-code-tui": ok,
       codex: vi.fn().mockRejectedValue(new Error("only codex")),

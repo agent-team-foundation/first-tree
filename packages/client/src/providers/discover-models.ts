@@ -59,6 +59,12 @@ export async function discoverProviderModels(
       return discoverGrokModels(deps);
     case "kimi-code":
       return discoverKimiModels(deps);
+    case "amp":
+      return unavailableCatalog(
+        provider,
+        "Amp model discovery is not enabled in V1; enter the provider-native model id",
+        deps,
+      );
     case "opencode":
       return unavailableCatalog(
         provider,
