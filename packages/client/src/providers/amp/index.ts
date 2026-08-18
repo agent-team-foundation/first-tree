@@ -91,11 +91,15 @@ export function buildAmpTurnArgs(input: {
   // Force private new threads (Amp's execute default is workspace-shared) and
   // disable remote web-terminal control every turn (host AMP_REMOTE_CONTROL_TERMINAL
   // must not open a second control plane outside First Tree's session boundary).
+  // Amp archives --execute threads by default; `threads continue` then fails with
+  // "This thread is archived and cannot be continued." Keep the thread live so
+  // First Tree resume can reuse the stream-confirmed T-uuid.
   args.push(
     "--execute",
     "--stream-json",
     "--stream-json-thinking",
     "--no-remote-control-terminal",
+    "--no-archive-after-execute",
     "--settings-file",
     input.settingsFile,
   );
