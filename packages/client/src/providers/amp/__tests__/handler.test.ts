@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared";
@@ -13,6 +13,7 @@ import {
   createAmpHandler,
   isAmpPendingSessionId,
   mapAmpMcpServers,
+  removeAmpRuntimeSettings,
   writeAmpRuntimeSettings,
 } from "../index.js";
 
@@ -52,15 +53,22 @@ function makeFakeSupervisor(scripts: ChildScript[]): {
   supervisor: ProviderProcessSupervisor;
   specs: ProviderProcessSpec[];
   children: FakeChild[];
+  settingsSnapshots: unknown[];
 } {
   const specs: ProviderProcessSpec[] = [];
   const children: FakeChild[] = [];
+  const settingsSnapshots: unknown[] = [];
   return {
     specs,
     children,
+    settingsSnapshots,
     supervisor: {
       spawn(spec) {
         specs.push(spec);
+        const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
+        if (typeof settingsPath === "string" && existsSync(settingsPath)) {
+          settingsSnapshots.push(JSON.parse(readFileSync(settingsPath, "utf8")));
+        }
         const child = new FakeChild();
         children.push(child);
         const script = scripts.shift();
@@ -278,11 +286,62 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
     });
   });
 
-  it("writes runtime-owned dangerouslyAllowAll settings under the agent home", () => {
+  it("writes runtime-owned dangerouslyAllowAll settings under a unique per-turn path", () => {
     const path = writeAmpRuntimeSettings(workspaceRoot);
-    expect(path).toBe(join(workspaceRoot, ".first-tree", "amp-runtime-settings.json"));
+    expect(path).toMatch(/amp-runtime-settings\.[0-9a-f-]{36}\.json$/);
+    expect(path.startsWith(join(workspaceRoot, ".first-tree", "amp-runtime-settings."))).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    removeAmpRuntimeSettings(path);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("keeps concurrent MCP snapshots on distinct paths so neither turn can overwrite the other", () => {
+    const first = writeAmpRuntimeSettings(
+      workspaceRoot,
+      mapAmpMcpServers(
+        ampPayload({
+          mcpServers: [
+            {
+              name: "a",
+              transport: "http",
+              url: "https://example.test/a",
+              headers: { Authorization: "Bearer token-a" },
+            },
+          ],
+        }),
+      ),
+    );
+    const second = writeAmpRuntimeSettings(
+      workspaceRoot,
+      mapAmpMcpServers(
+        ampPayload({
+          mcpServers: [
+            {
+              name: "b",
+              transport: "http",
+              url: "https://example.test/b",
+              headers: { Authorization: "Bearer token-b" },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(first).not.toBe(second);
+    expect(JSON.parse(readFileSync(first, "utf8"))).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/a", headers: { Authorization: "Bearer token-a" } },
+      },
+    });
+    expect(JSON.parse(readFileSync(second, "utf8"))).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/b", headers: { Authorization: "Bearer token-b" } },
+      },
+    });
+    removeAmpRuntimeSettings(first);
+    removeAmpRuntimeSettings(second);
   });
 
   it("folds MCP servers including headers into the 0600 settings file, never argv", () => {
@@ -309,13 +368,14 @@ describe("buildAmpTurnArgs — canonical spawn contract", () => {
       "secret-token",
     );
     expect(buildAmpTurnArgs({ mode: "high", resumeSessionId: null, settingsFile: path })).not.toContain("--mcp-config");
+    removeAmpRuntimeSettings(path);
   });
 });
 
 describe("Amp handler — per-turn CLI transport", () => {
   it("start: prompt on stdin only, canonical args, session id from stream", async () => {
     const events: SessionEvent[] = [];
-    const { supervisor, specs, children } = makeFakeSupervisor([
+    const { supervisor, specs, children, settingsSnapshots } = makeFakeSupervisor([
       successScript({ sessionId: "T-sess-real-1", text: "hello world" }),
     ]);
     const forwarded: string[] = [];
@@ -347,8 +407,9 @@ describe("Amp handler — per-turn CLI transport", () => {
     expect(spec.args).not.toContain("threads");
     expect((spec.options.env as Record<string, string> | undefined)?.AMP_REMOTE_CONTROL_TERMINAL).toBe("0");
     const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
-    expect(settingsPath).toMatch(/amp-runtime-settings\.json$/);
-    expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({ "amp.dangerouslyAllowAll": true });
+    expect(settingsPath).toMatch(/amp-runtime-settings\.[0-9a-f-]{36}\.json$/);
+    expect(settingsSnapshots[0]).toEqual({ "amp.dangerouslyAllowAll": true });
+    expect(existsSync(settingsPath ?? "")).toBe(false);
     expect(children[0]?.stdin.written).toContain("do the thing");
     expect(children[0]?.stdin.ended).toBe(true);
 
@@ -362,7 +423,9 @@ describe("Amp handler — per-turn CLI transport", () => {
 
   it("resume: threads continue plus --mode; MCP lives in settings, never --mcp-config", async () => {
     const events: SessionEvent[] = [];
-    const { supervisor, specs } = makeFakeSupervisor([successScript({ sessionId: "T-sess-real-2", text: "resumed" })]);
+    const { supervisor, specs, settingsSnapshots } = makeFakeSupervisor([
+      successScript({ sessionId: "T-sess-real-2", text: "resumed" }),
+    ]);
     const handler = makeHandler(supervisor, {
       payload: ampPayload({
         model: "high",
@@ -389,12 +452,14 @@ describe("Amp handler — per-turn CLI transport", () => {
     expect((spec.options.env as Record<string, string> | undefined)?.AMP_REMOTE_CONTROL_TERMINAL).toBe("0");
     expect(spec.args.join(" ")).not.toContain("secret-token");
     const settingsPath = spec.args[spec.args.indexOf("--settings-file") + 1];
-    expect(JSON.parse(readFileSync(settingsPath ?? "", "utf8"))).toEqual({
+    expect(settingsPath).toMatch(/amp-runtime-settings\.[0-9a-f-]{36}\.json$/);
+    expect(settingsSnapshots[0]).toEqual({
       "amp.dangerouslyAllowAll": true,
       "amp.mcpServers": {
         "first-tree-mcp-1": { url: "https://example.test/mcp", headers: { Authorization: "Bearer secret-token" } },
       },
     });
+    expect(existsSync(settingsPath ?? "")).toBe(false);
     await handler.shutdown();
   });
 
@@ -594,5 +659,113 @@ describe("Amp handler — per-turn CLI transport", () => {
     expect(specs).toHaveLength(1);
     expect(injectToken.completed).toMatchObject([{ status: "success" }]);
     await handler.shutdown();
+  });
+
+  it("gives concurrent same-agent turns distinct settings files across an MCP config change", async () => {
+    const releaseFirst: { value: (() => void) | null } = { value: null };
+    const releaseSecond: { value: (() => void) | null } = { value: null };
+    const firstSettings: { path: string | null; body: unknown } = { path: null, body: null };
+    const secondSettings: { path: string | null; body: unknown } = { path: null, body: null };
+
+    const holdScript = (release: { value: (() => void) | null }, sessionId: string) => (child: FakeChild) => {
+      void new Promise<void>((resolve) => {
+        release.value = resolve;
+      }).then(() => {
+        child.stdout.emit("data", line({ type: "system", subtype: "init", session_id: sessionId }));
+        child.stdout.emit(
+          "data",
+          line({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "ok",
+            session_id: sessionId,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+        );
+        child.stdout.emit("end");
+        child.emit("close", 0, null);
+      });
+    };
+
+    const first = makeFakeSupervisor([holdScript(releaseFirst, "T-concurrent-a")]);
+    // Capture settings path at spawn into the outer holders.
+    const firstSpawn = first.supervisor.spawn.bind(first.supervisor);
+    first.supervisor.spawn = (spec) => {
+      const settingsPath = String(spec.args[spec.args.indexOf("--settings-file") + 1]);
+      firstSettings.path = settingsPath;
+      firstSettings.body = JSON.parse(readFileSync(settingsPath, "utf8"));
+      return firstSpawn(spec);
+    };
+
+    const second = makeFakeSupervisor([holdScript(releaseSecond, "T-concurrent-b")]);
+    const secondSpawn = second.supervisor.spawn.bind(second.supervisor);
+    second.supervisor.spawn = (spec) => {
+      const settingsPath = String(spec.args[spec.args.indexOf("--settings-file") + 1]);
+      secondSettings.path = settingsPath;
+      secondSettings.body = JSON.parse(readFileSync(settingsPath, "utf8"));
+      return secondSpawn(spec);
+    };
+
+    const handlerA = makeHandler(first.supervisor, {
+      payload: ampPayload({
+        mcpServers: [
+          {
+            name: "a",
+            transport: "http",
+            url: "https://example.test/a",
+            headers: { Authorization: "Bearer token-a" },
+          },
+        ],
+      }),
+    });
+    const handlerB = makeHandler(second.supervisor, {
+      payload: ampPayload({
+        mcpServers: [
+          {
+            name: "b",
+            transport: "http",
+            url: "https://example.test/b",
+            headers: { Authorization: "Bearer token-b" },
+          },
+        ],
+      }),
+    });
+
+    const turnA = handlerA.start(makeMessage("a1", "first"), makeContext({ events: [] }), makeToken());
+    await vi.waitFor(() => {
+      if (!firstSettings.path) throw new Error("first settings not captured");
+    });
+    const turnB = handlerB.start(makeMessage("b1", "second"), makeContext({ events: [] }), makeToken());
+    await vi.waitFor(() => {
+      if (!secondSettings.path) throw new Error("second settings not captured");
+    });
+
+    expect(firstSettings.path).not.toBe(secondSettings.path);
+    expect(existsSync(firstSettings.path ?? "")).toBe(true);
+    expect(existsSync(secondSettings.path ?? "")).toBe(true);
+    expect(firstSettings.body).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/a", headers: { Authorization: "Bearer token-a" } },
+      },
+    });
+    expect(secondSettings.body).toEqual({
+      "amp.dangerouslyAllowAll": true,
+      "amp.mcpServers": {
+        "first-tree-mcp-1": { url: "https://example.test/b", headers: { Authorization: "Bearer token-b" } },
+      },
+    });
+    // While both children are still live, neither file may have been replaced with the other's snapshot.
+    expect(JSON.parse(readFileSync(firstSettings.path ?? "", "utf8"))).toEqual(firstSettings.body);
+    expect(JSON.parse(readFileSync(secondSettings.path ?? "", "utf8"))).toEqual(secondSettings.body);
+
+    releaseFirst.value?.();
+    releaseSecond.value?.();
+    await Promise.all([turnA, turnB]);
+    expect(existsSync(firstSettings.path ?? "")).toBe(false);
+    expect(existsSync(secondSettings.path ?? "")).toBe(false);
+    await handlerA.shutdown();
+    await handlerB.shutdown();
   });
 });

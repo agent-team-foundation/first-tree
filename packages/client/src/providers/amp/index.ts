@@ -109,13 +109,19 @@ export function buildAmpTurnArgs(input: {
  * so projected MCP does not need `amp mcp approve`. Mode 0600. MCP headers stay
  * in this file rather than `--mcp-config` argv, matching the prompt-off-argv
  * secret handling.
+ *
+ * Each call returns a unique immutable path under the shared agent home so a
+ * concurrent turn (or a mid-flight config transition) cannot replace another
+ * turn's MCP credentials/permission snapshot after spawn has already bound
+ * `--settings-file` to a pathname. Callers must remove the file only after the
+ * child process has closed (see `removeAmpRuntimeSettings`).
  */
 export function writeAmpRuntimeSettings(
   workspaceCwd: string,
   mcpServers?: Record<string, AmpMcpServerConfig> | null,
 ): string {
   const dir = join(workspaceCwd, ".first-tree");
-  const path = join(dir, "amp-runtime-settings.json");
+  const path = join(dir, `amp-runtime-settings.${randomUUID()}.json`);
   const temporaryPath = join(dir, `.amp-runtime-settings.${process.pid}.${randomUUID()}.tmp`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const settings: Record<string, unknown> = { "amp.dangerouslyAllowAll": true };
@@ -138,6 +144,15 @@ export function writeAmpRuntimeSettings(
     throw error;
   }
   return path;
+}
+
+/** Best-effort unlink of a per-turn Amp settings file after the child closes. */
+export function removeAmpRuntimeSettings(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Cleanup must not fail the turn; orphaned files are mode 0600 under agent home.
+  }
 }
 
 const STDERR_TAIL_LIMIT = 8_000;
@@ -780,9 +795,10 @@ export const createAmpHandler: HandlerFactory = (config) => {
       }
 
       let outcome: ProcessOutcome;
+      let settingsFile: string | null = null;
       try {
         const mcpServers = payload.mcpServers.length > 0 ? mapAmpMcpServers(payload) : null;
-        const settingsFile = writeAmpRuntimeSettings(workspaceCwd, mcpServers);
+        settingsFile = writeAmpRuntimeSettings(workspaceCwd, mcpServers);
         outcome = await runProcess({
           command: activeBinary,
           args: buildAmpTurnArgs({
@@ -802,6 +818,9 @@ export const createAmpHandler: HandlerFactory = (config) => {
         });
       } finally {
         clearTimeout(timeout);
+        // Unlink only after the child closes so Amp cannot re-read a replaced
+        // shared pathname mid-turn; each turn owns its own immutable file.
+        if (settingsFile) removeAmpRuntimeSettings(settingsFile);
       }
 
       if (abort.signal.aborted || generation !== turnGeneration || !sessionActive) {
