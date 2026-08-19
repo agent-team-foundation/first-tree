@@ -48,14 +48,14 @@ import {
   writeSessionBriefingFingerprint,
 } from "../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../handlers/assistant-text.js";
-import {
-  discardProviderLoginAuthorizationMaterial,
-  formatAuthHint,
-  isAmpAuthError,
-  sanitizeAmpAuthFailureText,
-} from "../handlers/auth-error-hint.js";
+import { formatAuthHint, isAmpAuthError } from "../handlers/auth-error-hint.js";
 import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
+import {
+  discardAmpLoginAuthorizationMaterial,
+  publicAmpAuthFailure,
+  sanitizeAmpAuthFailureText,
+} from "./auth-failure.js";
 import { resolveAmpRuntimeBinary } from "./binary.js";
 import { type AmpStreamEvent, AmpStreamParser, type AmpUsage, addAmpUsage } from "./parser.js";
 
@@ -677,7 +677,9 @@ export const createAmpHandler: HandlerFactory = (config) => {
         : input.state.sawProviderActivity
           ? "pre_visible"
           : "pre_provider";
-    const displayMessage = isAmpAuthError(input.failure) ? formatAuthHint("amp", input.failure) : input.failure;
+    const displayMessage = isAmpAuthError(input.failure)
+      ? formatAuthHint("amp", sanitizeAmpAuthFailureText(input.failure))
+      : input.failure;
     const attempt = new ProviderAttempt({
       provider: runtimeProvider,
       scope: "provider_turn",
@@ -943,7 +945,7 @@ export const createAmpHandler: HandlerFactory = (config) => {
         state.errors[0] ||
         protocolErrors[0] ||
         redactErrorPreview(
-          discardProviderLoginAuthorizationMaterial(
+          discardAmpLoginAuthorizationMaterial(
             outcome.stderrTail || outcome.stdoutTail || `amp exited ${outcome.exitCode}`,
           ),
           800,
@@ -1281,18 +1283,6 @@ function classifyAmpAuthFailure(input: {
     return publicAmpAuthFailure(input.stdoutTail);
   }
   return null;
-}
-
-/** Chat-safe Amp auth copy: keep the absent-key phrase, drop login URLs and credentials. */
-function publicAmpAuthFailure(raw: string): string {
-  const cleaned = sanitizeAmpAuthFailureText(raw);
-  const firstLine = cleaned
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  const summary = firstLine && isAmpAuthError(firstLine) ? firstLine : cleaned.replace(/\s+/g, " ").trim();
-  const compact = (summary.length > 0 ? summary : "No API key found. Run amp login.").slice(0, 240);
-  return compact;
 }
 
 function isReadOnlyTool(name: string): boolean {
