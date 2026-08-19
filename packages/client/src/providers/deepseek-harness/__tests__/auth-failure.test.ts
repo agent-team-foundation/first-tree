@@ -24,6 +24,8 @@ describe("DeepSeek auth failure sanitization", () => {
   it("feeds formatAuthHint with sanitized credential copy only", () => {
     const hint = formatAuthHint("deepseek-harness", publicDeepseekAuthFailure(RAW));
     expect(hint).toContain("DEEPSEEK_API_KEY");
+    expect(hint).toContain("Runtime → Environment variables");
+    expect(hint).toContain("host shell");
     expect(hint).not.toContain("qa-secret");
     expect(hint).not.toMatch(/https?:\/\//i);
   });

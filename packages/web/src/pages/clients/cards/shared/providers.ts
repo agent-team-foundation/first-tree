@@ -75,6 +75,13 @@ export function buildInstallCommand(provider: RuntimeProvider, os?: string | nul
       tmuxCmd ?? "# install tmux (>= 3.0) with your OS package manager",
     ]);
   }
+  if (provider === "deepseek-harness") {
+    // Host export remains the copy-pasteable second line; agent Runtime env is
+    // the preferred First Tree path and must be visible on the setup card.
+    return runtimeProviderComputerSetupCommand(provider, [
+      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables",
+    ]);
+  }
   return runtimeProviderComputerSetupCommand(provider);
 }
 
@@ -178,7 +185,11 @@ export function providerInstallHint(
     case "amp":
       return `Run \`${AMP_INSTALL_COMMAND}\` on this ${device} (official Amp installer), then complete provider-owned setup with \`${loginCmd}\`.`;
     case "deepseek-harness":
-      return `Install the bundled DeepSeek Harness packages with \`${installCmd}\` on this ${device}, then set \`DEEPSEEK_API_KEY\` in your shell environment.`;
+      return (
+        `Install the bundled DeepSeek Harness packages with \`${installCmd}\` on this ${device}, ` +
+        "then set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables " +
+        "(or export it in the host shell that runs First Tree)."
+      );
     case "cursor":
       return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;
     case "grok":

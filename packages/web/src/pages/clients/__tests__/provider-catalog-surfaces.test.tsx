@@ -6,7 +6,6 @@ import {
   pickPreferredRuntimeProvider,
   RUNTIME_PROVIDER_IDS,
   type RuntimeProvider,
-  runtimeProviderComputerSetupCommand,
   runtimeProviderLabel as sharedRuntimeProviderLabel,
 } from "@first-tree/shared";
 import { act } from "react";
@@ -124,6 +123,13 @@ describe("web provider surfaces derived from shared catalog", () => {
     expect(buildInstallCommand("opencode")).toBe("npm install -g opencode-ai@^1.18.7\nopencode auth login");
     expect(buildInstallCommand("amp")).toBe("curl -fsSL https://ampcode.com/install.sh | bash\namp login");
     expect(providerInstallHint("amp", "linux")).toContain("ampcode.com/install.sh");
+    expect(buildInstallCommand("deepseek-harness")).toContain("export DEEPSEEK_API_KEY=<your DeepSeek API key>");
+    expect(buildInstallCommand("deepseek-harness")).toContain(
+      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables",
+    );
+    expect(providerInstallHint("deepseek-harness", "linux")).toContain("Runtime → Environment variables");
+    expect(providerInstallHint("deepseek-harness", "linux")).toContain("host shell");
+    expect(providerInstallHint("deepseek-harness", "linux")).not.toMatch(/shell environment\.?$/);
     expect(buildInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");
     expect(buildInstallCommand("cursor")).not.toContain("cursor-agent login");
     expect(buildInstallCommand("grok")).not.toContain("grok login");
@@ -159,7 +165,7 @@ describe("web provider surfaces derived from shared catalog", () => {
 
   for (const [provider, loginCommand] of HOST_SETUP_CASES) {
     it(`renders RuntimeInstallBox with host-login guidance for provider ${provider}`, async () => {
-      const expected = runtimeProviderComputerSetupCommand(provider);
+      const expected = buildInstallCommand(provider, "darwin");
       const el = await render(<RuntimeInstallBox provider={provider} entry={null} hostname="devbox" os="darwin" />);
       const text = el.textContent ?? "";
       expect(text).toContain(PROVIDER_LABEL[provider]);
