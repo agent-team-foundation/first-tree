@@ -130,7 +130,12 @@ function firstProviderPayload(payloads: readonly ProviderRetryEventPayload[]): P
 }
 
 async function waitForCondition(predicate: () => boolean, description: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Wall-clock bound: under CI load the retry's post-timer Promise work can
+  // take more than a fixed handful of setImmediate ticks. Fake timers still
+  // own setTimeout; Date.now stays real because this file only fakes
+  // setTimeout/clearTimeout.
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -326,6 +331,7 @@ describe("claude-code handler — structured provider error result", () => {
     try {
       const result = await startSingleResultTurn();
       await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "first scheduled retry");
+      await waitForCondition(() => vi.getTimerCount() > 0, "retry backoff timer");
 
       expect(mockState.queryCalls).toBe(1);
       await vi.advanceTimersByTimeAsync(499);
