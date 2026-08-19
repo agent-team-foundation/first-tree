@@ -1,7 +1,7 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Filter, Pin, Plus, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { isAskAgentNavLocked } from "../../components/chat/ask-agent-nav-lock.js";
@@ -28,16 +28,28 @@ const DEFAULT_FILTERS: MobileWorkFilters = {
 const MOBILE_WORK_INITIAL_RENDER_COUNT = 16;
 const MOBILE_WORK_RENDER_BATCH_SIZE = 16;
 
+type ParkedListGeometry = { scrollTop: number; height: number };
+
 export function MobileWorkPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [quickView, setQuickView] = useState<MobileWorkQuickView>("all");
   const [filters, setFilters] = useState<MobileWorkFilters>(DEFAULT_FILTERS);
   const selectedChatId = searchParams.get("c");
+  const listScrollerRef = useRef<HTMLDivElement>(null);
+  const parkedListRef = useRef<ParkedListGeometry | null>(null);
+
+  const snapshotListScroll = useCallback(() => {
+    if (parkedListRef.current) return;
+    const scroller = listScrollerRef.current;
+    if (!scroller) return;
+    parkedListRef.current = { scrollTop: scroller.scrollTop, height: scroller.clientHeight };
+  }, []);
 
   const selectChat = useCallback(
     (chatId: string) => {
       // Unmounts a pending Ask agent's owning surface — refuse while locked.
       if (isAskAgentNavLocked()) return;
+      snapshotListScroll();
       const next = new URLSearchParams(searchParams);
       next.set("c", chatId);
       next.delete("review");
@@ -47,7 +59,7 @@ export function MobileWorkPage() {
       next.delete("nq");
       setSearchParams(next);
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams, snapshotListScroll],
   );
 
   const clearChat = useCallback(() => {
@@ -69,6 +81,7 @@ export function MobileWorkPage() {
   const openNeedYouChat = useCallback(
     (chatId: string) => {
       if (isAskAgentNavLocked()) return;
+      snapshotListScroll();
       const next = new URLSearchParams(searchParams);
       next.set("c", chatId);
       next.set("nq", "1");
@@ -78,24 +91,40 @@ export function MobileWorkPage() {
       next.delete("focusMsg");
       setSearchParams(next);
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams, snapshotListScroll],
   );
 
   const viewingChat = selectedChatId !== null;
+  const parkedGeometry = viewingChat ? parkedListRef.current : null;
+
+  useLayoutEffect(() => {
+    if (viewingChat) return;
+    const parked = parkedListRef.current;
+    const scroller = listScrollerRef.current;
+    if (!parked || !scroller) return;
+    scroller.scrollTop = parked.scrollTop;
+    parkedListRef.current = null;
+  }, [viewingChat]);
 
   return (
     <>
       <div className="relative h-full min-h-0">
         {/* Keep the list mounted under detail so back restores the same
-            scroll offset, rendered window, search, and filter chrome. */}
+            scroll offset, rendered window, search, and filter chrome.
+            Freeze the parked pane at list-mode height: hiding the shell tab
+            bar grows `<main>`, and stretching the list with it would clamp
+            a near-max scrollTop that does not come back with the tabs. */}
         <div
-          className={cn("h-full min-h-0", viewingChat && "pointer-events-none invisible absolute inset-0")}
+          className={cn("h-full min-h-0", viewingChat && "pointer-events-none invisible absolute top-0 right-0 left-0")}
+          style={parkedGeometry ? { height: parkedGeometry.height } : undefined}
           aria-hidden={viewingChat}
           inert={viewingChat || undefined}
           data-mobile-work-list-pane={viewingChat ? "parked" : "active"}
         >
           <MobileWorkList
+            scrollerRef={listScrollerRef}
             onSelectChat={selectChat}
+            onParkList={snapshotListScroll}
             quickView={quickView}
             onQuickViewChange={setQuickView}
             filters={filters}
@@ -123,14 +152,18 @@ export function MobileWorkPage() {
 }
 
 function MobileWorkList({
+  scrollerRef,
   onSelectChat,
+  onParkList,
   quickView,
   onQuickViewChange,
   filters,
   onFiltersChange,
   onOpenNeedYou,
 }: {
+  scrollerRef: RefObject<HTMLDivElement | null>;
   onSelectChat: (chatId: string) => void;
+  onParkList: () => void;
   quickView: MobileWorkQuickView;
   onQuickViewChange: (quickView: MobileWorkQuickView) => void;
   filters: MobileWorkFilters;
@@ -229,7 +262,7 @@ function MobileWorkList({
 
   return (
     <>
-      <MobilePage className="flex flex-col" padded>
+      <MobilePage className="flex flex-col" padded scrollerRef={scrollerRef}>
         <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-3)" }}>
           <h1 className="text-mobile-title min-w-0 flex-1" style={{ color: "var(--fg)", margin: 0 }}>
             Chat
@@ -253,6 +286,7 @@ function MobileWorkList({
           <Link
             to="/m/chat?c=draft"
             aria-label="Start new chat"
+            onClick={onParkList}
             className="inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-full)]"
             style={{ background: "var(--bg-active)", color: "var(--fg)", textDecoration: "none" }}
           >

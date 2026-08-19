@@ -6,12 +6,24 @@ import { act } from "react";
 import { MemoryRouter, Route, Routes, useNavigationType } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
+import { MobileShell } from "../shell.js";
 import { MobileWorkPage } from "../work.js";
 
-const authMock = vi.hoisted(() => ({ value: { agentId: "human-agent-self" } }));
+const authMock = vi.hoisted(() => ({
+  value: {
+    agentId: "human-agent-self",
+    organizationId: "org-1",
+    meLoaded: true,
+    onboardingStep: "completed" as const,
+    onboardingDismissedAt: null,
+    onboardingCompletedAt: "2026-07-01T00:00:00.000Z",
+    currentOrgHasPersonalAgent: true,
+  },
+}));
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
   listMeChatSourceCounts: vi.fn(),
+  listNeedYouRequests: vi.fn(),
 }));
 
 function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
@@ -44,6 +56,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
 
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../../api/me-chats.js", () => meChatMocks);
+vi.mock("../../../hooks/use-admin-ws.js", () => ({ useAdminWs: () => undefined }));
+vi.mock("../../../components/team-switch-overlay.js", () => ({ TeamSwitchOverlay: () => null }));
 // Stub the heavy chat-detail so we can drive the back affordance directly.
 vi.mock("../../workspace/center/index.js", () => ({
   CenterPanel: ({ onShowConversations }: { onShowConversations: (() => void) | null }) => (
@@ -65,12 +79,14 @@ describe("MobileWorkPage back navigation", () => {
   beforeEach(() => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
+    meChatMocks.listNeedYouRequests.mockReset();
     meChatMocks.listMeChats.mockResolvedValue({
       priorityRows: { pinned: [] },
       rows: [],
       nextCursor: null,
     });
     meChatMocks.listMeChatSourceCounts.mockResolvedValue({ counts: {} });
+    meChatMocks.listNeedYouRequests.mockResolvedValue({ items: [], total: 0 });
     lastNavType = "";
   });
 
@@ -213,5 +229,71 @@ describe("MobileWorkPage back navigation", () => {
     expect(restoredScroller).toBe(scroller);
     expect(restoredScroller?.scrollTop).toBe(640);
     expect(harness.container.textContent).toContain("Thread 1");
+  });
+
+  it("restores near-max list scroll after MobileShell hides the bottom tabs", async () => {
+    const rows = Array.from({ length: 24 }, (_, index) =>
+      chatRow({
+        chatId: `chat-${index + 1}`,
+        title: `Thread ${index + 1}`,
+        topic: `Thread ${index + 1}`,
+      }),
+    );
+    meChatMocks.listMeChats.mockResolvedValue({
+      priorityRows: { pinned: [] },
+      rows,
+      nextCursor: null,
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    harness.render(
+      <MemoryRouter initialEntries={["/m/chat"]}>
+        <QueryClientProvider client={queryClient}>
+          <Routes>
+            <Route element={<MobileShell />}>
+              <Route path="/m/chat" element={<MobileWorkPage />} />
+            </Route>
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("Thread 1"));
+    expect(harness.container.querySelector('nav[aria-label="Mobile"]')).not.toBeNull();
+
+    const scroller = harness.container.querySelector<HTMLElement>("[data-mobile-work-list-pane] .overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    if (!scroller) throw new Error("Missing Chat list scroller");
+
+    const listViewport = 400;
+    const detailViewport = 480;
+    const contentHeight = 2400;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => currentViewport });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: contentHeight });
+    let currentViewport = listViewport;
+    scroller.scrollTop = contentHeight - listViewport - 10;
+
+    const chatCard = harness.container.querySelector<HTMLButtonElement>('[data-mobile-card="work"]');
+    await act(async () => {
+      chatCard?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await harness.flush();
+
+    expect(harness.container.querySelector('nav[aria-label="Mobile"]')).toBeNull();
+    expect(harness.container.querySelector("[data-mobile-work-list-pane]")?.getAttribute("style")).toContain("400px");
+
+    currentViewport = detailViewport;
+    scroller.scrollTop = Math.min(scroller.scrollTop, contentHeight - currentViewport);
+
+    await act(async () => {
+      harness.container
+        .querySelector<HTMLButtonElement>('button[aria-label="back"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await harness.flush();
+
+    currentViewport = listViewport;
+    expect(harness.container.querySelector('nav[aria-label="Mobile"]')).not.toBeNull();
+    expect(scroller.scrollTop).toBe(contentHeight - listViewport - 10);
   });
 });

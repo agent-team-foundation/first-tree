@@ -1,5 +1,5 @@
 import { CircleUserRound, ListTodo, UsersRound } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, Ref } from "react";
 import { NavLink } from "react-router";
 import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { cn } from "../../lib/utils.js";
@@ -78,13 +78,16 @@ export function MobilePage({
   children,
   className,
   padded = true,
+  scrollerRef,
 }: {
   children: ReactNode;
   className?: string;
   padded?: boolean;
+  scrollerRef?: Ref<HTMLDivElement>;
 }) {
   return (
     <div
+      ref={scrollerRef}
       className={cn("h-full overflow-y-auto", className)}
       style={{
         padding: padded ? "var(--sp-4) var(--sp-4) var(--sp-6)" : undefined,
