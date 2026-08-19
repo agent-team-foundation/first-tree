@@ -23,6 +23,7 @@ export const OPENCODE_NPM_PACKAGE = `opencode-ai@^${OPENCODE_MINIMUM_VERSION}`;
 
 export const PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent";
 export const KIMI_NPM_PACKAGE = "@moonshot-ai/kimi-code";
+export const DEEPSEEK_INSTALL_NPM_PACKAGE = "@deepseek-ai/dsh-sdk-jsonrpc-demo@0.0.1-rc.5";
 
 /** Provider-owned install metadata — npm package or official installer script. */
 export type RuntimeProviderInstall =
@@ -84,6 +85,16 @@ export const RUNTIME_PROVIDER_CATALOG = {
     loginSteps: ["amp login"],
     authRecovery: { kind: "host" },
     authOwnerLabel: "Amp",
+  },
+  deepseek: {
+    id: "deepseek",
+    label: "DeepSeek Harness",
+    displayOrder: 100,
+    selectionPriority: null,
+    install: { kind: "npm", package: DEEPSEEK_INSTALL_NPM_PACKAGE, args: [] },
+    loginSteps: ["export DEEPSEEK_API_KEY=<your DeepSeek API key>"],
+    authRecovery: { kind: "host" },
+    authOwnerLabel: "DeepSeek",
   },
   "claude-code": {
     id: "claude-code",

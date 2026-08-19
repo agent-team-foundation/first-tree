@@ -876,7 +876,7 @@ function isKnownProviderCommand(command: string): boolean {
   // check and block switches on processes whose env cannot be read.
   const firstToken = command.trim().split(/\s+/, 1)[0] ?? "";
   const basename = (firstToken.split(/[/\\]/).pop() ?? "").toLowerCase();
-  return basename === "agent" || basename === "pi" || basename === "amp" || basename === "amp.exe";
+  return basename === "agent" || basename === "pi" || basename === "amp" || basename === "amp.exe" || basename === "dsh-jsonrpc-agent" || basename === "dsh-jsonrpc-agent.exe";
 }
 
 function isKnownDaemonRuntimeCommand(command: string): boolean {

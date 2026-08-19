@@ -111,8 +111,9 @@ export const CURSOR_AUTO_MODEL_OPTIONS: ModelOption[] = [
  * purpose (the account-dependent SKU catalog is large and shifting), so
  * their fallback is the free-form exact-id input.
  */
-const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
+export const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
   amp: AMP_MODE_OPTIONS,
+  deepseek: [],
   "claude-code": CLAUDE_MODEL_OPTIONS,
   "claude-code-tui": CLAUDE_MODEL_OPTIONS,
   codex: CODEX_MODEL_OPTIONS,
@@ -123,8 +124,10 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
   pi: [],
 };
 
-const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
+export const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   amp: "Select an Amp mode (capability preset). Unset omits --mode so Amp uses its local default (medium). Amp does not accept a model id.",
+  deepseek:
+    "Enter an exact DeepSeek model id. It is passed through verbatim on the next turn; unset uses deepseek-v4-flash at harness initialize.",
   "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
   "claude-code-tui": "Applies to new sessions immediately. Model swap restarts the tmux session (~2–4s).",
   codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",

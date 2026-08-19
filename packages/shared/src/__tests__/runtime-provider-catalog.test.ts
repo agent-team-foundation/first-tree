@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AMP_INSTALL_COMMAND,
+  DEEPSEEK_INSTALL_NPM_PACKAGE,
   asRuntimeProvider,
   capabilityEntrySchema,
   DISABLED_RUNTIME_PROVIDERS,
@@ -68,7 +69,7 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(RUNTIME_PROVIDER_PREFERRED_ORDER).toEqual(["codex", "claude-code"]);
     expect(
       RUNTIME_PROVIDER_IDS.filter((provider) => RUNTIME_PROVIDER_CATALOG[provider].selectionPriority === null),
-    ).toEqual(["amp", "claude-code-tui", "cursor", "grok", "kimi-code", "opencode", "pi"]);
+    ).toEqual(["amp", "deepseek", "claude-code-tui", "cursor", "grok", "kimi-code", "opencode", "pi"]);
     expect(PREFERRED_RUNTIME_PROVIDER).toBe("codex");
     expect(orderRuntimeProvidersByPreference(["pi", "opencode", "claude-code", "kimi-code", "codex"])).toEqual([
       "codex",
@@ -123,6 +124,7 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderShowsHostLoginOnSetup("opencode")).toBe(true);
     expect(runtimeProviderShowsHostLoginOnSetup("pi")).toBe(true);
     expect(runtimeProviderShowsHostLoginOnSetup("amp")).toBe(true);
+    expect(runtimeProviderShowsHostLoginOnSetup("deepseek")).toBe(true);
     expect(runtimeProviderShowsHostLoginOnSetup("codex")).toBe(false);
     expect(runtimeProviderShowsHostLoginOnSetup("claude-code")).toBe(false);
     expect(runtimeProviderShowsHostLoginOnSetup("claude-code-tui")).toBe(false);
@@ -141,6 +143,7 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderInProductAuthTarget("opencode")).toBeNull();
     expect(runtimeProviderInProductAuthTarget("pi")).toBeNull();
     expect(runtimeProviderInProductAuthTarget("amp")).toBeNull();
+    expect(runtimeProviderInProductAuthTarget("deepseek")).toBeNull();
   });
 
   it("leaves the published auth-error message uncapped on the wire", () => {
@@ -171,6 +174,12 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderInstallCommand("cursor")).toBe("curl https://cursor.com/install -fsS | bash");
     expect(runtimeProviderInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");
     expect(runtimeProviderInstallCommand("amp")).toBe(AMP_INSTALL_COMMAND);
+    expect(runtimeProviderInstallCommand("deepseek")).toBe(
+      `npm install -g ${DEEPSEEK_INSTALL_NPM_PACKAGE}`,
+    );
+    expect(runtimeProviderLoginCommand("deepseek")).toBe(
+      "export DEEPSEEK_API_KEY=<your DeepSeek API key>",
+    );
     expect(runtimeProviderLoginCommand("amp")).toBe("amp login");
     expect(KIMI_NPM_PACKAGE).toBe("@moonshot-ai/kimi-code");
     expect(RUNTIME_PROVIDER_CATALOG["kimi-code"].install).toEqual({

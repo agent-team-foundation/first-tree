@@ -64,6 +64,9 @@ function noticeLead(payload: ProviderRetryEventPayload): string {
       if (payload.provider === "amp") {
         return `${provider} could not ${action}: credentials need attention. On this machine run \`amp login\`, then retry.`;
       }
+      if (payload.provider === "deepseek") {
+        return `${provider} could not ${action}: credentials need attention. On this machine set \`DEEPSEEK_API_KEY\`, then retry.`;
+      }
       if (payload.provider === "pi") {
         return `${provider} could not ${action}: credentials need attention. On this machine run \`pi\`, then enter \`/login\`, and retry.`;
       }

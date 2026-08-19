@@ -4,6 +4,7 @@ import {
   isAmpAuthError,
   isClaudeAuthError,
   isCodexAuthError,
+  isDeepseekAuthError,
   isGrokAuthError,
   isOpenCodeAuthError,
 } from "../providers/handlers/auth-error-hint.js";
@@ -150,6 +151,15 @@ describe("isAmpAuthError", () => {
   });
 });
 
+describe("isDeepseekAuthError", () => {
+  it("matches provider-owned credential failures without treating capacity failures as auth", () => {
+    expect(isDeepseekAuthError("MISSING_CREDENTIAL: set DEEPSEEK_API_KEY")).toBe(true);
+    expect(isDeepseekAuthError("DEEPSEEK_API_KEY=secret not authenticated")).toBe(true);
+    expect(isDeepseekAuthError("rate limit exceeded")).toBe(false);
+    expect(isDeepseekAuthError("")).toBe(false);
+  });
+});
+
 describe("formatAuthHint", () => {
   it("targets `codex login` for the codex runtime and quotes the original SDK message", () => {
     const hint = formatAuthHint(
@@ -186,6 +196,14 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("amp");
     expect(hint).toContain("`amp login`");
     expect(hint).toContain("Amp");
+    expect(hint).toContain("not First Tree's");
+  });
+
+  it("keeps DeepSeek authentication host-local and points at DEEPSEEK_API_KEY setup", () => {
+    const hint = formatAuthHint("deepseek", "MISSING_CREDENTIAL: set DEEPSEEK_API_KEY");
+    expect(hint).toContain("deepseek");
+    expect(hint).toContain("DEEPSEEK_API_KEY");
+    expect(hint).toContain("DeepSeek");
     expect(hint).toContain("not First Tree's");
   });
 

@@ -124,6 +124,15 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
+  if (context.provider === "deepseek" && /not supported on windows in v1/.test(text)) {
+    return {
+      category: "capability",
+      reasonCode: "deepseek_platform_unsupported",
+      message: base.message,
+      retryAfterMs,
+      sourceKind: base.kind,
+    };
+  }
   if (context.provider === "grok" && /not supported on windows in v1/.test(text)) {
     return {
       category: "capability",
@@ -548,6 +557,14 @@ function isCredential(
   if (provider === "amp" && /not logged in|amp login|amp_api_key|no api key found|starting login flow/.test(text)) {
     return true;
   }
+  if (
+    provider === "deepseek" &&
+    /missing_credential|deepseek_api_key|missing api key|not authenticated|invalid api key|invalid_credential/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
   // Cursor CLI logged-out phrasings (kept in sync with isCursorAuthError in
   // handlers/auth-error-hint.ts). Provider-gated: the in-chat "Log in to
   // Cursor" CTA renders only for category=credential, so a wording variant
@@ -605,6 +622,9 @@ function isConfiguration(text: string, base: Classification, provider: RuntimePr
   // Pi model/MCP configuration gates — keep provider-gated so shared English
   // phrases cannot terminalize another provider's retryable failures.
   if (provider === "amp" && /amp_mode_invalid|amp mode must be one of/.test(text)) return true;
+  if (provider === "deepseek" && /deepseek_mcp_unsupported|managed mcp servers are not supported/.test(text)) {
+    return true;
+  }
   if (provider === "pi" && (isPiModelConfiguration(text) || isPiMcpConfiguration(text))) return true;
   // Cursor CLI literal invalid-model / explicit-deny / trust-wall phrasings
   // (captured in Phase 0). Gated to the cursor provider: this classifier is

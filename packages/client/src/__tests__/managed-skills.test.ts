@@ -43,6 +43,7 @@ import { spawnWorkspaceLockWorker } from "./workspace-file-lock-worker.js";
 /** Local fail-closed skill-root fixture — runtime tests must not import providers. */
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
   amp: ".agents/skills",
+  deepseek: ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",
@@ -55,6 +56,7 @@ const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
 
 const PROVIDERS: readonly RuntimeProvider[] = [
   "amp",
+  "deepseek",
   "claude-code",
   "claude-code-tui",
   "codex",
@@ -193,6 +195,7 @@ describe("managed Skill reconciler", () => {
   it("maps every runtime to its provider-native discovery root", () => {
     expect(PROVIDERS.map((provider) => [provider, providerSkillRoot(provider, TEST_PROVIDER_SKILL_ROOTS)])).toEqual([
       ["amp", ".agents/skills"],
+      ["deepseek", ".agents/skills"],
       ["claude-code", ".claude/skills"],
       ["claude-code-tui", ".claude/skills"],
       ["codex", ".agents/skills"],
@@ -221,6 +224,7 @@ describe("managed Skill reconciler", () => {
       "src/providers/opencode/index.ts",
       "src/providers/pi/index.ts",
       "src/providers/amp/index.ts",
+      "src/providers/deepseek/index.ts",
     ].map((path) => readFileSync(join(process.cwd(), path), "utf-8"));
     // Normal start/resume and hot-switch publication own reconcile inside
     // projectManagedWorkspace under the source-publication lock.
@@ -243,6 +247,8 @@ describe("managed Skill reconciler", () => {
     expect(handlerSources[6]).toContain("if (isManagedSkillsUnsafeDiscoveryError(error))");
     expect(handlerSources[8]).toContain('token.retry(messages, "amp_unsafe_skill_discovery")');
     expect(handlerSources[8]).toContain("if (isManagedSkillsUnsafeDiscoveryError(error))");
+    expect(handlerSources[9]).toContain('token.retry(messages, "deepseek_unsafe_skill_discovery")');
+    expect(handlerSources[9]).toContain("if (isManagedSkillsUnsafeDiscoveryError(error))");
   });
 
   it.each(PROVIDERS)("projects Core Skills only into the active %s discovery root", async (provider) => {

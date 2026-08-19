@@ -733,6 +733,7 @@ describe("probeCapabilities (aggregator)", () => {
     const okProbe = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
       amp: okProbe,
+      deepseek: okProbe,
       "claude-code": okProbe,
       "claude-code-tui": tuiProbe,
       codex: okProbe,
@@ -753,6 +754,7 @@ describe("probeCapabilities (aggregator)", () => {
       "claude-code",
       "codex",
       "cursor",
+      "deepseek",
       "grok",
       "kimi-code",
       "opencode",
@@ -761,7 +763,7 @@ describe("probeCapabilities (aggregator)", () => {
     expect(caps["claude-code"]?.state).toBe("ok");
     expect(caps["claude-code-tui"]).toBeUndefined();
     expect(tuiProbe).not.toHaveBeenCalled();
-    expect(okProbe).toHaveBeenCalledTimes(8);
+    expect(okProbe).toHaveBeenCalledTimes(9);
   }, 15_000);
 
   it("publishes the machine-level lark-cli capability alongside runtime providers", async () => {
@@ -779,6 +781,7 @@ describe("probeCapabilities (aggregator)", () => {
   it("converts enabled-provider probe rejections into error capability entries", async () => {
     const probes = {
       amp: vi.fn().mockRejectedValue("amp probe failed"),
+      deepseek: vi.fn().mockRejectedValue("deepseek probe failed"),
       "claude-code": vi.fn().mockRejectedValue(new Error("claude probe failed")),
       "claude-code-tui": vi.fn().mockRejectedValue("tui probe failed"),
       codex: vi.fn().mockRejectedValue("codex probe failed"),
@@ -793,6 +796,7 @@ describe("probeCapabilities (aggregator)", () => {
     const caps = await probeCapabilities({ probes });
 
     expect(caps.amp).toMatchObject({ state: "error", error: "amp probe failed" });
+    expect(caps.deepseek).toMatchObject({ state: "error", error: "deepseek probe failed" });
     expect(caps["claude-code"]).toMatchObject({
       state: "error",
       available: false,
@@ -843,6 +847,7 @@ describe("probeCapabilities (aggregator)", () => {
       "codex",
       "claude-code",
       "amp",
+      "deepseek",
       "cursor",
       "grok",
       "kimi-code",
@@ -855,6 +860,7 @@ describe("probeCapabilities (aggregator)", () => {
     const ok = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
       amp: ok,
+      deepseek: ok,
       "claude-code": ok,
       "claude-code-tui": ok,
       codex: vi.fn().mockRejectedValue(new Error("only codex")),

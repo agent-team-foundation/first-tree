@@ -302,6 +302,8 @@ describe("client switch drain markers", () => {
     expect(isSwitchDrainEnvRequired("/home/op/.local/bin/amp --execute --stream-json")).toBe(true);
     expect(isSwitchDrainEnvRequired("amp --execute --visibility private")).toBe(true);
     expect(isSwitchDrainEnvRequired("C:\\Users\\op\\AppData\\Roaming\\npm\\amp.exe --execute")).toBe(true);
+    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/dsh-jsonrpc-agent /path/to/cordis.yml")).toBe(true);
+    expect(isSwitchDrainEnvRequired("dsh-jsonrpc-agent cordis.yml")).toBe(true);
     expect(isSwitchDrainEnvRequired("python worker.py --amp")).toBe(false);
     expect(isSwitchDrainEnvRequired("ssh amp")).toBe(false);
   });

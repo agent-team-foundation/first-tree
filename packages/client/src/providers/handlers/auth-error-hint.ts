@@ -160,6 +160,23 @@ export function isAmpAuthError(message: string): boolean {
   return AMP_AUTH_KEYWORDS.some((keyword) => lower.includes(keyword));
 }
 
+const DEEPSEEK_AUTH_KEYWORDS: readonly string[] = [
+  "deepseek_api_key",
+  "missing_credential",
+  "missing api key",
+  "not authenticated",
+  "authentication required",
+  "unauthorized",
+  "invalid api key",
+  "invalid_credential",
+];
+
+export function isDeepseekAuthError(message: string): boolean {
+  if (message.length === 0) return false;
+  const lower = message.toLowerCase();
+  return DEEPSEEK_AUTH_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
 /**
  * The single auth-failure code claude-code's SDK reports (out of the
  * `SDKAssistantMessageError` union). Centralised here so both the assistant-

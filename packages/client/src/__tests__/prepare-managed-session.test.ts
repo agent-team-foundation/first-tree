@@ -15,6 +15,7 @@ const currentSourceRepoNamesFromPayload = vi.fn();
 
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
   amp: ".agents/skills",
+  deepseek: ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",

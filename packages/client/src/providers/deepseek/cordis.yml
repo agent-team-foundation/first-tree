@@ -1,0 +1,43 @@
+# First Tree–owned DeepSeek Harness cordis for JSON-RPC embed.
+# stdout is protocol-only — no console logger.
+
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  config:
+    maxTokensAsSuccess: false
+
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    models:
+      - id: !!js process.env.DSH_MODEL ?? 'deepseek-v4-flash'
+        contextWindow: 1000000
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+    persona: 'You are a helpful assistant running inside First Tree. Read and follow AGENTS.md in the workspace.'
+    workspaceContext:
+      maxBytes: 65536
+    skills:
+      enabled: true
+      filesystem:
+        customSkillDirs:
+          - !!js process.env.DSH_SKILLS_ROOT ?? '.agents/skills'
+    toolBash: true
+    toolJobs: false
+
+- id: bash-local
+  name: '@deepseek-ai/dsh-bash-local'
+
+- id: fs-local
+  name: '@deepseek-ai/dsh-fs-local'
+
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    compression: none

@@ -603,6 +603,19 @@ describe("classifyProviderFailure", () => {
     ).toMatchObject({ action: "stop" });
   });
 
+  it("deepseek win32 fail-closed classifies capability/deepseek_platform_unsupported with a deterministic stop", () => {
+    const c = classifyProviderFailure(
+      new Error(
+        "DeepSeek Harness is not supported on Windows in v1 until the client-wide pre-admission Job Object supervisor is available.",
+      ),
+      { provider: "deepseek", scope: "provider_turn" },
+    );
+    expect(c).toMatchObject({ category: "capability", reasonCode: "deepseek_platform_unsupported" });
+    expect(
+      decideProviderRetry({ classification: c, scope: "provider_turn", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "stop" });
+  });
+
   it("classifies Amp credential phrasings as needs_operator", () => {
     const c = classifyProviderFailure(new Error("Error: not logged in. Run `amp login` or set AMP_API_KEY."), {
       provider: "amp",
