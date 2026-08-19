@@ -626,6 +626,9 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
         // Amp posture: only a confirmed provider session id may be supplied.
         // Pending local ids stay local until the SDK returns a real id.
         const sessionHandle = activeHarness.session(expectedSessionId ?? undefined);
+        // Persist the SDK-allocated id before run() so a transport/timeout
+        // failure still resumes the same provider-native session.
+        adoptSessionId(sessionCtx, sessionHandle.id);
         const result = await sessionHandle.run(providerPrompt, {
           onNotification: (notification) => {
             if (abort.signal.aborted || generation !== turnGeneration) return;

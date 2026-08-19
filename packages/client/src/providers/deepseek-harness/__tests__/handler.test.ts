@@ -220,7 +220,7 @@ describe("DeepSeek handler", () => {
     const handler = makeHandler();
 
     runScript = () => ({
-      sessionId: "provider-native-1",
+      sessionId: "sess-new",
       finalResponse: "ok",
       events: [],
     });
@@ -228,8 +228,8 @@ describe("DeepSeek handler", () => {
     const pendingId = `${DEEPSEEK_PENDING_SESSION_PREFIX}abc`;
     const result = await handler.resume(makeMessage("m1", "hello"), pendingId, ctx, token);
     expect(harness.sessionCalls).toEqual([undefined]);
-    expect(result.sessionId).toBe("provider-native-1");
-    expect(replaceSessionId).toHaveBeenCalledWith("provider-native-1", "deepseek_session_id_confirmed");
+    expect(result.sessionId).toBe("sess-new");
+    expect(replaceSessionId).toHaveBeenCalledWith("sess-new", "deepseek_session_id_confirmed");
   });
 
   it("closes the harness on timeout so a hung run can settle", async () => {
@@ -259,10 +259,41 @@ describe("DeepSeek handler", () => {
     });
 
     const startedAt = Date.now();
-    await handler.start(makeMessage("m1", "hello"), ctx, token);
+    const result = await handler.start(makeMessage("m1", "hello"), ctx, token);
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(harness.close).toHaveBeenCalled();
     expect(token.completed[0]?.status === "error" || token.retried.length > 0).toBe(true);
+    // Session id must already be the SDK-allocated id, not a pending placeholder.
+    expect(result.sessionId).toBe("sess-new");
+    expect(isDeepseekPendingSessionId(result.sessionId)).toBe(false);
+  });
+
+  it("adopts sessionHandle.id before run so a failed turn still resumes the same provider session", async () => {
+    const events: FtSessionEvent[] = [];
+    const ctx = makeContext({ events });
+    const token = makeToken();
+    const handler = makeHandler({
+      deepseekRetrySleep: async () => true,
+      deepseekHarnessFactory: () => {
+        harness = new FakeHarness();
+        return harness;
+      },
+    });
+
+    runScript = () => {
+      throw new Error("transport lost after session allocation");
+    };
+    const failed = await handler.start(makeMessage("m1", "hello"), ctx, token);
+    expect(failed.sessionId).toBe("sess-new");
+    expect(harness.sessionCalls).toEqual([undefined]);
+
+    runScript = () => ({
+      sessionId: "sess-new",
+      finalResponse: "recovered",
+      events: [],
+    });
+    await handler.resume(makeMessage("m2", "retry"), failed.sessionId, ctx, makeToken());
+    expect(harness.sessionCalls).toEqual([undefined, "sess-new"]);
   });
 
   it("restarts the harness when launch-affecting model config changes", async () => {

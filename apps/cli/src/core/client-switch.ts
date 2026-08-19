@@ -861,6 +861,23 @@ export function parseSwitchProcessEnvValue(envText: string, key: string): string
   return token ? token[0] : "";
 }
 
+function isDeepseekHarnessProviderCommand(command: string): boolean {
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  const firstBase = (tokens[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
+  if (firstBase === "dsh-jsonrpc-agent" || firstBase === "dsh-jsonrpc-agent.exe") return true;
+  // Portable CLI launches `node <...>/packaged-bin.js <cordis>`; the first
+  // argv basename is `node`, so basename-only matching would miss live children
+  // when the process environment cannot be read during account-switch drain.
+  if (firstBase === "node" || firstBase === "nodejs" || firstBase === "node.exe") {
+    return tokens.slice(1).some((token) => {
+      const base = (token.split(/[/\\]/).pop() ?? "").toLowerCase();
+      return base === "packaged-bin.js" || base === "packaged-bin.mjs" || base === "packaged-bin.cjs";
+    });
+  }
+  return false;
+}
+
 function isKnownProviderCommand(command: string): boolean {
   if (
     /(^|[/\s])(claude|codex|cursor-agent|grok|opencode)(\s|$)/i.test(command) ||
@@ -876,7 +893,13 @@ function isKnownProviderCommand(command: string): boolean {
   // check and block switches on processes whose env cannot be read.
   const firstToken = command.trim().split(/\s+/, 1)[0] ?? "";
   const basename = (firstToken.split(/[/\\]/).pop() ?? "").toLowerCase();
-  return basename === "agent" || basename === "pi" || basename === "amp" || basename === "amp.exe" || basename === "dsh-jsonrpc-agent" || basename === "dsh-jsonrpc-agent.exe";
+  return (
+    basename === "agent" ||
+    basename === "pi" ||
+    basename === "amp" ||
+    basename === "amp.exe" ||
+    isDeepseekHarnessProviderCommand(command)
+  );
 }
 
 function isKnownDaemonRuntimeCommand(command: string): boolean {

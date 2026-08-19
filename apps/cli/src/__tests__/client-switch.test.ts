@@ -302,10 +302,22 @@ describe("client switch drain markers", () => {
     expect(isSwitchDrainEnvRequired("/home/op/.local/bin/amp --execute --stream-json")).toBe(true);
     expect(isSwitchDrainEnvRequired("amp --execute --visibility private")).toBe(true);
     expect(isSwitchDrainEnvRequired("C:\\Users\\op\\AppData\\Roaming\\npm\\amp.exe --execute")).toBe(true);
-    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/dsh-jsonrpc-agent /path/to/cordis.yml")).toBe(true);
-    expect(isSwitchDrainEnvRequired("dsh-jsonrpc-agent cordis.yml")).toBe(true);
     expect(isSwitchDrainEnvRequired("python worker.py --amp")).toBe(false);
     expect(isSwitchDrainEnvRequired("ssh amp")).toBe(false);
+  });
+
+  it("recognizes DeepSeek Harness as dsh-jsonrpc-agent or node + packaged-bin.js", () => {
+    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/dsh-jsonrpc-agent /path/to/cordis.yml")).toBe(true);
+    expect(isSwitchDrainEnvRequired("dsh-jsonrpc-agent cordis.yml")).toBe(true);
+    expect(
+      isSwitchDrainEnvRequired(
+        "/usr/bin/node /app/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js /app/dist/runtime-assets/deepseek-harness-cordis.yml",
+      ),
+    ).toBe(true);
+    expect(isSwitchDrainEnvRequired("node ./packaged-bin.js cordis.yml")).toBe(true);
+    // Unrelated node processes and argv-only mentions must not force the env check.
+    expect(isSwitchDrainEnvRequired("node /app/server.js --packaged-bin")).toBe(false);
+    expect(isSwitchDrainEnvRequired("python worker.py packaged-bin.js")).toBe(false);
   });
 
   it("records Amp from a readable First Tree envelope and fails closed without trusted markers", () => {
