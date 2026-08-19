@@ -1,3 +1,4 @@
+import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { describe, expect, it } from "vitest";
 import { classifyDeepseekRunFailure, mapDeepseekSessionEvent, sessionEventFromNotification } from "../events.js";
 
@@ -33,12 +34,13 @@ describe("DeepSeek session events", () => {
       mapDeepseekSessionEvent({
         type: "assistant/chunk",
         seq: 1,
+        time: 0,
         data: {
           turn: 1,
           step: 1,
           chunk: { type: "text-delta", index: 0, text: "hello" },
         },
-      }),
+      } as SessionEvent),
     ).toMatchObject({ kind: "text_delta", text: "hello" });
   });
 
@@ -47,6 +49,7 @@ describe("DeepSeek session events", () => {
       {
         type: "turn/end" as const,
         seq: 2,
+        time: 0,
         data: {
           turn: 1,
           reason: {
@@ -55,7 +58,7 @@ describe("DeepSeek session events", () => {
           },
         },
       },
-    ];
+    ] as SessionEvent[];
     expect(
       classifyDeepseekRunFailure({
         finalResponse: "",

@@ -35,8 +35,6 @@ export async function probeDeepseekCapability(deps: DeepseekProbeDeps = {}): Pro
         installed: true,
         runtimeSource: "bundled",
         runtimePath: resolution.binary,
-        detectedAt: new Date().toISOString(),
-        latencyMs: 0,
       };
     }
     return {

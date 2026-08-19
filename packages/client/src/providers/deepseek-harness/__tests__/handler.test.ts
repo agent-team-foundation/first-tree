@@ -124,14 +124,13 @@ function makeContext(opts: {
     } as unknown as SessionContext["sdk"],
     chatId: "chat-deepseek",
     log: () => {},
-    buildAgentEnv: (env) => env,
-    formatInboundContent: async (message) => message.content,
-    forwardResult: opts.forwardResult ?? (async () => {}),
+    ...plumbing,
+    // Prefer the test's forwardResult when provided; plumbing defaults otherwise.
+    ...(opts.forwardResult ? { forwardResult: opts.forwardResult } : {}),
     emitEvent: (event) => {
       opts.events.push(event);
     },
     recordProviderActivity: () => {},
-    ...plumbing,
     ...(opts.replaceSessionId ? { replaceSessionId: opts.replaceSessionId } : {}),
   };
 }
@@ -177,12 +176,13 @@ beforeEach(() => {
       {
         type: "assistant/chunk",
         seq: 1,
+        time: 0,
         data: {
           turn: 1,
           step: 1,
           chunk: { type: "text-delta", index: 0, text: "done" },
         },
-      },
+      } as SessionEvent,
     ],
   });
 });
@@ -345,6 +345,7 @@ describe("DeepSeek handler", () => {
       .find(Boolean);
     expect(retryEvent?.category).toBe("configuration");
     expect(retryEvent).toBeTruthy();
+    if (!retryEvent) throw new Error("expected provider retry event");
     expect(formatProviderFailureRuntimeNotice(retryEvent)).toContain("configuration needs attention");
     expect(harness.start).not.toHaveBeenCalled();
   });
@@ -357,6 +358,7 @@ describe("DeepSeek handler", () => {
         {
           type: "turn/end",
           seq: 1,
+          time: 0,
           data: {
             turn: 1,
             reason: {
@@ -367,7 +369,7 @@ describe("DeepSeek handler", () => {
               },
             },
           },
-        },
+        } as SessionEvent,
       ],
     });
     const events: FtSessionEvent[] = [];

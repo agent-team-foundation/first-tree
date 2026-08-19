@@ -496,7 +496,9 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       replaySafety,
     });
     attempt.recordSignal({
-      kind: input.spawnError ? "local_error" : authFailure ? "auth_error" : "provider_error",
+      // Auth failures stay `provider_error`; classification comes from source/message
+      // (ProviderAttemptSignalKind has no `auth_error` variant).
+      kind: input.spawnError ? "local_error" : "provider_error",
       error: input.spawnError ?? input.failure,
       messagePreview: authFailure ? publicDeepseekAuthFailure(input.failure) : displayMessage,
     });

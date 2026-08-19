@@ -61,13 +61,15 @@ export function mapDeepseekSessionEvent(event: SessionEvent): DeepseekStreamChun
         toolName: event.data.name,
         toolArgs: parseToolArguments(event.data.arguments),
       };
-    case "tool/result":
+    case "tool/result": {
+      const toolResult = event.data.message.content[0];
       return {
         kind: "tool_result",
-        toolCallId: String(event.data.message.toolCallId ?? event.data.message.toolUseId ?? ""),
-        toolFailed: Boolean(event.data.error),
+        toolCallId: String(toolResult?.toolCallId ?? event.data.message.source.callId ?? ""),
+        toolFailed: Boolean(event.data.error) || Boolean(toolResult?.isError),
         toolPreview: previewToolResult(event.data.message),
       };
+    }
     case "turn/end": {
       const reason = event.data.reason;
       if (reason.kind === "error") {
