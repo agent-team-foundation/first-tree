@@ -23,7 +23,22 @@ export const OPENCODE_NPM_PACKAGE = `opencode-ai@^${OPENCODE_MINIMUM_VERSION}`;
 
 export const PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent";
 export const KIMI_NPM_PACKAGE = "@moonshot-ai/kimi-code";
-export const DEEPSEEK_INSTALL_NPM_PACKAGE = "@deepseek-ai/dsh-sdk-jsonrpc-demo@0.0.1-rc.5";
+/**
+ * Remediation package list when a Client/CLI install is missing the bundled
+ * DeepSeek Harness closure. The portable First Tree CLI is expected to ship
+ * these already via `bundleDependencies`; this string is for broken/local installs.
+ */
+export const DEEPSEEK_INSTALL_NPM_PACKAGE = [
+  "@deepseek-ai/dsh-sdk-jsonrpc-demo@0.0.1-rc.5",
+  "@deepseek-ai/dsh-sdk-jsonrpc-server@0.0.1-rc.5",
+  "@deepseek-ai/dsh-sdk-client@0.0.1-rc.1",
+  "@deepseek-ai/dsh-agent-spine-demo@0.0.1-rc.5",
+  "@deepseek-ai/dsh-session-persistence-jsonl@0.0.1-rc.5",
+  "@deepseek-ai/dsh-llm-deepseek@0.0.1-rc.5",
+  "@deepseek-ai/dsh-bash-local@0.0.1-rc.5",
+  "@deepseek-ai/dsh-fs-local@0.0.1-rc.5",
+  "@deepseek-ai/dsh-session@0.0.1-rc.5",
+].join(" ");
 
 /** Provider-owned install metadata — npm package or official installer script. */
 export type RuntimeProviderInstall =

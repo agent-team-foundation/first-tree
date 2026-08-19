@@ -37,8 +37,9 @@ Running this case remains human-requested; it is not a CI gate.
 
 - Run in the isolated QA run cell selected by the plan (Docker + temporary git worktree; never the operator checkout).
 - The run cell host has the pinned DeepSeek Harness npm packages available to the First Tree client
-  (`@deepseek-ai/dsh-sdk-jsonrpc-demo@0.0.1-rc.5` and siblings). First Tree bundles them; if they are
-  absent from `node_modules`, exercise only the install-hint branch and mark live branches `BLOCKED`.
+  (the full `@deepseek-ai/*` closure: `dsh-sdk-jsonrpc-demo`, Cordis plugins, and SDK client). The
+  portable CLI ships them via `bundleDependencies`; if they are absent from `node_modules`, exercise
+  only the install-hint branch and mark live branches `BLOCKED`.
 - A DeepSeek API key the run may use on that host (`DEEPSEEK_API_KEY`). Key state is host-scoped; do
   not copy credential files between users or machines.
 - Use disposable source and Context Tree fixtures. Provider tool calls must not modify the product checkout.

@@ -48,6 +48,7 @@ import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
 import { publicDeepseekAuthFailure, sanitizeDeepseekAuthFailureText } from "./auth-failure.js";
 import {
+  deepseekLaunchFingerprint,
   deepseekSessionRoot,
   resolveDeepseekModel,
   resolveDeepseekRuntimeBinary,
@@ -148,6 +149,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
   let runtimeBinary: string | null = null;
   let cordisPath: string | null = null;
   let harness: DeepseekHarnessLike | null = null;
+  let harnessLaunchFingerprint: string | null = null;
   let providerSessionId: string | null = null;
   let pendingSyntheticId: string | null = null;
   let sessionActive = false;
@@ -219,7 +221,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       if (typeof value === "string") env[key] = value;
     }
     env.DSH_SESSION_ROOT = deepseekSessionRoot(workspaceCwd);
-    env.DSH_SKILLS_ROOT = PROVIDER_SKILL_ROOTS.deepseek;
+    env.DSH_SKILLS_ROOT = PROVIDER_SKILL_ROOTS["deepseek-harness"];
     env.DSH_MODEL = resolveDeepseekModel(payload.model);
     return env;
   }
@@ -274,6 +276,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
   async function closeHarness(): Promise<void> {
     const activeHarness = harness;
     harness = null;
+    harnessLaunchFingerprint = null;
     if (!activeHarness) return;
     try {
       await activeHarness.close();
@@ -287,8 +290,11 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
   ): Promise<DeepseekHarnessLike> {
-    if (harness) return harness;
     if (!runtimeBinary || !cordisPath) throw new Error("DeepSeek runtime is not resolved");
+    const fingerprint = deepseekLaunchFingerprint(payload);
+    if (harness && harnessLaunchFingerprint === fingerprint) return harness;
+    if (harness) await closeHarness();
+
     mkdirSync(deepseekSessionRoot(workspaceCwd), { recursive: true, mode: 0o700 });
     const env = buildEnv(sessionCtx, payload, workspaceCwd);
     const launch =
@@ -298,6 +304,8 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
     const created = createHarness({
       launch: {
         ...launch,
+        // Agent workspace is the initialize cwd; plugin packages resolve via
+        // packaged-bin's bareModuleBaseUrl (the installed CLI/client closure).
         cwd: workspaceCwd,
         env,
         requestTimeoutMs: turnTimeoutMs,
@@ -306,8 +314,15 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       provider: "deepseek-official",
       model: resolveDeepseekModel(payload.model),
     });
-    await created.start();
+    // Publish before awaiting start so an abort/timeout can close/reap a hung boot.
     harness = created;
+    harnessLaunchFingerprint = fingerprint;
+    try {
+      await created.start();
+    } catch (error) {
+      await closeHarness();
+      throw error;
+    }
     return created;
   }
 
@@ -579,7 +594,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
 
       const oneShotPrompt = pendingChatContextPrompt;
       const providerPrompt = oneShotPrompt ? `${oneShotPrompt}\n\n${prompt}` : prompt;
-      const expectedSessionId = providerSessionId ?? pendingSyntheticId;
+      const expectedSessionId = providerSessionId;
       const state: TurnObservation = {
         assistantText: "",
         sawProviderActivity: false,
@@ -589,9 +604,27 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       token.processingStarted(messages);
       const timeout = setTimeout(() => abort.abort(), turnTimeoutMs);
       timeout.unref?.();
+      const onAbortClose = () => {
+        void closeHarness();
+      };
+      abort.signal.addEventListener("abort", onAbortClose, { once: true });
 
       try {
         const activeHarness = await ensureHarness(sessionCtx, payload, workspaceCwd);
+        if (abort.signal.aborted || generation !== turnGeneration || !sessionActive) {
+          await closeHarness();
+          return settleFailure({
+            failure: "DeepSeek turn aborted or timed out before a safe terminal event",
+            spawnError: new Error("DeepSeek turn aborted or timed out"),
+            state,
+            sessionCtx,
+            messages,
+            token,
+            turnGeneration,
+          });
+        }
+        // Amp posture: only a confirmed provider session id may be supplied.
+        // Pending local ids stay local until the SDK returns a real id.
         const sessionHandle = activeHarness.session(expectedSessionId ?? undefined);
         const result = await sessionHandle.run(providerPrompt, {
           onNotification: (notification) => {
@@ -683,6 +716,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
           turnGeneration,
         });
       } finally {
+        abort.signal.removeEventListener("abort", onAbortClose);
         clearTimeout(timeout);
       }
     })();
@@ -950,8 +984,10 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       generation++;
       currentAbort?.abort();
       unsafeDiscoveryWaitAbort?.abort();
-      await Promise.all([currentTurnPromise, currentDrainPromise]);
+      // Close/reap before joining the turn so a hung HarnessSession.run cannot
+      // strand suspend/client drain indefinitely.
       await closeHarness();
+      await Promise.all([currentTurnPromise, currentDrainPromise]);
       if (drainingBatch) retryDrainingBatch(drainingBatch, recoveryReason);
       retryQueue(recoveryReason);
       drainCancellationReason = null;
@@ -968,8 +1004,8 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
       generation++;
       currentAbort?.abort();
       unsafeDiscoveryWaitAbort?.abort();
-      await Promise.all([currentTurnPromise, currentDrainPromise]);
       await closeHarness();
+      await Promise.all([currentTurnPromise, currentDrainPromise]);
       if (drainingBatch) retryDrainingBatch(drainingBatch, recoveryReason);
       retryQueue(recoveryReason);
       drainCancellationReason = null;

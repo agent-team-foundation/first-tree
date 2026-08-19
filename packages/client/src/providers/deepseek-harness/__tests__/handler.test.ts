@@ -23,24 +23,20 @@ class FakeHarnessSession {
   constructor(
     readonly id: string,
     private readonly script: () => FakeRunResult | Promise<FakeRunResult>,
-    private readonly onRun?: (prompt: string) => void,
   ) {}
 
-  async run(prompt: string): Promise<FakeRunResult> {
-    this.onRun?.(prompt);
+  async run(_prompt: string): Promise<FakeRunResult> {
     return this.script();
   }
 }
 
 class FakeHarness {
-  readonly sessions = new Map<string, FakeHarnessSession>();
+  readonly sessionCalls: Array<string | undefined> = [];
   start = vi.fn(async () => {});
   close = vi.fn(async () => {});
   session(sessionId?: string): FakeHarnessSession {
-    const id = sessionId ?? "sess-new";
-    const existing = this.sessions.get(id);
-    if (existing) return existing;
-    throw new Error(`unexpected session(${id})`);
+    this.sessionCalls.push(sessionId);
+    return new FakeHarnessSession(sessionId ?? "sess-new", () => runScript());
   }
 }
 
@@ -91,6 +87,13 @@ function makeMessage(id: string, content: string): SessionMessage {
 let workspaceRoot: string;
 let harness: FakeHarness;
 let runScript: () => FakeRunResult | Promise<FakeRunResult>;
+let runtimeConfig: {
+  agentId: string;
+  version: number;
+  payload: AgentRuntimeConfigPayload;
+  updatedAt: string;
+  updatedBy: string;
+};
 
 function makeContext(opts: {
   events: FtSessionEvent[];
@@ -134,14 +137,6 @@ function makeContext(opts: {
 }
 
 function makeHandler(extraConfig: Record<string, unknown> = {}) {
-  const payload = (extraConfig.payload as AgentRuntimeConfigPayload | undefined) ?? makePayload();
-  const runtimeConfig = {
-    agentId: "agent-deepseek-1",
-    version: 1,
-    payload,
-    updatedAt: new Date(0).toISOString(),
-    updatedBy: "test",
-  };
   return createDeepseekHandler({
     workspaceRoot,
     agentName: "deepseek-test-agent",
@@ -151,9 +146,10 @@ function makeHandler(extraConfig: Record<string, unknown> = {}) {
       ok: true,
       binary: "/bin/dsh-jsonrpc-agent",
       cordisPath: join(workspaceRoot, "cordis.yml"),
+      moduleBaseUrl: "file:///bin/dsh-jsonrpc-agent",
     }),
     deepseekHarnessFactory: () => {
-      harness.session = (sessionId?: string) => new FakeHarnessSession(sessionId ?? "sess-new", () => runScript());
+      harness = new FakeHarness();
       return harness;
     },
     agentConfigCache: {
@@ -167,6 +163,13 @@ function makeHandler(extraConfig: Record<string, unknown> = {}) {
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-deepseek-handler-"));
   harness = new FakeHarness();
+  runtimeConfig = {
+    agentId: "agent-deepseek-1",
+    version: 1,
+    payload: makePayload(),
+    updatedAt: new Date(0).toISOString(),
+    updatedBy: "test",
+  };
   runScript = () => ({
     sessionId: "sess-new",
     finalResponse: "done",
@@ -206,17 +209,103 @@ describe("DeepSeek handler", () => {
     expect(token.completed).toEqual([{ status: "success" }]);
     expect(events.some((event) => event.kind === "assistant_text")).toBe(true);
     expect(harness.start).toHaveBeenCalledTimes(1);
+    expect(harness.sessionCalls).toEqual([undefined]);
+  });
+
+  it("does not pass pending synthetic ids to the SDK session()", async () => {
+    const events: FtSessionEvent[] = [];
+    const replaceSessionId = vi.fn();
+    const ctx = makeContext({ events, replaceSessionId });
+    const token = makeToken();
+    const handler = makeHandler();
+
+    runScript = () => ({
+      sessionId: "provider-native-1",
+      finalResponse: "ok",
+      events: [],
+    });
+
+    const pendingId = `${DEEPSEEK_PENDING_SESSION_PREFIX}abc`;
+    const result = await handler.resume(makeMessage("m1", "hello"), pendingId, ctx, token);
+    expect(harness.sessionCalls).toEqual([undefined]);
+    expect(result.sessionId).toBe("provider-native-1");
+    expect(replaceSessionId).toHaveBeenCalledWith("provider-native-1", "deepseek_session_id_confirmed");
+  });
+
+  it("closes the harness on timeout so a hung run can settle", async () => {
+    let releaseRun: (() => void) | null = null;
+    runScript = () =>
+      new Promise<FakeRunResult>((resolve) => {
+        releaseRun = () =>
+          resolve({
+            sessionId: "sess-hung",
+            finalResponse: "",
+            events: [],
+          });
+      });
+
+    const events: FtSessionEvent[] = [];
+    const ctx = makeContext({ events });
+    const token = makeToken();
+    const handler = makeHandler({
+      deepseekTurnTimeoutMs: 40,
+      deepseekHarnessFactory: () => {
+        harness = new FakeHarness();
+        harness.close = vi.fn(async () => {
+          releaseRun?.();
+        });
+        return harness;
+      },
+    });
+
+    const startedAt = Date.now();
+    await handler.start(makeMessage("m1", "hello"), ctx, token);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(harness.close).toHaveBeenCalled();
+    expect(token.completed[0]?.status === "error" || token.retried.length > 0).toBe(true);
+  });
+
+  it("restarts the harness when launch-affecting model config changes", async () => {
+    const events: FtSessionEvent[] = [];
+    const ctx = makeContext({ events });
+    const token = makeToken();
+    const started: FakeHarness[] = [];
+    const handler = makeHandler({
+      deepseekHarnessFactory: () => {
+        const next = new FakeHarness();
+        started.push(next);
+        harness = next;
+        return next;
+      },
+    });
+
+    await handler.start(makeMessage("m1", "hello"), ctx, token);
+    expect(started).toHaveLength(1);
+
+    runtimeConfig = {
+      ...runtimeConfig,
+      version: 2,
+      payload: makePayload({ model: "deepseek-v4-pro" }),
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    await handler.resume(makeMessage("m2", "again"), "sess-new", ctx, makeToken());
+    expect(started).toHaveLength(2);
+    expect(started[0]!.close).toHaveBeenCalled();
+    expect(started[1]!.sessionCalls[0]).toBe("sess-new");
   });
 
   it("fails closed on managed MCP configuration", async () => {
     const events: FtSessionEvent[] = [];
     const ctx = makeContext({ events });
     const token = makeToken();
-    const handler = makeHandler({
+    runtimeConfig = {
+      ...runtimeConfig,
       payload: makePayload({
         mcpServers: [{ name: "demo", transport: "stdio", command: "echo", args: [] }],
       }),
-    });
+    };
+    const handler = makeHandler();
 
     await handler.start(makeMessage("m1", "hello"), ctx, token);
     expect(token.completed[0]?.status).toBe("error");

@@ -47,9 +47,9 @@ const deepseekCordisSource = resolve(
   repoRoot,
   "packages/client/src/providers/deepseek-harness/cordis.yml",
 );
-const deepseekCordisTargetDir = resolve(repoRoot, packageDirArg, "dist/providers/deepseek-harness");
 if (!existsSync(deepseekCordisSource) || !statSync(deepseekCordisSource).isFile()) {
   throw new Error(`DeepSeek cordis template is missing: ${deepseekCordisSource}`);
 }
-await mkdir(deepseekCordisTargetDir, { recursive: true });
-await cp(deepseekCordisSource, resolve(deepseekCordisTargetDir, "cordis.yml"));
+// Stable runtime-asset location shared with agent-briefing discovery
+// (`./runtime-assets` / `../runtime-assets` from bundled chunks).
+await cp(deepseekCordisSource, resolve(runtimeAssetsDir, "deepseek-harness-cordis.yml"));

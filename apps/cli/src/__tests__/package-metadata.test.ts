@@ -89,12 +89,36 @@ describe("npm package metadata", () => {
     // tarball must carry the patched artifact as a bundled dependency, and
     // the SDK's own runtime deps must be regular CLI dependencies so the
     // bundled copy resolves them from the consumer's top-level node_modules.
-    expect(pkg.bundleDependencies).toEqual(["@botiverse/kimi-code-sdk"]);
+    expect(pkg.bundleDependencies).toEqual([
+      "@botiverse/kimi-code-sdk",
+      "@deepseek-ai/dsh-agent-spine-demo",
+      "@deepseek-ai/dsh-bash-local",
+      "@deepseek-ai/dsh-fs-local",
+      "@deepseek-ai/dsh-llm-deepseek",
+      "@deepseek-ai/dsh-sdk-client",
+      "@deepseek-ai/dsh-sdk-jsonrpc-demo",
+      "@deepseek-ai/dsh-sdk-jsonrpc-server",
+      "@deepseek-ai/dsh-session",
+      "@deepseek-ai/dsh-session-persistence-jsonl",
+    ]);
     const dependencies = packageDependencies(pkg);
     for (const sdkRuntimeDep of ["@antfu/utils", "smol-toml", "yazl"]) {
       expect(dependencies[sdkRuntimeDep]).toBeDefined();
     }
     expect(dependencies["@botiverse/kimi-code-sdk"]).toBe("0.26.0-botiverse.2");
+    for (const deepseekPkg of [
+      "@deepseek-ai/dsh-agent-spine-demo",
+      "@deepseek-ai/dsh-bash-local",
+      "@deepseek-ai/dsh-fs-local",
+      "@deepseek-ai/dsh-llm-deepseek",
+      "@deepseek-ai/dsh-sdk-client",
+      "@deepseek-ai/dsh-sdk-jsonrpc-demo",
+      "@deepseek-ai/dsh-sdk-jsonrpc-server",
+      "@deepseek-ai/dsh-session",
+      "@deepseek-ai/dsh-session-persistence-jsonl",
+    ]) {
+      expect(dependencies[deepseekPkg]).toBeDefined();
+    }
   });
 });
 
