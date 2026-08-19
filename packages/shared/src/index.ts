@@ -1531,6 +1531,7 @@ export {
   type RuntimeProviderCatalogEntry,
   type RuntimeProviderInstall,
   type RuntimeProviderLoginSteps,
+  type RuntimeProviderPreferredCredential,
   runtimeProviderAuthOwnerLabel,
   runtimeProviderAuthRecovery,
   runtimeProviderChatAuthLoginPhrase,
@@ -1541,6 +1542,8 @@ export {
   runtimeProviderLabel,
   runtimeProviderLoginCommand,
   runtimeProviderLoginSteps,
+  runtimeProviderPreferredCredential,
+  runtimeProviderPreferredCredentialProse,
   runtimeProviderShowsHostLoginOnSetup,
 } from "./schemas/runtime-provider-catalog.js";
 export {

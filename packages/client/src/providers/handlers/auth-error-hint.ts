@@ -17,6 +17,7 @@ import {
   type RuntimeProvider,
   runtimeProviderAuthOwnerLabel,
   runtimeProviderChatAuthLoginPhrase,
+  runtimeProviderPreferredCredentialProse,
 } from "@first-tree/shared";
 
 type Runtime = Exclude<RuntimeProvider, "claude-code-tui">;
@@ -198,15 +199,19 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // in-chat hint stays aligned with Computers setup and other surfaces.
   const reauth = runtimeProviderChatAuthLoginPhrase(runtime);
   const provider = runtimeProviderAuthOwnerLabel(runtime);
+  const preferred = runtimeProviderPreferredCredentialProse(runtime);
   // Cap the appended raw message so an upstream stack-trace envelope (codex
   // wraps its `event.error.message` in surprising ways) doesn't bloat the
   // hint into a wall of text on the chat timeline.
   const trimmed = originalMessage.trim().slice(0, ORIGINAL_MESSAGE_CAP);
   const original = trimmed.length > 0 ? trimmed : "(no message from SDK)";
+  const recovery = preferred
+    ? `${preferred} (or run ${reauth} in the host shell)`
+    : `please run ${reauth} in your terminal to re-authenticate`;
   return (
     `${runtime} auth on this machine looks broken or expired. ` +
     `This is ${provider}'s auth state, not First Tree's — ` +
-    `please run ${reauth} in your terminal to re-authenticate, then retry. ` +
+    `${recovery}, then retry. ` +
     `Original SDK error: ${original}`
   );
 }

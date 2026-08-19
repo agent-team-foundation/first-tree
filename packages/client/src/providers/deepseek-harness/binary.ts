@@ -2,7 +2,7 @@ import { accessSync, constants, existsSync, realpathSync, statSync } from "node:
 import { createRequire } from "node:module";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEEPSEEK_INSTALL_NPM_PACKAGE, runtimeProviderLoginCommand } from "@first-tree/shared";
+import { DEEPSEEK_INSTALL_NPM_PACKAGE, runtimeProviderLoginCommand, runtimeProviderPreferredCredentialProse } from "@first-tree/shared";
 
 export { DEEPSEEK_INSTALL_NPM_PACKAGE };
 export const DEEPSEEK_LOGIN_COMMAND = runtimeProviderLoginCommand("deepseek-harness");
@@ -12,10 +12,12 @@ export const DEEPSEEK_CORDIS_ASSET_NAME = "deepseek-harness-cordis.yml";
 export function formatDeepseekBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();
   const suffix = original ? ` Original error: ${original}` : "";
+  const preferred =
+    runtimeProviderPreferredCredentialProse("deepseek-harness") ??
+    "set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables and Mark as sensitive";
   return (
     "DeepSeek Harness runtime packages are missing from this First Tree Client. " +
-    "After install, set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables and Mark as sensitive " +
-    "(or export it in the host shell). The portable CLI must ship the pinned `@deepseek-ai/*` " +
+    `After install, ${preferred} (or export it in the host shell). The portable CLI must ship the pinned \`@deepseek-ai/*\` ` +
     "closure (including Cordis plugins). Update or reinstall First Tree, or for a broken local install run " +
     `\`npm install ${DEEPSEEK_INSTALL_NPM_PACKAGE}\`.` +
     suffix

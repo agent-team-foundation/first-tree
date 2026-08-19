@@ -50,8 +50,26 @@ export type RuntimeProviderInstall =
  * Ordered login steps for chat auth-recovery / host-local surfaces.
  * Shell providers have exactly one step; interactive providers (Kimi / Pi)
  * have exactly two (`program`, slash-command).
+ *
+ * Each step MUST be an executable terminal fragment (or a slash-command for
+ * the interactive pair). Natural-language UI guidance does not belong here —
+ * use {@link RuntimeProviderPreferredCredential} for preferred First Tree
+ * placement prose.
  */
 export type RuntimeProviderLoginSteps = readonly [string] | readonly [string, string];
+
+/**
+ * Preferred First Tree credential placement when host-local auth is an API
+ * key (or similar) rather than only a CLI login. Absent → terminal
+ * {@link RuntimeProviderLoginSteps} only.
+ */
+export type RuntimeProviderPreferredCredential = {
+  kind: "agent-runtime-env";
+  /** Env var name stored on the agent's Runtime → Environment variables. */
+  envKey: string;
+  /** Prefer Web "Mark as sensitive" when saving on the agent. */
+  markSensitive: boolean;
+};
 
 /**
  * Where operators recover credentials.
@@ -85,6 +103,12 @@ export type RuntimeProviderCatalogEntry = {
   authRecovery: RuntimeProviderAuthRecovery;
   /** Credential owner named in chat auth-failure hints. */
   authOwnerLabel: string;
+  /**
+   * Optional preferred First Tree placement for the credential. When set,
+   * computers / chat prose may name agent Runtime env; {@link loginSteps}
+   * stay the executable host-shell fallback.
+   */
+  preferredCredential?: RuntimeProviderPreferredCredential;
 };
 
 /**
@@ -108,11 +132,14 @@ export const RUNTIME_PROVIDER_CATALOG = {
     displayOrder: 100,
     selectionPriority: null,
     install: { kind: "npm", package: DEEPSEEK_INSTALL_NPM_PACKAGE, args: [] },
-    loginSteps: [
-      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
-    ],
+    loginSteps: ["export DEEPSEEK_API_KEY=<your DeepSeek API key>"],
     authRecovery: { kind: "host" },
     authOwnerLabel: "DeepSeek",
+    preferredCredential: {
+      kind: "agent-runtime-env",
+      envKey: "DEEPSEEK_API_KEY",
+      markSensitive: true,
+    },
   },
   "claude-code": {
     id: "claude-code",
@@ -318,6 +345,29 @@ export function runtimeProviderInteractiveLoginCue(provider: RuntimeProvider): s
 /** Credential-owner label used in chat auth-failure hints. */
 export function runtimeProviderAuthOwnerLabel(provider: RuntimeProvider): string {
   return RUNTIME_PROVIDER_CATALOG[provider].authOwnerLabel;
+}
+
+/** Preferred First Tree credential placement, when the catalog declares one. */
+export function runtimeProviderPreferredCredential(
+  provider: RuntimeProvider,
+): RuntimeProviderPreferredCredential | null {
+  return RUNTIME_PROVIDER_CATALOG[provider].preferredCredential ?? null;
+}
+
+/**
+ * Operator-facing prose for {@link RuntimeProviderPreferredCredential}.
+ * Returns null when the provider has no preferred First Tree placement
+ * beyond host-local {@link runtimeProviderLoginSteps}.
+ */
+export function runtimeProviderPreferredCredentialProse(provider: RuntimeProvider): string | null {
+  const preferred = runtimeProviderPreferredCredential(provider);
+  if (!preferred) return null;
+  if (preferred.kind === "agent-runtime-env") {
+    const sensitive = preferred.markSensitive ? " and Mark as sensitive" : "";
+    return `set \`${preferred.envKey}\` on the agent's Runtime → Environment variables${sensitive}`;
+  }
+  const _exhaustive: never = preferred;
+  return _exhaustive;
 }
 
 /**

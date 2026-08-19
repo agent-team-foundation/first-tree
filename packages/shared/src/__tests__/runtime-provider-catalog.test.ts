@@ -30,6 +30,8 @@ import {
   runtimeProviderLabel,
   runtimeProviderLoginCommand,
   runtimeProviderLoginSteps,
+  runtimeProviderPreferredCredential,
+  runtimeProviderPreferredCredentialProse,
   runtimeProviderSchema,
   runtimeProviderShowsHostLoginOnSetup,
 } from "../index.js";
@@ -100,6 +102,11 @@ describe("runtime provider identity + catalog completeness", () => {
       expect(runtimeProviderLabel(id)).toBe(entry.label);
       expect(entry.loginSteps.length).toBeGreaterThan(0);
       expect(runtimeProviderLoginSteps(id)).toEqual(entry.loginSteps);
+      // loginSteps feed copy-pasteable terminal blocks — keep them executable,
+      // not natural-language UI guidance (that belongs on preferredCredential).
+      for (const step of entry.loginSteps) {
+        expect(step).not.toMatch(/Runtime\s*→|Mark as sensitive/i);
+      }
       const install = runtimeProviderInstallCommand(id);
       expect(install.length).toBeGreaterThan(0);
       if (entry.install.kind === "npm") {
@@ -175,9 +182,14 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");
     expect(runtimeProviderInstallCommand("amp")).toBe(AMP_INSTALL_COMMAND);
     expect(runtimeProviderInstallCommand("deepseek-harness")).toBe(`npm install -g ${DEEPSEEK_INSTALL_NPM_PACKAGE}`);
-    expect(runtimeProviderLoginCommand("deepseek-harness")).toBe(
-      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
-    );
+    expect(runtimeProviderLoginCommand("deepseek-harness")).toBe("export DEEPSEEK_API_KEY=<your DeepSeek API key>");
+    expect(runtimeProviderPreferredCredential("deepseek-harness")).toEqual({
+      kind: "agent-runtime-env",
+      envKey: "DEEPSEEK_API_KEY",
+      markSensitive: true,
+    });
+    expect(runtimeProviderPreferredCredentialProse("deepseek-harness")).toContain("Mark as sensitive");
+    expect(runtimeProviderPreferredCredentialProse("amp")).toBeNull();
     expect(runtimeProviderLoginCommand("amp")).toBe("amp login");
     expect(KIMI_NPM_PACKAGE).toBe("@moonshot-ai/kimi-code");
     expect(RUNTIME_PROVIDER_CATALOG["kimi-code"].install).toEqual({
