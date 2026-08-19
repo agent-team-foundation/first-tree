@@ -2,11 +2,12 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared";
+import { type AgentRuntimeConfigPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCtxPlumbing } from "../../../__tests__/test-helpers.js";
 import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../../../runtime/handler.js";
 import type { ProviderProcessSpec, ProviderProcessSupervisor } from "../../../runtime/provider-process-supervisor.js";
+import { formatProviderFailureRuntimeNotice } from "../../../runtime/runtime-notice.js";
 import {
   AMP_PENDING_SESSION_PREFIX,
   buildAmpTurnArgs,
@@ -121,10 +122,27 @@ function authFailureScript(): ChildScript {
 
 function absentKeyAuthFailureScript(): ChildScript {
   return (child) => {
-    child.stdout.emit("data", "No API key found. Starting login flow...\n");
+    child.stdout.emit(
+      "data",
+      [
+        "No API key found. Starting login flow...",
+        "If your browser does not open automatically, visit:",
+        "",
+        "https://ampcode.com/auth/cli-login?authToken=qa-one-time-placeholder&state=qa-state-placeholder",
+        "",
+        "When prompted, paste your code here: ",
+      ].join("\n"),
+    );
     child.stdout.emit("end");
     child.emit("close", 1, null);
   };
+}
+
+function assertNoAmpLoginAuthorizationMaterial(text: string): void {
+  expect(text).not.toMatch(/https?:\/\//i);
+  expect(text).not.toMatch(/authToken=|auth_token=|[?&]code=|[?&]state=|[?&]token=/i);
+  expect(text).not.toContain("qa-one-time-placeholder");
+  expect(text).not.toContain("qa-state-placeholder");
 }
 
 function makeToken(): DeliveryToken & { completed: TurnOutcome[]; retried: string[] } {
@@ -498,6 +516,16 @@ describe("Amp handler — per-turn CLI transport", () => {
     expect(
       events.some((event) => event.kind === "error" && String(event.payload.message).includes("No API key found")),
     ).toBe(true);
+    const errorTexts = events.filter((event) => event.kind === "error").map((event) => String(event.payload.message));
+    expect(errorTexts.length).toBeGreaterThan(0);
+    assertNoAmpLoginAuthorizationMaterial(JSON.stringify(events));
+    for (const text of errorTexts) {
+      assertNoAmpLoginAuthorizationMaterial(text);
+      const retryPayload = parseProviderRetryEventMessage(text);
+      if (!retryPayload) continue;
+      assertNoAmpLoginAuthorizationMaterial(JSON.stringify(retryPayload));
+      assertNoAmpLoginAuthorizationMaterial(formatProviderFailureRuntimeNotice(retryPayload));
+    }
     await handler.shutdown();
   });
 

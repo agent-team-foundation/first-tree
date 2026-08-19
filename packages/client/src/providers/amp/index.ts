@@ -48,7 +48,11 @@ import {
   writeSessionBriefingFingerprint,
 } from "../../runtime/provider-support/index.js";
 import { chunkAssistantText } from "../handlers/assistant-text.js";
-import { formatAuthHint, isAmpAuthError } from "../handlers/auth-error-hint.js";
+import {
+  discardProviderLoginAuthorizationMaterial,
+  formatAuthHint,
+  isAmpAuthError,
+} from "../handlers/auth-error-hint.js";
 import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
 import { resolveAmpRuntimeBinary } from "./binary.js";
@@ -937,7 +941,12 @@ export const createAmpHandler: HandlerFactory = (config) => {
         authFailure ||
         state.errors[0] ||
         protocolErrors[0] ||
-        redactErrorPreview(outcome.stderrTail || outcome.stdoutTail || `amp exited ${outcome.exitCode}`, 800);
+        redactErrorPreview(
+          discardProviderLoginAuthorizationMaterial(
+            outcome.stderrTail || outcome.stdoutTail || `amp exited ${outcome.exitCode}`,
+          ),
+          800,
+        );
       return settleFailure({
         failure,
         spawnError: outcome.spawnError,
@@ -1259,18 +1268,30 @@ function classifyAmpAuthFailure(input: {
   parsedProviderOutput: boolean;
 }): string | null {
   if (isAmpAuthError(input.stderrTail)) {
-    return redactErrorPreview(input.stderrTail, 800);
+    return publicAmpAuthFailure(input.stderrTail);
   }
   const structured = input.structuredErrors.find((error) => isAmpAuthError(error));
-  if (structured) return structured;
+  if (structured) return publicAmpAuthFailure(structured);
   // Stdout is an auth source only for the official pre-session login-flow
   // (plain text, no parsed init/assistant JSON). `exitCode !== 0` is also true
   // for a signal-killed child (`exitCode: null`), so JSON assistant text that
   // happens to mention the same phrases must not be classified from stdoutTail.
   if (!input.parsedProviderOutput && input.exitCode !== 0 && isAmpAuthError(input.stdoutTail)) {
-    return redactErrorPreview(input.stdoutTail, 800);
+    return publicAmpAuthFailure(input.stdoutTail);
   }
   return null;
+}
+
+/** Chat-safe Amp auth copy: keep the absent-key phrase, drop login URLs and query. */
+function publicAmpAuthFailure(raw: string): string {
+  const cleaned = discardProviderLoginAuthorizationMaterial(raw);
+  const firstLine = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  const summary = firstLine && isAmpAuthError(firstLine) ? firstLine : cleaned.replace(/\s+/g, " ").trim();
+  const compact = (summary.length > 0 ? summary : "No API key found. Run amp login.").slice(0, 240);
+  return compact;
 }
 
 function isReadOnlyTool(name: string): boolean {

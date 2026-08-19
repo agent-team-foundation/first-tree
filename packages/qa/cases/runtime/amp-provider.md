@@ -55,7 +55,8 @@ Running this case remains human-requested; it is not a CI gate.
   `high`, `ultra`) rather than free-form model ids.
 - Auth recovery: with the CLI logged out, a real turn fails as a credential failure; the chat surfaces a durable
   runtime notice directing the operator to `amp login` / `AMP_API_KEY` before the delivery is acked. First Tree must
-  never offer an in-product Amp OAuth Connect button and must never see or store the token.
+  never offer an in-product Amp OAuth Connect button, must never see or store the token, and must not copy Amp login
+  URLs or one-time query material into durable error events or runtime notices.
 - Real turn posture: during an authenticated turn, verify the spawned process runs from the agent workspace root with
   `amp --execute --stream-json --stream-json-thinking --no-remote-control-terminal --settings-file <unique-path>` plus
   `--visibility private` on new threads and `--mode <value>` only when configured — prompt text on stdin only, never in

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  discardProviderLoginAuthorizationMaterial,
   formatAuthHint,
   isAmpAuthError,
   isClaudeAuthError,
@@ -187,6 +188,26 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("`amp login`");
     expect(hint).toContain("Amp");
     expect(hint).toContain("not First Tree's");
+  });
+
+  it("discards Amp login URLs and one-time query material from the chat hint", () => {
+    const official = [
+      "No API key found. Starting login flow...",
+      "If your browser does not open automatically, visit:",
+      "",
+      "https://ampcode.com/auth/cli-login?authToken=qa-one-time-placeholder&state=qa-state-placeholder",
+      "",
+      "When prompted, paste your code here:",
+    ].join("\n");
+    expect(discardProviderLoginAuthorizationMaterial(official)).not.toMatch(/https?:\/\//i);
+    expect(discardProviderLoginAuthorizationMaterial(official)).not.toMatch(/authToken=|state=|[?&]code=/i);
+    const hint = formatAuthHint("amp", official);
+    expect(hint).toContain("`amp login`");
+    expect(hint).toContain("No API key found");
+    expect(hint).not.toMatch(/https?:\/\//i);
+    expect(hint).not.toMatch(/authToken=|state=|[?&]code=/i);
+    expect(hint).not.toContain("qa-one-time-placeholder");
+    expect(hint).not.toContain("paste your code");
   });
 
   it("keeps OpenCode authentication host-local and points at the provider-owned login", () => {
