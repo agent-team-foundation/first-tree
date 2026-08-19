@@ -81,30 +81,42 @@ export function MobileWorkPage() {
     [searchParams, setSearchParams],
   );
 
+  const viewingChat = selectedChatId !== null;
+
   return (
     <>
-      {selectedChatId !== null ? (
-        <div className="flex h-full min-h-0 overflow-hidden">
-          <CenterPanel
-            selectedChatId={selectedChatId}
+      <div className="relative h-full min-h-0">
+        {/* Keep the list mounted under detail so back restores the same
+            scroll offset, rendered window, search, and filter chrome. */}
+        <div
+          className={cn("h-full min-h-0", viewingChat && "pointer-events-none invisible absolute inset-0")}
+          aria-hidden={viewingChat}
+          inert={viewingChat || undefined}
+          data-mobile-work-list-pane={viewingChat ? "parked" : "active"}
+        >
+          <MobileWorkList
             onSelectChat={selectChat}
-            onClearChat={clearChat}
-            narrow
-            onShowConversations={clearChat}
-            initialParticipantIds={parseParticipantList(searchParams)}
-            presentation="mobile"
+            quickView={quickView}
+            onQuickViewChange={setQuickView}
+            filters={filters}
+            onFiltersChange={setFilters}
+            onOpenNeedYou={openNeedYouChat}
           />
         </div>
-      ) : (
-        <MobileWorkList
-          onSelectChat={selectChat}
-          quickView={quickView}
-          onQuickViewChange={setQuickView}
-          filters={filters}
-          onFiltersChange={setFilters}
-          onOpenNeedYou={openNeedYouChat}
-        />
-      )}
+        {selectedChatId !== null ? (
+          <div className="flex h-full min-h-0 overflow-hidden">
+            <CenterPanel
+              selectedChatId={selectedChatId}
+              onSelectChat={selectChat}
+              onClearChat={clearChat}
+              narrow
+              onShowConversations={clearChat}
+              initialParticipantIds={parseParticipantList(searchParams)}
+              presentation="mobile"
+            />
+          </div>
+        ) : null}
+      </div>
       <DocPreviewDrawer />
     </>
   );

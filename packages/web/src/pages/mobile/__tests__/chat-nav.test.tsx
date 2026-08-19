@@ -154,4 +154,64 @@ describe("MobileWorkPage back navigation", () => {
     expect(restoredPinnedQuickView?.getAttribute("aria-pressed")).toBe("true");
     expect(harness.container.textContent).toContain("Pinned planning");
   });
+
+  it("keeps the Chat list scroll offset after opening a conversation and going back", async () => {
+    const rows = Array.from({ length: 24 }, (_, index) =>
+      chatRow({
+        chatId: `chat-${index + 1}`,
+        title: `Thread ${index + 1}`,
+        topic: `Thread ${index + 1}`,
+      }),
+    );
+    meChatMocks.listMeChats.mockResolvedValue({
+      priorityRows: { pinned: [] },
+      rows,
+      nextCursor: null,
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    harness.render(
+      <MemoryRouter initialEntries={["/m/chat"]}>
+        <QueryClientProvider client={queryClient}>
+          <Routes>
+            <Route path="/m/chat" element={<MobileWorkPage />} />
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("Thread 1"));
+    const pane = harness.container.querySelector("[data-mobile-work-list-pane]");
+    const scroller = pane?.querySelector<HTMLElement>(".overflow-y-auto");
+    expect(pane?.getAttribute("data-mobile-work-list-pane")).toBe("active");
+    expect(scroller).not.toBeNull();
+    if (!scroller) throw new Error("Missing Chat list scroller");
+
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2400 });
+    scroller.scrollTop = 640;
+
+    const chatCard = harness.container.querySelector<HTMLButtonElement>('[data-mobile-card="work"]');
+    await act(async () => {
+      chatCard?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await harness.flush();
+    expect(harness.container.querySelector('button[aria-label="back"]')).not.toBeNull();
+    expect(pane?.getAttribute("data-mobile-work-list-pane")).toBe("parked");
+    expect(scroller.scrollTop).toBe(640);
+
+    await act(async () => {
+      harness.container
+        .querySelector<HTMLButtonElement>('button[aria-label="back"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await harness.flush();
+
+    const restoredPane = harness.container.querySelector("[data-mobile-work-list-pane]");
+    const restoredScroller = restoredPane?.querySelector<HTMLElement>(".overflow-y-auto");
+    expect(restoredPane?.getAttribute("data-mobile-work-list-pane")).toBe("active");
+    expect(restoredScroller).toBe(scroller);
+    expect(restoredScroller?.scrollTop).toBe(640);
+    expect(harness.container.textContent).toContain("Thread 1");
+  });
 });
