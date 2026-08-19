@@ -280,9 +280,8 @@ describe("MobileWorkPage back navigation", () => {
     await harness.flush();
 
     expect(harness.container.querySelector('nav[aria-label="Mobile"]')).toBeNull();
-    expect(Number.parseFloat(harness.container.querySelector("[data-mobile-work-list-pane]")?.style.height ?? "")).toBe(
-      listViewport,
-    );
+    const parkedPane = harness.container.querySelector<HTMLElement>("[data-mobile-work-list-pane]");
+    expect(Number.parseFloat(parkedPane?.style.height ?? "")).toBe(listViewport);
 
     currentViewport = detailViewport;
     scroller.scrollTop = Math.min(scroller.scrollTop, contentHeight - currentViewport);
