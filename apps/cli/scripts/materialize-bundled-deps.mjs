@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Materialize `bundleDependencies` (and the bundled packages' direct deps that
- * resolve from this package's node_modules) as real directories before `npm pack`
- * / `npm publish`.
+ * Materialize `bundleDependencies` (and the bundled packages' runtime
+ * dependencies + peerDependencies that resolve from this package's
+ * node_modules) as real directories before `npm pack` / `npm publish`.
  *
  * Why: the workspace is installed with pnpm, so `node_modules/<pkg>` entries are
  * symlinks into `node_modules/.pnpm/...`. npm 11.5.1's pack path follows those
@@ -84,9 +84,17 @@ function listBundleClosure(rootPkg) {
     const dir = packageDir(name);
     if (!existsSync(join(dir, "package.json"))) return;
     const pkg = readPackageJson(dir);
-    for (const dep of Object.keys(pkg.dependencies ?? {})) {
-      // Only materialize deps that already resolve beside this package. Transitive
-      // store-only packages are not pack inputs unless npm can see them here.
+    // Walk runtime deps and peers. Peer packages (e.g. dsh-sdk-protocol for
+    // dsh-sdk-client) are required at import time but never appear in
+    // `dependencies`, so a dependencies-only walk leaves the packed CLI unable
+    // to start. Only materialize packages that already resolve at this
+    // package's top-level node_modules — declare them as direct CLI deps so
+    // pnpm hoists them here before pack.
+    const runtimeDeps = {
+      ...(pkg.dependencies ?? {}),
+      ...(pkg.peerDependencies ?? {}),
+    };
+    for (const dep of Object.keys(runtimeDeps)) {
       if (existsSync(join(packageDir(dep), "package.json"))) visit(dep);
     }
   };

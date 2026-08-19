@@ -32,6 +32,7 @@ export const DEEPSEEK_INSTALL_NPM_PACKAGE = [
   "@deepseek-ai/dsh-sdk-jsonrpc-demo@0.0.1-rc.5",
   "@deepseek-ai/dsh-sdk-jsonrpc-server@0.0.1-rc.5",
   "@deepseek-ai/dsh-sdk-client@0.0.1-rc.1",
+  "@deepseek-ai/dsh-sdk-protocol@0.0.1-rc.5",
   "@deepseek-ai/dsh-agent-spine-demo@0.0.1-rc.5",
   "@deepseek-ai/dsh-session-persistence-jsonl@0.0.1-rc.5",
   "@deepseek-ai/dsh-llm-deepseek@0.0.1-rc.5",

@@ -98,6 +98,7 @@ describe("npm package metadata", () => {
       "@deepseek-ai/dsh-sdk-client",
       "@deepseek-ai/dsh-sdk-jsonrpc-demo",
       "@deepseek-ai/dsh-sdk-jsonrpc-server",
+      "@deepseek-ai/dsh-sdk-protocol",
       "@deepseek-ai/dsh-session",
       "@deepseek-ai/dsh-session-persistence-jsonl",
     ]);
@@ -114,11 +115,15 @@ describe("npm package metadata", () => {
       "@deepseek-ai/dsh-sdk-client",
       "@deepseek-ai/dsh-sdk-jsonrpc-demo",
       "@deepseek-ai/dsh-sdk-jsonrpc-server",
+      "@deepseek-ai/dsh-sdk-protocol",
       "@deepseek-ai/dsh-session",
       "@deepseek-ai/dsh-session-persistence-jsonl",
     ]) {
       expect(dependencies[deepseekPkg]).toBeDefined();
     }
+    // dsh-sdk-client imports this peer at module load; without it the packed
+    // CLI fails `first-tree-dev --version` with ERR_MODULE_NOT_FOUND.
+    expect(dependencies["@deepseek-ai/dsh-sdk-protocol"]).toBe("0.0.1-rc.5");
   });
 });
 

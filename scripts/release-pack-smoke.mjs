@@ -425,7 +425,11 @@ function captureBundledSymlinks() {
     const dir = join(CLI_ROOT, "node_modules", ...name.split("/"));
     try {
       const depPkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
-      for (const dep of Object.keys(depPkg.dependencies ?? {})) {
+      const runtimeDeps = {
+        ...(depPkg.dependencies ?? {}),
+        ...(depPkg.peerDependencies ?? {}),
+      };
+      for (const dep of Object.keys(runtimeDeps)) {
         if (existsSync(join(CLI_ROOT, "node_modules", ...dep.split("/"), "package.json"))) {
           names.add(dep);
         }
@@ -505,10 +509,41 @@ function runSmoke() {
       `import(${JSON.stringify(`file://${sdkEntry}`)}).then(() => process.exit(0), (error) => { console.error(error); process.exit(1); })`,
     ]);
 
+    const deepseekProtocolEntry = join(
+      consumerDir,
+      "node_modules",
+      "first-tree-dev",
+      "node_modules",
+      "@deepseek-ai",
+      "dsh-sdk-protocol",
+      "package.json",
+    );
+    if (!existsSync(deepseekProtocolEntry)) {
+      fail(
+        `consumer is missing bundled @deepseek-ai/dsh-sdk-protocol at ${deepseekProtocolEntry} — DeepSeek SDK peer closure is not shipping`,
+      );
+    }
+    const packagedCliRoot = join(consumerDir, "node_modules", "first-tree-dev");
+    run(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        "import '@deepseek-ai/dsh-sdk-client'; console.log('deepseek-client-ok')",
+      ],
+      {
+        cwd: packagedCliRoot,
+        env: {
+          ...process.env,
+          NODE_PATH: join(packagedCliRoot, "node_modules"),
+        },
+      },
+    );
+
     const sha256 = sha256File(tarball);
     const bytes = statSync(tarball).size;
     console.log(
-      `release-pack-smoke: PASS — packed ${tarballName} (${bytes} B, sha256=${sha256}, ${safety.entryCount} entries), consumer CLI ${versionText}, registry-safe paths, exact-release Context loader ${contextIntegration.bundleDigest}, bundled patched Kimi SDK verified`,
+      `release-pack-smoke: PASS — packed ${tarballName} (${bytes} B, sha256=${sha256}, ${safety.entryCount} entries), consumer CLI ${versionText}, registry-safe paths, exact-release Context loader ${contextIntegration.bundleDigest}, bundled patched Kimi SDK verified, DeepSeek SDK peer closure verified`,
     );
   } finally {
     cleanupPackArtifacts(work);
