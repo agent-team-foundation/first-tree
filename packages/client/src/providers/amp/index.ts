@@ -52,6 +52,7 @@ import {
   discardProviderLoginAuthorizationMaterial,
   formatAuthHint,
   isAmpAuthError,
+  sanitizeAmpAuthFailureText,
 } from "../handlers/auth-error-hint.js";
 import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
@@ -1282,9 +1283,9 @@ function classifyAmpAuthFailure(input: {
   return null;
 }
 
-/** Chat-safe Amp auth copy: keep the absent-key phrase, drop login URLs and query. */
+/** Chat-safe Amp auth copy: keep the absent-key phrase, drop login URLs and credentials. */
 function publicAmpAuthFailure(raw: string): string {
-  const cleaned = discardProviderLoginAuthorizationMaterial(raw);
+  const cleaned = sanitizeAmpAuthFailureText(raw);
   const firstLine = cleaned
     .split(/\r?\n/)
     .map((line) => line.trim())

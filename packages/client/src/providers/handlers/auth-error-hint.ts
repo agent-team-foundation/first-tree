@@ -18,6 +18,7 @@ import {
   runtimeProviderAuthOwnerLabel,
   runtimeProviderChatAuthLoginPhrase,
 } from "@first-tree/shared";
+import { redactErrorPreview } from "../../runtime/redact-error-preview.js";
 
 type Runtime = Exclude<RuntimeProvider, "claude-code-tui">;
 
@@ -179,11 +180,17 @@ export function discardProviderLoginAuthorizationMaterial(text: string): string 
   return text
     .replace(/https?:\/\/[^\s<>"']+/gi, "")
     .replace(/(?:^|[?&\s/#])(?:authToken|auth_token|token|code|state|auth_code)=[^\s&"'<>]+/gi, " ")
+    .replace(/\bAMP_API_KEY\s*[:=]\s*[^\s&"'<>]+/gi, "AMP_API_KEY=[REDACTED]")
     .replace(/when prompted,\s*paste your code here:?\s*/gi, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+/** Amp chat-safe auth text: drop login URLs/query, then generic credential redaction. */
+export function sanitizeAmpAuthFailureText(text: string): string {
+  return redactErrorPreview(discardProviderLoginAuthorizationMaterial(text), Number.POSITIVE_INFINITY);
 }
 
 /**
@@ -201,7 +208,7 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // Cap the appended raw message so an upstream stack-trace envelope (codex
   // wraps its `event.error.message` in surprising ways) doesn't bloat the
   // hint into a wall of text on the chat timeline.
-  const source = runtime === "amp" ? discardProviderLoginAuthorizationMaterial(originalMessage) : originalMessage;
+  const source = runtime === "amp" ? sanitizeAmpAuthFailureText(originalMessage) : originalMessage;
   const trimmed = source.trim().slice(0, ORIGINAL_MESSAGE_CAP);
   const original = trimmed.length > 0 ? trimmed : "(no message from SDK)";
   return (

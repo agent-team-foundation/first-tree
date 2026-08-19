@@ -125,7 +125,7 @@ function absentKeyAuthFailureScript(): ChildScript {
     child.stdout.emit(
       "data",
       [
-        "No API key found. Starting login flow...",
+        "No API key found. Starting login flow... AMP_API_KEY=qa-amp-key-placeholder Authorization: Bearer qa-bearer-placeholder sk-ant-abcdefghijklmnopqrstuvwxyz012345",
         "If your browser does not open automatically, visit:",
         "",
         "https://ampcode.com/auth/cli-login?authToken=qa-one-time-placeholder&state=qa-state-placeholder",
@@ -143,6 +143,12 @@ function assertNoAmpLoginAuthorizationMaterial(text: string): void {
   expect(text).not.toMatch(/authToken=|auth_token=|[?&]code=|[?&]state=|[?&]token=/i);
   expect(text).not.toContain("qa-one-time-placeholder");
   expect(text).not.toContain("qa-state-placeholder");
+}
+
+function assertNoAmpGenericCredentialMaterial(text: string): void {
+  expect(text).not.toContain("qa-amp-key-placeholder");
+  expect(text).not.toContain("qa-bearer-placeholder");
+  expect(text).not.toContain("sk-ant-abcdefghijklmnopqrstuvwxyz012345");
 }
 
 function makeToken(): DeliveryToken & { completed: TurnOutcome[]; retried: string[] } {
@@ -519,12 +525,16 @@ describe("Amp handler — per-turn CLI transport", () => {
     const errorTexts = events.filter((event) => event.kind === "error").map((event) => String(event.payload.message));
     expect(errorTexts.length).toBeGreaterThan(0);
     assertNoAmpLoginAuthorizationMaterial(JSON.stringify(events));
+    assertNoAmpGenericCredentialMaterial(JSON.stringify(events));
     for (const text of errorTexts) {
       assertNoAmpLoginAuthorizationMaterial(text);
+      assertNoAmpGenericCredentialMaterial(text);
       const retryPayload = parseProviderRetryEventMessage(text);
       if (!retryPayload) continue;
       assertNoAmpLoginAuthorizationMaterial(JSON.stringify(retryPayload));
+      assertNoAmpGenericCredentialMaterial(JSON.stringify(retryPayload));
       assertNoAmpLoginAuthorizationMaterial(formatProviderFailureRuntimeNotice(retryPayload));
+      assertNoAmpGenericCredentialMaterial(formatProviderFailureRuntimeNotice(retryPayload));
     }
     await handler.shutdown();
   });
