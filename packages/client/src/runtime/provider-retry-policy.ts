@@ -540,12 +540,19 @@ function isCredential(
   ) {
     return true;
   }
+  // Amp CLI logged-out / missing-key phrasings (kept in sync with isAmpAuthError
+  // in handlers/auth-error-hint.ts). Provider-gated: the official absent-key
+  // path prints "No API key found. Starting login flow..." and never mentions
+  // `amp login` / `AMP_API_KEY`, so those substrings must still classify
+  // credential without leaking them into other providers' traffic.
+  if (provider === "amp" && /not logged in|amp login|amp_api_key|no api key found|starting login flow/.test(text)) {
+    return true;
+  }
   // Cursor CLI logged-out phrasings (kept in sync with isCursorAuthError in
   // handlers/auth-error-hint.ts). Provider-gated: the in-chat "Log in to
   // Cursor" CTA renders only for category=credential, so a wording variant
   // that drops the word "authentication" must still classify credential —
   // without leaking these generic phrases into other providers' traffic.
-  if (provider === "amp" && /not logged in|amp login|amp_api_key/.test(text)) return true;
   if (provider === "cursor" && /not logged in|agent login|cursor_api_key/.test(text)) return true;
   // Grok Build CLI logged-out phrasings (kept in sync with isGrokAuthError in
   // handlers/auth-error-hint.ts). Same provider-gating rationale as cursor:

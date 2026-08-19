@@ -297,6 +297,59 @@ describe("client switch drain markers", () => {
     expect(isSwitchDrainEnvRequired("python worker.py --constant pi")).toBe(false);
     expect(isSwitchDrainEnvRequired("/bin/bash run-pi-benchmarks")).toBe(false);
   });
+
+  it("recognizes Amp CLI processes only by executable basename, not argv words", () => {
+    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/amp --execute --stream-json")).toBe(true);
+    expect(isSwitchDrainEnvRequired("amp --execute --visibility private")).toBe(true);
+    expect(isSwitchDrainEnvRequired("C:\\Users\\op\\AppData\\Roaming\\npm\\amp.exe --execute")).toBe(true);
+    expect(isSwitchDrainEnvRequired("python worker.py --amp")).toBe(false);
+    expect(isSwitchDrainEnvRequired("ssh amp")).toBe(false);
+  });
+
+  it("records Amp from a readable First Tree envelope and fails closed without trusted markers", () => {
+    const providers: Array<{ pid: number; provider: string; command: string }> = [];
+    const issues: Array<{ pid: number; command: string; reason: string }> = [];
+
+    collectSwitchDrainProcessFromEnvText({
+      pid: 201,
+      command: "/home/op/.local/bin/amp --execute --stream-json",
+      envText: [
+        "FIRST_TREE_HOME=/Users/alice/.first-tree",
+        "FIRST_TREE_PROVIDER=amp",
+        "FIRST_TREE_CLIENT_ID=client_aabbccdd",
+        "FIRST_TREE_SWITCH_DRAIN_VERSION=1",
+        "",
+      ].join("\0"),
+      home: "/Users/alice/.first-tree",
+      clientId: "client_aabbccdd",
+      providers,
+      issues,
+    });
+    expect(issues).toEqual([]);
+    expect(providers).toEqual([
+      expect.objectContaining({
+        pid: 201,
+        provider: "amp",
+        command: "/home/op/.local/bin/amp --execute --stream-json",
+      }),
+    ]);
+
+    const unmarkedProviders: Array<{ pid: number; provider: string; command: string }> = [];
+    const unmarkedIssues: Array<{ pid: number; command: string; reason: string }> = [];
+    collectSwitchDrainProcessFromEnvText({
+      pid: 202,
+      command: "/home/op/.local/bin/amp --execute --stream-json",
+      envText: "FIRST_TREE_HOME=/Users/alice/.first-tree",
+      home: "/Users/alice/.first-tree",
+      clientId: "client_aabbccdd",
+      providers: unmarkedProviders,
+      issues: unmarkedIssues,
+    });
+    expect(unmarkedProviders).toEqual([]);
+    expect(unmarkedIssues).toEqual([
+      expect.objectContaining({ pid: 202, reason: "missing trusted switch drain markers" }),
+    ]);
+  });
 });
 
 describe("client runtime markers", () => {

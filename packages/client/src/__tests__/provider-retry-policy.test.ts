@@ -615,6 +615,24 @@ describe("classifyProviderFailure", () => {
     ).toMatchObject({ action: "stop", terminalKind: "needs_operator" });
   });
 
+  it("classifies Amp official absent-key login-flow wording as needs_operator", () => {
+    const c = classifyProviderFailure(new Error("No API key found. Starting login flow..."), {
+      provider: "amp",
+      scope: "provider_turn",
+      source: "stream",
+    });
+    expect(c).toMatchObject({ category: "credential", reasonCode: "provider_credential_required" });
+    expect(
+      decideProviderRetry({ classification: c, scope: "provider_turn", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "stop", terminalKind: "needs_operator" });
+    const other = classifyProviderFailure(new Error("No API key found. Starting login flow..."), {
+      provider: "cursor",
+      scope: "provider_turn",
+      source: "stream",
+    });
+    expect(other.category).not.toBe("credential");
+  });
+
   it("grok win32 fail-closed classifies capability/grok_platform_unsupported with a deterministic stop", () => {
     const c = classifyProviderFailure(
       new Error("the grok provider is not supported on Windows in V1 (macOS/Linux only)"),

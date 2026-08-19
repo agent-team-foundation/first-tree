@@ -114,6 +114,14 @@ function authFailureScript(): ChildScript {
   };
 }
 
+function absentKeyAuthFailureScript(): ChildScript {
+  return (child) => {
+    child.stdout.emit("data", "No API key found. Starting login flow...\n");
+    child.stdout.emit("end");
+    child.emit("close", 1, null);
+  };
+}
+
 function makeToken(): DeliveryToken & { completed: TurnOutcome[]; retried: string[] } {
   const completed: TurnOutcome[] = [];
   const retried: string[] = [];
@@ -466,6 +474,28 @@ describe("Amp handler — per-turn CLI transport", () => {
     await handler.shutdown();
   });
 
+  it("classifies official Amp absent-key stdout as credential recovery, not unknown", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor, specs } = makeFakeSupervisor([absentKeyAuthFailureScript()]);
+    const handler = makeHandler(supervisor);
+    const token = makeToken();
+
+    const first = await handler.start(makeMessage("m1", "hello"), makeContext({ events }), token);
+    expect(isAmpPendingSessionId(first.sessionId)).toBe(true);
+    expect(specs[0]?.args).not.toContain("threads");
+    expect(token.retried).toEqual([]);
+    expect(token.completed).toMatchObject([
+      { status: "error", completion: "consumed", reason: "provider_credential_required" },
+    ]);
+    expect(events.some((event) => event.kind === "error" && String(event.payload.message).includes("amp login"))).toBe(
+      true,
+    );
+    expect(
+      events.some((event) => event.kind === "error" && String(event.payload.message).includes("No API key found")),
+    ).toBe(true);
+    await handler.shutdown();
+  });
+
   it("first-turn auth failure returns a synthetic id that must never be sent to threads continue", async () => {
     const events: SessionEvent[] = [];
     const { supervisor, specs } = makeFakeSupervisor([
@@ -495,7 +525,7 @@ describe("Amp handler — per-turn CLI transport", () => {
     const { supervisor } = makeFakeSupervisor([
       successScript({
         sessionId: "T-sess-real-4",
-        text: "An invalid api key error usually means AMP_API_KEY is wrong; run amp login.",
+        text: "An invalid api key error usually means AMP_API_KEY is wrong; run amp login. No API key found. Starting login flow is the missing-key path.",
       }),
     ]);
     const forwarded: string[] = [];

@@ -147,6 +147,11 @@ const AMP_AUTH_KEYWORDS: readonly string[] = [
   "unauthorized",
   "invalid api key",
   "missing api key",
+  // Official CLI absent-key / login-flow stdout (non-zero): "No API key found.
+  // Starting login flow...". That wording contains neither `amp login` nor
+  // `AMP_API_KEY` nor the existing `missing api key` substring.
+  "no api key found",
+  "starting login flow",
 ];
 
 export function isAmpAuthError(message: string): boolean {

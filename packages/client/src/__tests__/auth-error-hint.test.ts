@@ -142,6 +142,9 @@ describe("isAmpAuthError", () => {
   it("matches provider-owned credential failures without treating capacity failures as auth", () => {
     expect(isAmpAuthError("Error: not logged in. Run `amp login` or set AMP_API_KEY.")).toBe(true);
     expect(isAmpAuthError("invalid api key")).toBe(true);
+    expect(
+      isAmpAuthError("No API key found. Starting login flow...\nIf your browser does not open automatically, visit:"),
+    ).toBe(true);
     expect(isAmpAuthError("rate limit exceeded")).toBe(false);
     expect(isAmpAuthError("")).toBe(false);
   });

@@ -869,15 +869,14 @@ function isKnownProviderCommand(command: string): boolean {
     return true;
   }
   // Cursor's official main command is the generic name `agent`; the Pi coding
-  // agent's is the generic name `pi`. Match these ONLY as the executed
-  // binary's basename (first argv token): a whole-command word scan would
-  // drag every unrelated process that merely mentions the word (ssh-agent
-  // arguments, `python worker.py --constant pi`, `first-tree agent create`, …)
-  // into the fail-closed env check and block switches on processes whose env
-  // cannot be read.
+  // agent's is `pi`; Amp's is `amp`. Match these ONLY as the executed binary's
+  // basename (first argv token): a whole-command word scan would drag every
+  // unrelated process that merely mentions the word (`ssh amp`, `python
+  // worker.py --amp`, `first-tree agent create`, …) into the fail-closed env
+  // check and block switches on processes whose env cannot be read.
   const firstToken = command.trim().split(/\s+/, 1)[0] ?? "";
-  const basename = firstToken.split("/").pop() ?? "";
-  return basename.toLowerCase() === "agent" || basename.toLowerCase() === "pi";
+  const basename = (firstToken.split(/[/\\]/).pop() ?? "").toLowerCase();
+  return basename === "agent" || basename === "pi" || basename === "amp" || basename === "amp.exe";
 }
 
 function isKnownDaemonRuntimeCommand(command: string): boolean {

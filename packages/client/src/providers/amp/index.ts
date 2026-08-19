@@ -827,7 +827,24 @@ export const createAmpHandler: HandlerFactory = (config) => {
         if (settingsFile) removeAmpRuntimeSettings(settingsFile);
       }
 
+      const authFailure = classifyAmpAuthFailure({
+        exitCode: outcome.exitCode,
+        stderrTail: outcome.stderrTail,
+        stdoutTail: outcome.stdoutTail,
+        structuredErrors: state.errors,
+      });
+
       if (abort.signal.aborted || generation !== turnGeneration || !sessionActive) {
+        if (authFailure) {
+          return settleFailure({
+            failure: authFailure,
+            state,
+            sessionCtx,
+            messages,
+            token,
+            turnGeneration,
+          });
+        }
         return settleFailure({
           failure: "Amp turn aborted or timed out before a safe terminal event",
           spawnError: new Error("Amp turn aborted or timed out"),
@@ -849,12 +866,6 @@ export const createAmpHandler: HandlerFactory = (config) => {
         protocolErrors.push(`expected one terminal result event, observed ${state.results.length}`);
       }
       if (state.errors.length > 0) protocolErrors.push(...state.errors);
-      const authFailure = classifyAmpAuthFailure({
-        exitCode: outcome.exitCode,
-        stderrTail: outcome.stderrTail,
-        stdoutTail: outcome.stdoutTail,
-        structuredErrors: state.errors,
-      });
 
       const success =
         !outcome.spawnError &&

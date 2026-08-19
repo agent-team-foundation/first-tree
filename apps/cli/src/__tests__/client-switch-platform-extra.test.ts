@@ -26,6 +26,8 @@ const fsState = vi.hoisted(() => ({
   home: "",
   uid: typeof process.getuid === "function" ? process.getuid() : 0,
   procReaddirCount: 0,
+  procCommand: "codex exec",
+  procProvider: "codex",
 }));
 
 const execState = vi.hoisted(() => ({
@@ -38,6 +40,8 @@ const execState = vi.hoisted(() => ({
     | "many-daemon-untrusted"
     | "provider-name-in-env-only"
     | "provider-missing-env-snapshot"
+    | "amp-readable"
+    | "amp-missing-env-snapshot"
     | "command-throw"
     | "pid-throw",
   home: "",
@@ -96,17 +100,17 @@ vi.mock("node:fs", async (importOriginal) => {
         if (fsState.mode === "proc-cmdline-disappeared") throw new Error("process disappeared");
         if (fsState.mode === "proc-cmdline-string-error") throw "cmdline denied as string";
         if (fsState.mode === "proc-cmdline-error") throw new Error("cmdline denied");
-        return "codex exec";
+        return fsState.procCommand;
       }
       if (/^\/proc\/\d+\/environ$/u.test(text)) {
         if (fsState.mode === "proc-environ-string-error") throw "environ denied as string";
         if (fsState.mode === "proc-environ-error") throw new Error("environ denied");
         if (fsState.mode === "proc-untrusted") {
-          return [`FIRST_TREE_HOME=${fsState.home}`, "FIRST_TREE_PROVIDER=codex", ""].join("\0");
+          return [`FIRST_TREE_HOME=${fsState.home}`, `FIRST_TREE_PROVIDER=${fsState.procProvider}`, ""].join("\0");
         }
         return [
           `FIRST_TREE_HOME=${fsState.home}`,
-          "FIRST_TREE_PROVIDER=codex",
+          `FIRST_TREE_PROVIDER=${fsState.procProvider}`,
           "FIRST_TREE_CLIENT_ID=client_aabbccdd",
           "FIRST_TREE_SWITCH_DRAIN_VERSION=1",
           "",
@@ -180,8 +184,11 @@ vi.mock("node:child_process", async (importOriginal) => {
         if (execState.mode === "provider-name-in-env-only") {
           return `  200 node vitest-worker.js FIRST_TREE_HOME=${execState.home} PATH=/opt/tools/@openai/codex/bin\n`;
         }
-        if (execState.mode === "provider-missing-env-snapshot") {
+        if (execState.mode === "provider-missing-env-snapshot" || execState.mode === "amp-missing-env-snapshot") {
           return "";
+        }
+        if (execState.mode === "amp-readable") {
+          return `  200 /home/op/.local/bin/amp --execute FIRST_TREE_HOME=${execState.home} FIRST_TREE_PROVIDER=amp FIRST_TREE_CLIENT_ID=client_aabbccdd FIRST_TREE_SWITCH_DRAIN_VERSION=1\n`;
         }
         return `  200 codex exec FIRST_TREE_HOME=${execState.home} FIRST_TREE_PROVIDER=codex FIRST_TREE_CLIENT_ID=client_aabbccdd FIRST_TREE_SWITCH_DRAIN_VERSION=1\n`;
       }
@@ -198,6 +205,9 @@ vi.mock("node:child_process", async (importOriginal) => {
         }
         if (execState.mode === "provider-name-in-env-only") {
           return "  200 node vitest-worker.js\n";
+        }
+        if (execState.mode === "amp-readable" || execState.mode === "amp-missing-env-snapshot") {
+          return "  200 /home/op/.local/bin/amp --execute --stream-json\n";
         }
         return "  200 codex exec\n";
       }
@@ -247,6 +257,8 @@ beforeEach(() => {
   process.env.FIRST_TREE_HOME = home;
   fsState.mode = "normal";
   fsState.home = home;
+  fsState.procCommand = "codex exec";
+  fsState.procProvider = "codex";
   execState.mode = "ok";
   execState.home = home;
   fsState.procReaddirCount = 0;
@@ -382,6 +394,32 @@ describe("client switch platform drain scanning", () => {
 
     writeClientYaml();
     execState.mode = "provider-missing-env-snapshot";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("without readable environment"),
+    });
+  });
+
+  it("identifies a live Amp process from a readable envelope and fails closed without one", async () => {
+    setPlatform("linux");
+    fsState.procCommand = "/home/op/.local/bin/amp --execute --stream-json";
+    fsState.procProvider = "amp";
+    await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_TIMEOUT" });
+
+    writeClientYaml();
+    fsState.mode = "proc-environ-error";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("Unable to read process"),
+    });
+
+    writeClientYaml();
+    setPlatform("darwin");
+    execState.mode = "amp-readable";
+    await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_TIMEOUT" });
+
+    writeClientYaml();
+    execState.mode = "amp-missing-env-snapshot";
     await expect(runSwitch()).rejects.toMatchObject({
       code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
       message: expect.stringContaining("without readable environment"),
