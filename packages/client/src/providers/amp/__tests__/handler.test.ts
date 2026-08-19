@@ -125,7 +125,7 @@ function absentKeyAuthFailureScript(): ChildScript {
     child.stdout.emit(
       "data",
       [
-        "No API key found. Starting login flow... AMP_API_KEY=qa-amp-key-placeholder Authorization: Bearer qa-bearer-placeholder sk-ant-abcdefghijklmnopqrstuvwxyz012345",
+        'No API key found. Starting login flow... AMP_API_KEY=qa-amp-key-placeholder AMP_API_KEY="qa-amp-quoted-placeholder" {"AMP_API_KEY":"qa-amp-json-placeholder"} Authorization: Bearer qa-bearer-placeholder sk-ant-abcdefghijklmnopqrstuvwxyz012345',
         "If your browser does not open automatically, visit:",
         "",
         "https://ampcode.com/auth/cli-login?authToken=qa-one-time-placeholder&state=qa-state-placeholder",
@@ -147,6 +147,8 @@ function assertNoAmpLoginAuthorizationMaterial(text: string): void {
 
 function assertNoAmpGenericCredentialMaterial(text: string): void {
   expect(text).not.toContain("qa-amp-key-placeholder");
+  expect(text).not.toContain("qa-amp-quoted-placeholder");
+  expect(text).not.toContain("qa-amp-json-placeholder");
   expect(text).not.toContain("qa-bearer-placeholder");
   expect(text).not.toContain("sk-ant-abcdefghijklmnopqrstuvwxyz012345");
 }

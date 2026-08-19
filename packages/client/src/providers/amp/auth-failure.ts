@@ -5,12 +5,16 @@ import { isAmpAuthError } from "../handlers/auth-error-hint.js";
  * Drop complete Amp login URLs and one-time query material before any auth
  * text becomes chat-visible or durable. Official absent-key stdout prints a
  * `cli-login` URL with `authToken`; First Tree must not retain that.
+ *
+ * `AMP_API_KEY` is Amp's host credential env. The shared `redactErrorPreview`
+ * matcher treats `api_key` as a suffix of `AMP_API_KEY` (negative lookbehind),
+ * so Amp must strip unquoted, shell-quoted, and JSON key/value forms here.
  */
 export function discardAmpLoginAuthorizationMaterial(text: string): string {
   return text
     .replace(/https?:\/\/[^\s<>"']+/gi, "")
     .replace(/(?:^|[?&\s/#])(?:authToken|auth_token|token|code|state|auth_code)=[^\s&"'<>]+/gi, " ")
-    .replace(/\bAMP_API_KEY\s*[:=]\s*[^\s&"'<>]+/gi, "AMP_API_KEY=[REDACTED]")
+    .replace(/"?AMP_API_KEY"?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s&"'<>,}]+)/gi, "AMP_API_KEY=[REDACTED]")
     .replace(/when prompted,\s*paste your code here:?\s*/gi, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
