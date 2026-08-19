@@ -33,7 +33,7 @@ const IN_PRODUCT_SETUP_CASES = [
 
 const HOST_SETUP_CASES = [
   ["amp", "amp login"],
-  ["deepseek-harness", "export DEEPSEEK_API_KEY=<your DeepSeek API key>"],
+  ["deepseek-harness", "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)"],
   ["kimi-code", "kimi # then run /login"],
   ["opencode", "opencode auth login"],
   ["pi", "pi # then run /login"],
@@ -123,7 +123,9 @@ describe("web provider surfaces derived from shared catalog", () => {
     expect(buildInstallCommand("opencode")).toBe("npm install -g opencode-ai@^1.18.7\nopencode auth login");
     expect(buildInstallCommand("amp")).toBe("curl -fsSL https://ampcode.com/install.sh | bash\namp login");
     expect(providerInstallHint("amp", "linux")).toContain("ampcode.com/install.sh");
-    expect(buildInstallCommand("deepseek-harness")).toContain("export DEEPSEEK_API_KEY=<your DeepSeek API key>");
+    expect(buildInstallCommand("deepseek-harness")).toContain(
+      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
+    );
     expect(buildInstallCommand("deepseek-harness")).toContain(
       "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables",
     );

@@ -203,18 +203,6 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // hint into a wall of text on the chat timeline.
   const trimmed = originalMessage.trim().slice(0, ORIGINAL_MESSAGE_CAP);
   const original = trimmed.length > 0 ? trimmed : "(no message from SDK)";
-  // DeepSeek is API-key auth only: agent Runtime env is the First Tree path;
-  // host shell export remains valid. Do not funnel operators solely into a
-  // terminal `export` when the key can live on the agent config.
-  if (runtime === "deepseek-harness") {
-    return (
-      `${runtime} auth looks missing or invalid. ` +
-      `This is ${provider}'s credential, not First Tree Connect — ` +
-      "set `DEEPSEEK_API_KEY` on this agent's Runtime → Environment variables " +
-      "(or export it in the host shell that runs First Tree), then retry. " +
-      `Original SDK error: ${original}`
-    );
-  }
   return (
     `${runtime} auth on this machine looks broken or expired. ` +
     `This is ${provider}'s auth state, not First Tree's — ` +
