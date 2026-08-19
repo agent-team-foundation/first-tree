@@ -65,7 +65,7 @@ export async function discoverProviderModels(
         "Amp exposes modes, not a host-local model catalog; pick a mode in agent config",
         deps,
       );
-    case "deepseek":
+    case "deepseek-harness":
       return unavailableCatalog(
         provider,
         "DeepSeek model discovery is not enabled in V1; enter the provider-native model id",

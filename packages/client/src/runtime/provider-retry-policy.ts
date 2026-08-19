@@ -124,7 +124,7 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
-  if (context.provider === "deepseek" && /not supported on windows in v1/.test(text)) {
+  if (context.provider === "deepseek-harness" && /not supported on windows in v1/.test(text)) {
     return {
       category: "capability",
       reasonCode: "deepseek_platform_unsupported",
@@ -558,7 +558,7 @@ function isCredential(
     return true;
   }
   if (
-    provider === "deepseek" &&
+    provider === "deepseek-harness" &&
     /missing_credential|deepseek_api_key|missing api key|not authenticated|invalid api key|invalid_credential/.test(
       text,
     )
@@ -622,7 +622,7 @@ function isConfiguration(text: string, base: Classification, provider: RuntimePr
   // Pi model/MCP configuration gates — keep provider-gated so shared English
   // phrases cannot terminalize another provider's retryable failures.
   if (provider === "amp" && /amp_mode_invalid|amp mode must be one of/.test(text)) return true;
-  if (provider === "deepseek" && /deepseek_mcp_unsupported|managed mcp servers are not supported/.test(text)) {
+  if (provider === "deepseek-harness" && /deepseek_mcp_unsupported|managed mcp servers are not supported/.test(text)) {
     return true;
   }
   if (provider === "pi" && (isPiModelConfiguration(text) || isPiMcpConfiguration(text))) return true;

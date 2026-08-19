@@ -138,7 +138,7 @@ const CATALOG_CONSUMER_FILES = [
   "packages/client/src/providers/opencode/binary.ts",
   "packages/client/src/providers/pi/binary.ts",
   "packages/client/src/providers/amp/binary.ts",
-  "packages/client/src/providers/deepseek/binary.ts",
+  "packages/client/src/providers/deepseek-harness/binary.ts",
 ] as const;
 
 function listFilesRecursive(root: string, predicate: (path: string) => boolean): string[] {
@@ -308,7 +308,7 @@ describe("runtime provider architecture guard", () => {
     expect(productionRels).toContain("providers/opencode/capability.ts");
     expect(productionRels).toContain("providers/pi/capability.ts");
     expect(productionRels).toContain("providers/amp/capability.ts");
-    expect(productionRels).toContain("providers/deepseek/capability.ts");
+    expect(productionRels).toContain("providers/deepseek-harness/capability.ts");
 
     // Local regex / phrase tables that re-recognize provider binary absence.
     const codexBundledLocateMatcher = /unable to locate codex cli binaries/i;
@@ -1516,7 +1516,7 @@ describe("runtime provider architecture guard", () => {
       "providers/opencode/index.ts",
       "providers/pi/index.ts",
       "providers/amp/index.ts",
-      "providers/deepseek/index.ts",
+      "providers/deepseek-harness/index.ts",
       "providers/handlers/turn-settlement.ts",
       "providers/builtin-registry.ts",
       "providers/auth-driver.ts",
@@ -1736,7 +1736,7 @@ describe("runtime provider architecture guard", () => {
         expect(source).toContain("AMP_INSTALL_COMMAND");
         expect(source).toContain("runtimeProviderLoginCommand");
       }
-      if (rel.endsWith("providers/deepseek/binary.ts") || rel.endsWith("deepseek/binary.ts")) {
+      if (rel.endsWith("providers/deepseek-harness/binary.ts") || rel.endsWith("deepseek/binary.ts")) {
         expect(source).toMatch(/from "@first-tree\/shared"/);
         expect(source).toContain("DEEPSEEK_INSTALL_NPM_PACKAGE");
         expect(source).toContain("runtimeProviderLoginCommand");
@@ -2093,7 +2093,7 @@ describe("runtime provider architecture guard", () => {
       "providers/opencode/index.ts",
       "providers/pi/index.ts",
       "providers/amp/index.ts",
-      "providers/deepseek/index.ts",
+      "providers/deepseek-harness/index.ts",
     ] as const;
     for (const rel of mustUseProviderSupport) {
       const source = readFileSync(join(clientSrc, rel), "utf8");

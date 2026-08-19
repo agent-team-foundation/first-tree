@@ -11,7 +11,7 @@ import { z } from "zod";
  */
 export const runtimeProviderSchema = z.enum([
   "amp",
-  "deepseek",
+  "deepseek-harness",
   "claude-code",
   "claude-code-tui",
   "codex",

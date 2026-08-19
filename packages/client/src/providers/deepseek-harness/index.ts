@@ -54,7 +54,7 @@ import {
 } from "./binary.js";
 import { classifyDeepseekRunFailure, mapDeepseekSessionEvent, sessionEventFromNotification } from "./events.js";
 
-export const DEEPSEEK_PENDING_SESSION_PREFIX = "deepseek-pending-";
+export const DEEPSEEK_PENDING_SESSION_PREFIX = "deepseek-harness-pending-";
 
 export function isDeepseekPendingSessionId(sessionId: string): boolean {
   return sessionId.startsWith(DEEPSEEK_PENDING_SESSION_PREFIX);
@@ -237,7 +237,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
     const payload: AgentRuntimeConfigPayload =
       runtimeConfig?.payload ??
       ({
-        kind: "deepseek",
+        kind: "deepseek-harness",
         prompt: { append: "" },
         model: "",
         mcpServers: [],
@@ -245,7 +245,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
         gitRepos: [],
         resourceSkills: [],
       } satisfies AgentRuntimeConfigPayload);
-    if (payload.kind !== "deepseek") {
+    if (payload.kind !== "deepseek-harness") {
       throw new Error(`DeepSeek handler received ${payload.kind} runtime config`);
     }
     const projected = await projectManagedWorkspace({
@@ -469,7 +469,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
           : "pre_provider";
     const authFailure = isDeepseekAuthError(input.failure);
     const displayMessage = authFailure
-      ? formatAuthHint("deepseek", sanitizeDeepseekAuthFailureText(input.failure))
+      ? formatAuthHint("deepseek-harness", sanitizeDeepseekAuthFailureText(input.failure))
       : input.failure;
     const attempt = new ProviderAttempt({
       provider: runtimeProvider,
@@ -723,7 +723,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
     const payload: AgentRuntimeConfigPayload =
       runtimeConfig?.payload ??
       ({
-        kind: "deepseek",
+        kind: "deepseek-harness",
         prompt: { append: "" },
         model: "",
         mcpServers: [],
@@ -731,7 +731,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
         gitRepos: [],
         resourceSkills: [],
       } satisfies AgentRuntimeConfigPayload);
-    if (payload.kind !== "deepseek") {
+    if (payload.kind !== "deepseek-harness") {
       throw new Error(`DeepSeek handler received ${payload.kind} runtime config`);
     }
 

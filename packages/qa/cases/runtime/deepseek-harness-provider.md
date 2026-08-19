@@ -1,5 +1,5 @@
 ---
-id: deepseek-provider
+id: deepseek-harness-provider
 description: Validate the DeepSeek Harness JSON-RPC runtime provider end to end — bundled npm runtime, host-local DEEPSEEK_API_KEY auth, model id, managed skills, resume, and Context Tree I/O.
 areas: [runtime]
 surfaces: [web, cli, server, client]
@@ -9,10 +9,10 @@ surfaces: [web, cli, server, client]
 
 ## Goal
 
-Confirm that an agent bound to the `deepseek` provider runs real turns through the bundled
+Confirm that an agent bound to the `deepseek-harness` provider runs real turns through the bundled
 `dsh-jsonrpc-agent` subprocess driven by `@deepseek-ai/dsh-sdk-client`, with First Tree–owned
 `cordis.yml`, host-local `DEEPSEEK_API_KEY` auth (no Connect / pendingAuth), managed skills under
-`.agents/skills`, session persistence under `.first-tree/deepseek-sessions`, and resume via harness
+`.agents/skills`, session persistence under `.first-tree/deepseek-harness-sessions`, and resume via harness
 `sessionId`. Deterministic parser/handler behavior is covered by product tests; this case validates
 the live judgment slices those tests cannot prove.
 
@@ -52,7 +52,7 @@ Running this case remains human-requested; it is not a CI gate.
   installing and re-probing, the entry turns `ok` with a bundled runtime source. Detection must never
   launch the binary or judge login state. On Windows V1, capability stays unavailable with the Job Object
   message even when packages are not installed (no npm install invite).
-- Provider selection: a new agent can be created on `deepseek` only when the bound client advertises it;
+- Provider selection: a new agent can be created on `deepseek-harness` only when the bound client advertises it;
   afterwards the provider changes only via the explicit runtime-switch flow. Web exposes a free-form model
   id with unset defaulting to `deepseek-v4-flash`.
 - Auth recovery: with `DEEPSEEK_API_KEY` unset, a real turn fails as a credential failure; the chat surfaces
@@ -63,9 +63,9 @@ Running this case remains human-requested; it is not a CI gate.
   clear message — DeepSeek V1 does not pretend to support managed MCP.
 - Real turn posture: during an authenticated turn, verify the client spawns `dsh-jsonrpc-agent` with First
   Tree's bundled `cordis.yml`, cwd at the agent workspace, env including `DSH_SESSION_ROOT` under
-  `.first-tree/deepseek-sessions`, `DSH_SKILLS_ROOT=.agents/skills`, and `DEEPSEEK_API_KEY` injected via
+  `.first-tree/deepseek-harness-sessions`, `DSH_SKILLS_ROOT=.agents/skills`, and `DEEPSEEK_API_KEY` injected via
   child env. Prompt text rides the SDK only, never argv. A follow-up in the same chat must resume with the
-  prior harness `sessionId` (never a synthetic `deepseek-pending-*` id sent to persistence).
+  prior harness `sessionId` (never a synthetic `deepseek-harness-pending-*` id sent to persistence).
 - Cancel: operator stop or client switch drain must close/kill the harness subprocess (no wire cancel).
 - Context Tree I/O: in a chat whose agent has a bound Context Tree, have the agent read a tree node via
   shell and edit a tree file; the Context tab must record repo-qualified read/write evidence when observable.

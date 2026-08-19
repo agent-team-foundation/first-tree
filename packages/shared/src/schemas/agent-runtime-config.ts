@@ -303,7 +303,7 @@ export function isAmpRuntimeMode(value: string): value is AmpRuntimeMode {
 }
 
 const deepseekRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
-  kind: z.literal("deepseek"),
+  kind: z.literal("deepseek-harness"),
   // DeepSeek model identifiers are provider-native ids. Empty delegates to
   // deepseek-v4-flash at harness initialize; non-empty values are forwarded
   // through DSH_MODEL to the cordis template.
@@ -457,7 +457,7 @@ export type ClaudeCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, 
 export type ClaudeCodeTuiRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "claude-code-tui" }>;
 export type CodexRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "codex" }>;
 export type AmpRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "amp" }>;
-export type DeepseekRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "deepseek" }>;
+export type DeepseekRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "deepseek-harness" }>;
 export type CursorRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "cursor" }>;
 export type KimiCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "kimi-code" }>;
 export type OpenCodeRuntimeConfigPayload = Extract<AgentRuntimeConfigPayload, { kind: "opencode" }>;
@@ -514,7 +514,7 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: ClaudeCodeTuiRuntim
 
 /** Default payload for a fresh DeepSeek Harness agent. Empty model uses deepseek-v4-flash. */
 export const DEFAULT_DEEPSEEK_RUNTIME_CONFIG_PAYLOAD: DeepseekRuntimeConfigPayload = {
-  kind: "deepseek",
+  kind: "deepseek-harness",
   prompt: { append: "" },
   model: "",
   mcpServers: [],
@@ -610,7 +610,7 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "amp":
       return { ...DEFAULT_AMP_RUNTIME_CONFIG_PAYLOAD };
-    case "deepseek":
+    case "deepseek-harness":
       return { ...DEFAULT_DEEPSEEK_RUNTIME_CONFIG_PAYLOAD };
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };

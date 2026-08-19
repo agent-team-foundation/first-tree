@@ -35,7 +35,7 @@ import { mockCtxPlumbing } from "./test-helpers.js";
 
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
   amp: ".agents/skills",
-  deepseek: ".agents/skills",
+  "deepseek-harness": ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",

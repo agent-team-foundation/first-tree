@@ -200,8 +200,8 @@ describe("formatAuthHint", () => {
   });
 
   it("keeps DeepSeek authentication host-local and points at DEEPSEEK_API_KEY setup", () => {
-    const hint = formatAuthHint("deepseek", "MISSING_CREDENTIAL: set DEEPSEEK_API_KEY");
-    expect(hint).toContain("deepseek");
+    const hint = formatAuthHint("deepseek-harness", "MISSING_CREDENTIAL: set DEEPSEEK_API_KEY");
+    expect(hint).toContain("deepseek-harness");
     expect(hint).toContain("DEEPSEEK_API_KEY");
     expect(hint).toContain("DeepSeek");
     expect(hint).toContain("not First Tree's");

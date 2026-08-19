@@ -13,7 +13,7 @@ import { AGENT_RUNTIME_STATE_DIRNAME, SOURCE_STATE_FILENAME } from "../runtime/w
 
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
   amp: ".agents/skills",
-  deepseek: ".agents/skills",
+  "deepseek-harness": ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",

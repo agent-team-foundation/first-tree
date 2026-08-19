@@ -45,10 +45,10 @@ class FakeHarness {
 }
 
 function makePayload(
-  over: Partial<Omit<Extract<AgentRuntimeConfigPayload, { kind: "deepseek" }>, "kind">> = {},
-): Extract<AgentRuntimeConfigPayload, { kind: "deepseek" }> {
+  over: Partial<Omit<Extract<AgentRuntimeConfigPayload, { kind: "deepseek-harness" }>, "kind">> = {},
+): Extract<AgentRuntimeConfigPayload, { kind: "deepseek-harness" }> {
   return {
-    kind: "deepseek",
+    kind: "deepseek-harness",
     prompt: { append: "" },
     model: "",
     mcpServers: [],
@@ -145,7 +145,7 @@ function makeHandler(extraConfig: Record<string, unknown> = {}) {
   return createDeepseekHandler({
     workspaceRoot,
     agentName: "deepseek-test-agent",
-    runtimeProvider: "deepseek",
+    runtimeProvider: "deepseek-harness",
     deepseekTurnTimeoutMs: 5_000,
     deepseekRuntimeResolver: () => ({
       ok: true,

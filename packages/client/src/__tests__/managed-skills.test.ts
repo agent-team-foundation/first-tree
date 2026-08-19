@@ -43,7 +43,7 @@ import { spawnWorkspaceLockWorker } from "./workspace-file-lock-worker.js";
 /** Local fail-closed skill-root fixture — runtime tests must not import providers. */
 const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
   amp: ".agents/skills",
-  deepseek: ".agents/skills",
+  "deepseek-harness": ".agents/skills",
   "claude-code": ".claude/skills",
   "claude-code-tui": ".claude/skills",
   codex: ".agents/skills",
@@ -56,7 +56,7 @@ const TEST_PROVIDER_SKILL_ROOTS = Object.freeze({
 
 const PROVIDERS: readonly RuntimeProvider[] = [
   "amp",
-  "deepseek",
+  "deepseek-harness",
   "claude-code",
   "claude-code-tui",
   "codex",
@@ -195,7 +195,7 @@ describe("managed Skill reconciler", () => {
   it("maps every runtime to its provider-native discovery root", () => {
     expect(PROVIDERS.map((provider) => [provider, providerSkillRoot(provider, TEST_PROVIDER_SKILL_ROOTS)])).toEqual([
       ["amp", ".agents/skills"],
-      ["deepseek", ".agents/skills"],
+      ["deepseek-harness", ".agents/skills"],
       ["claude-code", ".claude/skills"],
       ["claude-code-tui", ".claude/skills"],
       ["codex", ".agents/skills"],
@@ -224,7 +224,7 @@ describe("managed Skill reconciler", () => {
       "src/providers/opencode/index.ts",
       "src/providers/pi/index.ts",
       "src/providers/amp/index.ts",
-      "src/providers/deepseek/index.ts",
+      "src/providers/deepseek-harness/index.ts",
     ].map((path) => readFileSync(join(process.cwd(), path), "utf-8"));
     // Normal start/resume and hot-switch publication own reconcile inside
     // projectManagedWorkspace under the source-publication lock.

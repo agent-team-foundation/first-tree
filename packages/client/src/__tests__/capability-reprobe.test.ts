@@ -81,7 +81,7 @@ describe("hasNonOkProvider", () => {
         "claude-code": okEntry(),
         codex: okEntry(),
         cursor: okEntry(),
-        deepseek: okEntry(),
+        "deepseek-harness": okEntry(),
         grok: okEntry(),
         "kimi-code": okEntry(),
         opencode: okEntry(),
@@ -155,7 +155,7 @@ describe("nextCapabilityRefreshDelayMs", () => {
 describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", () => {
   afterEach(() => {
     vi.doUnmock("../providers/amp/capability.js");
-    vi.doUnmock("../providers/deepseek/capability.js");
+    vi.doUnmock("../providers/deepseek-harness/capability.js");
     vi.doUnmock("../providers/claude/capability.js");
     vi.doUnmock("../providers/claude/capability-tui.js");
     vi.doUnmock("../providers/codex/capability.js");
@@ -182,7 +182,7 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
       });
     vi.resetModules();
     vi.doMock("../providers/amp/capability.js", () => ({ probeAmpCapability: mk("amp") }));
-    vi.doMock("../providers/deepseek/capability.js", () => ({ probeDeepseekCapability: mk("deepseek") }));
+    vi.doMock("../providers/deepseek-harness/capability.js", () => ({ probeDeepseekCapability: mk("deepseek-harness") }));
     vi.doMock("../providers/claude/capability.js", () => ({ probeClaudeCodeCapability: mk("claude-code") }));
     vi.doMock("../providers/claude/capability-tui.js", () => ({
       probeClaudeCodeTuiCapability: mk("claude-code-tui"),
@@ -210,7 +210,7 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     expect(calls["claude-code"]).toBe(1);
     expect(calls.codex).toBe(1);
     expect(calls.amp).toBe(1);
-    expect(calls.deepseek).toBe(1);
+    expect(calls["deepseek-harness"]).toBe(1);
     expect(out["claude-code"]?.state).toBe("ok");
     expect(out.codex?.state).toBe("ok");
     // claude-code-tui is disabled → never probed, no entry.

@@ -86,8 +86,8 @@ export const RUNTIME_PROVIDER_CATALOG = {
     authRecovery: { kind: "host" },
     authOwnerLabel: "Amp",
   },
-  deepseek: {
-    id: "deepseek",
+  "deepseek-harness": {
+    id: "deepseek-harness",
     label: "DeepSeek Harness",
     displayOrder: 100,
     selectionPriority: null,

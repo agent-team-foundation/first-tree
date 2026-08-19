@@ -733,7 +733,7 @@ describe("probeCapabilities (aggregator)", () => {
     const okProbe = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
       amp: okProbe,
-      deepseek: okProbe,
+      "deepseek-harness": okProbe,
       "claude-code": okProbe,
       "claude-code-tui": tuiProbe,
       codex: okProbe,
@@ -754,7 +754,7 @@ describe("probeCapabilities (aggregator)", () => {
       "claude-code",
       "codex",
       "cursor",
-      "deepseek",
+      "deepseek-harness",
       "grok",
       "kimi-code",
       "opencode",
@@ -781,7 +781,7 @@ describe("probeCapabilities (aggregator)", () => {
   it("converts enabled-provider probe rejections into error capability entries", async () => {
     const probes = {
       amp: vi.fn().mockRejectedValue("amp probe failed"),
-      deepseek: vi.fn().mockRejectedValue("deepseek probe failed"),
+      "deepseek-harness": vi.fn().mockRejectedValue("deepseek probe failed"),
       "claude-code": vi.fn().mockRejectedValue(new Error("claude probe failed")),
       "claude-code-tui": vi.fn().mockRejectedValue("tui probe failed"),
       codex: vi.fn().mockRejectedValue("codex probe failed"),
@@ -796,7 +796,7 @@ describe("probeCapabilities (aggregator)", () => {
     const caps = await probeCapabilities({ probes });
 
     expect(caps.amp).toMatchObject({ state: "error", error: "amp probe failed" });
-    expect(caps.deepseek).toMatchObject({ state: "error", error: "deepseek probe failed" });
+    expect(caps["deepseek-harness"]).toMatchObject({ state: "error", error: "deepseek probe failed" });
     expect(caps["claude-code"]).toMatchObject({
       state: "error",
       available: false,
@@ -847,7 +847,7 @@ describe("probeCapabilities (aggregator)", () => {
       "codex",
       "claude-code",
       "amp",
-      "deepseek",
+      "deepseek-harness",
       "cursor",
       "grok",
       "kimi-code",
@@ -860,7 +860,7 @@ describe("probeCapabilities (aggregator)", () => {
     const ok = vi.fn().mockResolvedValue(fakeEntry("ok"));
     const probes = {
       amp: ok,
-      deepseek: ok,
+      "deepseek-harness": ok,
       "claude-code": ok,
       "claude-code-tui": ok,
       codex: vi.fn().mockRejectedValue(new Error("only codex")),

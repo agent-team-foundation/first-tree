@@ -177,7 +177,7 @@ export function providerInstallHint(
     }
     case "amp":
       return `Run \`${AMP_INSTALL_COMMAND}\` on this ${device} (official Amp installer), then complete provider-owned setup with \`${loginCmd}\`.`;
-    case "deepseek":
+    case "deepseek-harness":
       return `Install the bundled DeepSeek Harness packages with \`${installCmd}\` on this ${device}, then set \`DEEPSEEK_API_KEY\` in your shell environment.`;
     case "cursor":
       return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;

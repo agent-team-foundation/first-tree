@@ -1,7 +1,7 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import type { HandlerFactory } from "../runtime/contracts.js";
 import { createAmpHandler } from "./amp/index.js";
-import { createDeepseekHandler } from "./deepseek/index.js";
+import { createDeepseekHandler } from "./deepseek-harness/index.js";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "./claude/executable.js";
 import { createClaudeCodeHandler } from "./claude/index.js";
 import { createClaudeCodeTuiHandler } from "./claude/tui/index.js";
@@ -43,7 +43,7 @@ export function createBuiltinHandlerRegistry(deps: BuiltinHandlerRegistryDeps = 
 
   return Object.freeze({
     amp: (config) => createAmpHandler(config),
-    deepseek: (config) => createDeepseekHandler(config),
+    "deepseek-harness": (config) => createDeepseekHandler(config),
     "claude-code": (config) => createClaudeCodeHandler({ ...config, claudeCodeExecutable: resolution.path }),
     "claude-code-tui": (config) => createClaudeCodeTuiHandler({ ...config, claudeCodeExecutable: resolution.path }),
     codex: (config) => createCodexHandler(config),

@@ -49,6 +49,6 @@ describe("DeepSeek binary resolution", () => {
   it("defaults empty model to deepseek-v4-flash and session root under agent home", () => {
     expect(resolveDeepseekModel("")).toBe(DEEPSEEK_DEFAULT_MODEL);
     expect(resolveDeepseekModel(" custom-model ")).toBe("custom-model");
-    expect(deepseekSessionRoot("/tmp/workspace")).toBe("/tmp/workspace/.first-tree/deepseek-sessions");
+    expect(deepseekSessionRoot("/tmp/workspace")).toBe("/tmp/workspace/.first-tree/deepseek-harness-sessions");
   });
 });

@@ -608,7 +608,7 @@ describe("classifyProviderFailure", () => {
       new Error(
         "DeepSeek Harness is not supported on Windows in v1 until the client-wide pre-admission Job Object supervisor is available.",
       ),
-      { provider: "deepseek", scope: "provider_turn" },
+      { provider: "deepseek-harness", scope: "provider_turn" },
     );
     expect(c).toMatchObject({ category: "capability", reasonCode: "deepseek_platform_unsupported" });
     expect(

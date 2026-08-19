@@ -29,8 +29,8 @@ describe("Amp mode options", () => {
 
 describe("DeepSeek model options", () => {
   it("uses free-form model entry with deepseek-v4-flash default guidance", () => {
-    expect(MODEL_OPTIONS_BY_PROVIDER.deepseek).toEqual([]);
-    expect(MODEL_HELP_BY_PROVIDER.deepseek).toContain("deepseek-v4-flash");
-    expect(MODEL_HELP_BY_PROVIDER.deepseek).toContain("exact DeepSeek model id");
+    expect(MODEL_OPTIONS_BY_PROVIDER["deepseek-harness"]).toEqual([]);
+    expect(MODEL_HELP_BY_PROVIDER["deepseek-harness"]).toContain("deepseek-v4-flash");
+    expect(MODEL_HELP_BY_PROVIDER["deepseek-harness"]).toContain("exact DeepSeek model id");
   });
 });

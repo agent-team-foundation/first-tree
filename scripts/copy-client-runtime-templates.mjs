@@ -45,9 +45,9 @@ await cp(canonicalWriteRouting, resolve(runtimeAssetsDir, "context-tree-write-ro
 
 const deepseekCordisSource = resolve(
   repoRoot,
-  "packages/client/src/providers/deepseek/cordis.yml",
+  "packages/client/src/providers/deepseek-harness/cordis.yml",
 );
-const deepseekCordisTargetDir = resolve(repoRoot, packageDirArg, "dist/providers/deepseek");
+const deepseekCordisTargetDir = resolve(repoRoot, packageDirArg, "dist/providers/deepseek-harness");
 if (!existsSync(deepseekCordisSource) || !statSync(deepseekCordisSource).isFile()) {
   throw new Error(`DeepSeek cordis template is missing: ${deepseekCordisSource}`);
 }

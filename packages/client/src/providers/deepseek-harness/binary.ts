@@ -8,7 +8,7 @@ import {
 } from "@first-tree/shared";
 
 export { DEEPSEEK_INSTALL_NPM_PACKAGE };
-export const DEEPSEEK_LOGIN_COMMAND = runtimeProviderLoginCommand("deepseek");
+export const DEEPSEEK_LOGIN_COMMAND = runtimeProviderLoginCommand("deepseek-harness");
 
 export function formatDeepseekBinaryMissingMessage(input: unknown): string {
   const original = errorText(input).trim();
@@ -170,7 +170,7 @@ export function resolveDeepseekModel(model: string): string {
 }
 
 export function deepseekSessionRoot(workspaceCwd: string): string {
-  return isAbsolute(join(workspaceCwd, ".first-tree", "deepseek-sessions"))
-    ? join(workspaceCwd, ".first-tree", "deepseek-sessions")
-    : resolve(workspaceCwd, ".first-tree", "deepseek-sessions");
+  return isAbsolute(join(workspaceCwd, ".first-tree", "deepseek-harness-sessions"))
+    ? join(workspaceCwd, ".first-tree", "deepseek-harness-sessions")
+    : resolve(workspaceCwd, ".first-tree", "deepseek-harness-sessions");
 }

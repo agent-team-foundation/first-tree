@@ -6,7 +6,7 @@ describe("DeepSeek install-only capability", () => {
     const resolveRuntime = vi.fn(() => ({
       ok: true as const,
       binary: "/app/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js",
-      cordisPath: "/app/dist/providers/deepseek/cordis.yml",
+      cordisPath: "/app/dist/providers/deepseek-harness-harness/cordis.yml",
     }));
     await expect(probeDeepseekCapability({ resolveRuntime, env: {} })).resolves.toMatchObject({
       state: "ok",
