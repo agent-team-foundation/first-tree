@@ -526,11 +526,7 @@ function runSmoke() {
     const packagedCliRoot = join(consumerDir, "node_modules", "first-tree-dev");
     run(
       process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        "import '@deepseek-ai/dsh-sdk-client'; console.log('deepseek-client-ok')",
-      ],
+      ["--input-type=module", "-e", "import '@deepseek-ai/dsh-sdk-client'; console.log('deepseek-client-ok')"],
       {
         cwd: packagedCliRoot,
         env: {

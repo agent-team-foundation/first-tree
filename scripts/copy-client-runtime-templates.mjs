@@ -43,10 +43,7 @@ await mkdir(runtimeAssetsDir, { recursive: true });
 await cp(canonicalPolicy, resolve(runtimeAssetsDir, "context-tree-policy.md"));
 await cp(canonicalWriteRouting, resolve(runtimeAssetsDir, "context-tree-write-routing.md"));
 
-const deepseekCordisSource = resolve(
-  repoRoot,
-  "packages/client/src/providers/deepseek-harness/cordis.yml",
-);
+const deepseekCordisSource = resolve(repoRoot, "packages/client/src/providers/deepseek-harness/cordis.yml");
 if (!existsSync(deepseekCordisSource) || !statSync(deepseekCordisSource).isFile()) {
   throw new Error(`DeepSeek cordis template is missing: ${deepseekCordisSource}`);
 }

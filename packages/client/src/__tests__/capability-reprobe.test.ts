@@ -182,7 +182,9 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
       });
     vi.resetModules();
     vi.doMock("../providers/amp/capability.js", () => ({ probeAmpCapability: mk("amp") }));
-    vi.doMock("../providers/deepseek-harness/capability.js", () => ({ probeDeepseekCapability: mk("deepseek-harness") }));
+    vi.doMock("../providers/deepseek-harness/capability.js", () => ({
+      probeDeepseekCapability: mk("deepseek-harness"),
+    }));
     vi.doMock("../providers/claude/capability.js", () => ({ probeClaudeCodeCapability: mk("claude-code") }));
     vi.doMock("../providers/claude/capability-tui.js", () => ({
       probeClaudeCodeTuiCapability: mk("claude-code-tui"),
