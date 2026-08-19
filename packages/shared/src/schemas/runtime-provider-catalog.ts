@@ -109,7 +109,7 @@ export const RUNTIME_PROVIDER_CATALOG = {
     selectionPriority: null,
     install: { kind: "npm", package: DEEPSEEK_INSTALL_NPM_PACKAGE, args: [] },
     loginSteps: [
-      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
+      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
     ],
     authRecovery: { kind: "host" },
     authOwnerLabel: "DeepSeek",

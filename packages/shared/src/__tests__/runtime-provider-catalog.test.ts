@@ -176,7 +176,7 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderInstallCommand("amp")).toBe(AMP_INSTALL_COMMAND);
     expect(runtimeProviderInstallCommand("deepseek-harness")).toBe(`npm install -g ${DEEPSEEK_INSTALL_NPM_PACKAGE}`);
     expect(runtimeProviderLoginCommand("deepseek-harness")).toBe(
-      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
+      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
     );
     expect(runtimeProviderLoginCommand("amp")).toBe("amp login");
     expect(KIMI_NPM_PACKAGE).toBe("@moonshot-ai/kimi-code");

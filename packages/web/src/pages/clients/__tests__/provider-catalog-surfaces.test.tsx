@@ -33,7 +33,10 @@ const IN_PRODUCT_SETUP_CASES = [
 
 const HOST_SETUP_CASES = [
   ["amp", "amp login"],
-  ["deepseek-harness", "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)"],
+  [
+    "deepseek-harness",
+    "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
+  ],
   ["kimi-code", "kimi # then run /login"],
   ["opencode", "opencode auth login"],
   ["pi", "pi # then run /login"],
@@ -124,12 +127,13 @@ describe("web provider surfaces derived from shared catalog", () => {
     expect(buildInstallCommand("amp")).toBe("curl -fsSL https://ampcode.com/install.sh | bash\namp login");
     expect(providerInstallHint("amp", "linux")).toContain("ampcode.com/install.sh");
     expect(buildInstallCommand("deepseek-harness")).toContain(
-      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
+      "set DEEPSEEK_API_KEY on agent Runtime → Environment variables, Mark as sensitive (or: export DEEPSEEK_API_KEY=<your DeepSeek API key>)",
     );
     expect(buildInstallCommand("deepseek-harness")).toContain(
-      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables",
+      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables, Mark as sensitive",
     );
     expect(providerInstallHint("deepseek-harness", "linux")).toContain("Runtime → Environment variables");
+    expect(providerInstallHint("deepseek-harness", "linux")).toContain("Mark as sensitive");
     expect(providerInstallHint("deepseek-harness", "linux")).toContain("host shell");
     expect(providerInstallHint("deepseek-harness", "linux")).not.toMatch(/shell environment\.?$/);
     expect(buildInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");

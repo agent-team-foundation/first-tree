@@ -206,6 +206,7 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("DeepSeek");
     expect(hint).toContain("not First Tree's");
     expect(hint).toContain("Runtime → Environment variables");
+    expect(hint).toContain("Mark as sensitive");
   });
 
   it("keeps OpenCode authentication host-local and points at the provider-owned login", () => {

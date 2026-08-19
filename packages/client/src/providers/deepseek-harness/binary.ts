@@ -14,7 +14,7 @@ export function formatDeepseekBinaryMissingMessage(input: unknown): string {
   const suffix = original ? ` Original error: ${original}` : "";
   return (
     "DeepSeek Harness runtime packages are missing from this First Tree Client. " +
-    "After install, set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables " +
+    "After install, set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables and Mark as sensitive " +
     "(or export it in the host shell). The portable CLI must ship the pinned `@deepseek-ai/*` " +
     "closure (including Cordis plugins). Update or reinstall First Tree, or for a broken local install run " +
     `\`npm install ${DEEPSEEK_INSTALL_NPM_PACKAGE}\`.` +

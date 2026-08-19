@@ -25,6 +25,7 @@ describe("DeepSeek auth failure sanitization", () => {
     const hint = formatAuthHint("deepseek-harness", publicDeepseekAuthFailure(RAW));
     expect(hint).toContain("DEEPSEEK_API_KEY");
     expect(hint).toContain("Runtime → Environment variables");
+    expect(hint).toContain("Mark as sensitive");
     expect(hint).toContain("not First Tree's");
     expect(hint).not.toContain("qa-secret");
     expect(hint).not.toMatch(/https?:\/\//i);

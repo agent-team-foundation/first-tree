@@ -79,7 +79,7 @@ export function buildInstallCommand(provider: RuntimeProvider, os?: string | nul
     // Host export remains the copy-pasteable second line; agent Runtime env is
     // the preferred First Tree path and must be visible on the setup card.
     return runtimeProviderComputerSetupCommand(provider, [
-      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables",
+      "# preferred: set DEEPSEEK_API_KEY on the agent's Runtime → Environment variables, Mark as sensitive",
     ]);
   }
   return runtimeProviderComputerSetupCommand(provider);
@@ -187,7 +187,7 @@ export function providerInstallHint(
     case "deepseek-harness":
       return (
         `Install the bundled DeepSeek Harness packages with \`${installCmd}\` on this ${device}, ` +
-        "then set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables " +
+        "then set `DEEPSEEK_API_KEY` on the agent's Runtime → Environment variables and Mark as sensitive " +
         "(or export it in the host shell that runs First Tree)."
       );
     case "cursor":
