@@ -184,6 +184,7 @@ type TurnState = {
   text: string[];
   usage: AmpUsage | null;
   sawProviderActivity: boolean;
+  parsedProviderOutput: boolean;
   sawUnsafeTool: boolean;
   protocolDiagnostics: string[];
   toolsByCallId: Map<string, string>;
@@ -514,6 +515,9 @@ export const createAmpHandler: HandlerFactory = (config) => {
   function handleEvent(event: AmpStreamEvent, state: TurnState, sessionCtx: SessionContext): void {
     sessionCtx.recordProviderActivity();
     state.sawProviderActivity = true;
+    if (event.kind !== "unknown" && event.kind !== "user_echo") {
+      state.parsedProviderOutput = true;
+    }
     switch (event.kind) {
       case "init":
         if (event.sessionId) state.sessionIds.add(event.sessionId);
@@ -777,6 +781,7 @@ export const createAmpHandler: HandlerFactory = (config) => {
         text: [],
         usage: null,
         sawProviderActivity: false,
+        parsedProviderOutput: false,
         sawUnsafeTool: false,
         protocolDiagnostics: [],
         toolsByCallId: new Map(),
@@ -832,10 +837,15 @@ export const createAmpHandler: HandlerFactory = (config) => {
         stderrTail: outcome.stderrTail,
         stdoutTail: outcome.stdoutTail,
         structuredErrors: state.errors,
+        parsedProviderOutput: state.parsedProviderOutput,
       });
 
       if (abort.signal.aborted || generation !== turnGeneration || !sessionActive) {
-        if (authFailure) {
+        // Raw pre-session login-flow stdout (no parsed init/assistant JSON) can
+        // hang until timeout; that is still a credential failure. Once a normal
+        // provider stream has been parsed, abort/timeout/suspend must not treat
+        // assistant text that merely mentions those phrases as auth recovery.
+        if (authFailure && !state.parsedProviderOutput) {
           return settleFailure({
             failure: authFailure,
             state,
@@ -1246,13 +1256,18 @@ function classifyAmpAuthFailure(input: {
   stderrTail: string;
   stdoutTail: string;
   structuredErrors: readonly string[];
+  parsedProviderOutput: boolean;
 }): string | null {
   if (isAmpAuthError(input.stderrTail)) {
     return redactErrorPreview(input.stderrTail, 800);
   }
   const structured = input.structuredErrors.find((error) => isAmpAuthError(error));
   if (structured) return structured;
-  if (input.exitCode !== 0 && isAmpAuthError(input.stdoutTail)) {
+  // Stdout is an auth source only for the official pre-session login-flow
+  // (plain text, no parsed init/assistant JSON). `exitCode !== 0` is also true
+  // for a signal-killed child (`exitCode: null`), so JSON assistant text that
+  // happens to mention the same phrases must not be classified from stdoutTail.
+  if (!input.parsedProviderOutput && input.exitCode !== 0 && isAmpAuthError(input.stdoutTail)) {
     return redactErrorPreview(input.stdoutTail, 800);
   }
   return null;

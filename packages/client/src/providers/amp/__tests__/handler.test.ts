@@ -39,10 +39,15 @@ class FakeChild extends EventEmitter {
   stdin = new FakeStdin();
   stdout = new FakeStream();
   stderr = new FakeStream();
-  pid = 4242;
+  // Falsy so abort uses `child.kill` instead of `process.kill(-pid)` against a
+  // fake pid that is not a real process group.
+  pid = 0;
   kills: string[] = [];
   kill(signal?: string): boolean {
     this.kills.push(signal ?? "SIGTERM");
+    if (this.kills.length > 1) return true;
+    this.stdout.emit("end");
+    this.emit("close", null, signal ?? "SIGTERM");
     return true;
   }
 }
@@ -517,6 +522,42 @@ describe("Amp handler — per-turn CLI transport", () => {
     await handler.resume(makeMessage("m2", "retry"), first.sessionId, ctx, makeToken());
     expect(specs[1]?.args).not.toContain("threads");
     expect(specs[1]?.args).not.toContain(first.sessionId);
+    await handler.shutdown();
+  });
+
+  it("does not consume an aborted normal stream as credential recovery when assistant text mentions login-flow wording", async () => {
+    const events: SessionEvent[] = [];
+    const { supervisor } = makeFakeSupervisor([
+      (child) => {
+        child.stdout.emit("data", line({ type: "system", subtype: "init", session_id: "T-sess-real-abort" }));
+        child.stdout.emit(
+          "data",
+          line({
+            type: "assistant",
+            message: {
+              content: [{ type: "text", text: "No API key found. Starting login flow..." }],
+            },
+          }),
+        );
+      },
+    ]);
+    const handler = makeHandler(supervisor, {
+      ampTurnTimeoutMs: 80,
+      ampRetrySleep: async () => true,
+    });
+    const token = makeToken();
+
+    await handler.start(makeMessage("m1", "explain missing credentials"), makeContext({ events }), token);
+
+    expect(token.completed.some((outcome) => outcome.reason === "provider_credential_required")).toBe(false);
+    expect(token.retried).not.toContain("provider_credential_required");
+    const errorText = events
+      .filter((event) => event.kind === "error")
+      .map((event) => String(event.payload.message))
+      .join("\n")
+      .toLowerCase();
+    expect(errorText).not.toContain("amp login");
+    expect(errorText).toMatch(/abort|timed out/);
     await handler.shutdown();
   });
 
