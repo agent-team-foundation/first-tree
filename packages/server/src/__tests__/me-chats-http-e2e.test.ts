@@ -136,6 +136,39 @@ describe("GET /orgs/:orgId/chats — liveActivity wire shape", () => {
     expect(row?.liveActivity).toBeNull();
   });
 
+  it("blocked runtime lights failedAgentIds recovery without busyAgentIds", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const peer = await createAgent(app.db, {
+      name: `e2e-blocked-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Blocked Peer",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const { chatId } = await createMeChat(app.db, alice.humanAgentUuid, alice.organizationId, {
+      participantIds: [peer.uuid],
+    });
+    await app.db.execute(sql`
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, runtime_state, runtime_state_at, updated_at)
+      VALUES (${peer.uuid}, ${chatId}, 'active', 'blocked', NOW(), NOW())
+      ON CONFLICT (agent_id, chat_id) DO UPDATE
+        SET state = EXCLUDED.state,
+            runtime_state = EXCLUDED.runtime_state,
+            runtime_state_at = EXCLUDED.runtime_state_at
+    `);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.json<{ rows: Array<Record<string, unknown>> }>().rows.find((r) => r.chatId === chatId);
+    expect(row?.failedAgentIds).toEqual([peer.uuid]);
+    expect(row?.busyAgentIds).toEqual([]);
+  });
+
   it("idle session → liveActivity null", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);

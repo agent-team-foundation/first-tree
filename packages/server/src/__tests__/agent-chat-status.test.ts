@@ -565,14 +565,26 @@ describe("agent-chat-status", () => {
       expect(s?.main).toBe("offline");
     });
 
-    it("stale per-chat runtime_state='error' fail-closes (does not surface as errored)", async () => {
+    it("stale per-chat in-flight runtime still surfaces as recovery (errored)", async () => {
       const { app, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
       await setSession(peer.agent.uuid, chatId, "active");
-      // Seed error stamp older than RUNTIME_STALE_MS.
-      await setRuntime(peer.agent.uuid, chatId, "error", -(RUNTIME_STALE_MS + 5_000));
+      await setRuntime(peer.agent.uuid, chatId, "working", -(RUNTIME_STALE_MS + 5_000));
       const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
-      expect(s?.errored).toBe(false);
+      expect(s?.working).toBe(false);
+      expect(s?.errored).toBe(true);
+      expect(s?.main).toBe("failed");
+    });
+
+    it("fresh blocked runtime surfaces as recovery, not working", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await setRuntime(peer.agent.uuid, chatId, "blocked");
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.working).toBe(false);
+      expect(s?.errored).toBe(true);
+      expect(s?.main).toBe("failed");
     });
 
     it("a reachable agent with a healthy active session is not failed", async () => {
@@ -755,17 +767,34 @@ describe("agent-chat-status", () => {
       expect(computeWorking({ ...active, state: "suspended" }, activity, now)).toBe(false);
     });
 
-    it("computeErrored — new-client authoritative: state='errored' OR fresh runtime='error'", () => {
+    it("computeErrored — new-client authoritative: state='errored' OR fresh error/blocked OR stale in-flight", () => {
       // C-axis lifecycle errored sticks regardless of D-axis state, irrespective of stamp.
       expect(computeErrored({ state: "errored", runtimeState: "idle", runtimeStateAt: null }, null, now)).toBe(true);
       expect(computeErrored({ state: "errored", runtimeState: "idle", runtimeStateAt: null }, "error", now)).toBe(true);
-      // D-axis 'error' only counts when fresh + active (new-client path).
+      // D-axis fault counts when fresh + active.
       expect(computeErrored({ state: "active", runtimeState: "error", runtimeStateAt: recent(-1000) }, null, now)).toBe(
         true,
       );
       expect(
+        computeErrored({ state: "active", runtimeState: "blocked", runtimeStateAt: recent(-1000) }, null, now),
+      ).toBe(true);
+      // Fresh working is slow-but-alive, not recovery.
+      expect(
+        computeErrored({ state: "active", runtimeState: "working", runtimeStateAt: recent(-1000) }, null, now),
+      ).toBe(false);
+      expect(
         computeErrored({ state: "suspended", runtimeState: "error", runtimeStateAt: recent(-1000) }, null, now),
       ).toBe(false);
+      // Stale in-flight must not look idle.
+      const staleAt = recent(-(RUNTIME_STALE_MS + 1000));
+      expect(computeErrored({ state: "active", runtimeState: "working", runtimeStateAt: staleAt }, null, now)).toBe(
+        true,
+      );
+      expect(computeErrored({ state: "active", runtimeState: "blocked", runtimeStateAt: staleAt }, null, now)).toBe(
+        true,
+      );
+      expect(computeErrored({ state: "active", runtimeState: "error", runtimeStateAt: staleAt }, null, now)).toBe(true);
+      expect(computeErrored({ state: "active", runtimeState: "idle", runtimeStateAt: staleAt }, null, now)).toBe(false);
     });
 
     it("computeErrored — old-client fallback (NULL stamp): legacy presence.runtime_state OR-fold", () => {
@@ -774,6 +803,7 @@ describe("agent-chat-status", () => {
       // is pre-PR behaviour, retained for one release cycle; self-closes the
       // moment the client upgrades and starts reporting per-chat runtime.
       expect(computeErrored(active, "error", now)).toBe(true);
+      expect(computeErrored(active, "blocked", now)).toBe(true);
       // Non-error presence on an old-client active row: not errored.
       expect(computeErrored(active, "working", now)).toBe(false);
       expect(computeErrored(active, null, now)).toBe(false);

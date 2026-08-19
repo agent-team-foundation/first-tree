@@ -37,7 +37,9 @@ import { isConsistentAgentRoute, metadataSupportsSessionReset } from "../../runt
  *   - reachability (A): the agent has a bound client (`agent_presence.client_id`)
  *   - engagement   (C): `agent_chat_sessions.state` for this pair
  *   - activity     (D): a fresh, non-terminal latest `session_events` row
- *   - attention       : a failure (session `errored` OR runtime `error`)
+ *   - attention       : recovery the user can notice — session `errored`,
+ *     fresh runtime `error` / `blocked`, or a stale in-flight D-axis
+ *     (`working` / `blocked` / `error`) after the client stopped reaffirming
  *
  * The `errored` predicate lives here ONCE (it used to be duplicated as a TS
  * predicate in this file AND a Drizzle clause in `me-chat.ts:deriveFailedAgents`,
@@ -601,13 +603,14 @@ export async function resolveAgentChatStatuses(
 // signals for one release cycle:
 //   - working: the latest non-terminal `session_events` row within
 //     LIVE_ACTIVITY_STALE_MS (the pre-PR proxy).
-//   - errored: the agent-global `presence.runtime_state === 'error'`
+//   - errored: the agent-global `presence.runtime_state === 'error' | 'blocked'`
 //     OR-fold (the pre-PR behaviour — yes, this still has the reverse-#366
 //     cross-chat leak for old clients, but that's the existing prod
 //     behaviour, not a new regression — and it self-closes the moment the
 //     client upgrades and starts reporting per-chat).
 // `state === 'errored'` (C-axis lifecycle) always contributes to errored
-// independently of the D-axis on both paths.
+// independently of the D-axis on both paths. Fresh `working` is never
+// recovery; stale in-flight D-axis is.
 //
 // Spec reference: proposals/hub-agent-status-working-freshness.20260525.md
 // §6.1 §10 ("保留旧 client 兼容兜底一个发布周期").
@@ -631,7 +634,8 @@ type RuntimeSessionRow =
  * the client has reported per-chat runtime within the freshness window.
  * Returns false for old clients (NULL stamp), stale stamps, and non-active
  * sessions; the caller should fall back to legacy signals on false-with-
- * NULL-stamp and treat false-with-stale-stamp as fail-closed.
+ * NULL-stamp. Stale in-flight runtime is recovery (`computeErrored`), not
+ * working.
  */
 export function isRuntimeFresh(session: RuntimeSessionRow, now: number): boolean {
   if (!session || session.state !== "active") return false;
@@ -658,22 +662,34 @@ export function computeWorking(session: RuntimeSessionRow, activity: LiveActivit
   return isRuntimeFresh(session, now) && session.runtimeState === ("working" satisfies RuntimeState);
 }
 
+function isFaultRuntime(runtimeState: string): boolean {
+  return runtimeState === ("error" satisfies RuntimeState) || runtimeState === ("blocked" satisfies RuntimeState);
+}
+
+function isInFlightRuntime(runtimeState: string): boolean {
+  return isFaultRuntime(runtimeState) || runtimeState === ("working" satisfies RuntimeState);
+}
+
 /**
- * Authoritative path: C-axis `state === 'errored'` always contributes; the
- * D-axis 'error' axis contributes when active + fresh. Old-client fallback
- * (NULL stamp on an active session): legacy `presence.runtime_state ===
- * 'error'` OR-fold, which is pre-PR behaviour (still has the reverse-#366
- * cross-chat leak for old clients; that's the existing prod regression
- * envelope and self-closes when the client upgrades). Spec §6.1 §10.
+ * Authoritative path: C-axis `state === 'errored'` always contributes.
+ * D-axis recovery contributes when the session is active and either:
+ *   - the stamp is fresh and runtime is `error` or `blocked`, or
+ *   - the stamp is stale and the last runtime was still in-flight
+ *     (`working` / `blocked` / `error`) — a dead client must not look idle.
+ * Fresh `working` is never recovery. Old-client fallback (NULL stamp on an
+ * active session): legacy `presence.runtime_state === 'error' | 'blocked'`
+ * OR-fold (still has the reverse-#366 cross-chat leak for old clients; that
+ * is the existing prod envelope and self-closes when the client upgrades).
  */
 export function computeErrored(session: RuntimeSessionRow, presenceRuntimeState: string | null, now: number): boolean {
   if (session?.state === "errored") return true;
   if (!session || session.state !== "active") return false;
   if (session.runtimeStateAt == null) {
-    // Old client (one release cycle): legacy agent-global error fallback.
-    return presenceRuntimeState === "error";
+    // Old client (one release cycle): legacy agent-global fault fallback.
+    return presenceRuntimeState != null && isFaultRuntime(presenceRuntimeState);
   }
-  return isRuntimeFresh(session, now) && session.runtimeState === ("error" satisfies RuntimeState);
+  if (isRuntimeFresh(session, now)) return isFaultRuntime(session.runtimeState);
+  return isInFlightRuntime(session.runtimeState);
 }
 
 /**

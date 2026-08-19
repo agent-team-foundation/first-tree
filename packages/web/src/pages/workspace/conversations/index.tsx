@@ -169,13 +169,11 @@ export function ConversationList({
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     // Bounded refetch is the safety floor for the per-chat composite
     // signals projected onto each row: `busyAgentIds` lights the chat-list
-    // dot for the working / codex-no-events case, and the only way the
-    // dot self-heals after a client crash is for a fresh `listMeChats` to
-    // discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s) — the
-    // server emits no notification when staleness is reached passively. An
-    // infinite query refetches every loaded page on each interval, so every
-    // row (not just the first page) self-heals within `RUNTIME_STALE_MS` +
-    // one refetch (~90s). 30s matches the `chat-agent-status` query.
+    // dots for a *fresh* working turn, and `failedAgentIds` lights recovery
+    // when runtime is blocked/error or the working stamp aged past
+    // `RUNTIME_STALE_MS` (60s). The server emits no notification when
+    // staleness is reached passively, so an infinite query refetches every
+    // loaded page on each interval. 30s matches the `chat-agent-status` query.
     refetchInterval: 30_000,
   });
 

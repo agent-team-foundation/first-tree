@@ -67,13 +67,16 @@ export type AgentEngagement = z.infer<typeof agentEngagementSchema>;
  * client re-affirms `working` / `blocked` / `error` sessions on a ~20s timer
  * (RUNTIME_REAFFIRM_BASE_MS) with ±20% jitter so a long turn keeps
  * `runtime_state_at` fresh; if no re-affirm lands within this window the
- * server stops treating the session as working/errored (self-heals after a
- * silent client death where the `idle` transition was never received).
- * 60s = 3× the nominal re-affirm interval, matching the approved spec
- * (proposals/hub-agent-status-working-freshness.20260525.md §6.1 §10).
+ * server stops treating the session as *working*. Stale in-flight runtime
+ * (`working` / `blocked` / `error`) still lights recovery so a silent client
+ * death does not look idle. 60s = 3× the nominal re-affirm interval, matching
+ * the approved spec (proposals/hub-agent-status-working-freshness.20260525.md
+ * §6.1 §10) for the working cutoff.
  *
- * Direct consequence: when a client process crashes mid-turn the user-visible
- * "stuck-working" upper bound is RUNTIME_STALE_MS.
+ * Direct consequence: when a client process crashes mid-turn, composite
+ * `working` clears once RUNTIME_STALE_MS elapses. Recovery attention then
+ * stays on the `errored` axis (chat-row `failedAgentIds`) so a dead in-flight
+ * turn does not look merely idle.
  */
 export const RUNTIME_STALE_MS = 60_000;
 
@@ -81,7 +84,7 @@ export const RUNTIME_STALE_MS = 60_000;
 export type DeriveMainStatusInput = {
   /** Reachability (A): is the agent's runtime/client reachable at all? */
   reachable: boolean;
-  /** A concrete failure the user should see (session `errored` OR runtime `error`). */
+  /** Recovery the user should see: session `errored`, runtime `error`/`blocked`, or a stale in-flight D-axis. */
   errored: boolean;
   /** Activity (D): the agent is producing output right now (live activity present). */
   working: boolean;

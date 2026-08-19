@@ -552,7 +552,8 @@ async function enrichMeChatRows(
       // agent in a shared chat no longer pins my row to "Needs attention".
       // Use the errored axis rather than composite `main`: reachability makes an
       // errored agent display as offline, but recovery attention must remain
-      // until the per-chat error itself clears.
+      // until the per-chat recovery itself clears (session errored, fresh
+      // blocked/error, or stale in-flight working/blocked/error).
       if (isSpeaker && s.errored && isMine) failed.push(s.agentId);
       // busy — speakers with composite `working` (the D-axis truth from
       // `agent_chat_sessions.runtime_state`). NOT narrowed to mine — "someone
