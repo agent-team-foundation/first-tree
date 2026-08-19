@@ -208,9 +208,7 @@ export function deepseekLaunchFingerprint(payload: {
   model: string;
   env: ReadonlyArray<{ key: string; value: string }>;
 }): string {
-  const envEntries = [...payload.env]
-    .map((entry) => `${entry.key}=${entry.value}`)
-    .sort((a, b) => a.localeCompare(b));
+  const envEntries = [...payload.env].map((entry) => `${entry.key}=${entry.value}`).sort((a, b) => a.localeCompare(b));
   return JSON.stringify({
     model: resolveDeepseekModel(payload.model),
     env: envEntries,

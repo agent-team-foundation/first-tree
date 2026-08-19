@@ -130,8 +130,7 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
   const contextTreeRepoUrl = gitAttribution.contextTreeRepoUrl;
   const contextTreeBranch = contextTree.kind === "remote" ? contextTree.branch : null;
   const resolveRuntime =
-    (config.deepseekRuntimeResolver as typeof resolveDeepseekRuntimeBinary | undefined) ??
-    resolveDeepseekRuntimeBinary;
+    (config.deepseekRuntimeResolver as typeof resolveDeepseekRuntimeBinary | undefined) ?? resolveDeepseekRuntimeBinary;
   const createHarness =
     (config.deepseekHarnessFactory as DeepseekHarnessFactory | undefined) ??
     ((options) => new DeepSeekHarness(options));
@@ -209,7 +208,11 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
     return attempt;
   }
 
-  function buildEnv(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): Record<string, string> {
+  function buildEnv(
+    sessionCtx: SessionContext,
+    payload: AgentRuntimeConfigPayload,
+    workspaceCwd: string,
+  ): Record<string, string> {
     const base: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (typeof value === "string") base[key] = value;
@@ -673,7 +676,10 @@ export const createDeepseekHandler: HandlerFactory = (config) => {
               kind: "error",
               payload: {
                 source: "runtime",
-                message: `forwardResult failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 2000),
+                message: `forwardResult failed: ${error instanceof Error ? error.message : String(error)}`.slice(
+                  0,
+                  2000,
+                ),
               },
             });
             sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });

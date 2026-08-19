@@ -57,8 +57,22 @@ describe("DeepSeek binary resolution", () => {
     expect(resolveDeepseekModel("")).toBe(DEEPSEEK_DEFAULT_MODEL);
     expect(resolveDeepseekModel(" custom-model ")).toBe("custom-model");
     expect(deepseekSessionRoot("/tmp/workspace")).toBe("/tmp/workspace/.first-tree/deepseek-harness-sessions");
-    expect(deepseekLaunchFingerprint({ model: "", env: [{ key: "B", value: "2" }, { key: "A", value: "1" }] })).toBe(
-      deepseekLaunchFingerprint({ model: "deepseek-v4-flash", env: [{ key: "A", value: "1" }, { key: "B", value: "2" }] }),
+    expect(
+      deepseekLaunchFingerprint({
+        model: "",
+        env: [
+          { key: "B", value: "2" },
+          { key: "A", value: "1" },
+        ],
+      }),
+    ).toBe(
+      deepseekLaunchFingerprint({
+        model: "deepseek-v4-flash",
+        env: [
+          { key: "A", value: "1" },
+          { key: "B", value: "2" },
+        ],
+      }),
     );
   });
 });

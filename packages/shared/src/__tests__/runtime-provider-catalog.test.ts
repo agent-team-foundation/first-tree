@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AMP_INSTALL_COMMAND,
-  DEEPSEEK_INSTALL_NPM_PACKAGE,
   asRuntimeProvider,
   capabilityEntrySchema,
+  DEEPSEEK_INSTALL_NPM_PACKAGE,
   DISABLED_RUNTIME_PROVIDERS,
   enabledOkRuntimeProviders,
   enabledRuntimeProviders,
@@ -174,12 +174,8 @@ describe("runtime provider identity + catalog completeness", () => {
     expect(runtimeProviderInstallCommand("cursor")).toBe("curl https://cursor.com/install -fsS | bash");
     expect(runtimeProviderInstallCommand("grok")).toBe("curl -fsSL https://x.ai/cli/install.sh | bash");
     expect(runtimeProviderInstallCommand("amp")).toBe(AMP_INSTALL_COMMAND);
-    expect(runtimeProviderInstallCommand("deepseek-harness")).toBe(
-      `npm install -g ${DEEPSEEK_INSTALL_NPM_PACKAGE}`,
-    );
-    expect(runtimeProviderLoginCommand("deepseek-harness")).toBe(
-      "export DEEPSEEK_API_KEY=<your DeepSeek API key>",
-    );
+    expect(runtimeProviderInstallCommand("deepseek-harness")).toBe(`npm install -g ${DEEPSEEK_INSTALL_NPM_PACKAGE}`);
+    expect(runtimeProviderLoginCommand("deepseek-harness")).toBe("export DEEPSEEK_API_KEY=<your DeepSeek API key>");
     expect(runtimeProviderLoginCommand("amp")).toBe("amp login");
     expect(KIMI_NPM_PACKAGE).toBe("@moonshot-ai/kimi-code");
     expect(RUNTIME_PROVIDER_CATALOG["kimi-code"].install).toEqual({

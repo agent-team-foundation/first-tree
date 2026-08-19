@@ -196,16 +196,19 @@ function makeContext(
   };
 }
 
-async function waitForMicrotasks(predicate: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 100; i++) {
+async function waitForPredicate(predicate: () => boolean, label: string): Promise<void> {
+  // Real timers: fake timers interact badly with the native workspace file lock
+  // used by prepareManagedSession (context-source.lock), which caused CI flakes
+  // (ENOENT on lstat / stuck before retry). The assertion under test is abort
+  // hygiene across retry, not timer precision.
+  for (let i = 0; i < 400; i++) {
     if (predicate()) return;
-    await vi.advanceTimersByTimeAsync(0);
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`timed out waiting for ${label}`);
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-retry-abort-"));
   state.runInputs.length = 0;
   state.signals.length = 0;
@@ -214,7 +217,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -239,7 +241,7 @@ describe("codex handler retry abort cleanup", () => {
 
     const startPromise = handler.start(makeMessage("m1", "first"), ctx, deliveryTokenFromSessionContext(ctx));
 
-    await waitForMicrotasks(
+    await waitForPredicate(
       () => state.streamClosedByAttempt[0] === true && logs.some((message) => message.includes("codex turn retry")),
       "first attempt retry backoff",
     );
@@ -250,7 +252,6 @@ describe("codex handler retry abort cleanup", () => {
     expect(String(state.runInputs[0])).toContain("first");
     expect(state.lateAbortAfterClose).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(500);
     await startPromise;
 
     const events = emitEvent.mock.calls.map(([event]) => event);

@@ -2,16 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
-import { type AgentRuntimeConfigPayload, parseProviderRetryEventMessage, type SessionEvent as FtSessionEvent } from "@first-tree/shared";
+import {
+  type AgentRuntimeConfigPayload,
+  type SessionEvent as FtSessionEvent,
+  parseProviderRetryEventMessage,
+} from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCtxPlumbing } from "../../../__tests__/test-helpers.js";
 import type { DeliveryToken, SessionContext, SessionMessage, TurnOutcome } from "../../../runtime/handler.js";
 import { formatProviderFailureRuntimeNotice } from "../../../runtime/runtime-notice.js";
-import {
-  createDeepseekHandler,
-  DEEPSEEK_PENDING_SESSION_PREFIX,
-  isDeepseekPendingSessionId,
-} from "../index.js";
+import { createDeepseekHandler, DEEPSEEK_PENDING_SESSION_PREFIX, isDeepseekPendingSessionId } from "../index.js";
 
 type FakeRunResult = {
   sessionId: string;
@@ -322,8 +322,8 @@ describe("DeepSeek handler", () => {
 
     await handler.resume(makeMessage("m2", "again"), "sess-new", ctx, makeToken());
     expect(started).toHaveLength(2);
-    expect(started[0]!.close).toHaveBeenCalled();
-    expect(started[1]!.sessionCalls[0]).toBe("sess-new");
+    expect(started[0]?.close).toHaveBeenCalled();
+    expect(started[1]?.sessionCalls[0]).toBe("sess-new");
   });
 
   it("fails closed on managed MCP configuration", async () => {
@@ -344,7 +344,8 @@ describe("DeepSeek handler", () => {
       .map((event) => (event.kind === "error" ? parseProviderRetryEventMessage(event.payload.message) : null))
       .find(Boolean);
     expect(retryEvent?.category).toBe("configuration");
-    expect(formatProviderFailureRuntimeNotice(retryEvent!)).toContain("configuration needs attention");
+    expect(retryEvent).toBeTruthy();
+    expect(formatProviderFailureRuntimeNotice(retryEvent)).toContain("configuration needs attention");
     expect(harness.start).not.toHaveBeenCalled();
   });
 

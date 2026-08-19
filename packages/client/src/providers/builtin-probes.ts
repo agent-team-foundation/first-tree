@@ -5,11 +5,11 @@ import {
   type RuntimeProvider,
 } from "@first-tree/shared";
 import { probeAmpCapability } from "./amp/capability.js";
-import { probeDeepseekCapability } from "./deepseek-harness/capability.js";
 import { probeClaudeCodeCapability } from "./claude/capability.js";
 import { probeClaudeCodeTuiCapability } from "./claude/capability-tui.js";
 import { probeCodexCapability } from "./codex/capability.js";
 import { probeCursorCapability } from "./cursor/capability.js";
+import { probeDeepseekCapability } from "./deepseek-harness/capability.js";
 import { probeGrokCapability } from "./grok/capability.js";
 import { probeKimiCodeCapability } from "./kimi-code/capability.js";
 import { probeOpenCodeCapability } from "./opencode/capability.js";

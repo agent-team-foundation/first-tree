@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { formatAuthHint } from "../../handlers/auth-error-hint.js";
-import { discardDeepseekAuthorizationMaterial, publicDeepseekAuthFailure, sanitizeDeepseekAuthFailureText } from "../auth-failure.js";
+import {
+  discardDeepseekAuthorizationMaterial,
+  publicDeepseekAuthFailure,
+  sanitizeDeepseekAuthFailureText,
+} from "../auth-failure.js";
 
 const RAW = [
   'DEEPSEEK_API_KEY=qa-secret DEEPSEEK_API_KEY="qa-quoted" {"DEEPSEEK_API_KEY":"qa-json"}',

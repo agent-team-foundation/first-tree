@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  classifyDeepseekRunFailure,
-  mapDeepseekSessionEvent,
-  sessionEventFromNotification,
-} from "../events.js";
+import { classifyDeepseekRunFailure, mapDeepseekSessionEvent, sessionEventFromNotification } from "../events.js";
 
 describe("DeepSeek session events", () => {
   it("reads session.event notifications (dot method name)", () => {
