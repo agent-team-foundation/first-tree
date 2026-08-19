@@ -803,7 +803,9 @@ describe("agent-chat-status", () => {
       // is pre-PR behaviour, retained for one release cycle; self-closes the
       // moment the client upgrades and starts reporting per-chat runtime.
       expect(computeErrored(active, "error", now)).toBe(true);
-      expect(computeErrored(active, "blocked", now)).toBe(true);
+      // Global `blocked` must stay out of the NULL-stamp fallback — it is not
+      // chat-scoped and historically false-alarmed during long reasoning.
+      expect(computeErrored(active, "blocked", now)).toBe(false);
       // Non-error presence on an old-client active row: not errored.
       expect(computeErrored(active, "working", now)).toBe(false);
       expect(computeErrored(active, null, now)).toBe(false);

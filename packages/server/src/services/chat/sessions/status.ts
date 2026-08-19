@@ -603,14 +603,15 @@ export async function resolveAgentChatStatuses(
 // signals for one release cycle:
 //   - working: the latest non-terminal `session_events` row within
 //     LIVE_ACTIVITY_STALE_MS (the pre-PR proxy).
-//   - errored: the agent-global `presence.runtime_state === 'error' | 'blocked'`
-//     OR-fold (the pre-PR behaviour — yes, this still has the reverse-#366
-//     cross-chat leak for old clients, but that's the existing prod
-//     behaviour, not a new regression — and it self-closes the moment the
-//     client upgrades and starts reporting per-chat).
+//   - errored: the agent-global `presence.runtime_state === 'error'` OR-fold
+//     only (never `blocked` — that signal is not chat-scoped and used to
+//     false-alarm on long reasoning). Still has the reverse-#366 cross-chat
+//     leak for old clients on `error`; that is the existing prod envelope and
+//     self-closes when the client upgrades and starts reporting per-chat.
 // `state === 'errored'` (C-axis lifecycle) always contributes to errored
 // independently of the D-axis on both paths. Fresh `working` is never
-// recovery; stale in-flight D-axis is.
+// recovery; stale in-flight D-axis is. Per-chat `blocked` recovery requires a
+// non-NULL per-chat stamp.
 //
 // Spec reference: proposals/hub-agent-status-working-freshness.20260525.md
 // §6.1 §10 ("保留旧 client 兼容兜底一个发布周期").
@@ -677,16 +678,18 @@ function isInFlightRuntime(runtimeState: string): boolean {
  *   - the stamp is stale and the last runtime was still in-flight
  *     (`working` / `blocked` / `error`) — a dead client must not look idle.
  * Fresh `working` is never recovery. Old-client fallback (NULL stamp on an
- * active session): legacy `presence.runtime_state === 'error' | 'blocked'`
- * OR-fold (still has the reverse-#366 cross-chat leak for old clients; that
- * is the existing prod envelope and self-closes when the client upgrades).
+ * active session): legacy `presence.runtime_state === 'error'` only — never
+ * agent-global `blocked`, which is not chat-scoped and historically false-
+ * alarmed during long reasoning turns. The reverse-#366 cross-chat leak for
+ * global `error` remains the existing prod envelope and self-closes when the
+ * client upgrades and starts reporting per-chat runtime.
  */
 export function computeErrored(session: RuntimeSessionRow, presenceRuntimeState: string | null, now: number): boolean {
   if (session?.state === "errored") return true;
   if (!session || session.state !== "active") return false;
   if (session.runtimeStateAt == null) {
-    // Old client (one release cycle): legacy agent-global fault fallback.
-    return presenceRuntimeState != null && isFaultRuntime(presenceRuntimeState);
+    // Old client (one release cycle): legacy agent-global error fallback only.
+    return presenceRuntimeState === "error";
   }
   if (isRuntimeFresh(session, now)) return isFaultRuntime(session.runtimeState);
   return isInFlightRuntime(session.runtimeState);
