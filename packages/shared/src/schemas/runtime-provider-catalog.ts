@@ -351,7 +351,10 @@ export function runtimeProviderAuthOwnerLabel(provider: RuntimeProvider): string
 export function runtimeProviderPreferredCredential(
   provider: RuntimeProvider,
 ): RuntimeProviderPreferredCredential | null {
-  return RUNTIME_PROVIDER_CATALOG[provider].preferredCredential ?? null;
+  // `as const satisfies` keeps per-entry exact types; widen to the catalog
+  // entry contract so optional `preferredCredential` is readable for every id.
+  const entry: RuntimeProviderCatalogEntry = RUNTIME_PROVIDER_CATALOG[provider];
+  return entry.preferredCredential ?? null;
 }
 
 /**
@@ -361,13 +364,9 @@ export function runtimeProviderPreferredCredential(
  */
 export function runtimeProviderPreferredCredentialProse(provider: RuntimeProvider): string | null {
   const preferred = runtimeProviderPreferredCredential(provider);
-  if (!preferred) return null;
-  if (preferred.kind === "agent-runtime-env") {
-    const sensitive = preferred.markSensitive ? " and Mark as sensitive" : "";
-    return `set \`${preferred.envKey}\` on the agent's Runtime → Environment variables${sensitive}`;
-  }
-  const _exhaustive: never = preferred;
-  return _exhaustive;
+  if (preferred?.kind !== "agent-runtime-env") return null;
+  const sensitive = preferred.markSensitive ? " and Mark as sensitive" : "";
+  return `set \`${preferred.envKey}\` on the agent's Runtime → Environment variables${sensitive}`;
 }
 
 /**
