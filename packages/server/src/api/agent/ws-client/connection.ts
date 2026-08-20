@@ -1,4 +1,4 @@
-import { PROVIDER_MODELS_RESULT_TYPE } from "@first-tree/shared";
+import { PROVIDER_MODELS_RESULT_TYPE, RUNTIME_INSTALL_RESULT_TYPE } from "@first-tree/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
@@ -78,6 +78,7 @@ export function attachClientWsConnection(
         switch (type) {
           case "client:register":
           case "heartbeat":
+          case RUNTIME_INSTALL_RESULT_TYPE:
           case PROVIDER_MODELS_RESULT_TYPE:
             await handleClientFrame(type, msg);
             break;

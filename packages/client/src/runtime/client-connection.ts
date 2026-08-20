@@ -23,11 +23,16 @@ import {
   type ProviderModelCatalog,
   providerModelsListCommandSchema,
   RUNTIME_AUTH_START_TYPE,
+  RUNTIME_INSTALL_RESULT_TYPE,
+  RUNTIME_INSTALL_START_TYPE,
   type RuntimeAuthMethod,
   type RuntimeAuthProvider,
+  type RuntimeInstallProvider,
+  type RuntimeInstallResultFrame,
   type RuntimeProvider,
   type RuntimeState,
   runtimeAuthStartCommandSchema,
+  runtimeInstallStartCommandSchema,
   type ServerWelcomeFrame,
   type SessionCommandAbortedFrame,
   type SessionCommandFinalizedFrame,
@@ -224,6 +229,12 @@ export type ProviderModelsListCommand = {
   ref: string;
 };
 
+/** Server -> daemon request to install one allowlisted runtime engine. */
+export type RuntimeInstallCommand = {
+  provider: RuntimeInstallProvider;
+  ref: string;
+};
+
 /**
  * Welcome frame received after `auth:ok`. `isReconnect` is true for every
  * occurrence after the first welcome in the lifetime of this `ClientConnection`
@@ -277,6 +288,7 @@ type ClientConnectionEvents = {
    */
   "session:command:aborted": [frame: SessionCommandAbortedFrame];
   "runtime-auth:start": [command: RuntimeAuthCommand];
+  "runtime-install:start": [command: RuntimeInstallCommand];
   "provider-models:list": [command: ProviderModelsListCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
@@ -568,6 +580,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    * sends ahead of `auth:ok`.
    */
   private serverSupportsSessionResetV1 = false;
+  /** Negotiated support for the controlled runtime-install command/result flow. */
+  private serverSupportsRuntimeInstallV1 = false;
   /**
    * Last handshake error, stashed for the `close` handler to surface a typed
    * reason (e.g. {@link ClientOrgMismatchError}) instead of a generic
@@ -1428,6 +1442,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: PROVIDER_MODELS_RESULT_TYPE, ref, catalog }));
   }
 
+  /** Publish runtime-install progress or a terminal result to the server. */
+  sendRuntimeInstallResult(result: RuntimeInstallResultFrame): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ ...result, type: RUNTIME_INSTALL_RESULT_TYPE }));
+  }
+
   async disconnect(): Promise<void> {
     this.closing = true;
     this.connectAbort?.abort();
@@ -1516,6 +1536,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         // server's Reset support into the register frame of a socket that may
         // have landed on a rolled-back replica.
         this.serverSupportsSessionResetV1 = false;
+        this.serverSupportsRuntimeInstallV1 = false;
         // Don't reset reconnectAttempt here — a TCP/WS handshake succeeding
         // but the auth phase failing is exactly the loop the client.log
         // captured at 19:40 (1 Hz reconnect storm with `failed to obtain
@@ -1676,6 +1697,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // servers ignore the unknown v1 field.
           wireCapabilities: {
             ...(this.serverSupportsSessionResetV1 ? { wsSessionResetV1: true } : {}),
+            ...(this.serverSupportsRuntimeInstallV1 && this.listenerCount("runtime-install:start") > 0
+              ? { runtimeInstallV1: true }
+              : {}),
           },
           ...(lastUpdateAttempt ? { lastUpdateAttempt } : {}),
         }),
@@ -1700,6 +1724,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       this.serverSupportsInboxAckConfirm = parsed.data.capabilities?.wsInboxAckConfirm === true;
       this.serverSupportsSessionEventConfirm = parsed.data.capabilities?.wsSessionEventConfirm === true;
       this.serverSupportsSessionResetV1 = parsed.data.capabilities?.wsSessionResetV1 === true;
+      this.serverSupportsRuntimeInstallV1 = parsed.data.capabilities?.runtimeInstallV1 === true;
       this.emit("server:welcome", { frame: parsed.data, isReconnect });
       return;
     }
@@ -1977,6 +2002,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (parsed.success) {
         const { provider, method, ref } = parsed.data;
         this.emit("runtime-auth:start", { provider, method, ref });
+      }
+      return;
+    }
+
+    if (type === RUNTIME_INSTALL_START_TYPE) {
+      const parsed = runtimeInstallStartCommandSchema.safeParse(msg);
+      if (parsed.success) {
+        const { provider, ref } = parsed.data;
+        this.emit("runtime-install:start", { provider, ref });
       }
       return;
     }

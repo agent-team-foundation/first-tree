@@ -3,6 +3,9 @@ import {
   clientRegisterSchema,
   PROVIDER_MODELS_RESULT_TYPE,
   providerModelsResultFrameSchema,
+  RUNTIME_INSTALL_RESULT_TYPE,
+  runtimeInstallResultFrameSchema,
+  runtimeInstallTerminalResultFrameSchema,
 } from "@first-tree/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -15,6 +18,10 @@ import * as clientService from "../../../services/runtime/client.js";
 import * as connectionManager from "../../../services/runtime/connection-manager.js";
 import * as runtimeLivenessService from "../../../services/runtime/liveness.js";
 import { storeModelCatalogRpcResult } from "../../../services/runtime/rpc/provider-models.js";
+import {
+  metadataSupportsRuntimeInstallV1,
+  recordRuntimeInstallProgress,
+} from "../../../services/runtime/rpc/runtime-install.js";
 import { setAuthWsAttrs } from "./auth.js";
 import type { ClientWsConnectionContext } from "./connection-context.js";
 import type { InboxDeliveryCoordinator } from "./inbox-delivery.js";
@@ -193,6 +200,39 @@ export function createClientFrameHandler(
         await reconcilePinnedAgentsForClient();
       }
       socket.send(JSON.stringify({ type: "heartbeat:ack" }));
+    } else if (type === RUNTIME_INSTALL_RESULT_TYPE) {
+      if (!clientId) {
+        socket.send(JSON.stringify({ type: "error", message: "Must register client first" }));
+        return;
+      }
+      const result = runtimeInstallResultFrameSchema.safeParse(msg);
+      if (!result.success) {
+        socket.send(JSON.stringify({ type: "error", message: "Malformed runtime-install:result frame" }));
+        return;
+      }
+      if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+        app.log.debug({ clientId, ref: result.data.ref }, "ignoring runtime-install result from replaced local socket");
+        return;
+      }
+      const client = await clientService.getClient(app.db, clientId);
+      if (
+        !client ||
+        client.status !== "connected" ||
+        client.instanceId !== instanceId ||
+        !metadataSupportsRuntimeInstallV1(client.metadata)
+      ) {
+        app.log.debug(
+          { clientId, ref: result.data.ref, instanceId },
+          "ignoring runtime-install result from stale or incapable client route",
+        );
+        return;
+      }
+      recordRuntimeInstallProgress(clientId, result.data);
+      const terminal = runtimeInstallTerminalResultFrameSchema.safeParse(result.data);
+      if (terminal.success) {
+        connectionManager.resolveClientReply(clientId, terminal.data.ref, terminal.data);
+      }
+      await notifier.notifyDaemonClientCommandResult({ clientId, ref: result.data.ref, result: result.data });
     } else if (type === PROVIDER_MODELS_RESULT_TYPE) {
       if (!clientId) {
         socket.send(JSON.stringify({ type: "error", message: "Must register client first" }));

@@ -11,6 +11,7 @@ import {
   type HandlerFactory,
   type ProviderModelsListCommand,
   type RuntimeAuthCommand,
+  type RuntimeInstallCommand,
   resolveAndLogClaudeExecutable,
   type UpdateHooks,
   UpdateManager,
@@ -20,6 +21,7 @@ import {
   type AgentPinnedMessage,
   type ClientPausedReason,
   type ProviderModelCatalog,
+  type RuntimeInstallResultFrame,
   type RuntimeProvider,
   runtimeProviderSchema,
 } from "@first-tree/shared";
@@ -303,6 +305,16 @@ export class ClientRuntime {
    */
   onRuntimeAuthStart(callback: (command: RuntimeAuthCommand) => void): void {
     this.connection.on("runtime-auth:start", callback);
+  }
+
+  /** Register a handler for the controlled runtime-install command. */
+  onRuntimeInstallStart(callback: (command: RuntimeInstallCommand) => void): void {
+    this.connection.on("runtime-install:start", callback);
+  }
+
+  /** Publish runtime-install progress or its terminal outcome. */
+  sendRuntimeInstallResult(result: RuntimeInstallResultFrame): void {
+    this.connection.sendRuntimeInstallResult(result);
   }
 
   /**

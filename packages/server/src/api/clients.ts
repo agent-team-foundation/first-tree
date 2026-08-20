@@ -3,7 +3,11 @@ import {
   PROVIDER_MODELS_LIST_TYPE,
   providerModelCatalogSchema,
   RUNTIME_AUTH_START_TYPE,
+  RUNTIME_INSTALL_START_TYPE,
   runtimeAuthStartRequestSchema,
+  runtimeInstallStartRequestSchema,
+  runtimeInstallStartResponseSchema,
+  runtimeInstallTerminalResultFrameSchema,
   runtimeProviderSchema,
   updateClientCapabilitiesSchema,
 } from "@first-tree/shared";
@@ -15,12 +19,20 @@ import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth/tokens.js";
 import * as clientService from "../services/runtime/client.js";
 import {
+  cancelClientReply,
   forceDisconnectClient,
   rejectPendingRepliesForClient,
   sendToClient,
   waitForClientReply,
 } from "../services/runtime/connection-manager.js";
 import { isClientConnectedSomewhere, readModelCatalogRpcResult } from "../services/runtime/rpc/provider-models.js";
+import {
+  beginRuntimeInstallProgress,
+  metadataSupportsRuntimeInstallV1,
+  RUNTIME_INSTALL_REPLY_TIMEOUT_MS,
+  runtimeInstallClientLiveness,
+  takeRuntimeInstallProgress,
+} from "../services/runtime/rpc/runtime-install.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -98,6 +110,80 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       );
     }
     return { ref, started: true as const };
+  });
+
+  // Install one allowlisted runtime engine on the selected Computer. The HTTP
+  // request stays open for the terminal result so no durable job/progress state
+  // is introduced; daemon progress/result frames are ref-correlated across
+  // replicas through the existing reverse-command notifier channel.
+  app.post<{ Params: { clientId: string } }>("/:clientId/runtime-install/start", async (request) => {
+    const { userId } = requireUser(request);
+    const { clientId } = request.params;
+    stampClientResource(request, clientId);
+    await clientService.assertClientOwner(app.db, clientId, { userId });
+    await clientService.assertClientNotRetired(app.db, clientId);
+    const body = runtimeInstallStartRequestSchema.parse(request.body);
+    const client = await clientService.getClient(app.db, clientId);
+    if (!client) throw new Error("unreachable: client missing after owner check");
+
+    const liveness = runtimeInstallClientLiveness(client, new Date(), app.config.runtime.presenceCleanupSeconds);
+    if (liveness === "disconnected") {
+      throw new ServiceUnavailableError(
+        "Runtime installation could not start because this computer is not connected. Start its daemon, then retry.",
+      );
+    }
+    if (liveness === "stale") {
+      throw new ServiceUnavailableError(
+        "Runtime installation could not start because this computer's connection is stale. Restart its daemon, then retry.",
+      );
+    }
+    if (!metadataSupportsRuntimeInstallV1(client.metadata)) {
+      throw new ServiceUnavailableError(
+        "Runtime installation is unavailable because this computer's daemon does not support controlled installs. Update and restart it, then retry.",
+      );
+    }
+    const targetInstanceId = client.instanceId;
+    if (!targetInstanceId) throw new Error("unreachable: live client missing instance id");
+
+    const ref = randomUUID();
+    beginRuntimeInstallProgress(clientId, body.provider, ref);
+    const replyPromise = waitForClientReply(clientId, ref, RUNTIME_INSTALL_REPLY_TIMEOUT_MS);
+    const command = { type: RUNTIME_INSTALL_START_TYPE, provider: body.provider, ref };
+    if (targetInstanceId === app.config.instanceId) {
+      const delivered = sendToClient(clientId, command);
+      if (!delivered) {
+        cancelClientReply(clientId, ref, new Error("Computer not connected"));
+        await replyPromise.catch(() => undefined);
+        takeRuntimeInstallProgress(clientId, ref);
+        throw new ServiceUnavailableError(
+          "Runtime installation could not start because this computer is not connected. Start its daemon, then retry.",
+        );
+      }
+    } else {
+      await app.notifier.notifyDaemonClientCommand({
+        ...command,
+        clientId,
+        targetInstanceId,
+      });
+    }
+
+    try {
+      const terminal = runtimeInstallTerminalResultFrameSchema.parse(await replyPromise);
+      const progress = takeRuntimeInstallProgress(clientId, ref);
+      const { type: _type, ...result } = terminal;
+      return runtimeInstallStartResponseSchema.parse({ ...result, progress });
+    } catch (err) {
+      takeRuntimeInstallProgress(clientId, ref);
+      const timedOut = err instanceof Error && err.message.toLowerCase().includes("timed out");
+      if (timedOut) {
+        throw new GatewayTimeoutError(
+          "Timed out waiting for this computer to finish installing the runtime. Check the daemon log before retrying.",
+        );
+      }
+      throw new BadGatewayError(
+        err instanceof Error ? err.message : "The computer did not return a valid runtime installation result.",
+      );
+    }
   });
 
   // Host-local model catalog: ask the connected daemon to discover models from

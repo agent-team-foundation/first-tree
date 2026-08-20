@@ -242,6 +242,28 @@ describe("native runtime installers", () => {
     });
   });
 
+  it("routes npm stderr to an injected sink without also writing through CLI Print", async () => {
+    const { installCodexRuntime } = await import("../core/install-codex-runtime.js");
+    const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
+    const stderrSink = vi.fn();
+
+    const codexChild = prepareSpawn().child;
+    const codexResult = installCodexRuntime("latest", stderrSink);
+    codexChild.stderr.emit("data", Buffer.from("codex registry diagnostic\n"));
+    codexChild.emit("exit", 1, null);
+    await codexResult;
+
+    const claudeChild = prepareSpawn().child;
+    const claudeResult = installClaudeRuntime("latest", stderrSink);
+    claudeChild.stderr.emit("data", Buffer.from("claude registry diagnostic\n"));
+    claudeChild.emit("exit", 1, null);
+    await claudeResult;
+
+    expect(stderrSink).toHaveBeenNthCalledWith(1, "codex registry diagnostic\n");
+    expect(stderrSink).toHaveBeenNthCalledWith(2, "claude registry diagnostic\n");
+    expect(outputMocks.line).not.toHaveBeenCalled();
+  });
+
   it("maps synchronous registry spawn failures for both runtime installers", async () => {
     const spawnError = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
     clientMocks.getChildProcessRegistry.mockReturnValue({

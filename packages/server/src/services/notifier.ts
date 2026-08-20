@@ -1,4 +1,11 @@
-import { PROVIDER_MODELS_LIST_TYPE, type SessionCommandAbortReason } from "@first-tree/shared";
+import {
+  PROVIDER_MODELS_LIST_TYPE,
+  RUNTIME_INSTALL_START_TYPE,
+  type RuntimeInstallResultFrame,
+  runtimeInstallProviderSchema,
+  runtimeInstallResultFrameSchema,
+  type SessionCommandAbortReason,
+} from "@first-tree/shared";
 import type postgres from "postgres";
 import type { WebSocket } from "ws";
 
@@ -120,6 +127,13 @@ export type AgentRouteChangeHandler = (payload: AgentRouteChangePayload) => void
 /** Small reverse-command frame fan-out for host-local daemon RPCs. */
 export type DaemonClientCommandPayload =
   | {
+      type: typeof RUNTIME_INSTALL_START_TYPE;
+      clientId: string;
+      provider: "claude-code" | "codex";
+      ref: string;
+      targetInstanceId: string;
+    }
+  | {
       type: typeof PROVIDER_MODELS_LIST_TYPE;
       clientId: string;
       provider: string;
@@ -172,6 +186,8 @@ export type DaemonClientCommandHandler = (payload: DaemonClientCommandPayload) =
 export type DaemonClientCommandResultPayload = {
   clientId: string;
   ref: string;
+  /** Present for ephemeral runtime-install progress/results; omitted for durable catalog wakes. */
+  result?: RuntimeInstallResultFrame;
 };
 export type DaemonClientCommandResultHandler = (payload: DaemonClientCommandResultPayload) => void;
 export type MeChatsChangedHandler = (payload: { humanAgentId: string; organizationId: string }) => void;
@@ -800,6 +816,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
             if (parsed.type === "session:command:aborted" && typeof sessionPayload.reason !== "string") return;
           } else if (parsed.type === PROVIDER_MODELS_LIST_TYPE) {
             if (typeof (parsed as { provider?: unknown }).provider !== "string") return;
+          } else if (parsed.type === RUNTIME_INSTALL_START_TYPE) {
+            if (!runtimeInstallProviderSchema.safeParse((parsed as { provider?: unknown }).provider).success) return;
           } else {
             return;
           }
@@ -825,6 +843,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
             if (typeof parsed.clientId !== "string" || typeof parsed.ref !== "string") {
               return;
             }
+            if (parsed.result !== undefined && !runtimeInstallResultFrameSchema.safeParse(parsed.result).success)
+              return;
             for (const handler of daemonClientCommandResultHandlers) {
               try {
                 handler(parsed as DaemonClientCommandResultPayload);

@@ -299,6 +299,7 @@ export function createClientWsAuthGate(
           wsInboxAckConfirm: true,
           wsSessionEventConfirm: true,
           wsSessionResetV1: true,
+          runtimeInstallV1: true,
         },
       });
       sendJsonOrThrow(socket, { type: "auth:ok" });

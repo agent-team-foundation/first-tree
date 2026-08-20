@@ -11,6 +11,8 @@ import {
   discoverProviderModels,
   flushClientSentry,
   initClientSentry,
+  probeClaudeCodeCapability,
+  probeCodexCapability,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -35,6 +37,7 @@ import {
   createApiNameResolver,
   createExecuteUpdate,
   createLoggerRuntimeOutput,
+  createRuntimeInstallRunner,
   daemonRuntimeHomesEqual,
   declineUpdate,
   ensureActiveRootClientIdPersisted,
@@ -42,6 +45,8 @@ import {
   getClientServiceStatus,
   getClientSwitchStartupBlock,
   handleClientOrgMismatch,
+  installClaudeRuntime,
+  installCodexRuntime,
   isDaemonRuntimeOwnershipError,
   isServiceSupported,
   listPinnedAgents,
@@ -415,6 +420,23 @@ export function registerDaemonStartCommand(daemon: Command): void {
             setProviderEntry: (provider, entry) => capabilityRefresher.setProviderEntry(provider, entry),
             log: (symbol, msg) => writeStatus(symbol, msg),
           }).finally(() => capabilityRefresher.endInteractive(command.provider));
+        });
+
+        const runtimeInstallRunner = createRuntimeInstallRunner({
+          // npm stderr is retained in the installer result. Keep raw chunks
+          // off supervisor streams; the runner emits one bounded, redacted
+          // terminal diagnostic through the daemon logger instead.
+          installClaude: () => installClaudeRuntime("latest", () => undefined),
+          installCodex: () => installCodexRuntime("latest", () => undefined),
+          reprobe: async (provider) => {
+            const entry = provider === "codex" ? await probeCodexCapability() : await probeClaudeCodeCapability();
+            await capabilityRefresher.setProviderEntry(provider, entry);
+          },
+          send: (result) => runtime.sendRuntimeInstallResult(result),
+          log: (symbol, message) => writeStatus(symbol, message),
+        });
+        runtime.onRuntimeInstallStart((command) => {
+          void runtimeInstallRunner.run(command);
         });
 
         // Host-local model catalog: web opens Model settings → server asks this

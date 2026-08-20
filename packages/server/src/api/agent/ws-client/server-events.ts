@@ -1,8 +1,18 @@
-import { agentPinnedMessageSchema, PROVIDER_MODELS_LIST_TYPE } from "@first-tree/shared";
+import {
+  agentPinnedMessageSchema,
+  PROVIDER_MODELS_LIST_TYPE,
+  RUNTIME_INSTALL_START_TYPE,
+  runtimeInstallTerminalResultFrameSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import type { Notifier } from "../../../services/notifier.js";
+import * as clientService from "../../../services/runtime/client.js";
 import * as connectionManager from "../../../services/runtime/connection-manager.js";
 import { readModelCatalogRpcResult } from "../../../services/runtime/rpc/provider-models.js";
+import {
+  metadataSupportsRuntimeInstallV1,
+  recordRuntimeInstallProgress,
+} from "../../../services/runtime/rpc/runtime-install.js";
 import { agentRoutedTo, readSessionCommandRpcResult } from "../../../services/runtime/rpc/session-command.js";
 
 export function registerClientWsServerEvents(app: FastifyInstance, notifier: Notifier, instanceId: string): void {
@@ -35,6 +45,27 @@ export function registerClientWsServerEvents(app: FastifyInstance, notifier: Not
         type: PROVIDER_MODELS_LIST_TYPE,
         provider: payload.provider,
         ref: payload.ref,
+      });
+      return;
+    }
+    if (payload.type === RUNTIME_INSTALL_START_TYPE) {
+      void (async () => {
+        const client = await clientService.getClient(app.db, payload.clientId);
+        if (
+          !client ||
+          client.status !== "connected" ||
+          client.instanceId !== payload.targetInstanceId ||
+          !metadataSupportsRuntimeInstallV1(client.metadata)
+        ) {
+          return;
+        }
+        connectionManager.sendToClient(payload.clientId, {
+          type: RUNTIME_INSTALL_START_TYPE,
+          provider: payload.provider,
+          ref: payload.ref,
+        });
+      })().catch((err) => {
+        app.log.warn({ err, clientId: payload.clientId, ref: payload.ref }, "runtime install fan-out failed");
       });
       return;
     }
@@ -78,6 +109,14 @@ export function registerClientWsServerEvents(app: FastifyInstance, notifier: Not
   });
 
   notifier.onDaemonClientCommandResult((payload) => {
+    if (payload.result) {
+      recordRuntimeInstallProgress(payload.clientId, payload.result);
+      const terminal = runtimeInstallTerminalResultFrameSchema.safeParse(payload.result);
+      if (terminal.success) {
+        connectionManager.resolveClientReply(payload.clientId, payload.ref, terminal.data);
+      }
+      return;
+    }
     void (async () => {
       const ack = await readSessionCommandRpcResult(app.db, payload.clientId, payload.ref);
       if (ack) {

@@ -759,6 +759,78 @@ describe("ClientConnection — additional branch coverage", () => {
     priv(connection).clearTimers();
   });
 
+  it("negotiates runtime-install v1, emits only allowlisted commands, and sends results", async () => {
+    const connection = await makeConnection();
+    const starts: unknown[] = [];
+    connection.on("runtime-install:start", (command) => starts.push(command));
+    const openPromise = priv(connection).openWebSocket();
+    const socket = FakeWebSocket.instances.at(-1);
+    if (!socket) throw new Error("missing fake socket");
+    socket.emitOpen();
+    await flushMicrotasks();
+    socket.emitMessage({
+      type: "server:welcome",
+      serverCommandVersion: "1.0.0",
+      serverTimeMs: Date.now(),
+      capabilities: { runtimeInstallV1: true },
+    });
+    socket.emitMessage({ type: "auth:ok" });
+    socket.emitMessage({ type: "client:registered" });
+    await openPromise;
+
+    const register = socket.sent
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+      .find((frame) => frame.type === "client:register");
+    expect(register?.wireCapabilities).toEqual({ runtimeInstallV1: true });
+
+    const ref = "123e4567-e89b-42d3-a456-426614174000";
+    socket.emitMessage({ type: "runtime-install:start", provider: "codex", ref });
+    socket.emitMessage({ type: "runtime-install:start", provider: "cursor", ref });
+    expect(starts).toEqual([{ provider: "codex", ref }]);
+
+    connection.sendRuntimeInstallResult({
+      type: "runtime-install:result",
+      provider: "codex",
+      ref,
+      status: "succeeded",
+      installedVersion: "0.140.0",
+    });
+    expect(parseSent(socket, socket.sent.length - 1)).toEqual({
+      type: "runtime-install:result",
+      provider: "codex",
+      ref,
+      status: "succeeded",
+      installedVersion: "0.140.0",
+    });
+
+    priv(connection).clearTimers();
+  });
+
+  it("does not advertise runtime-install v1 without a local install handler", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const openPromise = internal.openWebSocket();
+    const socket = FakeWebSocket.instances.at(-1);
+    if (!socket) throw new Error("missing fake socket");
+    socket.emitOpen();
+    await flushMicrotasks();
+    socket.emitMessage({
+      type: "server:welcome",
+      serverCommandVersion: "1.0.0",
+      serverTimeMs: Date.now(),
+      capabilities: { runtimeInstallV1: true },
+    });
+    socket.emitMessage({ type: "auth:ok" });
+    socket.emitMessage({ type: "client:registered" });
+    await openPromise;
+
+    const register = socket.sent
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+      .find((frame) => frame.type === "client:register");
+    expect(register?.wireCapabilities).toEqual({});
+    priv(connection).clearTimers();
+  });
+
   it("advertises no Reset capability at all to a server that never offered v1", async () => {
     const connection = await makeConnection();
     // This harness emits `auth:ok` before `server:welcome` and advertises

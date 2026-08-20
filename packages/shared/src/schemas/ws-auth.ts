@@ -121,6 +121,8 @@ export const serverCapabilitiesSchema = z
      * frame alone.
      */
     wsSessionResetV1: z.boolean().default(false),
+    /** Server supports the ref-correlated controlled runtime-install protocol. */
+    runtimeInstallV1: z.boolean().default(false),
   })
   .partial();
 export type ServerCapabilities = z.infer<typeof serverCapabilitiesSchema>;

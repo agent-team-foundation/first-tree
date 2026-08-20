@@ -1525,6 +1525,54 @@ describe("Agent client WS edge protocol coverage", () => {
     }
   });
 
+  it("dispatches runtime install progress and terminal results through the attached client WebSocket", async () => {
+    const seed = await createAdminContext(app, { username: `ws-install-${crypto.randomUUID().slice(0, 8)}` });
+    const ws = await openRegisteredSocket(seed, { runtimeInstallV1: true });
+    const notifyResult = vi.spyOn(app.notifier, "notifyDaemonClientCommandResult");
+
+    try {
+      const commandFrame = waitForFrame(
+        ws,
+        (message) => (message as { type?: string }).type === "runtime-install:start",
+      );
+      const pending = app.inject({
+        method: "POST",
+        url: `/api/v1/clients/${seed.clientId}/runtime-install/start`,
+        headers: { authorization: `Bearer ${seed.accessToken}` },
+        payload: { provider: "codex" },
+      });
+      const command = (await commandFrame) as { ref: string };
+
+      for (const result of [
+        { type: "runtime-install:result", provider: "codex", ref: command.ref, status: "accepted" },
+        { type: "runtime-install:result", provider: "codex", ref: command.ref, status: "in-progress" },
+        {
+          type: "runtime-install:result",
+          provider: "codex",
+          ref: command.ref,
+          status: "succeeded",
+          installedVersion: "0.140.0",
+        },
+      ]) {
+        ws.send(JSON.stringify(result));
+        await vi.waitFor(() =>
+          expect(notifyResult).toHaveBeenCalledWith({ clientId: seed.clientId, ref: command.ref, result }),
+        );
+      }
+
+      const response = await pending;
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        status: "succeeded",
+        installedVersion: "0.140.0",
+        progress: ["accepted", "in-progress"],
+      });
+    } finally {
+      notifyResult.mockRestore();
+      await closeSocket(ws);
+    }
+  });
+
   it("forwards a fanned-out session:terminate to the owning socket only when the binding is current", async () => {
     // Cross-replica command delivery: the daemon_client_commands handler on
     // the socket-owning replica re-checks the live agent→client binding

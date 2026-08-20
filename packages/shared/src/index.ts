@@ -1496,6 +1496,24 @@ export {
   runtimeAuthStartResponseSchema,
 } from "./schemas/runtime-auth.js";
 export {
+  RUNTIME_INSTALL_RESULT_TYPE,
+  RUNTIME_INSTALL_START_TYPE,
+  type RuntimeInstallProgressStatus,
+  type RuntimeInstallProvider,
+  type RuntimeInstallResultFrame,
+  type RuntimeInstallStartCommand,
+  type RuntimeInstallStartRequest,
+  type RuntimeInstallStartResponse,
+  type RuntimeInstallTerminalResultFrame,
+  runtimeInstallProgressStatusSchema,
+  runtimeInstallProviderSchema,
+  runtimeInstallResultFrameSchema,
+  runtimeInstallStartCommandSchema,
+  runtimeInstallStartRequestSchema,
+  runtimeInstallStartResponseSchema,
+  runtimeInstallTerminalResultFrameSchema,
+} from "./schemas/runtime-install.js";
+export {
   asRuntimeProvider,
   DEFAULT_RUNTIME_PROVIDER,
   DISABLED_RUNTIME_PROVIDERS,

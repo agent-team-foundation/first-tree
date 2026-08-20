@@ -23,6 +23,7 @@ const coreMocks = vi.hoisted(() => ({
   createApiNameResolver: vi.fn(),
   createExecuteUpdate: vi.fn(),
   createLoggerRuntimeOutput: vi.fn(),
+  createRuntimeInstallRunner: vi.fn(),
   daemonRuntimeHomesEqual: vi.fn(),
   declineUpdate: vi.fn(),
   ensureActiveRootClientIdPersisted: vi.fn(),
@@ -30,6 +31,8 @@ const coreMocks = vi.hoisted(() => ({
   getClientSwitchStartupBlock: vi.fn(),
   getClientServiceStatus: vi.fn(),
   handleClientOrgMismatch: vi.fn(),
+  installClaudeRuntime: vi.fn(),
+  installCodexRuntime: vi.fn(),
   isDaemonRuntimeOwnershipError: vi.fn(),
   isServiceSupported: vi.fn(),
   listPinnedAgents: vi.fn(),
@@ -102,8 +105,10 @@ let runtimeInstance: {
   watchAgentsDir: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
   onRuntimeAuthStart: ReturnType<typeof vi.fn>;
+  onRuntimeInstallStart: ReturnType<typeof vi.fn>;
   onProviderModelsList: ReturnType<typeof vi.fn>;
   sendProviderModelsResult: ReturnType<typeof vi.fn>;
+  sendRuntimeInstallResult: ReturnType<typeof vi.fn>;
   emitConnectionResilienceEvent: ReturnType<typeof vi.fn>;
 };
 let refresherInstance: {
@@ -183,6 +188,9 @@ beforeEach(() => {
   coreMocks.registerClientRuntimeMarker.mockReturnValue(vi.fn());
   coreMocks.createApiNameResolver.mockReturnValue(async () => "nova");
   coreMocks.createExecuteUpdate.mockReturnValue(async () => undefined);
+  coreMocks.createRuntimeInstallRunner.mockReturnValue({ run: vi.fn(async () => undefined) });
+  coreMocks.installClaudeRuntime.mockResolvedValue({ ok: true, installedVersion: null });
+  coreMocks.installCodexRuntime.mockResolvedValue({ ok: true, installedVersion: null });
   coreMocks.createLoggerRuntimeOutput.mockImplementation(
     (logger: {
       error: (message: string) => void;
@@ -219,8 +227,10 @@ beforeEach(() => {
     }),
     onReconnect: vi.fn(),
     onRuntimeAuthStart: vi.fn(),
+    onRuntimeInstallStart: vi.fn(),
     onProviderModelsList: vi.fn(),
     sendProviderModelsResult: vi.fn(),
+    sendRuntimeInstallResult: vi.fn(),
     emitConnectionResilienceEvent: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
@@ -585,6 +595,22 @@ describe("daemon start command", () => {
     );
     expect(coreMocks.CapabilityRefresher.mock.calls[0]?.[0]).not.toHaveProperty("initial");
     expect(runtimeInstance.onReconnect).toHaveBeenCalledWith(expect.any(Function));
+    expect(coreMocks.createRuntimeInstallRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installClaude: expect.any(Function),
+        installCodex: expect.any(Function),
+        reprobe: expect.any(Function),
+        send: expect.any(Function),
+      }),
+    );
+    expect(runtimeInstance.onRuntimeInstallStart).toHaveBeenCalledWith(expect.any(Function));
+    const installRunnerDeps = coreMocks.createRuntimeInstallRunner.mock.calls[0]?.[0] as
+      | { installClaude: () => Promise<unknown>; installCodex: () => Promise<unknown> }
+      | undefined;
+    await installRunnerDeps?.installClaude();
+    await installRunnerDeps?.installCodex();
+    expect(coreMocks.installClaudeRuntime).toHaveBeenCalledWith("latest", expect.any(Function));
+    expect(coreMocks.installCodexRuntime).toHaveBeenCalledWith("latest", expect.any(Function));
     expect(runtimeInstance.onProviderModelsList).toHaveBeenCalledWith(expect.any(Function));
     expect(refresherInstance.start).toHaveBeenCalled();
     expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({

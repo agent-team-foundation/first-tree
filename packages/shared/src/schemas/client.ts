@@ -74,6 +74,12 @@ export const clientWireCapabilitiesSchema = z
      * `terminate?waitForApply=true` on this field alone.
      */
     wsSessionResetV1: z.boolean().default(false),
+    /**
+     * Version 1 of the controlled runtime-install command/result protocol.
+     * Declared only after the server advertises the same capability, so a
+     * request cannot be sent to an older daemon that would silently ignore it.
+     */
+    runtimeInstallV1: z.boolean().default(false),
   })
   .partial();
 export type ClientWireCapabilities = z.infer<typeof clientWireCapabilitiesSchema>;

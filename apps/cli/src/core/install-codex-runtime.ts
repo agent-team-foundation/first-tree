@@ -43,7 +43,10 @@ function parseInstalledVersion(stdout: string): string | null {
  * the caller is expected to re-probe the codex capability so the new binary is
  * picked up via PATH resolution. Does not exit the process.
  */
-export async function installCodexRuntime(spec = "latest"): Promise<InstallCodexResult> {
+export async function installCodexRuntime(
+  spec = "latest",
+  stderrSink: (chunk: string) => void = (chunk) => print.line(chunk),
+): Promise<InstallCodexResult> {
   if (!isSafeInstallSpec(spec)) {
     return {
       ok: false,
@@ -82,7 +85,7 @@ export async function installCodexRuntime(spec = "latest"): Promise<InstallCodex
     child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
-      print.line(chunk.toString("utf8"));
+      stderrSink(chunk.toString("utf8"));
     });
 
     child.on("error", (err) => {

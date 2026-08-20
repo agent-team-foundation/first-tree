@@ -235,6 +235,11 @@ export { blank, status } from "./output.js";
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
 // Runtime-auth login orchestrator (browser-OAuth provider login)
 export { type RuntimeAuthLoginDeps, runRuntimeAuthLogin } from "./runtime-auth-login.js";
+export {
+  createRuntimeInstallRunner,
+  type RuntimeInstallRunner,
+  type RuntimeInstallRunnerDeps,
+} from "./runtime-install.js";
 export type { PinnedAgentRuntimeRecord } from "./runtime-provider-reconcile.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)
 export {
