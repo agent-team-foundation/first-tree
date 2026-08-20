@@ -2,7 +2,11 @@ import { accessSync, constants, existsSync, realpathSync, statSync } from "node:
 import { createRequire } from "node:module";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEEPSEEK_INSTALL_NPM_PACKAGE, runtimeProviderLoginCommand, runtimeProviderPreferredCredentialProse } from "@first-tree/shared";
+import {
+  DEEPSEEK_INSTALL_NPM_PACKAGE,
+  runtimeProviderLoginCommand,
+  runtimeProviderPreferredCredentialProse,
+} from "@first-tree/shared";
 
 export { DEEPSEEK_INSTALL_NPM_PACKAGE };
 export const DEEPSEEK_LOGIN_COMMAND = runtimeProviderLoginCommand("deepseek-harness");

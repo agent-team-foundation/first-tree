@@ -80,10 +80,7 @@ export function buildInstallCommand(provider: RuntimeProvider, os?: string | nul
     // loginSteps stays the copy-pasteable host export; preferredCredential
     // prose is a comment so the command block remains executable.
     const preferred = runtimeProviderPreferredCredentialProse(provider);
-    return runtimeProviderComputerSetupCommand(
-      provider,
-      preferred ? [`# preferred: ${preferred}`] : [],
-    );
+    return runtimeProviderComputerSetupCommand(provider, preferred ? [`# preferred: ${preferred}`] : []);
   }
   return runtimeProviderComputerSetupCommand(provider);
 }
