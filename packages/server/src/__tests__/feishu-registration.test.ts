@@ -1446,7 +1446,15 @@ describe("official Feishu QR registration", () => {
     expect(providerSignal?.aborted).toBe(true);
 
     completion.resolve({ client_id: "cli_after_timeout", client_secret: "late-secret" });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // The request rejects synchronously at the QR timeout, but the DB
+    // terminal transition is launched fire-and-forget
+    // (`void transitionCurrentAttemptToError(...)`): poll the database
+    // postcondition instead of sleeping a fixed interval and hoping the
+    // transition landed.
+    await waitFor(async () => {
+      const [row] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.agentId, a.agent.uuid));
+      return row?.status === "error";
+    });
     const [stored] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.agentId, a.agent.uuid));
     expect(stored).toMatchObject({ status: "error", appId: null, appSecretCipher: null });
   });
@@ -1481,7 +1489,14 @@ describe("official Feishu QR registration", () => {
       }),
     ).rejects.toThrow("Timed out waiting for Feishu registration QR code");
     onQRCodeReady?.({ url: "https://open.feishu.cn/register?code=too-late", expireIn: 120 });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // Same async boundary: the QR timeout rejects the request now, while
+    // the row's terminal transition settles afterwards. Poll the database
+    // postcondition (error state with the stale URL cleared) rather than
+    // assuming a fixed sleep is enough.
+    await waitFor(async () => {
+      const [row] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.agentId, a.agent.uuid));
+      return row?.status === "error" && row.registrationExpiresAt === null;
+    });
 
     const [stored] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.agentId, a.agent.uuid));
     expect(stored).toMatchObject({ status: "error", registrationExpiresAt: null });
@@ -1535,7 +1550,19 @@ describe("official Feishu QR registration", () => {
     ).rejects.toThrow("Timed out waiting for Feishu registration QR code");
     lateQr?.({ url: "https://open.feishu.cn/register?code=too-late-update", expireIn: 120 });
     completion.resolve({ client_id: "cli_existing", client_secret: "late-secret" });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // The QR timeout rejects the request synchronously, but the restore of
+    // the pre-existing binding is an async fire-and-forget transition
+    // (`void transitionCurrentAttemptToError(...)`): poll the database
+    // postcondition instead of asserting after a fixed sleep.
+    await waitFor(async () => {
+      const [row] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.id, before.id));
+      return (
+        row?.status === "active" &&
+        row.connectionStatus === "connected" &&
+        row.registrationStateCipher === null &&
+        row.registrationExpiresAt === null
+      );
+    });
 
     const [restored] = await app.db.select().from(imBotBindings).where(eq(imBotBindings.id, before.id));
     expect(restored).toMatchObject({
